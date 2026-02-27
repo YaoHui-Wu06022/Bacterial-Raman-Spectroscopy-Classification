@@ -1,0 +1,278 @@
+===== FILE-LEVEL SUMMARY =====
+
+feike                : 23
+jinpu                : 4
+baoman               : 3
+
+===============================================
+
+########## File: CELL2_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike (86.61%)
+Top-k predictions:
+   1) feike                 86.61%
+   2) dachang               7.51%
+   3) baoman                4.75%
+
+===============================================
+
+########## File: CELL2_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike (77.39%)
+Top-k predictions:
+   1) feike                 77.39%
+   2) baoman                10.79%
+   3) dachang               9.03%
+
+===============================================
+
+########## File: CELL3_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike (93.41%)
+Top-k predictions:
+   1) feike                 93.41%
+   2) dachang               4.67%
+   3) baoman                1.19%
+
+===============================================
+
+########## File: CELL3_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike (72.27%)
+Top-k predictions:
+   1) feike                 72.27%
+   2) dachang               13.70%
+   3) baoman                8.67%
+
+===============================================
+
+########## File: CELL4_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike (93.48%)
+Top-k predictions:
+   1) feike                 93.48%
+   2) dachang               5.05%
+   3) baoman                0.99%
+
+===============================================
+
+########## File: CELL4_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike (80.71%)
+Top-k predictions:
+   1) feike                 80.71%
+   2) baoman                11.12%
+   3) dachang               7.12%
+
+===============================================
+
+########## File: CELL5_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike (68.74%)
+Top-k predictions:
+   1) feike                 68.74%
+   2) jinpu                 15.33%
+   3) dachang               12.03%
+
+===============================================
+
+########## File: CELL5_Area01_001_shift_cos.arc_data ##########
+Top-1 → baoman (57.16%)
+Top-k predictions:
+   1) baoman                57.16%
+   2) feike                 19.15%
+   3) jinpu                 14.95%
+
+===============================================
+
+########## File: CELL6_Area01_000_shift_cos.arc_data ##########
+Top-1 → jinpu (85.30%)
+Top-k predictions:
+   1) jinpu                 85.30%
+   2) feike                 9.25%
+   3) dachang               3.79%
+
+===============================================
+
+########## File: CELL6_Area01_001_shift_cos.arc_data ##########
+Top-1 → jinpu (59.25%)
+Top-k predictions:
+   1) jinpu                 59.25%
+   2) feike                 27.38%
+   3) dachang               9.98%
+
+===============================================
+
+########## File: CELL7_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike (73.47%)
+Top-k predictions:
+   1) feike                 73.47%
+   2) dachang               12.65%
+   3) baoman                8.06%
+
+===============================================
+
+########## File: CELL7_Area01_001_shift_cos.arc_data ##########
+Top-1 → jinpu (82.26%)
+Top-k predictions:
+   1) jinpu                 82.26%
+   2) feike                 10.77%
+   3) dachang               4.87%
+
+===============================================
+
+########## File: CELL8_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike (92.88%)
+Top-k predictions:
+   1) feike                 92.88%
+   2) dachang               5.24%
+   3) baoman                1.38%
+
+===============================================
+
+########## File: CELL8_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike (85.83%)
+Top-k predictions:
+   1) feike                 85.83%
+   2) dachang               9.57%
+   3) baoman                3.94%
+
+===============================================
+
+########## File: CELL9_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike (88.01%)
+Top-k predictions:
+   1) feike                 88.01%
+   2) dachang               7.32%
+   3) jinpu                 2.35%
+
+===============================================
+
+########## File: CELL9_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike (91.23%)
+Top-k predictions:
+   1) feike                 91.23%
+   2) dachang               5.64%
+   3) baoman                2.18%
+
+===============================================
+
+########## File: CELL10_Area01_000_shift_cos.arc_data ##########
+Top-1 → baoman (87.15%)
+Top-k predictions:
+   1) baoman                87.15%
+   2) feike                 9.60%
+   3) dachang               2.47%
+
+===============================================
+
+########## File: CELL10_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike (92.33%)
+Top-k predictions:
+   1) feike                 92.33%
+   2) dachang               5.26%
+   3) baoman                1.45%
+
+===============================================
+
+########## File: CELL11_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike (86.35%)
+Top-k predictions:
+   1) feike                 86.35%
+   2) dachang               8.85%
+   3) jinpu                 2.46%
+
+===============================================
+
+########## File: CELL11_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike (88.63%)
+Top-k predictions:
+   1) feike                 88.63%
+   2) dachang               6.96%
+   3) jinpu                 2.47%
+
+===============================================
+
+########## File: CELL12_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike (79.77%)
+Top-k predictions:
+   1) feike                 79.77%
+   2) dachang               17.77%
+   3) baoman                1.52%
+
+===============================================
+
+########## File: CELL12_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike (82.91%)
+Top-k predictions:
+   1) feike                 82.91%
+   2) dachang               8.83%
+   3) jinpu                 5.79%
+
+===============================================
+
+########## File: CELL13_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike (75.80%)
+Top-k predictions:
+   1) feike                 75.80%
+   2) dachang               11.21%
+   3) jinpu                 8.47%
+
+===============================================
+
+########## File: CELL13_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike (84.08%)
+Top-k predictions:
+   1) feike                 84.08%
+   2) dachang               13.16%
+   3) baoman                2.00%
+
+===============================================
+
+########## File: CELL14_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike (91.26%)
+Top-k predictions:
+   1) feike                 91.26%
+   2) dachang               5.99%
+   3) baoman                2.18%
+
+===============================================
+
+########## File: CELL14_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike (67.98%)
+Top-k predictions:
+   1) feike                 67.98%
+   2) jinpu                 17.45%
+   3) dachang               10.44%
+
+===============================================
+
+########## File: CELL15_Area01_000_shift_cos.arc_data ##########
+Top-1 → baoman (77.26%)
+Top-k predictions:
+   1) baoman                77.26%
+   2) feike                 18.15%
+   3) dachang               3.50%
+
+===============================================
+
+########## File: CELL15_Area01_001_shift_cos.arc_data ##########
+Top-1 → jinpu (36.94%)
+Top-k predictions:
+   1) jinpu                 36.94%
+   2) baoman                29.58%
+   3) feike                 21.77%
+
+===============================================
+
+########## File: CELL16_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike (89.62%)
+Top-k predictions:
+   1) feike                 89.62%
+   2) dachang               7.64%
+   3) baoman                2.25%
+
+===============================================
+
+########## File: CELL16_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike (75.00%)
+Top-k predictions:
+   1) feike                 75.00%
+   2) baoman                16.13%
+   3) dachang               7.69%
+
+===============================================
+

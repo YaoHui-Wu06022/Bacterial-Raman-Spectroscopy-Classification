@@ -1,0 +1,169 @@
+{
+  "head_names": [
+    "level_1",
+    "level_2",
+    "leaf"
+  ],
+  "level_names": [
+    "level_1",
+    "level_2"
+  ],
+  "class_names_by_level": {
+    "level_1": [
+      "Enterobacter",
+      "Escherichia",
+      "Klebsiella",
+      "Proteus",
+      "Serratia"
+    ],
+    "level_2": [
+      "Enterobacter/ECL",
+      "Enterobacter/ESK",
+      "Escherichia/EC",
+      "Klebsiella/KAE",
+      "Klebsiella/KOX",
+      "Klebsiella/KP",
+      "Proteus/PMI",
+      "Proteus/PVU",
+      "Serratia/SLI",
+      "Serratia/SMA"
+    ],
+    "leaf": [
+      "Enterobacter/ECL",
+      "Enterobacter/ESK",
+      "Escherichia/EC",
+      "Klebsiella/KAE",
+      "Klebsiella/KOX",
+      "Klebsiella/KP",
+      "Proteus/PMI",
+      "Proteus/PVU",
+      "Serratia/SLI",
+      "Serratia/SMA"
+    ]
+  },
+  "parent_to_children": {
+    "level_1": {},
+    "level_2": {
+      "0": [
+        0,
+        1
+      ],
+      "1": [
+        2
+      ],
+      "2": [
+        3,
+        4,
+        5
+      ],
+      "3": [
+        6,
+        7
+      ],
+      "4": [
+        8,
+        9
+      ]
+    },
+    "leaf": {
+      "0": [
+        0
+      ],
+      "1": [
+        1
+      ],
+      "2": [
+        2
+      ],
+      "3": [
+        3
+      ],
+      "4": [
+        4
+      ],
+      "5": [
+        5
+      ],
+      "6": [
+        6
+      ],
+      "7": [
+        7
+      ],
+      "8": [
+        8
+      ],
+      "9": [
+        9
+      ]
+    }
+  },
+  "parent_level_name": {
+    "level_1": null,
+    "level_2": "level_1",
+    "leaf": "level_2"
+  },
+  "train_level": "level_2",
+  "level_models": {
+    "level_1": "level_1_model.pt"
+  },
+  "parent_models": {
+    "level_2": {
+      "0": {
+        "model_path": "level_2_parent_0_model.pt",
+        "child_ids": [
+          0,
+          1
+        ],
+        "child_names": [
+          "Enterobacter/ECL",
+          "Enterobacter/ESK"
+        ]
+      },
+      "1": {
+        "model_path": null,
+        "child_ids": [
+          2
+        ],
+        "child_names": [
+          "Escherichia/EC"
+        ]
+      },
+      "2": {
+        "model_path": "level_2_parent_2_model.pt",
+        "child_ids": [
+          3,
+          4,
+          5
+        ],
+        "child_names": [
+          "Klebsiella/KAE",
+          "Klebsiella/KOX",
+          "Klebsiella/KP"
+        ]
+      },
+      "3": {
+        "model_path": "level_2_parent_3_model.pt",
+        "child_ids": [
+          6,
+          7
+        ],
+        "child_names": [
+          "Proteus/PMI",
+          "Proteus/PVU"
+        ]
+      },
+      "4": {
+        "model_path": "level_2_parent_4_model.pt",
+        "child_ids": [
+          8,
+          9
+        ],
+        "child_names": [
+          "Serratia/SLI",
+          "Serratia/SMA"
+        ]
+      }
+    }
+  }
+}

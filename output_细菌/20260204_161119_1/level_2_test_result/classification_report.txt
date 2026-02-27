@@ -1,0 +1,12 @@
+| Class | Precision | Recall | F1-score | Support |
+|-------|-----------|--------|----------|---------|
+| Enterobacter/ECL | 85.19 | 82.14 | 83.64 | 28.0 |
+| Enterobacter/ESK | 100.00 | 85.71 | 92.31 | 21.0 |
+| Escherichia/EC | 90.00 | 96.43 | 93.10 | 56.0 |
+| Klebsiella/KAE | 80.65 | 80.65 | 80.65 | 31.0 |
+| Klebsiella/KOX | 72.00 | 81.82 | 76.60 | 22.0 |
+| Klebsiella/KP | 83.33 | 78.12 | 80.65 | 32.0 |
+| Proteus/PMI | 87.88 | 96.67 | 92.06 | 30.0 |
+| Proteus/PVU | 95.83 | 100.00 | 97.87 | 23.0 |
+| Serratia/SLI | 95.24 | 83.33 | 88.89 | 24.0 |
+| Serratia/SMA | 85.00 | 77.27 | 80.95 | 22.0 |

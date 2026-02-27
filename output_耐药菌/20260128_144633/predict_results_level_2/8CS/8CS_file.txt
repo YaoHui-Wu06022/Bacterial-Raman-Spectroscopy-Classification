@@ -1,0 +1,247 @@
+===== FILE-LEVEL SUMMARY =====
+
+feike/ESBL           : 18
+feike/CRE            : 12
+
+===============================================
+
+########## File: CELL1_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (50.40%)
+Top-k predictions:
+   1) feike/ESBL            50.40%
+   2) feike/CRE             49.60%
+
+===============================================
+
+########## File: CELL1_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (62.54%)
+Top-k predictions:
+   1) feike/ESBL            62.54%
+   2) feike/CRE             37.46%
+
+===============================================
+
+########## File: CELL2_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (52.65%)
+Top-k predictions:
+   1) feike/ESBL            52.65%
+   2) feike/CRE             47.35%
+
+===============================================
+
+########## File: CELL2_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (64.58%)
+Top-k predictions:
+   1) feike/ESBL            64.58%
+   2) feike/CRE             35.42%
+
+===============================================
+
+########## File: CELL3_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike/CRE (58.26%)
+Top-k predictions:
+   1) feike/CRE             58.26%
+   2) feike/ESBL            41.74%
+
+===============================================
+
+########## File: CELL3_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike/CRE (65.46%)
+Top-k predictions:
+   1) feike/CRE             65.46%
+   2) feike/ESBL            34.54%
+
+===============================================
+
+########## File: CELL4_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (67.26%)
+Top-k predictions:
+   1) feike/ESBL            67.26%
+   2) feike/CRE             32.74%
+
+===============================================
+
+########## File: CELL4_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (56.79%)
+Top-k predictions:
+   1) feike/ESBL            56.79%
+   2) feike/CRE             43.21%
+
+===============================================
+
+########## File: CELL5_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (74.99%)
+Top-k predictions:
+   1) feike/ESBL            74.99%
+   2) feike/CRE             25.01%
+
+===============================================
+
+########## File: CELL5_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike/CRE (55.59%)
+Top-k predictions:
+   1) feike/CRE             55.59%
+   2) feike/ESBL            44.41%
+
+===============================================
+
+########## File: CELL6_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (63.94%)
+Top-k predictions:
+   1) feike/ESBL            63.94%
+   2) feike/CRE             36.06%
+
+===============================================
+
+########## File: CELL6_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (65.31%)
+Top-k predictions:
+   1) feike/ESBL            65.31%
+   2) feike/CRE             34.69%
+
+===============================================
+
+########## File: CELL7_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (61.54%)
+Top-k predictions:
+   1) feike/ESBL            61.54%
+   2) feike/CRE             38.46%
+
+===============================================
+
+########## File: CELL7_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (58.09%)
+Top-k predictions:
+   1) feike/ESBL            58.09%
+   2) feike/CRE             41.91%
+
+===============================================
+
+########## File: CELL8_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike/CRE (70.27%)
+Top-k predictions:
+   1) feike/CRE             70.27%
+   2) feike/ESBL            29.73%
+
+===============================================
+
+########## File: CELL8_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike/CRE (52.80%)
+Top-k predictions:
+   1) feike/CRE             52.80%
+   2) feike/ESBL            47.20%
+
+===============================================
+
+########## File: CELL9_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike/CRE (51.68%)
+Top-k predictions:
+   1) feike/CRE             51.68%
+   2) feike/ESBL            48.32%
+
+===============================================
+
+########## File: CELL9_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (73.27%)
+Top-k predictions:
+   1) feike/ESBL            73.27%
+   2) feike/CRE             26.73%
+
+===============================================
+
+########## File: CELL10_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike/CRE (71.03%)
+Top-k predictions:
+   1) feike/CRE             71.03%
+   2) feike/ESBL            28.97%
+
+===============================================
+
+########## File: CELL10_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike/CRE (61.00%)
+Top-k predictions:
+   1) feike/CRE             61.00%
+   2) feike/ESBL            39.00%
+
+===============================================
+
+########## File: CELL11_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (65.75%)
+Top-k predictions:
+   1) feike/ESBL            65.75%
+   2) feike/CRE             34.25%
+
+===============================================
+
+########## File: CELL11_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (57.15%)
+Top-k predictions:
+   1) feike/ESBL            57.15%
+   2) feike/CRE             42.85%
+
+===============================================
+
+########## File: CELL12_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (63.26%)
+Top-k predictions:
+   1) feike/ESBL            63.26%
+   2) feike/CRE             36.74%
+
+===============================================
+
+########## File: CELL12_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike/CRE (75.64%)
+Top-k predictions:
+   1) feike/CRE             75.64%
+   2) feike/ESBL            24.36%
+
+===============================================
+
+########## File: CELL13_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike/CRE (70.37%)
+Top-k predictions:
+   1) feike/CRE             70.37%
+   2) feike/ESBL            29.63%
+
+===============================================
+
+########## File: CELL13_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike/CRE (57.79%)
+Top-k predictions:
+   1) feike/CRE             57.79%
+   2) feike/ESBL            42.21%
+
+===============================================
+
+########## File: CELL14_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike/CRE (52.32%)
+Top-k predictions:
+   1) feike/CRE             52.32%
+   2) feike/ESBL            47.68%
+
+===============================================
+
+########## File: CELL14_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (55.03%)
+Top-k predictions:
+   1) feike/ESBL            55.03%
+   2) feike/CRE             44.97%
+
+===============================================
+
+########## File: CELL15_Area01_000_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (66.92%)
+Top-k predictions:
+   1) feike/ESBL            66.92%
+   2) feike/CRE             33.08%
+
+===============================================
+
+########## File: CELL15_Area01_001_shift_cos.arc_data ##########
+Top-1 → feike/ESBL (50.60%)
+Top-k predictions:
+   1) feike/ESBL            50.60%
+   2) feike/CRE             49.40%
+
+===============================================
+

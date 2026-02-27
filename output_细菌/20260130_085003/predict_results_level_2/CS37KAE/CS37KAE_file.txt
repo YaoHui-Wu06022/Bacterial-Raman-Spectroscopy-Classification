@@ -1,0 +1,269 @@
+===== FILE-LEVEL SUMMARY =====
+
+Klebsiella/KAE       : 22
+Escherichia/EC       : 5
+Proteus/PMI          : 1
+Klebsiella/KP        : 1
+Enterobacter/ECL     : 1
+
+===============================================
+
+########## File: cell1_Area01_000_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (98.35%)
+Top-k predictions:
+   1) Klebsiella/KAE        98.35%
+   2) Klebsiella/KP         1.26%
+   3) Klebsiella/KOX        0.38%
+
+===============================================
+
+########## File: cell1_Area01_001_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (94.19%)
+Top-k predictions:
+   1) Klebsiella/KAE        94.19%
+   2) Klebsiella/KP         4.46%
+   3) Klebsiella/KOX        1.34%
+
+===============================================
+
+########## File: cell2_Area01_000_shift_cos.arc_data ##########
+Top-1 → Proteus/PMI (97.15%)
+Top-k predictions:
+   1) Proteus/PMI           97.15%
+   2) Proteus/PVU           2.85%
+
+===============================================
+
+########## File: cell2_Area01_001_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (73.37%)
+Top-k predictions:
+   1) Klebsiella/KAE        73.37%
+   2) Klebsiella/KP         23.82%
+   3) Klebsiella/KOX        2.81%
+
+===============================================
+
+########## File: cell3_Area01_000_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (97.90%)
+Top-k predictions:
+   1) Klebsiella/KAE        97.90%
+   2) Klebsiella/KP         1.49%
+   3) Klebsiella/KOX        0.62%
+
+===============================================
+
+########## File: cell3_Area01_001_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (99.34%)
+Top-k predictions:
+   1) Klebsiella/KAE        99.34%
+   2) Klebsiella/KP         0.57%
+   3) Klebsiella/KOX        0.09%
+
+===============================================
+
+########## File: cell4_Area01_000_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (98.25%)
+Top-k predictions:
+   1) Klebsiella/KAE        98.25%
+   2) Klebsiella/KP         1.64%
+   3) Klebsiella/KOX        0.12%
+
+===============================================
+
+########## File: cell4_Area01_001_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (98.25%)
+Top-k predictions:
+   1) Klebsiella/KAE        98.25%
+   2) Klebsiella/KP         1.52%
+   3) Klebsiella/KOX        0.23%
+
+===============================================
+
+########## File: cell5_Area01_000_shift_cos.arc_data ##########
+Top-1 → Escherichia/EC (100.00%)
+Top-k predictions:
+   1) Escherichia/EC        100.00%
+
+===============================================
+
+########## File: cell5_Area01_001_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (90.66%)
+Top-k predictions:
+   1) Klebsiella/KAE        90.66%
+   2) Klebsiella/KP         7.53%
+   3) Klebsiella/KOX        1.81%
+
+===============================================
+
+########## File: cell6_Area01_000_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (80.22%)
+Top-k predictions:
+   1) Klebsiella/KAE        80.22%
+   2) Klebsiella/KP         14.32%
+   3) Klebsiella/KOX        5.46%
+
+===============================================
+
+########## File: cell6_Area01_001_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (71.84%)
+Top-k predictions:
+   1) Klebsiella/KAE        71.84%
+   2) Klebsiella/KP         25.13%
+   3) Klebsiella/KOX        3.03%
+
+===============================================
+
+########## File: cell7_Area01_000_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (83.38%)
+Top-k predictions:
+   1) Klebsiella/KAE        83.38%
+   2) Klebsiella/KP         15.16%
+   3) Klebsiella/KOX        1.47%
+
+===============================================
+
+########## File: cell7_Area01_001_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (85.19%)
+Top-k predictions:
+   1) Klebsiella/KAE        85.19%
+   2) Klebsiella/KP         12.39%
+   3) Klebsiella/KOX        2.42%
+
+===============================================
+
+########## File: cell8_Area01_000_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (83.01%)
+Top-k predictions:
+   1) Klebsiella/KAE        83.01%
+   2) Klebsiella/KP         16.52%
+   3) Klebsiella/KOX        0.47%
+
+===============================================
+
+########## File: cell8_Area01_001_shift_cos.arc_data ##########
+Top-1 → Escherichia/EC (100.00%)
+Top-k predictions:
+   1) Escherichia/EC        100.00%
+
+===============================================
+
+########## File: cell9_Area01_000_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (90.75%)
+Top-k predictions:
+   1) Klebsiella/KAE        90.75%
+   2) Klebsiella/KP         7.69%
+   3) Klebsiella/KOX        1.56%
+
+===============================================
+
+########## File: cell9_Area01_001_shift_cos.arc_data ##########
+Top-1 → Escherichia/EC (100.00%)
+Top-k predictions:
+   1) Escherichia/EC        100.00%
+
+===============================================
+
+########## File: cell10_Area01_000_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (93.23%)
+Top-k predictions:
+   1) Klebsiella/KAE        93.23%
+   2) Klebsiella/KP         5.74%
+   3) Klebsiella/KOX        1.04%
+
+===============================================
+
+########## File: cell10_Area01_001_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (76.53%)
+Top-k predictions:
+   1) Klebsiella/KAE        76.53%
+   2) Klebsiella/KP         17.22%
+   3) Klebsiella/KOX        6.25%
+
+===============================================
+
+########## File: cell11_Area01_000_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KP (39.34%)
+Top-k predictions:
+   1) Klebsiella/KP         39.34%
+   2) Klebsiella/KAE        38.11%
+   3) Klebsiella/KOX        22.55%
+
+===============================================
+
+########## File: cell11_Area01_001_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (95.11%)
+Top-k predictions:
+   1) Klebsiella/KAE        95.11%
+   2) Klebsiella/KP         3.71%
+   3) Klebsiella/KOX        1.19%
+
+===============================================
+
+########## File: cell12_Area01_000_shift_cos.arc_data ##########
+Top-1 → Escherichia/EC (100.00%)
+Top-k predictions:
+   1) Escherichia/EC        100.00%
+
+===============================================
+
+########## File: cell12_Area01_001_shift_cos.arc_data ##########
+Top-1 → Escherichia/EC (100.00%)
+Top-k predictions:
+   1) Escherichia/EC        100.00%
+
+===============================================
+
+########## File: cell13_Area01_000_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (57.14%)
+Top-k predictions:
+   1) Klebsiella/KAE        57.14%
+   2) Klebsiella/KP         21.50%
+   3) Klebsiella/KOX        21.37%
+
+===============================================
+
+########## File: cell13_Area01_001_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (86.02%)
+Top-k predictions:
+   1) Klebsiella/KAE        86.02%
+   2) Klebsiella/KP         10.10%
+   3) Klebsiella/KOX        3.89%
+
+===============================================
+
+########## File: cell14_Area01_000_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (75.38%)
+Top-k predictions:
+   1) Klebsiella/KAE        75.38%
+   2) Klebsiella/KP         20.18%
+   3) Klebsiella/KOX        4.45%
+
+===============================================
+
+########## File: cell14_Area01_001_shift_cos.arc_data ##########
+Top-1 → Enterobacter/ECL (73.16%)
+Top-k predictions:
+   1) Enterobacter/ECL      73.16%
+   2) Enterobacter/EAB      13.96%
+   3) Enterobacter/ESK      12.88%
+
+===============================================
+
+########## File: cell15_Area01_000_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (93.56%)
+Top-k predictions:
+   1) Klebsiella/KAE        93.56%
+   2) Klebsiella/KP         5.56%
+   3) Klebsiella/KOX        0.88%
+
+===============================================
+
+########## File: cell15_Area01_001_shift_cos.arc_data ##########
+Top-1 → Klebsiella/KAE (83.35%)
+Top-k predictions:
+   1) Klebsiella/KAE        83.35%
+   2) Klebsiella/KP         14.82%
+   3) Klebsiella/KOX        1.83%
+
+===============================================
+

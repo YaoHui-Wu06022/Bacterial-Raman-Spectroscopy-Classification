@@ -1,0 +1,30 @@
+Analysis target: level_1
+Using device: cuda (config.use_gpu=True, cuda_available=True)
+
+=== Computing input channel importance ===
+Using channel names: ['snv', 'smooth']
+Input channel importance: tensor([0.6144, 0.3856], device='cuda:0')
+
+=== Running Multi-layer Grad-CAM Analysis ===
+
+=== Layer Importance (merged by stage) ===
+conv1                         : 0.2014
+layer1                        : 0.2636
+layer2                        : 0.1628
+layer3                        : 0.1360
+layer4                        : 0.1032
+transformer                   : 0.1329
+
+===== SE Module Summary (Compact) =====
+layer1.0.se: mean=0.4959, std=0.0473, min=0.4260, max=0.5859
+layer1.1.se: mean=0.5043, std=0.0439, min=0.4140, max=0.5790
+layer2.1.0.se: mean=0.4945, std=0.0292, min=0.4466, max=0.5535
+layer2.1.1.se: mean=0.5002, std=0.0301, min=0.4459, max=0.5541
+layer3.1.0.se: mean=0.5038, std=0.0176, min=0.4664, max=0.5349
+layer3.1.1.se: mean=0.4990, std=0.0176, min=0.4502, max=0.5417
+layer4.1.0.se: mean=0.5010, std=0.0110, min=0.4716, max=0.5283
+layer4.1.1.se: mean=0.4471, std=0.0757, min=0.2999, max=0.6242
+
+=== Computing band importance heatmap ===
+Saved band importance heatmap: /content/output_level_3/20260128_144633/level_1_analysis/figures/band_importance_heatmap.png
+Saved band top-k CSV: /content/output_level_3/20260128_144633/level_1_analysis/figures/band_top5_per_class.csv

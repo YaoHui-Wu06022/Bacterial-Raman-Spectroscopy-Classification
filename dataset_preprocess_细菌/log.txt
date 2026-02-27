@@ -1,0 +1,715 @@
+[Citrobacter/CITF] removed 7 samples, threshold=214.889786
+  CITF01_cell14_Area01_000_shift_cos.arc_data	221.164413
+  CITF01_cell15_Area01_001_shift_cos.arc_data	240.034576
+  CITF01_cell16_Area01_000_shift_cos.arc_data	241.761017
+  CITF01_cell16_Area01_001_shift_cos.arc_data	230.174423
+  CITF01_cell1_Area01_000_shift_cos.arc_data	224.673065
+  CITF03_cell11_Area01_000_shift_cos.arc_data	214.908371
+  CITF03_cell5_Area01_001_shift_cos.arc_data	226.347107
+[Citrobacter/CITK] removed 9 samples, threshold=289.207672
+  CITK01_cell10_Area01_000_shift_cos.arc_data	289.615234
+  CITK01_cell10_Area01_001_shift_cos.arc_data	305.071381
+  CITK01_cell13_Area01_000_shift_cos.arc_data	298.024048
+  CITK01_cell5_Area01_000_shift_cos.arc_data	297.226105
+  CITK04_cell18_Area01_001_shift_cos.arc_data	303.063141
+  CITK04_cell19_Area01_000_shift_cos.arc_data	294.304382
+  CITK04_cell19_Area01_001_shift_cos.arc_data	299.071960
+  CITK04_cell1_Area01_001_shift_cos.arc_data	292.389404
+  CITK04_cell5_Area01_001_shift_cos.arc_data	291.210358
+[Enterobacter/EAB] removed 6 samples, threshold=317.665009
+  EAB01_cell2_Area01_000_shift_cos.arc_data	353.253418
+  EAB01_cell4_Area01_001_shift_cos.arc_data	356.933441
+  EAB03_CELL18_Area01_000_shift_cos.arc_data	320.744080
+  EAB03_CELL21_Area01_000_shift_cos.arc_data	344.036224
+  EAB03_CELL22_Area01_000_shift_cos.arc_data	340.565369
+  EAB03_CELL24_Area01_001_shift_cos.arc_data	343.802795
+[Enterobacter/ECL] removed 8 samples, threshold=203.303986
+  ECL03_cell14_Area01_000_shift_cos.arc_data	203.963425
+  ECL03_cell15_Area01_000_shift_cos.arc_data	203.371399
+  ECL03_cell17_Area01_000_shift_cos.arc_data	208.612442
+  ECL03_cell18_Area01_001_shift_cos.arc_data	216.200394
+  ECL04_CELL13_Area01_000_shift_cos.arc_data	216.347000
+  ECL04_CELL15_Area01_000_shift_cos.arc_data	222.592728
+  ECL04_CELL18_Area01_000_shift_cos.arc_data	209.154465
+  ECL04_CELL18_Area01_001_shift_cos.arc_data	203.386108
+[Enterobacter/ESK] removed 6 samples, threshold=134.072433
+  ESK01_CELL18_Area01_001_shift_cos.arc_data	149.562042
+  ESK02_CELL2_Area01_001_shift_cos.arc_data	140.067780
+  ESK03_CELL1_Area01_001_shift_cos.arc_data	147.100510
+  ESK03_CELL3_Area01_000_shift_cos.arc_data	142.032974
+  ESK03_CELL6_Area01_000_shift_cos.arc_data	134.520157
+  ESK03_CELL9_Area01_000_shift_cos.arc_data	136.407959
+[Escherichia/EC] removed 7 samples, threshold=176.643173
+  EC01_cell11_shift_cos.arc_data	179.811234
+  EC01_cell12_shift_cos.arc_data	176.764084
+  EC01_cell3_shift_cos.arc_data	209.468124
+  EC01_cell5_shift_cos.arc_data	203.708771
+  EC01_cell6_shift_cos.arc_data	181.966354
+  EC01_cell7_shift_cos.arc_data	212.255951
+  EC03_cell3_Area01_000_shift_cos.arc_data	181.807190
+[Klebsiella/KAE] removed 9 samples, threshold=298.761597
+  KAE01_cell15_Area01_000_shift_cos.arc_data	303.271790
+  KAE01_cell16_Area01_000_shift_cos.arc_data	311.960846
+  KAE01_cell18_Area01_000_shift_cos.arc_data	305.765594
+  KAE02_cell11_Area01_000_shift_cos.arc_data	299.042969
+  KAE02_cell13_Area01_001_shift_cos.arc_data	299.351471
+  KAE02_cell18_Area01_001_shift_cos.arc_data	303.758423
+  KAE02_cell19_Area01_000_shift_cos.arc_data	311.994720
+  KAE02_cell5_Area01_000_shift_cos.arc_data	305.278076
+  KAE02_cell8_Area01_000_shift_cos.arc_data	303.337585
+[Klebsiella/KOX] removed 6 samples, threshold=280.668182
+  KOX01_cell12_Area01_001_shift_cos.arc_data	294.426392
+  KOX01_cell13_Area01_000_shift_cos.arc_data	305.199707
+  KOX01_cell2_Area01_001_shift_cos.arc_data	286.500702
+  KOX01_cell4_Area01_000_shift_cos.arc_data	296.131409
+  KOX01_cell6_Area01_001_shift_cos.arc_data	292.649933
+  KOX02_cell5_Area01_000_shift_cos.arc_data	326.073486
+[Klebsiella/KP] removed 9 samples, threshold=222.451782
+  KP02_cell11_Area01_001_shift_cos.arc_data	232.905396
+  KP02_cell15_Area01_001_shift_cos.arc_data	229.381378
+  KP02_cell7_Area01_000_shift_cos.arc_data	222.776245
+  KP02_cell9_Area01_000_shift_cos.arc_data	222.631683
+  KP03_cell11_Area01_001_shift_cos.arc_data	224.337708
+  KP03_cell15_Area01_001_shift_cos.arc_data	231.236191
+  KP03_cell7_Area01_001_shift_cos.arc_data	237.235184
+  KP03_cell8_Area01_000_shift_cos.arc_data	223.325470
+  KP03_cell9_Area01_001_shift_cos.arc_data	225.789398
+[Proteus/PMI] removed 8 samples, threshold=137.061417
+  PMI01_cell1_Area01_000_shift_cos.arc_data	155.892471
+  PMI01_cell2_Area01_000_shift_cos.arc_data	150.561539
+  PMI01_cell2_Area01_001_shift_cos.arc_data	138.173431
+  PMI01_cell3_Area01_000_shift_cos.arc_data	139.522369
+  PMI01_cell3_Area01_001_shift_cos.arc_data	142.496307
+  PMI02_cell1_Area01_000_shift_cos.arc_data	155.792862
+  PMI02_cell1_Area01_001_shift_cos.arc_data	142.871628
+  PMI04_cell2_Area01_001_shift_cos.arc_data	141.781342
+[Proteus/PVU] removed 6 samples, threshold=360.238007
+  PVU01_cell14_Area01_001_shift_cos.arc_data	373.014435
+  PVU01_cell2_Area01_000_shift_cos.arc_data	366.277344
+  PVU01_cell6_Area01_001_shift_cos.arc_data	379.238617
+  PVU01_cell9_Area01_001_shift_cos.arc_data	377.844574
+  PVU02_cell14_Area01_001_shift_cos.arc_data	378.548431
+  PVU02_cell8_Area01_001_shift_cos.arc_data	378.670502
+[Serratia/SLI] removed 7 samples, threshold=82.025742
+  SLI01_cell11_Area01_000_shift_cos.arc_data	94.563789
+  SLI01_cell12_Area01_001_shift_cos.arc_data	90.645981
+  SLI01_cell21_Area01_001_shift_cos.arc_data	84.460945
+  SLI02_cell18_Area01_001_shift_cos.arc_data	83.103073
+  SLI02_cell5_Area01_001_shift_cos.arc_data	91.021698
+  SLI02_cell6_Area01_000_shift_cos.arc_data	116.966721
+  SLI02_cell6_Area01_001_shift_cos.arc_data	103.855515
+[Serratia/SMA] removed 6 samples, threshold=123.349365
+  SMA01_cell5_Area01_000_shift_cos.arc_data	166.020569
+  SMA02_cell2_Area01_000_shift_cos.arc_data	206.927399
+  SMA02_cell2_Area01_001_shift_cos.arc_data	162.151215
+  SMA02_cell3_Area01_000_shift_cos.arc_data	159.963211
+  SMA02_cell8_Area01_000_shift_cos.arc_data	125.288048
+  SMA04t_cell4_Area01_001_shift_cos.arc_data	127.424896
+[Enterobacter/EAB] removed 4 samples, threshold=342.151733
+  EAB01_cell2_Area01_000_shift_cos.arc_data	353.253418
+  EAB01_cell4_Area01_001_shift_cos.arc_data	356.933441
+  EAB03_CELL21_Area01_000_shift_cos.arc_data	344.036224
+  EAB03_CELL24_Area01_001_shift_cos.arc_data	343.802795
+[Enterobacter/ECL] removed 5 samples, threshold=206.706406
+  ECL03_cell17_Area01_000_shift_cos.arc_data	208.612442
+  ECL03_cell18_Area01_001_shift_cos.arc_data	216.200394
+  ECL04_CELL13_Area01_000_shift_cos.arc_data	216.347000
+  ECL04_CELL15_Area01_000_shift_cos.arc_data	222.592728
+  ECL04_CELL18_Area01_000_shift_cos.arc_data	209.154465
+[Enterobacter/ESK] removed 4 samples, threshold=139.299225
+  ESK01_CELL18_Area01_001_shift_cos.arc_data	149.562042
+  ESK02_CELL2_Area01_001_shift_cos.arc_data	140.067780
+  ESK03_CELL1_Area01_001_shift_cos.arc_data	147.100510
+  ESK03_CELL3_Area01_000_shift_cos.arc_data	142.032974
+[Escherichia/EC] removed 4 samples, threshold=181.866074
+  EC01_cell3_shift_cos.arc_data	209.468124
+  EC01_cell5_shift_cos.arc_data	203.708771
+  EC01_cell6_shift_cos.arc_data	181.966354
+  EC01_cell7_shift_cos.arc_data	212.255951
+[Klebsiella/KAE] removed 5 samples, threshold=303.396515
+  KAE01_cell16_Area01_000_shift_cos.arc_data	311.960846
+  KAE01_cell18_Area01_000_shift_cos.arc_data	305.765594
+  KAE02_cell18_Area01_001_shift_cos.arc_data	303.758423
+  KAE02_cell19_Area01_000_shift_cos.arc_data	311.994720
+  KAE02_cell5_Area01_000_shift_cos.arc_data	305.278076
+[Klebsiella/KOX] removed 4 samples, threshold=293.626984
+  KOX01_cell12_Area01_001_shift_cos.arc_data	294.426392
+  KOX01_cell13_Area01_000_shift_cos.arc_data	305.199707
+  KOX01_cell4_Area01_000_shift_cos.arc_data	296.131409
+  KOX02_cell5_Area01_000_shift_cos.arc_data	326.073486
+[Klebsiella/KP] removed 6 samples, threshold=224.297226
+  KP02_cell11_Area01_001_shift_cos.arc_data	232.905396
+  KP02_cell15_Area01_001_shift_cos.arc_data	229.381378
+  KP03_cell11_Area01_001_shift_cos.arc_data	224.337708
+  KP03_cell15_Area01_001_shift_cos.arc_data	231.236191
+  KP03_cell7_Area01_001_shift_cos.arc_data	237.235184
+  KP03_cell9_Area01_001_shift_cos.arc_data	225.789398
+[Proteus/PMI] removed 5 samples, threshold=142.053040
+  PMI01_cell1_Area01_000_shift_cos.arc_data	155.892471
+  PMI01_cell2_Area01_000_shift_cos.arc_data	150.561539
+  PMI01_cell3_Area01_001_shift_cos.arc_data	142.496307
+  PMI02_cell1_Area01_000_shift_cos.arc_data	155.792862
+  PMI02_cell1_Area01_001_shift_cos.arc_data	142.871628
+[Proteus/PVU] removed 4 samples, threshold=375.381226
+  PVU01_cell6_Area01_001_shift_cos.arc_data	379.238617
+  PVU01_cell9_Area01_001_shift_cos.arc_data	377.844574
+  PVU02_cell14_Area01_001_shift_cos.arc_data	378.548431
+  PVU02_cell8_Area01_001_shift_cos.arc_data	378.670502
+[Serratia/SLI] removed 4 samples, threshold=90.751183
+  SLI01_cell11_Area01_000_shift_cos.arc_data	94.563789
+  SLI02_cell5_Area01_001_shift_cos.arc_data	91.021698
+  SLI02_cell6_Area01_000_shift_cos.arc_data	116.966721
+  SLI02_cell6_Area01_001_shift_cos.arc_data	103.855515
+[Serratia/SMA] removed 4 samples, threshold=145.321075
+  SMA01_cell5_Area01_000_shift_cos.arc_data	166.020569
+  SMA02_cell2_Area01_000_shift_cos.arc_data	206.927399
+  SMA02_cell2_Area01_001_shift_cos.arc_data	162.151215
+  SMA02_cell3_Area01_000_shift_cos.arc_data	159.963211
+[Citrobacter/CITF01] removed 2 samples, threshold=240.790375
+  cell15_Area01_001_shift_cos.arc_data	257.259674
+  cell16_Area01_001_shift_cos.arc_data	241.272217
+[Citrobacter/CITF02] removed 2 samples, threshold=317.458893
+  cell2_Area01_000_shift_cos.arc_data	321.452515
+  cell4_Area01_000_shift_cos.arc_data	320.147919
+[Citrobacter/CITF03] removed 2 samples, threshold=131.035736
+  cell5_Area01_000_shift_cos.arc_data	141.333862
+  cell8_Area01_000_shift_cos.arc_data	132.907211
+[Citrobacter/CITF04t] removed 1 samples, threshold=0.000000
+  cell2_Area01_001_shift_cos.arc_data	0.000000
+[Citrobacter/CITK01] removed 2 samples, threshold=222.569229
+  cell19_Area01_001_shift_cos.arc_data	228.286743
+  cell3_Area01_001_shift_cos.arc_data	223.144257
+[Citrobacter/CITK02] removed 2 samples, threshold=359.094879
+  CELL11_Area01_000_shift_cos.arc_data	385.105347
+  CELL5_Area01_000_shift_cos.arc_data	359.635437
+[Citrobacter/CITK03] removed 2 samples, threshold=164.078430
+  cell10_Area01_000_shift_cos.arc_data	180.715439
+  cell4_Area01_000_shift_cos.arc_data	165.499603
+[Citrobacter/CITK04] removed 2 samples, threshold=171.247299
+  cell15_Area01_001_shift_cos.arc_data	175.327957
+  cell19_Area01_000_shift_cos.arc_data	246.890137
+[Citrobacter/CITK05t] removed 1 samples, threshold=161.026474
+  cell8_Area01_001_shift_cos.arc_data	170.102371
+[Enterobacter/EAB01] removed 2 samples, threshold=224.402588
+  cell1_Area01_000_shift_cos.arc_data	241.349960
+  cell1_Area01_001_shift_cos.arc_data	225.435638
+[Enterobacter/EAB02] removed 2 samples, threshold=73.315498
+  cell1_Area01_001_shift_cos.arc_data	91.989159
+  cell2_Area01_001_shift_cos.arc_data	73.748260
+[Enterobacter/EAB03] removed 2 samples, threshold=432.262817
+  CELL19_Area01_001_shift_cos.arc_data	460.390045
+  CELL22_Area01_000_shift_cos.arc_data	436.108093
+[Enterobacter/ECL01] removed 2 samples, threshold=241.904129
+  cell2_Area01_001_shift_cos.arc_data	243.273743
+  cell3_Area01_001_shift_cos.arc_data	275.214569
+[Enterobacter/ECL02] removed 2 samples, threshold=164.551331
+  cell1_Area01_001_shift_cos.arc_data	166.386108
+  cell8_Area01_001_shift_cos.arc_data	168.739532
+[Enterobacter/ECL03] removed 2 samples, threshold=90.953926
+  cell16_Area01_000_shift_cos.arc_data	97.827667
+  cell16_Area01_001_shift_cos.arc_data	92.254875
+[Enterobacter/ECL04] removed 1 samples, threshold=220.765869
+  CELL14_Area01_000_shift_cos.arc_data	228.704941
+[Enterobacter/ECL04t] removed 1 samples, threshold=0.000000
+  cell1_Area01_000_shift_cos.arc_data	0.000000
+[Enterobacter/ESK01] removed 2 samples, threshold=242.570633
+  CELL17_Area01_001_shift_cos.arc_data	256.812744
+  CELL5_Area01_001_shift_cos.arc_data	243.491959
+[Enterobacter/ESK02] removed 2 samples, threshold=157.968124
+  CELL1_Area01_001_shift_cos.arc_data	159.559387
+  CELL2_Area01_001_shift_cos.arc_data	164.464981
+[Enterobacter/ESK03] removed 2 samples, threshold=87.921173
+  CELL2_Area01_001_shift_cos.arc_data	91.688408
+  CELL5_Area01_001_shift_cos.arc_data	89.034073
+[Escherichia/EC01] removed 2 samples, threshold=174.190643
+  cell5_shift_cos.arc_data	185.833572
+  cell7_shift_cos.arc_data	189.230682
+[Escherichia/EC02] removed 1 samples, threshold=145.662872
+  cell1_Area01_001_shift_cos.arc_data	235.809982
+[Escherichia/EC03] removed 1 samples, threshold=210.059464
+  cell3_Area01_000_shift_cos.arc_data	244.558792
+[Escherichia/EC04t] removed 1 samples, threshold=216.940582
+  cell6_Area01_001_shift_cos.arc_data	222.410965
+[Klebsiella/KAE01] removed 2 samples, threshold=166.001205
+  cell13_Area01_001_shift_cos.arc_data	166.392761
+  cell3_Area01_001_shift_cos.arc_data	195.085785
+[Klebsiella/KAE02] removed 2 samples, threshold=72.909401
+  cell1_Area01_000_shift_cos.arc_data	74.837479
+  cell6_Area01_001_shift_cos.arc_data	89.371964
+[Klebsiella/KAE03] removed 2 samples, threshold=298.587646
+  CELL3_Area01_000_shift_cos.arc_data	300.924408
+  CELL3_Area01_001_shift_cos.arc_data	301.686493
+[Klebsiella/KAE04] removed 2 samples, threshold=136.408508
+  CELL4_Area01_000_shift_cos.arc_data	137.340164
+  CELL4_Area01_001_shift_cos.arc_data	164.385498
+[Klebsiella/KAE05t] removed 1 samples, threshold=0.000000
+  cell2_Area01_000_shift_cos.arc_data	0.000000
+[Klebsiella/KOX01] removed 2 samples, threshold=95.725662
+  cell18_Area01_001_shift_cos.arc_data	110.908089
+  cell9_Area01_001_shift_cos.arc_data	96.066139
+[Klebsiella/KOX02] removed 2 samples, threshold=164.226196
+  cell5_Area01_000_shift_cos.arc_data	237.014038
+  cell5_Area01_001_shift_cos.arc_data	166.899078
+[Klebsiella/KOX03] removed 2 samples, threshold=136.694016
+  cell11_Area01_000_shift_cos.arc_data	137.408585
+  cell9_Area01_001_shift_cos.arc_data	155.002594
+[Klebsiella/KOX04t] removed 1 samples, threshold=0.000000
+  CELL3_Area01_001_shift_cos.arc_data	0.000000
+[Klebsiella/KP02] removed 2 samples, threshold=74.820450
+  cell14_Area01_001_shift_cos.arc_data	75.117393
+  cell8_Area01_000_shift_cos.arc_data	76.599876
+[Klebsiella/KP03] removed 2 samples, threshold=48.660633
+  cell12_Area01_001_shift_cos.arc_data	48.675598
+  cell7_Area01_001_shift_cos.arc_data	68.630516
+[Klebsiella/KP04] removed 2 samples, threshold=162.322083
+  cell4_Area01_000_shift_cos.arc_data	169.042068
+  cell7_Area01_001_shift_cos.arc_data	207.337234
+[Klebsiella/KP05] removed 2 samples, threshold=92.972450
+  cell10_Area01_000_shift_cos.arc_data	119.801003
+  cell2_Area01_001_shift_cos.arc_data	93.517441
+[Klebsiella/KP06t] removed 1 samples, threshold=0.000000
+  cell1_Area01_000_shift_cos.arc_data	0.000000
+[Proteus/PMI01] removed 2 samples, threshold=118.333755
+  cell1_Area01_000_shift_cos.arc_data	118.881584
+  cell2_Area01_001_shift_cos.arc_data	137.292862
+[Proteus/PMI02] removed 2 samples, threshold=174.256302
+  cell1_Area01_001_shift_cos.arc_data	174.662964
+  cell3_Area01_000_shift_cos.arc_data	192.652054
+[Proteus/PMI03] removed 2 samples, threshold=192.363174
+  cell3_Area01_001_shift_cos.arc_data	212.592926
+  cell5_Area01_001_shift_cos.arc_data	192.710648
+[Proteus/PMI04] removed 2 samples, threshold=191.461411
+  cell2_Area01_001_shift_cos.arc_data	200.699249
+  cell4_Area01_000_shift_cos.arc_data	195.152222
+[Proteus/PMI05t] removed 1 samples, threshold=0.000000
+  cell2_Area01_000_shift_cos.arc_data	0.000000
+[Proteus/PVU01] removed 2 samples, threshold=96.761581
+  cell11_Area01_000_shift_cos.arc_data	165.422180
+  cell18_Area01_000_shift_cos.arc_data	102.054596
+[Proteus/PVU02] removed 2 samples, threshold=167.262604
+  cell4_Area01_000_shift_cos.arc_data	168.330963
+  cell8_Area01_000_shift_cos.arc_data	220.471451
+[Proteus/PVU03] removed 2 samples, threshold=275.190613
+  cell1_Area01_000_shift_cos.arc_data	278.508942
+  cell3_Area01_000_shift_cos.arc_data	367.745422
+[Serratia/SLI01] removed 2 samples, threshold=77.449371
+  cell12_Area01_000_shift_cos.arc_data	101.380836
+  cell12_Area01_001_shift_cos.arc_data	78.599030
+[Serratia/SLI02] removed 2 samples, threshold=133.290802
+  cell6_Area01_000_shift_cos.arc_data	133.802032
+  cell6_Area01_001_shift_cos.arc_data	179.104446
+[Serratia/SLI03] removed 2 samples, threshold=78.827370
+  cell8_Area01_000_shift_cos.arc_data	80.297356
+  cell9_Area01_000_shift_cos.arc_data	85.584824
+[Serratia/SMA01] removed 2 samples, threshold=101.949387
+  cell5_Area01_000_shift_cos.arc_data	103.206734
+  cell7_Area01_001_shift_cos.arc_data	109.529953
+[Serratia/SMA02] removed 2 samples, threshold=136.441498
+  cell2_Area01_000_shift_cos.arc_data	180.891281
+  cell3_Area01_000_shift_cos.arc_data	138.163773
+[Serratia/SMA03] removed 2 samples, threshold=237.892776
+  cell11_Area01_001_shift_cos.arc_data	238.540176
+  cell5_Area01_001_shift_cos.arc_data	300.948547
+[Serratia/SMA04t] removed 1 samples, threshold=0.000000
+  cell3_Area01_001_shift_cos.arc_data	0.000000
+[Citrobacter/CITF01] removed 2 samples, threshold=233.698898
+  cell15_Area01_001_shift_cos.arc_data	246.113449
+  cell16_Area01_000_shift_cos.arc_data	234.026505
+[Citrobacter/CITF02] removed 2 samples, threshold=329.735870
+  cell2_Area01_000_shift_cos.arc_data	335.371063
+  cell4_Area01_000_shift_cos.arc_data	346.001465
+[Citrobacter/CITF03] removed 2 samples, threshold=107.743279
+  cell11_Area01_000_shift_cos.arc_data	117.513229
+  cell5_Area01_000_shift_cos.arc_data	110.142029
+[Citrobacter/CITF04t] removed 1 samples, threshold=0.000000
+  cell4_Area01_000_shift_cos.arc_data	0.000000
+[Citrobacter/CITK01] removed 2 samples, threshold=225.395126
+  cell19_Area01_001_shift_cos.arc_data	230.594727
+  cell3_Area01_001_shift_cos.arc_data	226.492554
+[Citrobacter/CITK02] removed 2 samples, threshold=353.285065
+  CELL11_Area01_000_shift_cos.arc_data	363.519440
+  CELL8_Area01_000_shift_cos.arc_data	353.695526
+[Citrobacter/CITK03] removed 2 samples, threshold=164.724579
+  cell10_Area01_000_shift_cos.arc_data	182.888062
+  cell1_Area01_001_shift_cos.arc_data	167.327072
+[Citrobacter/CITK04] removed 2 samples, threshold=192.977875
+  cell19_Area01_000_shift_cos.arc_data	240.056641
+  cell20_Area01_001_shift_cos.arc_data	197.753296
+[Citrobacter/CITK05t] removed 1 samples, threshold=158.465897
+  cell8_Area01_001_shift_cos.arc_data	169.217911
+[Enterobacter/EAB01] removed 2 samples, threshold=252.566650
+  cell1_Area01_000_shift_cos.arc_data	262.014313
+  cell2_Area01_000_shift_cos.arc_data	253.277832
+[Enterobacter/EAB02] removed 2 samples, threshold=74.320061
+  cell1_Area01_001_shift_cos.arc_data	95.370560
+  cell2_Area01_001_shift_cos.arc_data	75.105721
+[Enterobacter/ECL01] removed 2 samples, threshold=244.926682
+  cell2_Area01_000_shift_cos.arc_data	246.193146
+  cell2_Area01_001_shift_cos.arc_data	252.887314
+[Enterobacter/ECL02] removed 2 samples, threshold=147.018600
+  cell1_Area01_001_shift_cos.arc_data	177.953384
+  cell8_Area01_001_shift_cos.arc_data	148.791565
+[Enterobacter/ECL03] removed 2 samples, threshold=82.893349
+  cell16_Area01_000_shift_cos.arc_data	83.609520
+  cell16_Area01_001_shift_cos.arc_data	84.379387
+[Enterobacter/ECL04] removed 1 samples, threshold=220.945663
+  CELL14_Area01_000_shift_cos.arc_data	230.210312
+[Enterobacter/ECL04t] removed 1 samples, threshold=0.000000
+  cell3_Area01_000_shift_cos.arc_data	0.000000
+[Enterobacter/ESK01] removed 2 samples, threshold=247.414871
+  CELL17_Area01_001_shift_cos.arc_data	248.337616
+  CELL5_Area01_001_shift_cos.arc_data	248.807404
+[Enterobacter/ESK02] removed 2 samples, threshold=164.189789
+  CELL1_Area01_001_shift_cos.arc_data	166.693069
+  CELL2_Area01_001_shift_cos.arc_data	166.260010
+[Enterobacter/ESK03] removed 2 samples, threshold=89.291100
+  CELL2_Area01_001_shift_cos.arc_data	92.050735
+  CELL5_Area01_001_shift_cos.arc_data	90.729630
+[Escherichia/EC01] removed 2 samples, threshold=167.063858
+  cell5_shift_cos.arc_data	176.063950
+  cell7_shift_cos.arc_data	187.594849
+[Escherichia/EC02] removed 1 samples, threshold=150.913055
+  cell1_Area01_001_shift_cos.arc_data	246.228439
+[Escherichia/EC03] removed 1 samples, threshold=206.440872
+  cell3_Area01_000_shift_cos.arc_data	240.543243
+[Escherichia/EC04t] removed 1 samples, threshold=211.501541
+  cell6_Area01_000_shift_cos.arc_data	222.156128
+[Klebsiella/KAE01] removed 2 samples, threshold=166.240967
+  cell13_Area01_000_shift_cos.arc_data	166.861328
+  cell3_Area01_001_shift_cos.arc_data	194.078323
+[Klebsiella/KAE02] removed 2 samples, threshold=68.752632
+  cell1_Area01_000_shift_cos.arc_data	72.418533
+  cell6_Area01_001_shift_cos.arc_data	90.212227
+[Klebsiella/KAE03] removed 2 samples, threshold=293.325134
+  CELL3_Area01_000_shift_cos.arc_data	299.712189
+  CELL3_Area01_001_shift_cos.arc_data	295.213501
+[Klebsiella/KAE04] removed 2 samples, threshold=138.069870
+  CELL18_Area01_001_shift_cos.arc_data	161.315262
+  CELL1_Area01_000_shift_cos.arc_data	138.926620
+[Klebsiella/KAE05t] removed 1 samples, threshold=0.000000
+  cell2_Area01_000_shift_cos.arc_data	0.000000
+[Klebsiella/KOX01] removed 2 samples, threshold=84.823906
+  cell11_Area01_000_shift_cos.arc_data	85.006195
+  cell9_Area01_001_shift_cos.arc_data	100.076050
+[Klebsiella/KOX02] removed 2 samples, threshold=169.594040
+  cell5_Area01_000_shift_cos.arc_data	240.519165
+  cell5_Area01_001_shift_cos.arc_data	172.040344
+[Klebsiella/KOX03] removed 2 samples, threshold=124.592018
+  cell11_Area01_000_shift_cos.arc_data	125.011108
+  cell9_Area01_001_shift_cos.arc_data	164.587128
+[Klebsiella/KOX04t] removed 1 samples, threshold=0.000000
+  CELL1_Area01_000_shift_cos.arc_data	0.000000
+[Klebsiella/KP02] removed 2 samples, threshold=75.652901
+  cell14_Area01_001_shift_cos.arc_data	75.947090
+  cell8_Area01_000_shift_cos.arc_data	84.822701
+[Klebsiella/KP03] removed 2 samples, threshold=48.739983
+  cell14_Area01_001_shift_cos.arc_data	48.840298
+  cell7_Area01_001_shift_cos.arc_data	65.462791
+[Klebsiella/KP04] removed 2 samples, threshold=163.056015
+  cell4_Area01_000_shift_cos.arc_data	168.009796
+  cell7_Area01_001_shift_cos.arc_data	186.036423
+[Klebsiella/KP05] removed 2 samples, threshold=85.493271
+  cell2_Area01_001_shift_cos.arc_data	87.949974
+  cell5_Area01_000_shift_cos.arc_data	94.264984
+[Klebsiella/KP06t] removed 1 samples, threshold=0.000000
+  cell3_Area01_001_shift_cos.arc_data	0.000000
+[Proteus/PMI01] removed 2 samples, threshold=125.243370
+  cell1_Area01_000_shift_cos.arc_data	128.596512
+  cell2_Area01_001_shift_cos.arc_data	125.766434
+[Proteus/PMI02] removed 2 samples, threshold=201.898209
+  cell2_Area01_001_shift_cos.arc_data	238.626282
+  cell3_Area01_000_shift_cos.arc_data	204.201187
+[Proteus/PMI03] removed 2 samples, threshold=197.551804
+  cell1_Area01_001_shift_cos.arc_data	197.593353
+  cell3_Area01_001_shift_cos.arc_data	205.832062
+[Proteus/PMI04] removed 2 samples, threshold=196.308441
+  cell2_Area01_001_shift_cos.arc_data	198.331635
+  cell4_Area01_000_shift_cos.arc_data	203.135925
+[Proteus/PMI05t] removed 1 samples, threshold=0.000000
+  cell3_Area01_000_shift_cos.arc_data	0.000000
+[Proteus/PVU01] removed 2 samples, threshold=86.809196
+  cell11_Area01_000_shift_cos.arc_data	162.102814
+  cell18_Area01_000_shift_cos.arc_data	90.032303
+[Proteus/PVU02] removed 2 samples, threshold=174.741058
+  cell4_Area01_000_shift_cos.arc_data	175.090897
+  cell8_Area01_000_shift_cos.arc_data	229.598892
+[Proteus/PVU03] removed 2 samples, threshold=276.385162
+  cell1_Area01_000_shift_cos.arc_data	280.969666
+  cell3_Area01_000_shift_cos.arc_data	350.706146
+[Serratia/SLI01] removed 2 samples, threshold=82.884544
+  cell12_Area01_000_shift_cos.arc_data	92.766693
+  cell12_Area01_001_shift_cos.arc_data	87.260597
+[Serratia/SLI02] removed 2 samples, threshold=158.667664
+  cell6_Area01_000_shift_cos.arc_data	164.807770
+  cell6_Area01_001_shift_cos.arc_data	182.341797
+[Serratia/SLI03] removed 2 samples, threshold=78.769432
+  cell8_Area01_000_shift_cos.arc_data	80.932358
+  cell9_Area01_000_shift_cos.arc_data	79.499924
+[Serratia/SMA01] removed 2 samples, threshold=89.383942
+  cell5_Area01_000_shift_cos.arc_data	90.371941
+  cell7_Area01_001_shift_cos.arc_data	122.187843
+[Serratia/SMA02] removed 2 samples, threshold=142.961319
+  cell2_Area01_001_shift_cos.arc_data	169.027710
+  cell3_Area01_001_shift_cos.arc_data	143.316391
+[Serratia/SMA03] removed 2 samples, threshold=243.761108
+  cell5_Area01_001_shift_cos.arc_data	294.991943
+  cell6_Area01_001_shift_cos.arc_data	244.082077
+[Serratia/SMA04t] removed 1 samples, threshold=0.000000
+  cell4_Area01_001_shift_cos.arc_data	0.000000
+[Enterobacter/EAB] removed 4 samples, threshold=338.370239
+  EAB01_cell2_Area01_000_shift_cos.arc_data	358.400055
+  EAB01_cell4_Area01_000_shift_cos.arc_data	341.038971
+  EAB03_CELL21_Area01_000_shift_cos.arc_data	344.451172
+  EAB03_CELL22_Area01_000_shift_cos.arc_data	342.162994
+[Enterobacter/ECL] removed 5 samples, threshold=206.901077
+  ECL03_cell14_Area01_001_shift_cos.arc_data	207.703201
+  ECL03_cell17_Area01_000_shift_cos.arc_data	213.452118
+  ECL03_cell18_Area01_001_shift_cos.arc_data	224.341019
+  ECL04_CELL13_Area01_000_shift_cos.arc_data	217.111069
+  ECL04_CELL18_Area01_000_shift_cos.arc_data	213.693985
+[Enterobacter/ESK] removed 4 samples, threshold=141.629211
+  ESK01_CELL18_Area01_001_shift_cos.arc_data	148.652588
+  ESK03_CELL1_Area01_001_shift_cos.arc_data	146.804123
+  ESK03_CELL4_Area01_000_shift_cos.arc_data	142.350830
+  ESK03_CELL9_Area01_000_shift_cos.arc_data	146.378586
+[Escherichia/EC] removed 4 samples, threshold=189.125778
+  EC01_cell3_shift_cos.arc_data	227.208298
+  EC01_cell5_shift_cos.arc_data	197.383850
+  EC01_cell7_shift_cos.arc_data	208.921494
+  EC04t_cell6_Area01_001_shift_cos.arc_data	193.806122
+[Klebsiella/KAE] removed 5 samples, threshold=307.203644
+  KAE01_cell15_Area01_000_shift_cos.arc_data	309.774689
+  KAE01_cell16_Area01_000_shift_cos.arc_data	310.186432
+  KAE01_cell18_Area01_000_shift_cos.arc_data	313.616913
+  KAE02_cell18_Area01_001_shift_cos.arc_data	308.580688
+  KAE02_cell19_Area01_000_shift_cos.arc_data	315.351593
+[Klebsiella/KOX] removed 4 samples, threshold=289.663361
+  KOX01_cell13_Area01_000_shift_cos.arc_data	294.346802
+  KOX01_cell4_Area01_000_shift_cos.arc_data	295.242310
+  KOX01_cell6_Area01_001_shift_cos.arc_data	293.183289
+  KOX02_cell5_Area01_000_shift_cos.arc_data	321.289978
+[Klebsiella/KP] removed 6 samples, threshold=224.735336
+  KP02_cell11_Area01_001_shift_cos.arc_data	232.639984
+  KP03_cell14_Area01_001_shift_cos.arc_data	224.801315
+  KP03_cell15_Area01_001_shift_cos.arc_data	237.864777
+  KP03_cell1_Area01_000_shift_cos.arc_data	230.871811
+  KP03_cell7_Area01_001_shift_cos.arc_data	232.967163
+  KP03_cell9_Area01_001_shift_cos.arc_data	235.208206
+[Proteus/PMI] removed 5 samples, threshold=145.344467
+  PMI01_cell1_Area01_000_shift_cos.arc_data	153.256836
+  PMI01_cell2_Area01_000_shift_cos.arc_data	150.067947
+  PMI01_cell3_Area01_001_shift_cos.arc_data	146.997589
+  PMI02_cell1_Area01_000_shift_cos.arc_data	158.182404
+  PMI02_cell2_Area01_001_shift_cos.arc_data	151.638306
+[Proteus/PVU] removed 4 samples, threshold=373.580994
+  PVU01_cell6_Area01_001_shift_cos.arc_data	386.224579
+  PVU01_cell9_Area01_001_shift_cos.arc_data	390.368286
+  PVU02_cell14_Area01_001_shift_cos.arc_data	374.839752
+  PVU02_cell8_Area01_001_shift_cos.arc_data	374.980835
+[Serratia/SLI] removed 4 samples, threshold=87.517708
+  SLI01_cell11_Area01_000_shift_cos.arc_data	92.975044
+  SLI02_cell5_Area01_001_shift_cos.arc_data	94.822380
+  SLI02_cell6_Area01_000_shift_cos.arc_data	102.968849
+  SLI02_cell6_Area01_001_shift_cos.arc_data	103.446457
+[Serratia/SMA] removed 4 samples, threshold=141.381989
+  SMA01_cell5_Area01_000_shift_cos.arc_data	171.932526
+  SMA02_cell2_Area01_000_shift_cos.arc_data	205.032410
+  SMA02_cell2_Area01_001_shift_cos.arc_data	147.096756
+  SMA02_cell3_Area01_000_shift_cos.arc_data	158.779480
+[Citrobacter/CITF] removed 4 samples, threshold=229.571915
+  CITF01_cell14_Area01_000_shift_cos.arc_data	237.153625
+  CITF01_cell15_Area01_001_shift_cos.arc_data	238.015915
+  CITF01_cell16_Area01_000_shift_cos.arc_data	235.789047
+  CITF01_cell2_Area01_001_shift_cos.arc_data	238.893082
+[Citrobacter/CITK] removed 6 samples, threshold=297.347137
+  CITK01_cell13_Area01_000_shift_cos.arc_data	297.349762
+  CITK01_cell5_Area01_000_shift_cos.arc_data	310.811707
+  CITK04_cell14_Area01_000_shift_cos.arc_data	305.876251
+  CITK04_cell18_Area01_001_shift_cos.arc_data	297.441986
+  CITK04_cell19_Area01_001_shift_cos.arc_data	308.364899
+  CITK04_cell6_Area01_000_shift_cos.arc_data	299.784454
+[Enterobacter/EAB] removed 3 samples, threshold=250.775070
+  EAB02_cell14_Area01_000_shift_cos.arc_data	251.970993
+  EAB02_cell18_Area01_001_shift_cos.arc_data	251.034348
+  EAB02_cell3_Area01_001_shift_cos.arc_data	251.309891
+[Enterobacter/ECL] removed 5 samples, threshold=206.901077
+  ECL03_cell14_Area01_001_shift_cos.arc_data	207.703201
+  ECL03_cell17_Area01_000_shift_cos.arc_data	213.452118
+  ECL03_cell18_Area01_001_shift_cos.arc_data	224.341019
+  ECL04_CELL13_Area01_000_shift_cos.arc_data	217.111069
+  ECL04_CELL18_Area01_000_shift_cos.arc_data	213.693985
+[Enterobacter/ESK] removed 4 samples, threshold=141.629211
+  ESK01_CELL18_Area01_001_shift_cos.arc_data	148.652588
+  ESK03_CELL1_Area01_001_shift_cos.arc_data	146.804123
+  ESK03_CELL4_Area01_000_shift_cos.arc_data	142.350830
+  ESK03_CELL9_Area01_000_shift_cos.arc_data	146.378586
+[Escherichia/EC] removed 4 samples, threshold=189.125778
+  EC01_cell3_shift_cos.arc_data	227.208298
+  EC01_cell5_shift_cos.arc_data	197.383850
+  EC01_cell7_shift_cos.arc_data	208.921494
+  EC04t_cell6_Area01_001_shift_cos.arc_data	193.806122
+[Klebsiella/KAE] removed 5 samples, threshold=307.203644
+  KAE01_cell15_Area01_000_shift_cos.arc_data	309.774689
+  KAE01_cell16_Area01_000_shift_cos.arc_data	310.186432
+  KAE01_cell18_Area01_000_shift_cos.arc_data	313.616913
+  KAE02_cell18_Area01_001_shift_cos.arc_data	308.580688
+  KAE02_cell19_Area01_000_shift_cos.arc_data	315.351593
+[Klebsiella/KOX] removed 4 samples, threshold=289.663361
+  KOX01_cell13_Area01_000_shift_cos.arc_data	294.346802
+  KOX01_cell4_Area01_000_shift_cos.arc_data	295.242310
+  KOX01_cell6_Area01_001_shift_cos.arc_data	293.183289
+  KOX02_cell5_Area01_000_shift_cos.arc_data	321.289978
+[Klebsiella/KP] removed 6 samples, threshold=224.735336
+  KP02_cell11_Area01_001_shift_cos.arc_data	232.639984
+  KP03_cell14_Area01_001_shift_cos.arc_data	224.801315
+  KP03_cell15_Area01_001_shift_cos.arc_data	237.864777
+  KP03_cell1_Area01_000_shift_cos.arc_data	230.871811
+  KP03_cell7_Area01_001_shift_cos.arc_data	232.967163
+  KP03_cell9_Area01_001_shift_cos.arc_data	235.208206
+[Proteus/PMI] removed 5 samples, threshold=145.344467
+  PMI01_cell1_Area01_000_shift_cos.arc_data	153.256836
+  PMI01_cell2_Area01_000_shift_cos.arc_data	150.067947
+  PMI01_cell3_Area01_001_shift_cos.arc_data	146.997589
+  PMI02_cell1_Area01_000_shift_cos.arc_data	158.182404
+  PMI02_cell2_Area01_001_shift_cos.arc_data	151.638306
+[Proteus/PVU] removed 4 samples, threshold=373.580994
+  PVU01_cell6_Area01_001_shift_cos.arc_data	386.224579
+  PVU01_cell9_Area01_001_shift_cos.arc_data	390.368286
+  PVU02_cell14_Area01_001_shift_cos.arc_data	374.839752
+  PVU02_cell8_Area01_001_shift_cos.arc_data	374.980835
+[Serratia/SLI] removed 4 samples, threshold=87.517708
+  SLI01_cell11_Area01_000_shift_cos.arc_data	92.975044
+  SLI02_cell5_Area01_001_shift_cos.arc_data	94.822380
+  SLI02_cell6_Area01_000_shift_cos.arc_data	102.968849
+  SLI02_cell6_Area01_001_shift_cos.arc_data	103.446457
+[Serratia/SMA] removed 4 samples, threshold=141.381989
+  SMA01_cell5_Area01_000_shift_cos.arc_data	171.932526
+  SMA02_cell2_Area01_000_shift_cos.arc_data	205.032410
+  SMA02_cell2_Area01_001_shift_cos.arc_data	147.096756
+  SMA02_cell3_Area01_000_shift_cos.arc_data	158.779480
+[Citrobacter/CITF] removed 4 samples, threshold=229.571915
+  CITF01_cell14_Area01_000_shift_cos.arc_data	237.153625
+  CITF01_cell15_Area01_001_shift_cos.arc_data	238.015915
+  CITF01_cell16_Area01_000_shift_cos.arc_data	235.789047
+  CITF01_cell2_Area01_001_shift_cos.arc_data	238.893082
+[Citrobacter/CITK] removed 6 samples, threshold=297.347137
+  CITK01_cell13_Area01_000_shift_cos.arc_data	297.349762
+  CITK01_cell5_Area01_000_shift_cos.arc_data	310.811707
+  CITK04_cell14_Area01_000_shift_cos.arc_data	305.876251
+  CITK04_cell18_Area01_001_shift_cos.arc_data	297.441986
+  CITK04_cell19_Area01_001_shift_cos.arc_data	308.364899
+  CITK04_cell6_Area01_000_shift_cos.arc_data	299.784454
+[Enterobacter/EAB] removed 3 samples, threshold=250.775070
+  EAB02_cell14_Area01_000_shift_cos.arc_data	251.970993
+  EAB02_cell18_Area01_001_shift_cos.arc_data	251.034348
+  EAB02_cell3_Area01_001_shift_cos.arc_data	251.309891
+[Enterobacter/ECL] removed 5 samples, threshold=206.901077
+  ECL03_cell14_Area01_001_shift_cos.arc_data	207.703201
+  ECL03_cell17_Area01_000_shift_cos.arc_data	213.452118
+  ECL03_cell18_Area01_001_shift_cos.arc_data	224.341019
+  ECL04_CELL13_Area01_000_shift_cos.arc_data	217.111069
+  ECL04_CELL18_Area01_000_shift_cos.arc_data	213.693985
+[Enterobacter/ESK] removed 4 samples, threshold=141.629211
+  ESK01_CELL18_Area01_001_shift_cos.arc_data	148.652588
+  ESK03_CELL1_Area01_001_shift_cos.arc_data	146.804123
+  ESK03_CELL4_Area01_000_shift_cos.arc_data	142.350830
+  ESK03_CELL9_Area01_000_shift_cos.arc_data	146.378586
+[Escherichia/EC] removed 4 samples, threshold=189.125778
+  EC01_cell3_shift_cos.arc_data	227.208298
+  EC01_cell5_shift_cos.arc_data	197.383850
+  EC01_cell7_shift_cos.arc_data	208.921494
+  EC04t_cell6_Area01_001_shift_cos.arc_data	193.806122
+[Klebsiella/KAE] removed 5 samples, threshold=307.203644
+  KAE01_cell15_Area01_000_shift_cos.arc_data	309.774689
+  KAE01_cell16_Area01_000_shift_cos.arc_data	310.186432
+  KAE01_cell18_Area01_000_shift_cos.arc_data	313.616913
+  KAE02_cell18_Area01_001_shift_cos.arc_data	308.580688
+  KAE02_cell19_Area01_000_shift_cos.arc_data	315.351593
+[Klebsiella/KOX] removed 4 samples, threshold=289.663361
+  KOX01_cell13_Area01_000_shift_cos.arc_data	294.346802
+  KOX01_cell4_Area01_000_shift_cos.arc_data	295.242310
+  KOX01_cell6_Area01_001_shift_cos.arc_data	293.183289
+  KOX02_cell5_Area01_000_shift_cos.arc_data	321.289978
+[Klebsiella/KP] removed 6 samples, threshold=224.735336
+  KP02_cell11_Area01_001_shift_cos.arc_data	232.639984
+  KP03_cell14_Area01_001_shift_cos.arc_data	224.801315
+  KP03_cell15_Area01_001_shift_cos.arc_data	237.864777
+  KP03_cell1_Area01_000_shift_cos.arc_data	230.871811
+  KP03_cell7_Area01_001_shift_cos.arc_data	232.967163
+  KP03_cell9_Area01_001_shift_cos.arc_data	235.208206
+[Citrobacter/CITF] removed 4 samples, threshold=229.571915
+  CITF01_cell14_Area01_000_shift_cos.arc_data	237.153625
+  CITF01_cell15_Area01_001_shift_cos.arc_data	238.015915
+  CITF01_cell16_Area01_000_shift_cos.arc_data	235.789047
+  CITF01_cell2_Area01_001_shift_cos.arc_data	238.893082
+[Citrobacter/CITK] removed 6 samples, threshold=297.347137
+  CITK01_cell13_Area01_000_shift_cos.arc_data	297.349762
+  CITK01_cell5_Area01_000_shift_cos.arc_data	310.811707
+  CITK04_cell14_Area01_000_shift_cos.arc_data	305.876251
+  CITK04_cell18_Area01_001_shift_cos.arc_data	297.441986
+  CITK04_cell19_Area01_001_shift_cos.arc_data	308.364899
+  CITK04_cell6_Area01_000_shift_cos.arc_data	299.784454
+[Enterobacter/EAB] removed 3 samples, threshold=250.775070
+  EAB02_cell14_Area01_000_shift_cos.arc_data	251.970993
+  EAB02_cell18_Area01_001_shift_cos.arc_data	251.034348
+  EAB02_cell3_Area01_001_shift_cos.arc_data	251.309891
+[Enterobacter/ECL] removed 5 samples, threshold=206.901077
+  ECL03_cell14_Area01_001_shift_cos.arc_data	207.703201
+  ECL03_cell17_Area01_000_shift_cos.arc_data	213.452118
+  ECL03_cell18_Area01_001_shift_cos.arc_data	224.341019
+  ECL04_CELL13_Area01_000_shift_cos.arc_data	217.111069
+  ECL04_CELL18_Area01_000_shift_cos.arc_data	213.693985
+[Enterobacter/ESK] removed 4 samples, threshold=141.629211
+  ESK01_CELL18_Area01_001_shift_cos.arc_data	148.652588
+  ESK03_CELL1_Area01_001_shift_cos.arc_data	146.804123
+  ESK03_CELL4_Area01_000_shift_cos.arc_data	142.350830
+  ESK03_CELL9_Area01_000_shift_cos.arc_data	146.378586
+[Escherichia/EC] removed 9 samples, threshold=135.412384
+  EC01_cell3_shift_cos.arc_data	135.843063
+  EC01_cell4_shift_cos.arc_data	137.218719
+  EC05_ESBL-1_cell12_Area01_000_shift_cos.arc_data	143.067154
+  EC05_ESBL-1_cell15_Area01_001_shift_cos.arc_data	144.336533
+  EC05_ESBL-1_cell16_Area01_000_shift_cos.arc_data	142.872971
+  EC05_ESBL-1_cell16_Area01_001_shift_cos.arc_data	144.755539
+  EC05_ESBL-1_cell21_Area01_000_shift_cos.arc_data	145.094269
+  EC05_ESBL-1_cell7_Area01_001_shift_cos.arc_data	143.245026
+  EC05_ESBL-1_cell9_Area01_000_shift_cos.arc_data	157.750458
+[Klebsiella/KAE] removed 5 samples, threshold=307.203644
+  KAE01_cell15_Area01_000_shift_cos.arc_data	309.774689
+  KAE01_cell16_Area01_000_shift_cos.arc_data	310.186432
+  KAE01_cell18_Area01_000_shift_cos.arc_data	313.616913
+  KAE02_cell18_Area01_001_shift_cos.arc_data	308.580688
+  KAE02_cell19_Area01_000_shift_cos.arc_data	315.351593
+[Klebsiella/KOX] removed 4 samples, threshold=289.663361
+  KOX01_cell13_Area01_000_shift_cos.arc_data	294.346802
+  KOX01_cell4_Area01_000_shift_cos.arc_data	295.242310
+  KOX01_cell6_Area01_001_shift_cos.arc_data	293.183289
+  KOX02_cell5_Area01_000_shift_cos.arc_data	321.289978
+[Klebsiella/KP] removed 6 samples, threshold=224.735336
+  KP02_cell11_Area01_001_shift_cos.arc_data	232.639984
+  KP03_cell14_Area01_001_shift_cos.arc_data	224.801315
+  KP03_cell15_Area01_001_shift_cos.arc_data	237.864777
+  KP03_cell1_Area01_000_shift_cos.arc_data	230.871811
+  KP03_cell7_Area01_001_shift_cos.arc_data	232.967163
+  KP03_cell9_Area01_001_shift_cos.arc_data	235.208206
+[Proteus/PMI] removed 5 samples, threshold=145.344467
+  PMI01_cell1_Area01_000_shift_cos.arc_data	153.256836
+  PMI01_cell2_Area01_000_shift_cos.arc_data	150.067947
+  PMI01_cell3_Area01_001_shift_cos.arc_data	146.997589
+  PMI02_cell1_Area01_000_shift_cos.arc_data	158.182404
+  PMI02_cell2_Area01_001_shift_cos.arc_data	151.638306
+[Proteus/PVU] removed 4 samples, threshold=373.580994
+  PVU01_cell6_Area01_001_shift_cos.arc_data	386.224579
+  PVU01_cell9_Area01_001_shift_cos.arc_data	390.368286
+  PVU02_cell14_Area01_001_shift_cos.arc_data	374.839752
+  PVU02_cell8_Area01_001_shift_cos.arc_data	374.980835
+[Serratia/SLI] removed 4 samples, threshold=87.517708
+  SLI01_cell11_Area01_000_shift_cos.arc_data	92.975044
+  SLI02_cell5_Area01_001_shift_cos.arc_data	94.822380
+  SLI02_cell6_Area01_000_shift_cos.arc_data	102.968849
+  SLI02_cell6_Area01_001_shift_cos.arc_data	103.446457
+[Serratia/SMA] removed 4 samples, threshold=141.381989
+  SMA01_cell5_Area01_000_shift_cos.arc_data	171.932526
+  SMA02_cell2_Area01_000_shift_cos.arc_data	205.032410
+  SMA02_cell2_Area01_001_shift_cos.arc_data	147.096756
+  SMA02_cell3_Area01_000_shift_cos.arc_data	158.779480

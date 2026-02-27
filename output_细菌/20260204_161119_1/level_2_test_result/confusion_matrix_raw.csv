@@ -1,0 +1,11 @@
+,Enterobacter/ECL,Enterobacter/ESK,Escherichia/EC,Klebsiella/KAE,Klebsiella/KOX,Klebsiella/KP,Proteus/PMI,Proteus/PVU,Serratia/SLI,Serratia/SMA
+Enterobacter/ECL,23,0,1,0,0,3,0,0,0,1
+Enterobacter/ESK,0,18,2,1,0,0,0,0,0,0
+Escherichia/EC,0,0,54,1,0,1,0,0,0,0
+Klebsiella/KAE,1,0,0,25,3,1,0,0,0,1
+Klebsiella/KOX,1,0,1,1,18,0,0,0,0,1
+Klebsiella/KP,1,0,0,1,3,25,2,0,0,0
+Proteus/PMI,0,0,1,0,0,0,29,0,0,0
+Proteus/PVU,0,0,0,0,0,0,0,23,0,0
+Serratia/SLI,0,0,0,1,1,0,2,0,20,0
+Serratia/SMA,1,0,1,1,0,0,0,1,1,17

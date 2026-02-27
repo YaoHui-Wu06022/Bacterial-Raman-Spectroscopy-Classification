@@ -1,0 +1,35 @@
+{
+  "level_1": [
+    "Enterobacter",
+    "Escherichia",
+    "Klebsiella",
+    "Proteus",
+    "Serratia"
+  ],
+  "level_2": [
+    "Enterobacter/EAB",
+    "Enterobacter/ECL",
+    "Enterobacter/ESK",
+    "Escherichia/EC",
+    "Klebsiella/KAE",
+    "Klebsiella/KOX",
+    "Klebsiella/KP",
+    "Proteus/PMI",
+    "Proteus/PVU",
+    "Serratia/SLI",
+    "Serratia/SMA"
+  ],
+  "leaf": [
+    "Enterobacter/EAB",
+    "Enterobacter/ECL",
+    "Enterobacter/ESK",
+    "Escherichia/EC",
+    "Klebsiella/KAE",
+    "Klebsiella/KOX",
+    "Klebsiella/KP",
+    "Proteus/PMI",
+    "Proteus/PVU",
+    "Serratia/SLI",
+    "Serratia/SMA"
+  ]
+}

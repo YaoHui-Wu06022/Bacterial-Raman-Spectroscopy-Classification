@@ -1,0 +1,12 @@
+Aggregate analysis for level_2 over 4 parents.
+Using device: cuda (config.use_gpu=True, cuda_available=True)
+--- Parent 0 ---
+--- Parent 2 ---
+--- Parent 3 ---
+--- Parent 4 ---
+No parent models for level_1; cannot inherit band importance.
+Saved aggregate channel importance: /content/output/20260204_161119/level_2_aggregate_analysis/figures/channel_importance_IG_aggregate.png
+Saved aggregate layer importance: /content/output/20260204_161119/level_2_aggregate_analysis/figures/layer_importance_aggregate.png
+Saved aggregate band importance heatmap: /content/output/20260204_161119/level_2_aggregate_analysis/figures/band_importance_heatmap_aggregate.png
+Saved aggregate band top-k CSV: /content/output/20260204_161119/level_2_aggregate_analysis/figures/band_top5_per_class_aggregate.csv
+Note: Embedding plots are skipped in aggregate mode (different parent models).
