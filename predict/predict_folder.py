@@ -111,20 +111,20 @@ if __name__ == "__main__":
     # ========================================================
     # 指定实验输出目录（必须包含 config_.yaml + *_model.pt）
     # ========================================================
-    EXP_DIR = resolve_path("output_细菌/20260204_161119_1")
+    EXP_DIR = resolve_path("output_耐药菌/20260302_021659")
     # 手动设置预测层级（None 则使用 config）
-    PREDICT_LEVEL = "level_1"
+    PREDICT_LEVEL = "level_2"
 
     # 可选：人工指定上层遮罩（例如在 level_1 先验已知大类）
     # 例如：{"level_1": ["baoman", "dachang"]}
     # 也支持索引：{"level_1": [0, 2]}
-    # MANUAL_PARENT_MASK = {
-    #     "level_1":["feike"],
-    # }
-    MANUAL_PARENT_MASK = None
+    MANUAL_PARENT_MASK = {
+        "level_1":["feike"],
+    }
+    # MANUAL_PARENT_MASK = None
 
     # 待预测数据根目录
-    PREDICT_ROOT = resolve_path("dataset_test_细菌")
+    PREDICT_ROOT = resolve_path("dataset_test_耐药菌")
     if not os.path.isdir(PREDICT_ROOT):
         raise FileNotFoundError(
             f"Predict root not found: {PREDICT_ROOT}. Please check the path."

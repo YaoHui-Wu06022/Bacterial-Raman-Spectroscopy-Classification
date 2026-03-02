@@ -1,0 +1,11 @@
+,baoman/R,baoman/S,dachang/ESBL/ESBL+,dachang/ESBL/ESBL-,dachang/FQR,feike/CRE,feike/ESBL/ESBL+,feike/ESBL/ESBL-,jinpu/MRSA,jinpu/MSSA
+baoman/R,27,2,0,0,0,0,0,0,0,0
+baoman/S,1,24,0,0,0,0,0,0,0,0
+dachang/ESBL/ESBL+,0,0,35,10,0,0,2,0,0,0
+dachang/ESBL/ESBL-,0,0,7,31,0,0,2,5,0,0
+dachang/FQR,0,0,4,3,41,0,0,0,0,0
+feike/CRE,0,0,0,0,0,28,1,0,0,0
+feike/ESBL/ESBL+,0,0,2,1,0,0,36,14,0,0
+feike/ESBL/ESBL-,0,0,0,3,0,0,10,39,0,0
+jinpu/MRSA,0,0,0,0,0,0,0,0,23,0
+jinpu/MSSA,0,0,0,0,0,0,0,0,0,24

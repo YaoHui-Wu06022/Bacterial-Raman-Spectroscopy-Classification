@@ -1,0 +1,361 @@
+Using device: cuda (config.use_gpu=True, cuda_available=True)
+Seed set to 42 (deterministic=True)
+[level_3] ==================== LEVEL START ====================
+parent=5 train=425 test=107 child=[2, 3]
+[level_3_parent_5] ==================== MODEL START ====================
+[Epoch 1] TrainLoss(cls)=1.3247, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.6984
+TrainAcc=52.94%, TestAcc=49.53%, TestMacroF1=33.12%, TestBalAcc=50.00%, LR=2.40e-04, 
+EarlyStop score = 0.3969 (w_f1=0.6, w_acc=0.4)
+  --> Best model updated! (MacroF1 improved)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 2] TrainLoss(cls)=0.5516, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.7402
+TrainAcc=53.65%, TestAcc=50.47%, TestMacroF1=33.54%, TestBalAcc=50.00%, LR=2.40e-04, 
+EarlyStop score = 0.4031 (w_f1=0.6, w_acc=0.4)
+  --> Best model updated! (MacroF1 improved)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 3] TrainLoss(cls)=0.4107, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.6936
+TrainAcc=53.18%, TestAcc=47.66%, TestMacroF1=36.42%, TestBalAcc=48.06%, LR=2.39e-04, 
+EarlyStop score = 0.4092 (w_f1=0.6, w_acc=0.4)
+  --> Best model updated! (MacroF1 improved)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 4] TrainLoss(cls)=0.3566, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.7016
+TrainAcc=65.88%, TestAcc=49.53%, TestMacroF1=33.12%, TestBalAcc=50.00%, LR=2.39e-04, 
+EarlyStop score = 0.3969 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 5] TrainLoss(cls)=0.3428, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.6908
+TrainAcc=66.12%, TestAcc=50.47%, TestMacroF1=33.54%, TestBalAcc=50.00%, LR=2.38e-04, 
+EarlyStop score = 0.4031 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 6] TrainLoss(cls)=0.3161, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.6610
+TrainAcc=73.88%, TestAcc=69.16%, TestMacroF1=68.26%, TestBalAcc=69.32%, LR=2.37e-04, 
+EarlyStop score = 0.6862 (w_f1=0.6, w_acc=0.4)
+  --> Best model updated! (MacroF1 improved)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 7] TrainLoss(cls)=0.3115, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.6157
+TrainAcc=72.00%, TestAcc=68.22%, TestMacroF1=66.95%, TestBalAcc=68.05%, LR=2.36e-04, 
+EarlyStop score = 0.6746 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 8] TrainLoss(cls)=0.3136, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.7105
+TrainAcc=70.12%, TestAcc=54.21%, TestMacroF1=41.41%, TestBalAcc=53.77%, LR=2.34e-04, 
+EarlyStop score = 0.4653 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 9] TrainLoss(cls)=0.2930, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.5888
+TrainAcc=76.94%, TestAcc=69.16%, TestMacroF1=68.62%, TestBalAcc=69.04%, LR=2.33e-04, 
+EarlyStop score = 0.6884 (w_f1=0.6, w_acc=0.4)
+  --> Best model updated! (MacroF1 improved)
+[level_3_parent_5] ------------------------------------------------
+  base_w     = [0.9995646 1.0004355]
+  ema_class_ce= [0.51645315 0.5509839 ]
+  final_w    = [1.0052857 0.9947143]
+[Epoch 10] TrainLoss(cls)=0.2802, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.6131
+TrainAcc=76.24%, TestAcc=69.16%, TestMacroF1=66.13%, TestBalAcc=68.89%, LR=2.31e-04, 
+EarlyStop score = 0.6734 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 11] TrainLoss(cls)=0.2705, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.5685
+TrainAcc=77.41%, TestAcc=73.83%, TestMacroF1=72.56%, TestBalAcc=73.64%, LR=2.29e-04, 
+EarlyStop score = 0.7307 (w_f1=0.6, w_acc=0.4)
+  --> Best model updated! (MacroF1 improved)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 12] TrainLoss(cls)=0.2808, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.6494
+TrainAcc=77.18%, TestAcc=59.81%, TestMacroF1=54.01%, TestBalAcc=60.15%, LR=2.27e-04, 
+EarlyStop score = 0.5633 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 13] TrainLoss(cls)=0.2694, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.6009
+TrainAcc=80.00%, TestAcc=67.29%, TestMacroF1=64.89%, TestBalAcc=67.05%, LR=2.25e-04, 
+EarlyStop score = 0.6585 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 14] TrainLoss(cls)=0.2359, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.5392
+TrainAcc=82.59%, TestAcc=68.22%, TestMacroF1=68.22%, TestBalAcc=68.24%, LR=2.23e-04, 
+EarlyStop score = 0.6822 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 15] TrainLoss(cls)=0.2578, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.5693
+TrainAcc=82.35%, TestAcc=70.09%, TestMacroF1=69.88%, TestBalAcc=70.18%, LR=2.21e-04, 
+EarlyStop score = 0.6997 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 16] TrainLoss(cls)=0.2646, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.7400
+TrainAcc=81.88%, TestAcc=53.27%, TestMacroF1=43.23%, TestBalAcc=53.67%, LR=2.18e-04, 
+EarlyStop score = 0.4725 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 17] TrainLoss(cls)=0.2338, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.6254
+TrainAcc=81.18%, TestAcc=65.42%, TestMacroF1=61.54%, TestBalAcc=65.13%, LR=2.15e-04, 
+EarlyStop score = 0.6309 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 18] TrainLoss(cls)=0.2326, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.8652
+TrainAcc=80.94%, TestAcc=62.62%, TestMacroF1=56.18%, TestBalAcc=62.26%, LR=2.12e-04, 
+EarlyStop score = 0.5876 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 19] TrainLoss(cls)=0.2818, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.6105
+TrainAcc=79.53%, TestAcc=59.81%, TestMacroF1=55.87%, TestBalAcc=60.10%, LR=2.09e-04, 
+EarlyStop score = 0.5744 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+  base_w     = [0.9995646 1.0004355]
+  ema_class_ce= [0.40145063 0.41070348]
+  final_w    = [1.0242318 0.9757682]
+[Epoch 20] TrainLoss(cls)=0.2451, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=1.6798
+TrainAcc=82.82%, TestAcc=49.53%, TestMacroF1=33.12%, TestBalAcc=50.00%, LR=2.06e-04, 
+EarlyStop score = 0.3969 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 21] TrainLoss(cls)=0.1918, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.7209
+TrainAcc=87.53%, TestAcc=65.42%, TestMacroF1=61.01%, TestBalAcc=65.11%, LR=2.03e-04, 
+EarlyStop score = 0.6277 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 22] TrainLoss(cls)=0.1986, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.7778
+TrainAcc=84.47%, TestAcc=63.55%, TestMacroF1=58.29%, TestBalAcc=63.23%, LR=2.00e-04, 
+EarlyStop score = 0.6040 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 23] TrainLoss(cls)=0.1717, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.7200
+TrainAcc=89.41%, TestAcc=57.01%, TestMacroF1=53.60%, TestBalAcc=57.27%, LR=1.96e-04, 
+EarlyStop score = 0.5496 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 24] TrainLoss(cls)=0.1815, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.7392
+TrainAcc=87.53%, TestAcc=59.81%, TestMacroF1=54.68%, TestBalAcc=60.13%, LR=1.93e-04, 
+EarlyStop score = 0.5674 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 25] TrainLoss(cls)=0.1802, AlignLossW=0.0000, SupConLossW=0.0000, TestLoss=0.7903
+TrainAcc=88.00%, TestAcc=60.75%, TestMacroF1=55.42%, TestBalAcc=61.08%, LR=1.89e-04, 
+EarlyStop score = 0.5755 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 26] TrainLoss(cls)=0.1814, AlignLossW=0.0000, SupConLossW=0.0061, TestLoss=0.7300
+TrainAcc=90.59%, TestAcc=65.42%, TestMacroF1=62.47%, TestBalAcc=65.69%, LR=1.85e-04, 
+EarlyStop score = 0.6365 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 27] TrainLoss(cls)=0.1395, AlignLossW=0.0000, SupConLossW=0.0121, TestLoss=0.6098
+TrainAcc=91.53%, TestAcc=70.09%, TestMacroF1=69.88%, TestBalAcc=70.18%, LR=1.81e-04, 
+EarlyStop score = 0.6997 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 28] TrainLoss(cls)=0.1351, AlignLossW=0.0000, SupConLossW=0.0182, TestLoss=1.6440
+TrainAcc=89.88%, TestAcc=53.27%, TestMacroF1=39.53%, TestBalAcc=52.83%, LR=1.77e-04, 
+EarlyStop score = 0.4503 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 29] TrainLoss(cls)=0.2392, AlignLossW=0.0000, SupConLossW=0.0242, TestLoss=0.6750
+TrainAcc=88.71%, TestAcc=65.42%, TestMacroF1=61.01%, TestBalAcc=65.11%, LR=1.73e-04, 
+EarlyStop score = 0.6277 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+  base_w     = [0.9995646 1.0004355]
+  ema_class_ce= [0.29490528 0.33471823]
+  final_w    = [1.0253955  0.97460437]
+[Epoch 30] TrainLoss(cls)=0.1976, AlignLossW=0.0000, SupConLossW=0.0304, TestLoss=0.5636
+TrainAcc=88.47%, TestAcc=70.09%, TestMacroF1=69.88%, TestBalAcc=70.18%, LR=1.69e-04, 
+EarlyStop score = 0.6997 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 31] TrainLoss(cls)=0.1920, AlignLossW=0.0000, SupConLossW=0.0363, TestLoss=0.8399
+TrainAcc=89.41%, TestAcc=58.88%, TestMacroF1=52.58%, TestBalAcc=59.22%, LR=1.65e-04, 
+EarlyStop score = 0.5510 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 32] TrainLoss(cls)=0.1787, AlignLossW=0.0000, SupConLossW=0.0424, TestLoss=0.6878
+TrainAcc=89.65%, TestAcc=61.68%, TestMacroF1=58.87%, TestBalAcc=61.93%, LR=1.61e-04, 
+EarlyStop score = 0.5999 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 33] TrainLoss(cls)=0.1531, AlignLossW=0.0000, SupConLossW=0.0485, TestLoss=0.5940
+TrainAcc=90.12%, TestAcc=69.16%, TestMacroF1=68.99%, TestBalAcc=69.23%, LR=1.56e-04, 
+EarlyStop score = 0.6905 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 34] TrainLoss(cls)=0.1608, AlignLossW=0.0000, SupConLossW=0.0544, TestLoss=0.5383
+TrainAcc=89.41%, TestAcc=74.77%, TestMacroF1=74.73%, TestBalAcc=74.81%, LR=1.52e-04, 
+EarlyStop score = 0.7475 (w_f1=0.6, w_acc=0.4)
+  --> Best model updated! (MacroF1 improved)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 35] TrainLoss(cls)=0.1493, AlignLossW=0.0000, SupConLossW=0.0605, TestLoss=0.6139
+TrainAcc=89.65%, TestAcc=66.36%, TestMacroF1=64.73%, TestBalAcc=66.56%, LR=1.47e-04, 
+EarlyStop score = 0.6538 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 36] TrainLoss(cls)=0.1322, AlignLossW=0.0000, SupConLossW=0.0664, TestLoss=0.6376
+TrainAcc=92.00%, TestAcc=64.49%, TestMacroF1=62.44%, TestBalAcc=64.71%, LR=1.43e-04, 
+EarlyStop score = 0.6326 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 37] TrainLoss(cls)=0.1104, AlignLossW=0.0000, SupConLossW=0.0723, TestLoss=0.6108
+TrainAcc=92.71%, TestAcc=71.96%, TestMacroF1=70.84%, TestBalAcc=71.79%, LR=1.39e-04, 
+EarlyStop score = 0.7129 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 38] TrainLoss(cls)=0.1291, AlignLossW=0.0000, SupConLossW=0.0783, TestLoss=0.8299
+TrainAcc=94.35%, TestAcc=64.49%, TestMacroF1=59.66%, TestBalAcc=64.17%, LR=1.34e-04, 
+EarlyStop score = 0.6159 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 39] TrainLoss(cls)=0.1289, AlignLossW=0.0000, SupConLossW=0.0844, TestLoss=0.5472
+TrainAcc=92.71%, TestAcc=70.09%, TestMacroF1=70.09%, TestBalAcc=70.09%, LR=1.30e-04, 
+EarlyStop score = 0.7009 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+  base_w     = [0.9995646 1.0004355]
+  ema_class_ce= [0.25517157 0.18973656]
+  final_w    = [0.96029365 1.0397063 ]
+[Epoch 40] TrainLoss(cls)=0.1308, AlignLossW=0.0000, SupConLossW=0.0901, TestLoss=0.7712
+TrainAcc=92.94%, TestAcc=61.68%, TestMacroF1=58.87%, TestBalAcc=61.93%, LR=1.25e-04, 
+EarlyStop score = 0.5999 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 41] TrainLoss(cls)=0.1273, AlignLossW=0.0000, SupConLossW=0.0962, TestLoss=0.9316
+TrainAcc=92.47%, TestAcc=57.01%, TestMacroF1=51.17%, TestBalAcc=57.34%, LR=1.20e-04, 
+EarlyStop score = 0.5351 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 42] TrainLoss(cls)=0.1310, AlignLossW=0.0000, SupConLossW=0.1022, TestLoss=0.5377
+TrainAcc=91.76%, TestAcc=70.09%, TestMacroF1=70.03%, TestBalAcc=70.14%, LR=1.16e-04, 
+EarlyStop score = 0.7005 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 43] TrainLoss(cls)=0.1490, AlignLossW=0.0000, SupConLossW=0.1081, TestLoss=0.5597
+TrainAcc=90.59%, TestAcc=73.83%, TestMacroF1=73.55%, TestBalAcc=73.74%, LR=1.11e-04, 
+EarlyStop score = 0.7366 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 44] TrainLoss(cls)=0.1057, AlignLossW=0.0000, SupConLossW=0.1141, TestLoss=0.5747
+TrainAcc=92.71%, TestAcc=71.03%, TestMacroF1=70.52%, TestBalAcc=71.16%, LR=1.07e-04, 
+EarlyStop score = 0.7073 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 45] TrainLoss(cls)=0.1148, AlignLossW=0.0000, SupConLossW=0.1198, TestLoss=0.6147
+TrainAcc=93.41%, TestAcc=74.77%, TestMacroF1=74.19%, TestBalAcc=74.63%, LR=1.03e-04, 
+EarlyStop score = 0.7442 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 46] TrainLoss(cls)=0.1186, AlignLossW=0.0000, SupConLossW=0.1198, TestLoss=0.5922
+TrainAcc=93.65%, TestAcc=71.96%, TestMacroF1=71.40%, TestBalAcc=72.10%, LR=9.82e-05, 
+EarlyStop score = 0.7163 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 47] TrainLoss(cls)=0.1058, AlignLossW=0.0000, SupConLossW=0.1200, TestLoss=0.5868
+TrainAcc=93.18%, TestAcc=71.03%, TestMacroF1=71.03%, TestBalAcc=71.03%, LR=9.38e-05, 
+EarlyStop score = 0.7103 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 48] TrainLoss(cls)=0.1017, AlignLossW=0.0000, SupConLossW=0.1197, TestLoss=0.5658
+TrainAcc=95.53%, TestAcc=73.83%, TestMacroF1=73.65%, TestBalAcc=73.92%, LR=8.95e-05, 
+EarlyStop score = 0.7372 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 49] TrainLoss(cls)=0.0817, AlignLossW=0.0000, SupConLossW=0.1159, TestLoss=0.5264
+TrainAcc=94.82%, TestAcc=75.70%, TestMacroF1=75.65%, TestBalAcc=75.66%, LR=8.52e-05, 
+EarlyStop score = 0.7567 (w_f1=0.6, w_acc=0.4)
+  --> Best model updated! (MacroF1 improved)
+[level_3_parent_5] ------------------------------------------------
+  base_w     = [0.9995646 1.0004355]
+  ema_class_ce= [0.1826035  0.17451333]
+  final_w    = [1.0106558 0.9893441]
+[Epoch 50] TrainLoss(cls)=0.1080, AlignLossW=0.0000, SupConLossW=0.1119, TestLoss=0.5763
+TrainAcc=94.82%, TestAcc=72.90%, TestMacroF1=72.74%, TestBalAcc=72.83%, LR=8.10e-05, 
+EarlyStop score = 0.7281 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 51] TrainLoss(cls)=0.0888, AlignLossW=0.0000, SupConLossW=0.1080, TestLoss=0.5589
+TrainAcc=95.29%, TestAcc=75.70%, TestMacroF1=75.68%, TestBalAcc=75.73%, LR=7.69e-05, 
+EarlyStop score = 0.7569 (w_f1=0.6, w_acc=0.4)
+  --> Best model updated! (MacroF1 improved)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 52] TrainLoss(cls)=0.0972, AlignLossW=0.0000, SupConLossW=0.1044, TestLoss=0.5953
+TrainAcc=93.88%, TestAcc=71.03%, TestMacroF1=70.66%, TestBalAcc=71.14%, LR=7.28e-05, 
+EarlyStop score = 0.7081 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 53] TrainLoss(cls)=0.0856, AlignLossW=0.0000, SupConLossW=0.1006, TestLoss=0.5402
+TrainAcc=94.59%, TestAcc=76.64%, TestMacroF1=76.60%, TestBalAcc=76.68%, LR=6.88e-05, 
+EarlyStop score = 0.7662 (w_f1=0.6, w_acc=0.4)
+  --> Best model updated! (MacroF1 improved)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 54] TrainLoss(cls)=0.0866, AlignLossW=0.0000, SupConLossW=0.0967, TestLoss=0.5945
+TrainAcc=95.53%, TestAcc=71.96%, TestMacroF1=71.66%, TestBalAcc=72.06%, LR=6.49e-05, 
+EarlyStop score = 0.7178 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 55] TrainLoss(cls)=0.0908, AlignLossW=0.0000, SupConLossW=0.0931, TestLoss=0.5876
+TrainAcc=95.53%, TestAcc=72.90%, TestMacroF1=72.74%, TestBalAcc=72.97%, LR=6.11e-05, 
+EarlyStop score = 0.7281 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 56] TrainLoss(cls)=0.1211, AlignLossW=0.0000, SupConLossW=0.0893, TestLoss=0.7260
+TrainAcc=93.41%, TestAcc=71.03%, TestMacroF1=69.21%, TestBalAcc=70.81%, LR=5.74e-05, 
+EarlyStop score = 0.6994 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 57] TrainLoss(cls)=0.0811, AlignLossW=0.0000, SupConLossW=0.0855, TestLoss=0.6170
+TrainAcc=94.35%, TestAcc=71.96%, TestMacroF1=71.05%, TestBalAcc=71.80%, LR=5.38e-05, 
+EarlyStop score = 0.7141 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 58] TrainLoss(cls)=0.0813, AlignLossW=0.0000, SupConLossW=0.0816, TestLoss=0.5340
+TrainAcc=95.06%, TestAcc=72.90%, TestMacroF1=72.74%, TestBalAcc=72.97%, LR=5.03e-05, 
+EarlyStop score = 0.7281 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 59] TrainLoss(cls)=0.0598, AlignLossW=0.0000, SupConLossW=0.0778, TestLoss=0.7141
+TrainAcc=97.18%, TestAcc=71.03%, TestMacroF1=69.49%, TestBalAcc=71.24%, LR=4.69e-05, 
+EarlyStop score = 0.7011 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+  base_w     = [0.9995646 1.0004355]
+  ema_class_ce= [0.17501459 0.13109566]
+  final_w    = [0.9873742 1.0126257]
+[Epoch 60] TrainLoss(cls)=0.1007, AlignLossW=0.0000, SupConLossW=0.0743, TestLoss=0.6131
+TrainAcc=95.76%, TestAcc=71.03%, TestMacroF1=70.18%, TestBalAcc=71.19%, LR=4.37e-05, 
+EarlyStop score = 0.7052 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 61] TrainLoss(cls)=0.0737, AlignLossW=0.0000, SupConLossW=0.0705, TestLoss=0.5636
+TrainAcc=95.06%, TestAcc=71.03%, TestMacroF1=70.66%, TestBalAcc=71.14%, LR=4.06e-05, 
+EarlyStop score = 0.7081 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 62] TrainLoss(cls)=0.1044, AlignLossW=0.0000, SupConLossW=0.0667, TestLoss=0.7127
+TrainAcc=95.53%, TestAcc=68.22%, TestMacroF1=66.39%, TestBalAcc=68.45%, LR=3.76e-05, 
+EarlyStop score = 0.6712 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 63] TrainLoss(cls)=0.0680, AlignLossW=0.0000, SupConLossW=0.0630, TestLoss=0.7744
+TrainAcc=95.29%, TestAcc=67.29%, TestMacroF1=65.24%, TestBalAcc=67.52%, LR=3.47e-05, 
+EarlyStop score = 0.6606 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 64] TrainLoss(cls)=0.0550, AlignLossW=0.0000, SupConLossW=0.0592, TestLoss=0.5916
+TrainAcc=96.00%, TestAcc=71.96%, TestMacroF1=71.66%, TestBalAcc=72.06%, LR=3.20e-05, 
+EarlyStop score = 0.7178 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 65] TrainLoss(cls)=0.0514, AlignLossW=0.0000, SupConLossW=0.0555, TestLoss=0.5546
+TrainAcc=96.71%, TestAcc=71.96%, TestMacroF1=71.94%, TestBalAcc=71.94%, LR=2.94e-05, 
+EarlyStop score = 0.7195 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 66] TrainLoss(cls)=0.0724, AlignLossW=0.0000, SupConLossW=0.0518, TestLoss=0.5786
+TrainAcc=96.00%, TestAcc=71.03%, TestMacroF1=70.66%, TestBalAcc=70.93%, LR=2.69e-05, 
+EarlyStop score = 0.7081 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 67] TrainLoss(cls)=0.0616, AlignLossW=0.0000, SupConLossW=0.0480, TestLoss=0.5637
+TrainAcc=95.76%, TestAcc=70.09%, TestMacroF1=69.96%, TestBalAcc=70.04%, LR=2.47e-05, 
+EarlyStop score = 0.7002 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 68] TrainLoss(cls)=0.0866, AlignLossW=0.0000, SupConLossW=0.0443, TestLoss=0.5692
+TrainAcc=95.76%, TestAcc=74.77%, TestMacroF1=74.76%, TestBalAcc=74.79%, LR=2.25e-05, 
+EarlyStop score = 0.7476 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 69] TrainLoss(cls)=0.1031, AlignLossW=0.0000, SupConLossW=0.0407, TestLoss=0.5948
+TrainAcc=95.06%, TestAcc=71.96%, TestMacroF1=71.66%, TestBalAcc=72.06%, LR=2.06e-05, 
+EarlyStop score = 0.7178 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+  base_w     = [0.9995646 1.0004355]
+  ema_class_ce= [0.13664499 0.12813102]
+  final_w    = [1.0335308  0.96646917]
+[Epoch 70] TrainLoss(cls)=0.0506, AlignLossW=0.0000, SupConLossW=0.0369, TestLoss=0.5719
+TrainAcc=96.71%, TestAcc=72.90%, TestMacroF1=72.66%, TestBalAcc=72.99%, LR=1.88e-05, 
+EarlyStop score = 0.7275 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 71] TrainLoss(cls)=0.0690, AlignLossW=0.0000, SupConLossW=0.0333, TestLoss=0.5562
+TrainAcc=95.53%, TestAcc=73.83%, TestMacroF1=73.81%, TestBalAcc=73.86%, LR=1.71e-05, 
+EarlyStop score = 0.7382 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 72] TrainLoss(cls)=0.0659, AlignLossW=0.0000, SupConLossW=0.0295, TestLoss=0.5590
+TrainAcc=96.94%, TestAcc=73.83%, TestMacroF1=73.65%, TestBalAcc=73.92%, LR=1.56e-05, 
+EarlyStop score = 0.7372 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 73] TrainLoss(cls)=0.0822, AlignLossW=0.0000, SupConLossW=0.0258, TestLoss=0.5506
+TrainAcc=96.47%, TestAcc=74.77%, TestMacroF1=74.73%, TestBalAcc=74.81%, LR=1.43e-05, 
+EarlyStop score = 0.7475 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 74] TrainLoss(cls)=0.0656, AlignLossW=0.0000, SupConLossW=0.0236, TestLoss=0.5472
+TrainAcc=96.24%, TestAcc=75.70%, TestMacroF1=75.68%, TestBalAcc=75.73%, LR=1.32e-05, 
+EarlyStop score = 0.7569 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 75] TrainLoss(cls)=0.0769, AlignLossW=0.0000, SupConLossW=0.0237, TestLoss=0.5476
+TrainAcc=94.59%, TestAcc=76.64%, TestMacroF1=76.60%, TestBalAcc=76.68%, LR=1.22e-05, 
+EarlyStop score = 0.7662 (w_f1=0.6, w_acc=0.4)
+  --> Best model updated! (MacroF1 improved)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 76] TrainLoss(cls)=0.0636, AlignLossW=0.0000, SupConLossW=0.0236, TestLoss=0.5423
+TrainAcc=96.71%, TestAcc=73.83%, TestMacroF1=73.83%, TestBalAcc=73.83%, LR=1.14e-05, 
+EarlyStop score = 0.7383 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 77] TrainLoss(cls)=0.0833, AlignLossW=0.0000, SupConLossW=0.0236, TestLoss=0.5441
+TrainAcc=95.29%, TestAcc=72.90%, TestMacroF1=72.86%, TestBalAcc=72.87%, LR=1.08e-05, 
+EarlyStop score = 0.7287 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 78] TrainLoss(cls)=0.0658, AlignLossW=0.0000, SupConLossW=0.0237, TestLoss=0.5453
+TrainAcc=96.71%, TestAcc=71.96%, TestMacroF1=71.90%, TestBalAcc=71.93%, LR=1.04e-05, 
+EarlyStop score = 0.7193 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+[Epoch 79] TrainLoss(cls)=0.0484, AlignLossW=0.0000, SupConLossW=0.0236, TestLoss=0.5419
+TrainAcc=95.76%, TestAcc=72.90%, TestMacroF1=72.90%, TestBalAcc=72.90%, LR=1.01e-05, 
+EarlyStop score = 0.7290 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+  base_w     = [0.9995646 1.0004355]
+  ema_class_ce= [0.11507209 0.14422625]
+  final_w    = [0.9847659 1.0152342]
+[Epoch 80] TrainLoss(cls)=0.0772, AlignLossW=0.0000, SupConLossW=0.0236, TestLoss=0.5421
+TrainAcc=96.00%, TestAcc=72.90%, TestMacroF1=72.89%, TestBalAcc=72.89%, LR=1.00e-05, 
+EarlyStop score = 0.7289 (w_f1=0.6, w_acc=0.4)
+[level_3_parent_5] ------------------------------------------------
+=== Best model epoch: 75 ===

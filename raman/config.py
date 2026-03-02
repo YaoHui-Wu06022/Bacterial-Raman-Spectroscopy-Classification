@@ -6,7 +6,8 @@ class Config:
 
     # ===================== 全局设置 =====================
     # 训练层级（评估/预测层级在 evalute/predict 脚本里单独设置）
-    train_level = "level_2"
+    train_level = "level_3"
+    # train_level = "level_2"
     train_per_parent = True  # 是否层级训练
 
     # 训练分割层级（默认按 leaf 分组，避免泄漏）
@@ -23,16 +24,36 @@ class Config:
     supcon_start = 30
     supcon_end = 50
     supcon_level = "leaf"
+    # 对齐/SupCon 后期衰减起点（占总 epoch 比例）
+    # None: 根据 dataset_root 自动选择（耐药=0.6，其他=0.7）
+    decay_start_ratio = None
 
     # ===================== 基础目录 =====================
     # 数据根目录
-    dataset_root = "dataset_train_细菌"
+    dataset_root = "dataset_train_耐药菌"
+    # dataset_root = "dataset_train_细菌"
     cut_min = 600
     cut_max = 1800
     target_points = 896  # 插值参考点数
     delta = (cut_max - cut_min) / (target_points - 1)
-    BAD_BANDS = [(900, 950.0)]
+    BAD_BANDS = [(905, 940.0)]
+    # BAD_BANDS = [(900, 950.0)]
     bad_bands = BAD_BANDS
+
+    def resolve_decay_start_ratio(self):
+        """
+        返回衰减起点比例:
+        - 手动设置 decay_start_ratio 时，优先使用手动值
+        - 否则根据 dataset_root 自动判断
+        """
+        manual = getattr(self, "decay_start_ratio", None)
+        if manual is not None:
+            return float(manual)
+
+        root = str(getattr(self, "dataset_root", "")).lower()
+        if ("耐药" in root) or ("resist" in root):
+            return 0.6
+        return 0.7
 
     # 输出目录（由 train 在运行期确定，绑定时间戳）
     timestamp = None

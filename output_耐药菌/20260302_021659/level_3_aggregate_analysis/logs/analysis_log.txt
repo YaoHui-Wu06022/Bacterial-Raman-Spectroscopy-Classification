@@ -1,0 +1,9 @@
+Aggregate analysis for level_3 over 2 parents.
+Using device: cuda (config.use_gpu=True, cuda_available=True)
+--- Parent 2 ---
+--- Parent 5 ---
+Saved aggregate channel importance: /content/output_level_3/20260302_021659/level_3_aggregate_analysis/figures/channel_importance_IG_aggregate.png
+Saved aggregate layer importance: /content/output_level_3/20260302_021659/level_3_aggregate_analysis/figures/layer_importance_aggregate.png
+Saved aggregate band importance heatmap: /content/output_level_3/20260302_021659/level_3_aggregate_analysis/figures/band_importance_heatmap_aggregate.png
+Saved aggregate band top-k CSV: /content/output_level_3/20260302_021659/level_3_aggregate_analysis/figures/band_top5_per_class_aggregate.csv
+Note: Embedding plots are skipped in aggregate mode (different parent models).
