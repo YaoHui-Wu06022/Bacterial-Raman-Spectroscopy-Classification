@@ -62,7 +62,7 @@ def _load_hierarchy_meta(exp_dir):
 # =====================
 # 实验目录（需要包含多个层级的模型）
 # =====================
-EXP_DIR = "output_耐药菌/20260129_052515"
+EXP_DIR = "output_耐药菌/20260302_021659"
 EXP_DIR = resolve_path(EXP_DIR)
 config = load_experiment(EXP_DIR)
 
@@ -74,7 +74,7 @@ if not os.path.isdir(DATASET_ROOT):
 config.dataset_root = DATASET_ROOT
 
 # 手动设置评估层级
-EVAL_LEVEL = "level_2"
+EVAL_LEVEL = "level_1"
 INHERIT_MISSING_LEVELS = True  # 缺失层级时向最低级继承（便于展示）
 
 # =====================

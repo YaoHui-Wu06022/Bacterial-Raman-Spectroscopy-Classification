@@ -33,7 +33,7 @@ PCA_ENABLED = True
 PCA_COMPONENTS = 0.95
 PCA_CENTER = True
 # remove top X% by reconstruction error (e.g. 0.05 = top 5%)
-PCA_OUTLIER_RATIO = 0.01
+PCA_OUTLIER_RATIO = 0.05
 
 # Paths
 ROOT_PROCESS_RAW = "dataset_raw"

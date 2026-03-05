@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # ============================================================
 #  PCA + SVM using train_files.json / test_files.json
 # ============================================================
@@ -32,8 +32,8 @@ def resolve_path(path):
 # =========================
 # User settings
 # =========================
-EXP_DIR = resolve_path("output_细菌/20260130_085003")  # set your output folder
-LEVEL = "level_1"  # None -> use config.train_level
+EXP_DIR = resolve_path("output_耐药菌/20260302_021659")  # set your output folder
+LEVEL = "level_3"  # None -> use config.train_level
 
 OUTPUT_DIR = resolve_path(os.path.join("PCA+SVM", "output", os.path.basename(EXP_DIR)))
 
@@ -170,18 +170,71 @@ def main():
     y_pred = svm.predict(X_test_pca)
 
     acc = accuracy_score(y_test, y_pred)
-    report = classification_report(
+    report_dict = classification_report(
         y_test, y_pred,
         labels=list(range(len(class_names))),
         target_names=class_names,
+        output_dict=True,
         zero_division=0
     )
+
+    def _fmt_line(name, p, r, f1, support):
+        return (
+            f"{name:<20}"
+            f"{p * 100:>12.4f}%"
+            f"{r * 100:>12.4f}%"
+            f"{f1 * 100:>12.4f}%"
+            f"{int(round(support)):>12d}"
+        )
+
+    report_lines = []
+    report_lines.append(f"{'':<20}{'precision':>12}{'recall':>12}{'f1-score':>12}{'support':>12}")
+    report_lines.append("")
+    for cls_name in class_names:
+        row = report_dict[cls_name]
+        report_lines.append(
+            _fmt_line(
+                cls_name,
+                row["precision"],
+                row["recall"],
+                row["f1-score"],
+                row["support"],
+            )
+        )
+
+    total_support = int(sum(report_dict[name]["support"] for name in class_names))
+    report_lines.append("")
+    report_lines.append(
+        f"{'accuracy':<20}{'':>12}{'':>12}{acc * 100:>11.4f}%{total_support:>12d}"
+    )
+
+    macro = report_dict["macro avg"]
+    weighted = report_dict["weighted avg"]
+    report_lines.append(
+        _fmt_line(
+            "macro avg",
+            macro["precision"],
+            macro["recall"],
+            macro["f1-score"],
+            macro["support"],
+        )
+    )
+    report_lines.append(
+        _fmt_line(
+            "weighted avg",
+            weighted["precision"],
+            weighted["recall"],
+            weighted["f1-score"],
+            weighted["support"],
+        )
+    )
+    report = "\n".join(report_lines)
 
     cm = confusion_matrix(y_test, y_pred, labels=list(range(len(class_names))))
 
     # Save outputs
     with open(os.path.join(OUTPUT_DIR, "metrics.txt"), "w", encoding="utf-8") as f:
-        f.write(f"Accuracy: {acc:.4f}\n")
+        f.write(f"Accuracy: {acc * 100:.4f}%\n")
         f.write(f"PCA components: {X_train_pca.shape[1]}\n")
         f.write("Explained variance ratio:\n")
         f.write(np.array2string(pca.explained_variance_ratio_, precision=4))
@@ -202,3 +255,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

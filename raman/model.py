@@ -279,7 +279,7 @@ class ResNeXt1D_Transformer(nn.Module):
                 dropout=self.config.transformer_dropout,
                 batch_first=True,
                 activation="gelu",
-                norm_first=True
+                norm_first=True # 修改
             )
             self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=self.config.transformer_layers)
         elif self.lstm_on:
