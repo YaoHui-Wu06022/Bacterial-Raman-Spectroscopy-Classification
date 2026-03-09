@@ -14,6 +14,7 @@ from sklearn.svm import SVC
 from sklearn.metrics import confusion_matrix, classification_report, accuracy_score
 
 from raman.config_io import load_experiment
+from raman.data_paths import resolve_dataset_stage
 from raman.dataset import RamanDataset
 from raman.train_utils import load_split_files
 
@@ -32,8 +33,8 @@ def resolve_path(path):
 # =========================
 # User settings
 # =========================
-EXP_DIR = resolve_path("output_耐药菌/20260302_021659")  # set your output folder
-LEVEL = "level_3"  # None -> use config.train_level
+EXP_DIR = resolve_path("output/厌氧菌/20260309_054529")  # set your output folder
+LEVEL = "level_1"  # None -> use config.train_level
 
 OUTPUT_DIR = resolve_path(os.path.join("PCA+SVM", "output", os.path.basename(EXP_DIR)))
 
@@ -133,7 +134,14 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     config = load_experiment(exp_dir)
-    dataset_root = resolve_path(config.dataset_root)
+    dataset_root = os.fspath(
+        resolve_dataset_stage(
+            resolve_path(config.dataset_root),
+            stage="train",
+            project_root=BASE_DIR,
+            must_exist=True,
+        )
+    )
     config.dataset_root = dataset_root
 
     dataset = RamanDataset(dataset_root, augment=False, config=config)

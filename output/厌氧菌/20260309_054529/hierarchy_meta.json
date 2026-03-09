@@ -1,0 +1,49 @@
+{
+  "head_names": [
+    "level_1",
+    "leaf"
+  ],
+  "level_names": [
+    "level_1"
+  ],
+  "class_names_by_level": {
+    "level_1": [
+      "Aa",
+      "Fn",
+      "PG",
+      "Pn"
+    ],
+    "leaf": [
+      "Aa",
+      "Fn",
+      "PG",
+      "Pn"
+    ]
+  },
+  "parent_to_children": {
+    "level_1": {},
+    "leaf": {
+      "0": [
+        0
+      ],
+      "1": [
+        1
+      ],
+      "2": [
+        2
+      ],
+      "3": [
+        3
+      ]
+    }
+  },
+  "parent_level_name": {
+    "level_1": null,
+    "leaf": "level_1"
+  },
+  "train_level": "level_1",
+  "level_models": {
+    "level_1": "level_1_model.pt"
+  },
+  "parent_models": {}
+}

@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 from collections import defaultdict
+from .data_paths import resolve_dataset_stage
 from .preprocess import (
     SNV,
     L2Normalize,
@@ -34,9 +35,16 @@ class RamanDataset(Dataset):
 
     ROOT_TAG = "__root__"
     MISSING_TAG = "__missing__"
+    PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
     def __init__(self, root_dir, augment=False, config=None):
-        self.root_dir = root_dir
+        resolved_root = resolve_dataset_stage(
+            root_dir,
+            stage="train",
+            project_root=self.PROJECT_ROOT,
+            must_exist=True,
+        )
+        self.root_dir = os.fspath(resolved_root)
         self.augment = augment
         assert config is not None, "RamanDataset requires an explicit config"
         self.config = config

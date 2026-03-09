@@ -1,0 +1,80 @@
+[Aa] removed 8 samples, threshold=342.813507
+  Aa03_cell10_Area01_000_cos_shift.arc_data	350.267883
+  Aa03_cell11_Area01_000_cos_shift.arc_data	372.028137
+  Aa03_cell13_Area01_001_cos_shift.arc_data	354.180298
+  Aa03_cell15_Area01_000_cos_shift.arc_data	372.605438
+  Aa03_cell15_Area01_001_cos_shift.arc_data	362.807739
+  Aa03_cell18_Area01_000_cos_shift.arc_data	369.504730
+  Aa03_cell21_Area01_000_cos_shift.arc_data	342.952362
+  Aa03_cell3_Area01_001_cos_shift.arc_data	361.080444
+[Fn] removed 11 samples, threshold=508.067627
+  Fn02_cell14_Area01_000_cos_shift.arc_data	526.001221
+  Fn02_cell14_Area01_001_cos_shift.arc_data	525.007202
+  Fn02_cell19_Area01_000_cos_shift.arc_data	588.570068
+  Fn02_cell20_Area01_000_cos_shift.arc_data	575.380432
+  Fn02_cell20_Area01_001_cos_shift.arc_data	579.728271
+  Fn02_cell21_Area01_001_cos_shift.arc_data	510.694794
+  Fn02_cell22_Area01_000_cos_shift.arc_data	518.211304
+  Fn02_cell22_Area01_001_cos_shift.arc_data	554.756775
+  Fn02_cell2_Area01_001_cos_shift.arc_data	532.631470
+  Fn02_cell4_Area01_001_cos_shift.arc_data	527.744202
+  Fn02_cell5_Area01_001_cos_shift.arc_data	538.828186
+[PG] removed 11 samples, threshold=435.491486
+  PG01_cell11_Area01_000_cos_shift.arc_data	448.007904
+  PG01_cell12_Area01_001_cos_shift.arc_data	485.361938
+  PG01_cell8_Area01_000_cos_shift.arc_data	437.105255
+  PG02_cell6_Area01_000_cos_shift.arc_data	441.835876
+  PG03__cell1_Area01_000_cos_shift.arc_data	439.995300
+  PG03__cell1_Area01_001_cos_shift.arc_data	470.262787
+  PG03__cell23_Area01_000_cos_shift.arc_data	444.133179
+  PG03__cell23_Area01_001_cos_shift.arc_data	440.531067
+  PG03__cell25_Area01_000_cos_shift.arc_data	457.424072
+  PG03__cell25_Area01_001_cos_shift.arc_data	442.590271
+  PG03__cell7_Area01_000_cos_shift.arc_data	497.003601
+[Pn] removed 6 samples, threshold=364.253632
+  Pn02_cell13_Area01_000_cos_shift.arc_data	365.241180
+  Pn02_cell14_Area01_000_cos_shift.arc_data	405.798798
+  Pn02_cell16_Area01_000_cos_shift.arc_data	445.237213
+  Pn02_cell16_Area01_001_cos_shift.arc_data	392.988495
+  Pn02_cell5_Area01_000_cos_shift.arc_data	410.369049
+  Pn03_cell18_Area01_000_cos_shift.arc_data	364.612579
+[Aa] removed 8 samples, threshold=342.813507
+  Aa03_cell10_Area01_000_cos_shift.arc_data	350.267883
+  Aa03_cell11_Area01_000_cos_shift.arc_data	372.028137
+  Aa03_cell13_Area01_001_cos_shift.arc_data	354.180298
+  Aa03_cell15_Area01_000_cos_shift.arc_data	372.605438
+  Aa03_cell15_Area01_001_cos_shift.arc_data	362.807739
+  Aa03_cell18_Area01_000_cos_shift.arc_data	369.504730
+  Aa03_cell21_Area01_000_cos_shift.arc_data	342.952362
+  Aa03_cell3_Area01_001_cos_shift.arc_data	361.080444
+[Fn] removed 11 samples, threshold=508.067627
+  Fn02_cell14_Area01_000_cos_shift.arc_data	526.001221
+  Fn02_cell14_Area01_001_cos_shift.arc_data	525.007202
+  Fn02_cell19_Area01_000_cos_shift.arc_data	588.570068
+  Fn02_cell20_Area01_000_cos_shift.arc_data	575.380432
+  Fn02_cell20_Area01_001_cos_shift.arc_data	579.728271
+  Fn02_cell21_Area01_001_cos_shift.arc_data	510.694794
+  Fn02_cell22_Area01_000_cos_shift.arc_data	518.211304
+  Fn02_cell22_Area01_001_cos_shift.arc_data	554.756775
+  Fn02_cell2_Area01_001_cos_shift.arc_data	532.631470
+  Fn02_cell4_Area01_001_cos_shift.arc_data	527.744202
+  Fn02_cell5_Area01_001_cos_shift.arc_data	538.828186
+[PG] removed 11 samples, threshold=435.491486
+  PG01_cell11_Area01_000_cos_shift.arc_data	448.007904
+  PG01_cell12_Area01_001_cos_shift.arc_data	485.361938
+  PG01_cell8_Area01_000_cos_shift.arc_data	437.105255
+  PG02_cell6_Area01_000_cos_shift.arc_data	441.835876
+  PG03__cell1_Area01_000_cos_shift.arc_data	439.995300
+  PG03__cell1_Area01_001_cos_shift.arc_data	470.262787
+  PG03__cell23_Area01_000_cos_shift.arc_data	444.133179
+  PG03__cell23_Area01_001_cos_shift.arc_data	440.531067
+  PG03__cell25_Area01_000_cos_shift.arc_data	457.424072
+  PG03__cell25_Area01_001_cos_shift.arc_data	442.590271
+  PG03__cell7_Area01_000_cos_shift.arc_data	497.003601
+[Pn] removed 6 samples, threshold=364.253632
+  Pn02_cell13_Area01_000_cos_shift.arc_data	365.241180
+  Pn02_cell14_Area01_000_cos_shift.arc_data	405.798798
+  Pn02_cell16_Area01_000_cos_shift.arc_data	445.237213
+  Pn02_cell16_Area01_001_cos_shift.arc_data	392.988495
+  Pn02_cell5_Area01_000_cos_shift.arc_data	410.369049
+  Pn03_cell18_Area01_000_cos_shift.arc_data	364.612579

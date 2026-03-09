@@ -36,7 +36,7 @@
 ```text
 原始 .arc_data
   -> (离线) baseline校正 + 截断 + 插值 + 坏波段剔除 + PCA异常值过滤
-  -> dataset_train_* / dataset_test_*
+  -> dataset/<分类名>/dataset_train 或 dataset/<分类名>/dataset_test
   -> (在线) RAW域增强 -> 标准化 -> SNV后增强 -> 多通道构建
   -> ResNeXt1D 主干 -> 序列编码器(Transformer/LSTM/None) -> 池化(attn/stat) -> 分类头(cosine/linear)
   -> 训练：Focal + Align + SupCon (+DRW/EMA动态权重)
@@ -70,14 +70,13 @@
 │  ├─ analysis_core.py               # 单模型/聚合分析主流程
 │  ├─ analyze_single.py              # 单模型分析入口
 │  └─ analyze_aggregate.py           # 按parent聚合分析入口
-├─ dataset_preprocess_细菌/           # 细菌离线预处理脚本
-├─ dataset_preprocess_耐药菌/         # 耐药离线预处理脚本
+├─ dataset_process/                   # 统一离线预处理与数据集整理入口
 ├─ PCA+SVM/
 │  └─ pca_svm_from_split.py          # 传统基线（按训练split复现）
-├─ dataset_train_细菌/                # 预处理后的细菌训练数据
-├─ dataset_train_耐药菌/              # 预处理后的耐药训练数据
-├─ dataset_test_细菌/                 # 预处理后的细菌测试数据
-└─ dataset_test_耐药菌/               # 预处理后的耐药测试数据
+└─ dataset/
+   ├─ 细菌/
+   ├─ 耐药菌/
+   └─ 厌氧菌/
 ```
 
 ---
@@ -120,9 +119,9 @@
 
 ---
 
-## 5. 离线数据预处理（`dataset_preprocess_*`）
+## 5. 离线数据预处理（`dataset_process` + `dataset/<分类名>`）
 
-两个目录（细菌/耐药）流程一致，参数不同（例如 `BAD_BANDS`）。
+不同数据集共用一套流程，差异参数（例如 `BAD_BANDS`）集中在 `dataset_process/profiles.py`。
 
 ### 5.1 阶段1：原始目录重组（`classify_dataset.py`）
 
@@ -152,13 +151,13 @@
 
 输出：
 
-- 清洗后光谱到 `dataset_train_*`
-- 类别均值谱图到 `dataset_train_fig/`
+- 清洗后光谱到 `dataset/<分类名>/dataset_train`
+- 类别均值谱图到 `dataset/<分类名>/dataset_train_fig/`
 - PCA剔除日志 `log.txt`
 
 ### 5.3 阶段3：测试集预处理（`preprocess_testdata.py`）
 
-流程与训练集一致，但不做 PCA 异常值剔除，输出到 `dataset_test_*`，并保存类别均值谱图到 `dataset_test_fig/`。
+流程与训练集一致，但不做 PCA 异常值剔除，输出到 `dataset/<分类名>/dataset_test`，并保存类别均值谱图到 `dataset/<分类名>/dataset_test_fig/`。
 
 ### 5.4 其他脚本
 
@@ -317,10 +316,8 @@
 
 `decay_start_ratio` 规则：
 
-- 手动设置时优先
-- 否则自动判断：
-  - 数据路径含 `耐药`/`resist` -> `0.6`
-  - 否则 `0.7`
+- 直接在 `raman/config.py` 中显式设置具体值
+- 训练时按该值读取，并限制在 `[0.0, 1.0]`
 
 ### 8.7 优化器与学习率
 
@@ -541,11 +538,11 @@
 - `supcon_start=30`
 - `supcon_end=50`
 - `supcon_level="leaf"`
-- `decay_start_ratio=None`（自动：耐药0.6，其他0.7）
+- `decay_start_ratio=0.7`（按需手动改成具体值，例如 `0.6` / `0.7`）
 
 ### 14.2 数据路径与波段
 
-- `dataset_root="dataset_train_耐药菌"`（需按任务切换）
+- `dataset_root="dataset/耐药菌"`（需按任务切换；训练时自动读取其下 `dataset_train`）
 - `cut_min=600`
 - `cut_max=1800`
 - `target_points=896`
@@ -676,22 +673,50 @@
 
 ### 15.2 离线预处理
 
-细菌：
+所有 `dataset_process` 命令都在项目根目录执行：
 
 ```bash
-python dataset_preprocess_细菌/classify_dataset.py
-python dataset_preprocess_细菌/preprocess_dataset.py
-python dataset_preprocess_细菌/preprocess_testdata.py
-python dataset_preprocess_细菌/count_dataset.py
+python -m dataset_process <command> <数据集名>
 ```
 
-耐药：
+支持的数据集名：
+
+- `细菌`
+- `耐药菌`
+- `厌氧菌`
+
+可用指令：
+
+- `python -m dataset_process list`
+- `python -m dataset_process pack-init 细菌`
+- `python -m dataset_process unpack-init 细菌`
+- `python -m dataset_process classify 细菌`
+- `python -m dataset_process preview-init 细菌`
+- `python -m dataset_process preprocess-train 细菌`
+- `python -m dataset_process preprocess-test 细菌`
+- `python -m dataset_process count 细菌`
+- `python -m dataset_process count 细菌 --subdir dataset_raw`
+
+指令说明：
+
+- `list`：列出当前支持的数据集 profile。
+- `pack-init`：将 `dataset/<数据集名>/dataset_init/` 打包为 `dataset_init.npz`。
+- `unpack-init`：将 `dataset_init.npz` 解包回 `dataset_init/`。
+- `classify`：从 `dataset_init/` 或 `dataset_init.npz` 分类整理到 `dataset_raw/`。
+- `preview-init`：对 `dataset_init` 中每个原始叶子文件夹单独做预处理并输出图到 `dataset_init_fig/`，不会执行 PCA 异常点剔除。
+- `preprocess-train`：从 `dataset_raw/` 生成 `dataset_train/` 和 `dataset_train_fig/`。
+- `preprocess-test`：从 `测试菌/` 生成 `dataset_test/` 和 `dataset_test_fig/`。
+- `count`：统计默认目录或指定子目录中的 `.arc_data` 数量。
+
+常用流程示例：
 
 ```bash
-python dataset_preprocess_耐药菌/classify_dataset.py
-python dataset_preprocess_耐药菌/preprocess_dataset.py
-python dataset_preprocess_耐药菌/preprocess_testdata.py
-python dataset_preprocess_耐药菌/count_dataset.py
+python -m dataset_process unpack-init 厌氧菌
+python -m dataset_process preview-init 厌氧菌
+python -m dataset_process classify 厌氧菌
+python -m dataset_process preprocess-train 厌氧菌
+python -m dataset_process preprocess-test 厌氧菌
+python -m dataset_process count 厌氧菌
 ```
 
 ### 15.3 训练
@@ -763,5 +788,3 @@ python "PCA+SVM/pca_svm_from_split.py"
 - 余弦头：方向主导，幅值影响弱，跨批次强度漂移下通常更稳。
 
 ---
-
-如果你后续希望，我可以基于这个 README 再给一版“论文写作版”（方法节/实验节结构），直接可用于开题或投稿初稿。

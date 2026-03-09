@@ -7,6 +7,7 @@ import torch
 from tqdm import tqdm
 from predict_core import load_predictor, predict_one
 import re
+from raman.data_paths import resolve_dataset_stage
 
 # 项目根目录解析（支持子目录运行）
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -111,7 +112,7 @@ if __name__ == "__main__":
     # ========================================================
     # 指定实验输出目录（必须包含 config_.yaml + *_model.pt）
     # ========================================================
-    EXP_DIR = resolve_path("output_耐药菌/20260302_021659")
+    EXP_DIR = resolve_path("output/耐药菌/20260302_021659")
     # 手动设置预测层级（None 则使用 config）
     PREDICT_LEVEL = "level_2"
 
@@ -124,11 +125,15 @@ if __name__ == "__main__":
     # MANUAL_PARENT_MASK = None
 
     # 待预测数据根目录
-    PREDICT_ROOT = resolve_path("dataset_test_耐药菌")
-    if not os.path.isdir(PREDICT_ROOT):
-        raise FileNotFoundError(
-            f"Predict root not found: {PREDICT_ROOT}. Please check the path."
+    PREDICT_DATASET = resolve_path("dataset/耐药菌")
+    PREDICT_ROOT = os.fspath(
+        resolve_dataset_stage(
+            PREDICT_DATASET,
+            stage="predict_input",
+            project_root=BASE_DIR,
+            must_exist=True,
         )
+    )
 
     TOP_K = 3
 

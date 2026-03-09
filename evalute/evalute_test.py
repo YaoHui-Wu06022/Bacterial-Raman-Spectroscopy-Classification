@@ -14,6 +14,7 @@ from sklearn.metrics import (
 )
 
 from raman.config_io import load_experiment
+from raman.data_paths import resolve_dataset_stage
 from raman.dataset import RamanDataset
 from raman.model import ResNeXt1D_Transformer
 from raman.preprocess import InputPreprocessor
@@ -62,15 +63,18 @@ def _load_hierarchy_meta(exp_dir):
 # =====================
 # 实验目录（需要包含多个层级的模型）
 # =====================
-EXP_DIR = "output_耐药菌/20260302_021659"
+EXP_DIR = "output/厌氧菌/20260309_054529"
 EXP_DIR = resolve_path(EXP_DIR)
 config = load_experiment(EXP_DIR)
 
-DATASET_ROOT = resolve_path(config.dataset_root)
-if not os.path.isdir(DATASET_ROOT):
-    raise FileNotFoundError(
-        f"Dataset root not found: {DATASET_ROOT}. Please check config.dataset_root."
+DATASET_ROOT = os.fspath(
+    resolve_dataset_stage(
+        resolve_path(config.dataset_root),
+        stage="train",
+        project_root=BASE_DIR,
+        must_exist=True,
     )
+)
 config.dataset_root = DATASET_ROOT
 
 # 手动设置评估层级
@@ -565,20 +569,62 @@ def evaluate_test_set():
         zero_division=0
     )
 
-    md = [
-        "| Class | Precision | Recall | F1-score | Support |",
-        "|-------|-----------|--------|----------|---------|"
-    ]
+    def _fmt_line(name, p, r, f1, support):
+        return (
+            f"{name:<20}"
+            f"{p * 100:>12.4f}%"
+            f"{r * 100:>12.4f}%"
+            f"{f1 * 100:>12.4f}%"
+            f"{int(round(support)):>12d}"
+        )
 
-    for cls in classes:
-        p = report[cls]["precision"] * 100
-        r = report[cls]["recall"] * 100
-        f1 = report[cls]["f1-score"] * 100
-        sup = report[cls]["support"]
-        md.append(f"| {cls} | {p:.2f} | {r:.2f} | {f1:.2f} | {sup} |")
+    report_lines = []
+    report_lines.append(
+        f"{'':<20}{'precision':>12}{'recall':>12}{'f1-score':>12}{'support':>12}"
+    )
+    report_lines.append("")
+
+    for cls_name in classes:
+        row = report[cls_name]
+        report_lines.append(
+            _fmt_line(
+                cls_name,
+                row["precision"],
+                row["recall"],
+                row["f1-score"],
+                row["support"],
+            )
+        )
+
+    total_support = int(sum(report[name]["support"] for name in classes))
+    report_lines.append("")
+    report_lines.append(
+        f"{'accuracy':<20}{'':>12}{'':>12}{acc * 100:>11.4f}%{total_support:>12d}"
+    )
+
+    macro = report["macro avg"]
+    weighted = report["weighted avg"]
+    report_lines.append(
+        _fmt_line(
+            "macro avg",
+            macro["precision"],
+            macro["recall"],
+            macro["f1-score"],
+            macro["support"],
+        )
+    )
+    report_lines.append(
+        _fmt_line(
+            "weighted avg",
+            weighted["precision"],
+            weighted["recall"],
+            weighted["f1-score"],
+            weighted["support"],
+        )
+    )
 
     with open(OUT_REPORT, "w", encoding="utf-8") as f:
-        f.write("\n".join(md))
+        f.write("\n".join(report_lines))
 
     # 混淆矩阵
     cm = confusion_matrix(all_labels, all_preds, labels=list(range(num_classes)))

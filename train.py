@@ -34,7 +34,7 @@ from raman.train_utils import(
 TRAIN_ONLY_LEVEL = "level_1"          # 例如 "level_2"
 TRAIN_ONLY_PARENT_NAME = None    # 例如 "dachang"
 TRAIN_ONLY_PARENT = None        # 例如 2（可选，优先级高于名称）
-# 可选：手动覆盖衰减起点比例（None 表示走 config 自动判断）
+# 可选：手动覆盖衰减起点比例（None 表示直接使用 config.decay_start_ratio）
 OVERRIDE_DECAY_START_RATIO = None
 
 # 耐药level_3用
@@ -212,11 +212,8 @@ def main():
             config.timestamp
         )
 
-    # 解析对齐/SupCon 衰减起点比例，并写回 config 以便完整记录到 config.yaml
-    if hasattr(config, "resolve_decay_start_ratio"):
-        decay_start_ratio = float(config.resolve_decay_start_ratio())
-    else:
-        decay_start_ratio = float(getattr(config, "decay_start_ratio", 0.7))
+    # 读取对齐/SupCon 衰减起点比例，并写回 config 以便完整记录到 config.yaml
+    decay_start_ratio = float(config.decay_start_ratio)
     decay_start_ratio = min(max(decay_start_ratio, 0.0), 1.0)
     config.decay_start_ratio = decay_start_ratio
 

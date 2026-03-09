@@ -7,6 +7,7 @@ import os
 import re
 import torch
 from predict_core import load_predictor, predict_one
+from raman.data_paths import resolve_dataset_stage
 
 # 项目根目录解析（支持子目录运行）
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -39,15 +40,26 @@ if __name__ == "__main__":
     # 里面应包含：
     #   - config.yaml
     #   - {TASK}_model.pt
-    EXP_DIR = resolve_path("output_耐药菌/20260129_052515")
+    EXP_DIR = resolve_path("output/耐药菌/20260129_052515")
     # 手动设置预测层级（None 则使用 config）
     PREDICT_LEVEL = "level_3"
 
     # 待预测的文件夹（包含 .arc_data）
-    folder_path = "dataset_test_耐药菌/10CS"
-    if not folder_path.strip():
+    dataset_root = resolve_path("dataset/耐药菌")
+    folder_name = "10CS"
+    if not folder_name.strip():
         raise ValueError("Please set folder_path to a valid folder path.")
-    folder_path = resolve_path(folder_path)
+    folder_path = os.path.join(
+        os.fspath(
+            resolve_dataset_stage(
+                dataset_root,
+                stage="predict_input",
+                project_root=BASE_DIR,
+                must_exist=True,
+            )
+        ),
+        folder_name
+    )
     if not os.path.isdir(folder_path):
         raise FileNotFoundError(f"Input folder not found: {folder_path}")
 
