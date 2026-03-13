@@ -1,4 +1,7 @@
-import analysis_core as ac
+try:
+    from . import analysis_core as ac
+except ImportError:
+    import analysis_core as ac
 
 
 # ---------------- 手动配置 ----------------

@@ -22,15 +22,30 @@ from raman.train_utils import (
     split_by_lowest_level_ratio,
     load_split_files
 )
-from raman.analysis import (
-    compute_input_channel_importance_IG,
-    collect_analyzable_layers,
-    LayerGradCAMAnalyzer,
-    merge_scores_by_group,
-    collect_embeddings,
-    collect_embeddings_train_test,
-    plot_embedding_hierarchical
-)
+try:
+    from .analysis_utils import (
+        _compute_baseline_mean_spectrum,
+        _needs_cudnn_rnn_guard,
+        compute_input_channel_importance_IG,
+        collect_analyzable_layers,
+        LayerGradCAMAnalyzer,
+        merge_scores_by_group,
+        collect_embeddings,
+        collect_embeddings_train_test,
+        plot_embedding_hierarchical
+    )
+except ImportError:
+    from analysis_utils import (
+        _compute_baseline_mean_spectrum,
+        _needs_cudnn_rnn_guard,
+        compute_input_channel_importance_IG,
+        collect_analyzable_layers,
+        LayerGradCAMAnalyzer,
+        merge_scores_by_group,
+        collect_embeddings,
+        collect_embeddings_train_test,
+        plot_embedding_hierarchical
+    )
 
 # BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BASE_DIR = ""
@@ -252,23 +267,6 @@ def _build_analysis_tasks(
     return tasks, auto_all
 
 
-@torch.no_grad()
-def _compute_baseline_mean_spectrum(loader, device, num_batches=10):
-    """IG baseline：用若干 batch 的平均谱线，更稳定也更符合数据分布。"""
-    means = []
-    it = iter(loader)
-    for _ in range(num_batches):
-        try:
-            x, _, _ = next(it)
-        except StopIteration:
-            break
-        x = x.to(device)
-        means.append(x.mean(dim=0, keepdim=True))
-    if len(means) == 0:
-        raise RuntimeError("Loader is empty; cannot compute baseline.")
-    return torch.mean(torch.stack(means, dim=0), dim=0)
-
-
 def _effective_label_names(dataset, level_name, missing_tag="__missing__"):
     if hasattr(dataset, "_resolve_level_name"):
         level_name = dataset._resolve_level_name(level_name)
@@ -318,14 +316,10 @@ def compute_class_band_importance_ig(
 ):
     """计算每个类别的波段重要性（IG 平均）。"""
     model.eval()
-    disable_cudnn = False
+    disable_cudnn = _needs_cudnn_rnn_guard(model)
     prev_cudnn = torch.backends.cudnn.enabled
-    if not model.training and torch.backends.cudnn.enabled:
-        for m in model.modules():
-            if isinstance(m, (nn.LSTM, nn.GRU, nn.RNN)):
-                torch.backends.cudnn.enabled = False
-                disable_cudnn = True
-                break
+    if disable_cudnn:
+        torch.backends.cudnn.enabled = False
 
     if baseline_mode == "zero":
         baseline = None

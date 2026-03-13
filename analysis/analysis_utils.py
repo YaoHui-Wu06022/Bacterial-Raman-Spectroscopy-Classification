@@ -222,14 +222,15 @@ def compute_input_channel_importance_IG(
 def collect_analyzable_layers(model):
     """
     自动收集：
-    - conv1
+    - conv1 / input_proj
     - 所有 ResNeXtBlock1D
     - 所有 TransformerEncoderLayer
+    - LSTM
     返回:
         analyzable: { "layer1.0": module, ... }
         groups:     { "layer1.0": "layer1", "layer1.1": "layer1", ... }
     """
-    from .model import ResNeXtBlock1D
+    from raman.model import ResNeXtBlock1D
 
     analyzable = {}
     groups = {}
@@ -255,11 +256,19 @@ def collect_analyzable_layers(model):
                 continue
 
             # --------------------------------------------------
-            # conv1 特例
+            # LSTM 归为 "lstm"
             # --------------------------------------------------
-            if full_name == "conv1":
+            if isinstance(child, nn.LSTM):
                 analyzable[full_name] = child
-                groups[full_name] = "conv1"
+                groups[full_name] = "lstm"
+                continue
+
+            # --------------------------------------------------
+            # conv1 / input_proj 特例
+            # --------------------------------------------------
+            if full_name in ("conv1", "input_proj"):
+                analyzable[full_name] = child
+                groups[full_name] = full_name
                 continue
 
             # 默认继续遍历
@@ -764,30 +773,3 @@ def plot_embedding_hierarchical(
     plt.savefig(save_path, dpi=300)
     plt.show()
     plt.close()
-
-
-def plot_umap_hierarchical(
-    feats,
-    hier_labels: dict,
-    save_path,
-    method="umap",
-    n_neighbors=15,
-    min_dist=0.1,
-    tsne_perplexity=30,
-    tsne_iter=1000,
-    random_state=42,
-    label_names=None,
-):
-    # Backward-compatible wrapper.
-    return plot_embedding_hierarchical(
-        feats=feats,
-        hier_labels=hier_labels,
-        save_path=save_path,
-        method=method,
-        n_neighbors=n_neighbors,
-        min_dist=min_dist,
-        tsne_perplexity=tsne_perplexity,
-        tsne_iter=tsne_iter,
-        random_state=random_state,
-        label_names=label_names,
-    )

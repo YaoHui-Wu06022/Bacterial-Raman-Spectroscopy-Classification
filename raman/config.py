@@ -31,15 +31,15 @@ class Config:
 
     # ===================== 基础目录 =====================
     # 数据根目录
-    dataset_root = "dataset/厌氧菌"
+    # dataset_root = "dataset/厌氧菌"
     # dataset_root = "dataset/耐药菌"
-    # dataset_root = "dataset/细菌"
+    dataset_root = "dataset/细菌"
     cut_min = 600
     cut_max = 1800
     target_points = 896  # 插值参考点数
     delta = (cut_max - cut_min) / (target_points - 1)
-    BAD_BANDS = [(900, 940)]
-    # BAD_BANDS = [(905, 940.0)] # 细菌
+    # BAD_BANDS = [(900, 940)] # 厌氧菌
+    BAD_BANDS = [(905, 940.0)] # 细菌
     # BAD_BANDS = [(900, 950.0)] # 耐药菌
     bad_bands = BAD_BANDS
 
@@ -84,8 +84,22 @@ class Config:
     win_smooth = 15   # 平滑窗口
     win1 = 15   # 一阶导窗口
 
+    # backbone_type:
+    # - "cnn": ResNeXt1D 主干
+    # - "identity": 跳过 CNN，只做平均下采样 + 1x1 通道投影
+    backbone_type = "cnn"
+    # identity 路径的时序下采样倍率；默认 16，用来和 CNN 主干的长度压缩量大致对齐
+    # 1 表示不下采样
+    identity_pool_kernel = 16
+
     # encoder_type: "transformer" | "lstm" | "none"
-    encoder_type = "transformer"
+    encoder_type = "lstm"
+    # 常用消融组合：
+    # - 仅 CNN: backbone_type="cnn", encoder_type="none"
+    # - 仅 LSTM: backbone_type="identity", encoder_type="lstm"
+    # - 仅 Transformer: backbone_type="identity", encoder_type="transformer"
+    # - CNN + LSTM: backbone_type="cnn", encoder_type="lstm"
+    # - CNN + Transformer: backbone_type="cnn", encoder_type="transformer"
     # Transformer 配置
     transformer_nhead = 6  # 定死
     transformer_dim = 192  # 定死

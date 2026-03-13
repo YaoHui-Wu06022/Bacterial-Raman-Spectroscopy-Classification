@@ -58,8 +58,7 @@
 │  ├─ dataset.py                     # 层级数据集、标签映射、通道构建
 │  ├─ preprocess.py                  # 在线预处理与两阶段增强
 │  ├─ model.py                       # ResNeXt1D + (Transformer/LSTM) + 分类头
-│  ├─ train_utils.py                 # split/评估/损失/采样器工具
-│  └─ analysis.py                    # IG/GradCAM/embedding等分析底层实现
+│  └─ train_utils.py                 # split/评估/损失/采样器工具
 ├─ predict/
 │  ├─ predict_core.py                # 级联推理核心
 │  ├─ predict_folder.py              # 批量目录预测
@@ -67,6 +66,7 @@
 ├─ evalute/
 │  └─ evalute_test.py                # 测试集评估（注意目录名是 evalute）
 ├─ analysis/
+│  ├─ analysis_utils.py              # IG/GradCAM/embedding等分析底层实现
 │  ├─ analysis_core.py               # 单模型/聚合分析主流程
 │  ├─ analyze_single.py              # 单模型分析入口
 │  └─ analyze_aggregate.py           # 按parent聚合分析入口
@@ -182,38 +182,54 @@
 4. 训练时 SNV 后增强（`augment_norm_spectrum`）
 5. 构建输入通道（`snv_posneg_split` + `smooth` + `d1`）
 
+推理/评估时不会启用增强，只保留与训练一致的裁剪、插值、标准化和通道构建逻辑。
+
 ### 6.2 RAW 域增强（pre-augment）
 
 函数：`augment_raw_spectrum`
 
-候选操作：
+这一阶段的目标不是“凭空造新谱”，而是模拟采集条件和仪器响应变化。实现上分成几组候选操作：
 
-- `aug_piecewise_gain`（分段峰比例扰动）
-- `aug_noise_gaussian` / `aug_noise_poisson`（二选一噪声）
-- `aug_axis_warp`（波数轴非刚性扰动）
-- `aug_weak_baseline` / `aug_strong_baseline`（二选一基线扰动）
+- `aug_piecewise_gain`：
+  将整条谱随机切成若干区段，每段乘一个接近 `1.0` 的随机比例，模拟不同 Raman band 相对强度变化。
+- `aug_noise_gaussian`：
+  噪声强度按当前谱的稳健振幅缩放，不是固定绝对值，避免强谱和弱谱加同样大小噪声。
+- `aug_noise_poisson`：
+  噪声幅度与局部强度相关，近似模拟“信号越强，噪声也越大”的采集特征。
+- `aug_axis_warp`：
+  用“小线性漂移 + 低频正弦扰动 + 插值回原网格”的方式模拟波数轴轻微标定误差。
+- `aug_weak_baseline`：
+  用线性项和低频正弦项叠加出弱背景，模拟 baseline 去除不干净。
+- `aug_strong_baseline`：
+  通过少量控制点插值构造低频弯曲基线，模拟跨批次或跨仪器背景差异。
 
 执行策略：
 
-- 先按概率采样候选操作
-- 随机打乱
-- 截断到 `max_pre_augs`
+- `piecewise_gain`、`axis_warp` 独立按概率决定是否加入
+- `gaussian / poisson` 二选一，避免两种噪声同时叠加
+- `weak_baseline / strong_baseline` 二选一，避免同一次增强里叠两套背景
+- 采样出的操作会随机打乱顺序，再截断到 `max_pre_augs`
+- 全部实现都按有效波段工作，坏段或 `NaN` 不会被拿去造假信息
 
 ### 6.3 SNV 后增强（post-augment）
 
 函数：`augment_norm_spectrum`
 
-候选操作：
+这一阶段不再模拟整体强度，而是针对“谱形”和“局部峰形”做轻扰动：
 
-- `aug_shift`（峰位平移）
-- `aug_broadening`（高斯展宽）
-- `aug_mask_attenuate`（局部衰减遮挡）
+- `aug_shift`：
+  以整数点为单位整体微移，模拟重复测量时峰位轻微偏差。
+- `aug_broadening`：
+  对谱做小核高斯卷积，让局部峰轻微展宽，但不会把整条谱抹平。
+- `aug_mask_attenuate`：
+  随机选一段区间，用带平滑边缘的衰减窗压低局部响应，模拟局部污染、坏点或局部失真。
 
 执行策略：
 
-- 概率采样
-- 随机打乱
-- 截断到 `max_post_augs`
+- 每种操作独立按概率采样
+- 采样后随机打乱，再截断到 `max_post_augs`
+- 这类增强发生在标准化之后，主要改变形状与局部模式，而不是整体能量尺度
+- 因此它更像“提高重复测量鲁棒性”，而不是模拟跨仪器强度漂移
 
 ### 6.4 通道构建
 
@@ -253,9 +269,19 @@
 
 当前可选：
 
+- `backbone_type="cnn"`：使用 ResNeXt1D 主干
+- `backbone_type="identity"`：跳过 CNN，直接平均下采样后做通道投影
 - `encoder_type="transformer"`：位置编码 + TransformerEncoder
 - `encoder_type="lstm"`：单/双向 LSTM
-- `encoder_type="none"`：跳过序列编码，仅用卷积特征
+- `encoder_type="none"`：跳过序列编码，仅用前端特征
+
+常用消融组合：
+
+- 仅 CNN：`backbone_type="cnn"`，`encoder_type="none"`
+- 仅 LSTM：`backbone_type="identity"`，`encoder_type="lstm"`
+- 仅 Transformer：`backbone_type="identity"`，`encoder_type="transformer"`
+- CNN + LSTM：`backbone_type="cnn"`，`encoder_type="lstm"`
+- CNN + Transformer：`backbone_type="cnn"`，`encoder_type="transformer"`
 
 ### 7.3 池化与分类头
 
@@ -459,6 +485,8 @@
 
 - 单模型/按parent分析：`analysis/analyze_single.py`
 - parent聚合分析：`analysis/analyze_aggregate.py`
+- 流程编排：`analysis/analysis_core.py`
+- 可复用分析函数：`analysis/analysis_utils.py`
 
 ### 12.2 单模型分析输出
 
@@ -519,139 +547,48 @@
 
 ---
 
-## 14. 配置参数全量说明（`raman/config.py`）
+## 14. 配置使用原则（`raman/config.py`）
 
-以下为当前代码默认值（训练时生效）。
+README 不再逐项抄写 `config.py` 的全部默认值；配置源码本身是唯一准确来源。这里更强调“怎么改”和“优先改什么”。
 
-### 14.1 全局与层级
+### 14.1 最常改的几组配置
 
-- `train_level="level_3"`
-- `train_per_parent=True`
-- `split_level="leaf"`
-- `use_align_loss=True`
-- `align_loss_weight=0.01`
-- `align_start=20`
-- `align_end=50`
-- `use_supcon_loss=True`
-- `supcon_loss_weight=0.03`
-- `supcon_tau=0.15`
-- `supcon_start=30`
-- `supcon_end=50`
-- `supcon_level="leaf"`
-- `decay_start_ratio=0.7`（按需手动改成具体值，例如 `0.6` / `0.7`）
+- 任务与数据：
+  `dataset_root`、`train_level`、`train_per_parent`、`split_level`、`BAD_BANDS`
+- 输入与预处理：
+  `norm_method`、`snv_posneg_split`、`smooth_use`、`d1_use`
+- 模型结构：
+  `backbone_type`、`encoder_type`、`pooling_type`、`cosine_head`
+- 编码器容量：
+  `transformer_dim / nhead / ffn_dim / layers`，或 `lstm_hidden / layers / bidirectional`
+- 训练控制：
+  `learning_rate`、`batch_size`、`epochs`、`patience`、`seed`
+- 增强强度：
+  `p_*` 系列概率、`max_pre_augs`、`max_post_augs`
 
-### 14.2 数据路径与波段
+### 14.2 结构开关的常用组合
 
-- `dataset_root="dataset/耐药菌"`（需按任务切换；训练时自动读取其下 `dataset_train`）
-- `cut_min=600`
-- `cut_max=1800`
-- `target_points=896`
-- `delta=(cut_max-cut_min)/(target_points-1)`
-- `BAD_BANDS=[(905, 940.0)]`
-- `bad_bands=BAD_BANDS`
+- `仅CNN`：`backbone_type="cnn"`，`encoder_type="none"`
+- `仅LSTM`：`backbone_type="identity"`，`encoder_type="lstm"`
+- `仅Transformer`：`backbone_type="identity"`，`encoder_type="transformer"`
+- `CNN+LSTM`：`backbone_type="cnn"`，`encoder_type="lstm"`
+- `CNN+Transformer`：`backbone_type="cnn"`，`encoder_type="transformer"`
 
-### 14.3 预处理与输入通道
+其中 `identity_pool_kernel` 只在 `backbone_type="identity"` 时生效，用来控制“非 CNN 路线”送进序列编码器前的长度压缩量。
 
-- `input_is_norm=False`
-- `norm_method="snv"`（可选 `snv/l2/minmax`）
-- `snv_posneg_split=True`
-- `smooth_use=True`
-- `d1_use=False`
-- `in_channels`（属性自动计算）
-- `win_res=15`
-- `win_smooth=15`
-- `win1=15`
+### 14.3 推荐的调参顺序
 
-### 14.4 模型结构
+1. 先固定数据入口、训练层级和 split 策略。
+2. 再固定主结构组合，例如先确定是 `CNN+Transformer` 还是 `仅LSTM`。
+3. 结构定下来后，再调编码器容量和 dropout。
+4. 最后再调增强强度、损失权重和 early stop 相关参数。
 
-- `se_use=True`
-- `reduction=8`
-- `encoder_type="transformer"`（`transformer/lstm/none`）
-- `transformer_nhead=6`
-- `transformer_dim=192`
-- `transformer_ffn_dim=384`
-- `transformer_layers=1`
-- `transformer_dropout=0.2`
-- `lstm_hidden=192`
-- `lstm_layers=1`
-- `lstm_dropout=0.2`
-- `lstm_bidirectional=False`
-- `att_pool_dropout=0.2`
-- `pooling_type="stat"`（`attn/stat`）
-- `cosine_head=True`
-- `cosine_scale=25`
-- `cardinality=4`
-- `base_width=4`
-- `stem_kernel_size=15`
-- `stem_multiscale=True`
-- `stem_kernel_sizes=(3, 7, 15)`
+### 14.4 关于增强参数的理解方式
 
-### 14.5 训练超参数
-
-- `epochs=80`
-- `batch_size=64`
-- `learning_rate=4e-4`
-- `train_split=0.8`
-- `patience=40`
-- `use_gpu=True`
-- `seed=42`
-- `deterministic=True`
-- `early_stop_w_f1=0.6`
-- `early_stop_w_acc=0.4`
-- `gamma=0.8`
-- `use_severity_weight=True`
-- `use_drw=True`
-- `label_smoothing=0.0`
-- `scheduler_Tmax=epochs`
-- `scheduler_eta_min=1e-5`
-
-### 14.6 增强参数（RAW域）
-
-- `p_piecewise_gain=0.30`
-- `piecewise_gain_std=0.12`
-- `p_noise=0.4`
-- `p_poisson=0.2`
-- `noise_rel_min=0.005`
-- `noise_rel_max=0.02`
-- `poisson_strength_min=0.0`
-- `poisson_strength_max=0.015`
-- `p_axis=0.2`
-- `axis_warp_alpha=0.002`
-- `axis_warp_beta=1.0`
-- `p_baseline_weak=0.5`
-- `p_baseline_strong=0.3`
-- `baseline_lin_min=0.0`
-- `baseline_lin_max=0.02`
-- `baseline_sin_min=0.0`
-- `baseline_sin_max=0.01`
-- `baseline_freq_min=0.5`
-- `baseline_freq_max=2.0`
-- `baseline_strong_amp_min=0.05`
-- `baseline_strong_amp_max=0.15`
-
-### 14.7 增强参数（SNV后域）
-
-- `p_shift=0.3`
-- `shift_max=3`
-- `p_broadening=0.35`
-- `broad_sigma_min=0.6`
-- `broad_sigma_max=1.2`
-- `broad_truncate=3.0`
-- `p_cut=0.3`
-- `mask_width_min=40`
-- `mask_width_max=100`
-- `mask_atten_min=0.1`
-- `mask_atten_max=0.3`
-- `max_pre_augs=4`
-- `max_post_augs=2`
-
-### 14.8 嵌入可视化参数
-
-- `embedding_method="tsne"`（`umap/tsne`）
-- `umap_neighbors=15`
-- `umap_min_dist=0.1`
-- `tsne_perplexity=30`
-- `tsne_iter=1000`
+- `RAW` 域参数主要控制“采集条件变化”的模拟强度。
+- `SNV后` 参数主要控制“谱形局部扰动”的强度。
+- 如果出现训练早期塌成单类、测试集长时间不动，优先检查结构与学习率，不要只靠加大增强概率硬顶。
+- 如果训练集很高、测试集明显掉，优先考虑减弱 `strong baseline` 和 `cut` 这一类强扰动。
 
 ---
 

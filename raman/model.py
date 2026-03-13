@@ -174,102 +174,50 @@ class CosineClassifier(nn.Module):
         return self.scale * torch.matmul(x, w.t())
 
 # ============================================================
-# ResNeXt1D + SE + (Transformer/LSTM/None)
+# Raman 消融模型:
+# - backbone_type 控制前端特征提取器（CNN / 直连）
+# - encoder_type 控制序列编码器（Transformer / LSTM / None）
 # ============================================================
 class ResNeXt1D_Transformer(nn.Module):
     def __init__(self, num_classes, config):
-
         super().__init__()
         self.config = config
+        self.backbone_type = str(getattr(self.config, "backbone_type", "cnn")).lower()
+        if self.backbone_type not in ("cnn", "identity"):
+            raise ValueError(f"Unknown backbone_type: {self.backbone_type}")
+
         self.encoder_type = str(getattr(self.config, "encoder_type", "transformer")).lower()
         if self.encoder_type not in ("transformer", "lstm", "none"):
             raise ValueError(f"Unknown encoder_type: {self.encoder_type}")
+
+        self.cnn_backbone_on = (self.backbone_type == "cnn")
         self.transformer_on = (self.encoder_type == "transformer")
         self.lstm_on = (self.encoder_type == "lstm")
         self.reduction = self.config.reduction
         self.se_use = self.config.se_use
+        self.proj_dim = int(getattr(self.config, "transformer_dim", 192))
 
-        # ============================
-        # Stem
-        # ============================
-        self.stem_multiscale = bool(getattr(self.config, "stem_multiscale", False))
-        if self.stem_multiscale:
-            kernel_sizes = getattr(self.config, "stem_kernel_sizes", None) or [3, 7, 15]
-            kernel_sizes = [int(k) for k in kernel_sizes]
-            num_branches = max(1, len(kernel_sizes))
-            base_ch = 64 // num_branches
-            rem = 64 - base_ch * num_branches
-            branch_channels = [base_ch] * num_branches
-            for i in range(rem):
-                branch_channels[i] += 1
-            self.stem_branches = nn.ModuleList([
-                nn.Sequential(
-                    nn.Conv1d(
-                        self.config.in_channels, out_ch,
-                        kernel_size=k,
-                        stride=1, padding=k // 2, bias=False
-                    ),
-                    nn.BatchNorm1d(out_ch),
-                    nn.ReLU(inplace=True)
-                )
-                for k, out_ch in zip(kernel_sizes, branch_channels)
-            ])
-            # 用 AvgPool 下采样, AvgPool stride = kernel_size
-            self.stem_pool = nn.AvgPool1d(kernel_size=2)
+        if self.cnn_backbone_on:
+            self._build_cnn_backbone()
         else:
-            self.conv1 = nn.Sequential(
-                nn.Conv1d(
-                    self.config.in_channels, 64,
-                    kernel_size=self.config.stem_kernel_size,
-                    stride=1, padding=self.config.stem_kernel_size // 2, bias=False
-                ),
-                nn.BatchNorm1d(64),
-                # 去掉了 MaxPool，对光谱来说最大池化可能破坏峰形状
-                nn.ReLU(inplace=True),
-                nn.AvgPool1d(kernel_size=2)  # 用 AvgPool 下采样, AvgPool stride = kernel_size
+            self.identity_pool_kernel = max(1, int(getattr(self.config, "identity_pool_kernel", 16)))
+            if self.identity_pool_kernel == 1:
+                self.identity_pool = nn.Identity()
+            else:
+                self.identity_pool = nn.AvgPool1d(
+                    kernel_size=self.identity_pool_kernel,
+                    stride=self.identity_pool_kernel
+                )
+            self.input_proj = nn.Sequential(
+                nn.Conv1d(self.config.in_channels, self.proj_dim, kernel_size=1, bias=False),
+                nn.BatchNorm1d(self.proj_dim),
+                nn.GELU()
             )
-
-        # ============================
-        # ResNeXt Backbone
-        # ============================
-        self.in_planes = 64
-        self.layer1 = self._make_layer(
-            64, 2,
-            cardinality=self.config.cardinality,
-            base_width=self.config.base_width
-        )
-        self.layer2 = nn.Sequential(
-            nn.AvgPool1d(kernel_size=2), # 把下采样从block 里抽出来, AvgPool对光谱友好（连续、平滑、不跳点）
-            self._make_layer(
-                128, 2,
-                cardinality=self.config.cardinality,
-                base_width=self.config.base_width)
-        )
-        self.layer3 = nn.Sequential(
-            nn.AvgPool1d(kernel_size=2),
-            self._make_layer(
-                256, 2,
-                cardinality=self.config.cardinality,
-                base_width=self.config.base_width)
-        )
-        self.layer4 = nn.Sequential(
-            nn.AvgPool1d(kernel_size=2),
-            self._make_layer(
-                384, 2,
-                cardinality=self.config.cardinality,
-                base_width=self.config.base_width)
-        )
-
-        # ============================
-        # 通道投影
-        # ============================
-        self.proj_dim = self.config.transformer_dim
-        self.proj = nn.Conv1d(384, self.proj_dim, kernel_size=1, bias=False)
 
         # ============================
         # Sequence Encoder
         # ============================
-        self.seq_dim = self.proj_dim # 因为LSTM可能双向
+        self.seq_dim = self.proj_dim
         if self.transformer_on:
             self.pos_encoder = PositionalEncoding1D(d_model=self.proj_dim)
             encoder_layer = nn.TransformerEncoderLayer(
@@ -279,9 +227,12 @@ class ResNeXt1D_Transformer(nn.Module):
                 dropout=self.config.transformer_dropout,
                 batch_first=True,
                 activation="gelu",
-                norm_first=True # 修改
+                norm_first=True
             )
-            self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=self.config.transformer_layers)
+            self.transformer = nn.TransformerEncoder(
+                encoder_layer,
+                num_layers=self.config.transformer_layers
+            )
         elif self.lstm_on:
             self.lstm_hidden = int(getattr(self.config, "lstm_hidden", self.proj_dim))
             self.lstm_layers = int(getattr(self.config, "lstm_layers", 1))
@@ -325,6 +276,86 @@ class ResNeXt1D_Transformer(nn.Module):
         else:
             self.head = nn.Linear(self.feat_dim, int(num_classes))
 
+    def _build_cnn_backbone(self):
+        # ============================
+        # Stem
+        # ============================
+        self.stem_multiscale = bool(getattr(self.config, "stem_multiscale", False))
+        if self.stem_multiscale:
+            kernel_sizes = getattr(self.config, "stem_kernel_sizes", None) or [3, 7, 15]
+            kernel_sizes = [int(k) for k in kernel_sizes]
+            num_branches = max(1, len(kernel_sizes))
+            base_ch = 64 // num_branches
+            rem = 64 - base_ch * num_branches
+            branch_channels = [base_ch] * num_branches
+            for i in range(rem):
+                branch_channels[i] += 1
+            self.stem_branches = nn.ModuleList([
+                nn.Sequential(
+                    nn.Conv1d(
+                        self.config.in_channels,
+                        out_ch,
+                        kernel_size=k,
+                        stride=1,
+                        padding=k // 2,
+                        bias=False
+                    ),
+                    nn.BatchNorm1d(out_ch),
+                    nn.ReLU(inplace=True)
+                )
+                for k, out_ch in zip(kernel_sizes, branch_channels)
+            ])
+            self.stem_pool = nn.AvgPool1d(kernel_size=2)
+        else:
+            self.conv1 = nn.Sequential(
+                nn.Conv1d(
+                    self.config.in_channels,
+                    64,
+                    kernel_size=self.config.stem_kernel_size,
+                    stride=1,
+                    padding=self.config.stem_kernel_size // 2,
+                    bias=False
+                ),
+                nn.BatchNorm1d(64),
+                nn.ReLU(inplace=True),
+                nn.AvgPool1d(kernel_size=2)
+            )
+
+        # ============================
+        # ResNeXt Backbone
+        # ============================
+        self.in_planes = 64
+        self.layer1 = self._make_layer(
+            64, 2,
+            cardinality=self.config.cardinality,
+            base_width=self.config.base_width
+        )
+        self.layer2 = nn.Sequential(
+            nn.AvgPool1d(kernel_size=2),
+            self._make_layer(
+                128, 2,
+                cardinality=self.config.cardinality,
+                base_width=self.config.base_width
+            )
+        )
+        self.layer3 = nn.Sequential(
+            nn.AvgPool1d(kernel_size=2),
+            self._make_layer(
+                256, 2,
+                cardinality=self.config.cardinality,
+                base_width=self.config.base_width
+            )
+        )
+        self.layer4 = nn.Sequential(
+            nn.AvgPool1d(kernel_size=2),
+            self._make_layer(
+                384, 2,
+                cardinality=self.config.cardinality,
+                base_width=self.config.base_width
+            )
+        )
+        self.proj = nn.Conv1d(384, self.proj_dim, kernel_size=1, bias=False)
+
     def _make_layer(self, planes, blocks, cardinality, base_width):
         layers = []
 
@@ -356,22 +387,26 @@ class ResNeXt1D_Transformer(nn.Module):
 
         return nn.Sequential(*layers)
 
+    def _forward_feature_extractor(self, x):
+        if self.cnn_backbone_on:
+            if self.stem_multiscale:
+                out = torch.cat([branch(x) for branch in self.stem_branches], dim=1)
+                out = self.stem_pool(out)
+            else:
+                out = self.conv1(x)
+            out = self.layer1(out)
+            out = self.layer2(out)
+            out = self.layer3(out)
+            out = self.layer4(out)
+            return self.proj(out)
+
+        out = self.identity_pool(x)
+        return self.input_proj(out)
+
     # --------------------------- Forward ------------------------------
     def forward(self, x, return_feat=False):
         # x: [B, C, L]
-
-        if self.stem_multiscale:
-            out = torch.cat([b(x) for b in self.stem_branches], dim=1)
-            out = self.stem_pool(out)
-        else:
-            out = self.conv1(x)
-
-        out = self.layer1(out)
-        out = self.layer2(out)
-        out = self.layer3(out)
-        out = self.layer4(out)
-        # 投影
-        out = self.proj(out)  # [B, d_model, L’]
+        out = self._forward_feature_extractor(x)
 
         # [B, C, L] → [B, L, C]
         out = out.permute(0, 2, 1)
