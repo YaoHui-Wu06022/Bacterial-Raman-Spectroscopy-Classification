@@ -375,11 +375,10 @@ def preprocess_group_samples(
             center=PCA_CENTER,
         )
         if pca_components > 0:
-            ratio = float(PCA_OUTLIER_RATIO)
-            ratio = max(0.0, min(ratio, 1.0))
+            ratio = max(0.0, min(float(PCA_OUTLIER_RATIO), 1.0))
             if ratio <= 0.0:
+                keep_mask = np.ones(errors.shape, dtype=bool)
                 threshold = float("inf")
-                keep_mask = np.ones_like(errors, dtype=bool)
             else:
                 threshold = float(np.quantile(errors, 1.0 - ratio))
                 keep_mask = errors <= threshold

@@ -33,7 +33,7 @@ def resolve_path(path):
 # =========================
 # User settings
 # =========================
-EXP_DIR = resolve_path("output/厌氧菌/20260309_054529")  # set your output folder
+EXP_DIR = resolve_path("output/ding/20260318_055705")  # set your output folder
 LEVEL = "level_1"  # None -> use config.train_level
 
 OUTPUT_DIR = resolve_path(os.path.join("PCA+SVM", "output", os.path.basename(EXP_DIR)))

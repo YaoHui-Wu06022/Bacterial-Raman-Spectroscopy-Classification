@@ -49,6 +49,14 @@ PROFILES = {
         count_root="dataset_train",
         aliases=("厌氧菌", "anaerobe"),
     ),
+    "ding": DatasetProfile(
+        profile_id="ding",
+        dataset_name="丁",
+        train_bad_bands=(),
+        test_bad_bands=(),
+        count_root="dataset_train",
+        aliases=("丁", "ding"),
+    ),
 }
 
 PROFILE_LOOKUP = {}

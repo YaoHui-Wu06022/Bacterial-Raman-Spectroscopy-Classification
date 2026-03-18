@@ -63,7 +63,7 @@ def _load_hierarchy_meta(exp_dir):
 # =====================
 # 实验目录（需要包含多个层级的模型）
 # =====================
-EXP_DIR = "output/厌氧菌/20260309_054529"
+EXP_DIR = "output/细菌/20260318_131711"
 EXP_DIR = resolve_path(EXP_DIR)
 config = load_experiment(EXP_DIR)
 

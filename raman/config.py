@@ -34,6 +34,7 @@ class Config:
     # dataset_root = "dataset/厌氧菌"
     # dataset_root = "dataset/耐药菌"
     dataset_root = "dataset/细菌"
+    # dataset_root = "dataset/丁"
     cut_min = 600
     cut_max = 1800
     target_points = 896  # 插值参考点数
@@ -41,12 +42,13 @@ class Config:
     # BAD_BANDS = [(900, 940)] # 厌氧菌
     # BAD_BANDS = [(905, 940.0)] # 耐药菌
     BAD_BANDS = [(900, 950.0)] # 细菌
+    # bad_bands = () # 丁
     bad_bands = BAD_BANDS
 
     # 输出目录（由 train 在运行期确定，绑定时间戳）
     timestamp = None
     output_dir = None
-    seed = 88 # 分组随机种子
+    seed = 42 # 分组随机种子
     deterministic = True  # 是否保持训练可复现（GPU 稳定性优先）
     early_stop_w_f1 = 0.6
     early_stop_w_acc = 0.4

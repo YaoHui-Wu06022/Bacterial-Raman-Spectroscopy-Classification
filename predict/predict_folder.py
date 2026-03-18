@@ -112,7 +112,7 @@ if __name__ == "__main__":
     # ========================================================
     # 指定实验输出目录（必须包含 config_.yaml + *_model.pt）
     # ========================================================
-    EXP_DIR = resolve_path("output/细菌/test")
+    EXP_DIR = resolve_path("output/厌氧菌/20260318_053928")
     # 手动设置预测层级（None 则使用 config）
     PREDICT_LEVEL = "level_1"
 
@@ -125,7 +125,7 @@ if __name__ == "__main__":
     MANUAL_PARENT_MASK = None
 
     # 待预测数据根目录
-    PREDICT_DATASET = resolve_path("dataset/细菌")
+    PREDICT_DATASET = resolve_path("dataset/厌氧菌")
     PREDICT_ROOT = os.fspath(
         resolve_dataset_stage(
             PREDICT_DATASET,
