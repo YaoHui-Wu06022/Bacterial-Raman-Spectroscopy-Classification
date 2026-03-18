@@ -182,7 +182,13 @@
 4. 训练时 SNV 后增强（`augment_norm_spectrum`）
 5. 构建输入通道（`snv_posneg_split` + `smooth` + `d1`）
 
-推理/评估时不会启用增强，只保留与训练一致的裁剪、插值、标准化和通道构建逻辑。
+这里的在线预处理不负责重做离线 `cut / 插值 / bad bands / baseline`。
+这些步骤已经在 `dataset_process preprocess-train` 和 `dataset_process preprocess-test` 中完成。
+因此训练、评估、预测默认都建立在“输入文件已经是 `dataset_train/` 或 `dataset_test/` 口径”的前提上：
+
+- 训练：在离线处理后的 `dataset_train/` 上再做在线增强、标准化和通道构建
+- `evalute_test.py`：读取 `dataset_train/` 中由 split 划出的测试子集，只做标准化和通道构建
+- `predict_folder.py` / `predict_single.py`：读取离线处理后的 `dataset_test/`，只做标准化和通道构建
 
 ### 6.2 RAW 域增强（pre-augment）
 
@@ -241,6 +247,12 @@
 
 `in_channels` 由配置属性自动计算并与实际构建通道数强校验。
 
+补充说明：
+
+- 当前主线仍推荐保留 `snv_posneg_split=True`
+- 即使 backbone 激活从 `ReLU` 切到 `SiLU`，也建议先不要同步改通道设计
+- 更干净的对比方式是：先只比较 `relu` vs `silu`，确认有效后，再单独做“是否保留 SNV+/SNV- 分裂”的消融
+
 ---
 
 ## 7. 模型架构细节（`raman/model.py`）
@@ -250,7 +262,7 @@
 ### 7.1 主干网络（ResNeXt1D + SE）
 
 - Stem：
-  - 单尺度 `Conv1d + BN + ReLU + AvgPool`
+  - 单尺度 `Conv1d + BN + backbone_activation + AvgPool`
   - 或多尺度分支 `kernel_sizes=(3,7,15)` 后拼接，再 `AvgPool`
 - 主干层：
   - `layer1(64x2)`、`layer2(128x2)`、`layer3(256x2)`、`layer4(384x2)`
@@ -261,6 +273,13 @@
   - `1x1` 升维
   - `SEBlock1D`
   - shortcut 残差
+
+其中 `backbone_activation` 目前支持：
+
+- `relu`
+- `silu`
+
+对于当前 Raman 光谱任务，backbone 下采样仍默认使用 `AvgPool1d`，不建议仅因为切到 `SiLU` 就改成 `MaxPool1d`。原因是平均池化更能保留连续峰形和局部峰面积，而最大池化更容易放大尖峰噪声。
 
 ### 7.2 序列编码器角色
 
@@ -558,7 +577,7 @@ README 不再逐项抄写 `config.py` 的全部默认值；配置源码本身是
 - 输入与预处理：
   `norm_method`、`snv_posneg_split`、`smooth_use`、`d1_use`
 - 模型结构：
-  `backbone_type`、`encoder_type`、`pooling_type`、`cosine_head`
+  `backbone_type`、`encoder_type`、`backbone_activation`、`pooling_type`、`cosine_head`
 - 编码器容量：
   `transformer_dim / nhead / ffn_dim / layers`，或 `lstm_hidden / layers / bidirectional`
 - 训练控制：
@@ -575,6 +594,12 @@ README 不再逐项抄写 `config.py` 的全部默认值；配置源码本身是
 - `CNN+Transformer`：`backbone_type="cnn"`，`encoder_type="transformer"`
 
 其中 `identity_pool_kernel` 只在 `backbone_type="identity"` 时生效，用来控制“非 CNN 路线”送进序列编码器前的长度压缩量。
+
+如果只是想比较 `ReLU` 和 `SiLU`，推荐先只改：
+
+- `backbone_activation="relu"` 或 `backbone_activation="silu"`
+
+其余结构、池化方式和输入通道先保持不变，这样实验更容易解释。
 
 ### 14.3 推荐的调参顺序
 
@@ -679,6 +704,21 @@ python predict/predict_single.py
 ```bash
 python evalute/evalute_test.py
 ```
+
+训练、`evalute_test`、批量/单文件预测三条链路的输入口径如下：
+
+| 链路 | 实际输入目录 | 是否使用 split | 运行时处理 | 说明 |
+|---|---|---|---|---|
+| `train.py` | `dataset/<分类名>/dataset_train` | 是 | 训练集启用在线增强，再做标准化和通道构建 | 训练和验证都来自 `dataset_train` |
+| `evalute/evalute_test.py` | `dataset/<分类名>/dataset_train` | 是 | 不做在线增强，只做标准化和通道构建 | 评估的是训练时那份 hold-out 测试子集 |
+| `predict/predict_folder.py` | `dataset/<分类名>/dataset_test` | 否 | 不做在线增强，只做标准化和通道构建 | 面向离线 `preprocess-test` 后的外部测试目录 |
+| `predict/predict_single.py` | `dataset/<分类名>/dataset_test` | 否 | 不做在线增强，只做标准化和通道构建 | 与批量预测保持同一输入口径 |
+
+补充说明：
+
+- `dataset_process preprocess-train` 负责把原始训练样本整理成 `dataset_train/`
+- `dataset_process preprocess-test` 负责把 `测试菌/` 整理成 `dataset_test/`
+- `predict_folder.py` 和 `predict_single.py` 现在默认读取处理后的 `dataset_test/`，不再直接读原始 `测试菌/`
 
 ### 15.6 可解释性分析
 

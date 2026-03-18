@@ -129,7 +129,7 @@ if __name__ == "__main__":
     PREDICT_ROOT = os.fspath(
         resolve_dataset_stage(
             PREDICT_DATASET,
-            stage="predict_input",
+            stage="test",
             project_root=BASE_DIR,
             must_exist=True,
         )

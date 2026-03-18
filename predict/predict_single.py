@@ -53,7 +53,7 @@ if __name__ == "__main__":
         os.fspath(
             resolve_dataset_stage(
                 dataset_root,
-                stage="predict_input",
+                stage="test",
                 project_root=BASE_DIR,
                 must_exist=True,
             )
