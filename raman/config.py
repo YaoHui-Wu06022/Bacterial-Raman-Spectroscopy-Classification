@@ -56,7 +56,7 @@ class Config:
     norm_method = "snv"       # 选择标准化方式 snv/l2/minmax
 
     # 打开通道
-    snv_posneg_split = False  # SNV pos/neg split
+    snv_posneg_split = True  # SNV pos/neg split
     smooth_use = True    # 是否使用smooth作为额外通道
     d1_use = False       # 是否使用一阶导作为额外通道
 
@@ -75,7 +75,7 @@ class Config:
     # backbone_activation:
     # - "relu": 当前默认配置
     # - "silu": 更平滑，常用于小模型或希望保留弱负响应时
-    backbone_activation = "silu"
+    backbone_activation = "relu"
 
     # Focal loss 强度
     gamma = 0.8 # 控制“压容易样本”的力度
