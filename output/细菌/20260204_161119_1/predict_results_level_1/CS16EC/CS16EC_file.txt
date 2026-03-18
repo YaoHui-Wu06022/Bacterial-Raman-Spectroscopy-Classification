@@ -1,404 +1,405 @@
 ===== FILE-LEVEL SUMMARY =====
 
-Klebsiella           : 33
-Escherichia          : 10
-Enterobacter         : 1
+Escherichia          : 34
+Klebsiella           : 8
+Serratia             : 1
+Proteus              : 1
 
 ===============================================
 
 ########## File: cell1_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (82.27%)
+Top-1 → Klebsiella (78.46%)
 Top-k predictions:
-   1) Klebsiella            82.27%
-   2) Enterobacter          17.00%
-   3) Escherichia           0.68%
+   1) Klebsiella            78.46%
+   2) Enterobacter          13.89%
+   3) Escherichia           6.71%
 
 ===============================================
 
 ########## File: cell1_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (59.92%)
+Top-1 → Serratia (39.47%)
 Top-k predictions:
-   1) Klebsiella            59.92%
-   2) Escherichia           17.04%
-   3) Enterobacter          16.66%
+   1) Serratia              39.47%
+   2) Escherichia           30.59%
+   3) Proteus               13.50%
 
 ===============================================
 
 ########## File: cell2_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (97.50%)
+Top-1 → Klebsiella (42.63%)
 Top-k predictions:
-   1) Klebsiella            97.50%
-   2) Enterobacter          1.61%
-   3) Escherichia           0.65%
+   1) Klebsiella            42.63%
+   2) Escherichia           36.27%
+   3) Proteus               17.42%
 
 ===============================================
 
 ########## File: cell2_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (68.56%)
+Top-1 → Escherichia (67.98%)
 Top-k predictions:
-   1) Klebsiella            68.56%
-   2) Escherichia           18.58%
-   3) Enterobacter          11.54%
+   1) Escherichia           67.98%
+   2) Enterobacter          9.75%
+   3) Serratia              8.95%
 
 ===============================================
 
 ########## File: cell3_Area01_000_shift_cos.arc_data ##########
-Top-1 → Escherichia (76.15%)
+Top-1 → Escherichia (98.17%)
 Top-k predictions:
-   1) Escherichia           76.15%
-   2) Klebsiella            22.55%
-   3) Proteus               0.61%
+   1) Escherichia           98.17%
+   2) Klebsiella            0.80%
+   3) Proteus               0.79%
 
 ===============================================
 
 ########## File: cell3_Area01_001_shift_cos.arc_data ##########
-Top-1 → Escherichia (61.94%)
+Top-1 → Escherichia (87.85%)
 Top-k predictions:
-   1) Escherichia           61.94%
-   2) Enterobacter          27.41%
-   3) Klebsiella            9.20%
+   1) Escherichia           87.85%
+   2) Enterobacter          10.58%
+   3) Proteus               0.91%
 
 ===============================================
 
 ########## File: cell4_Area01_000_shift_cos.arc_data ##########
-Top-1 → Enterobacter (43.72%)
+Top-1 → Escherichia (62.31%)
 Top-k predictions:
-   1) Enterobacter          43.72%
-   2) Klebsiella            28.44%
-   3) Escherichia           27.63%
+   1) Escherichia           62.31%
+   2) Enterobacter          27.98%
+   3) Klebsiella            9.35%
 
 ===============================================
 
 ########## File: cell4_Area01_001_shift_cos.arc_data ##########
-Top-1 → Escherichia (85.66%)
+Top-1 → Escherichia (95.32%)
 Top-k predictions:
-   1) Escherichia           85.66%
-   2) Klebsiella            10.87%
-   3) Proteus               2.71%
+   1) Escherichia           95.32%
+   2) Proteus               3.85%
+   3) Enterobacter          0.54%
 
 ===============================================
 
 ########## File: cell5_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (60.81%)
+Top-1 → Escherichia (81.27%)
 Top-k predictions:
-   1) Klebsiella            60.81%
-   2) Escherichia           29.84%
-   3) Enterobacter          9.22%
+   1) Escherichia           81.27%
+   2) Klebsiella            17.10%
+   3) Enterobacter          1.27%
 
 ===============================================
 
 ########## File: cell5_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (96.52%)
+Top-1 → Klebsiella (60.45%)
 Top-k predictions:
-   1) Klebsiella            96.52%
-   2) Enterobacter          2.61%
-   3) Escherichia           0.85%
+   1) Klebsiella            60.45%
+   2) Escherichia           33.06%
+   3) Proteus               3.17%
 
 ===============================================
 
 ########## File: cell6_Area01_000_shift_cos.arc_data ##########
-Top-1 → Escherichia (79.76%)
+Top-1 → Escherichia (97.47%)
 Top-k predictions:
-   1) Escherichia           79.76%
-   2) Klebsiella            14.77%
-   3) Enterobacter          5.40%
+   1) Escherichia           97.47%
+   2) Klebsiella            1.47%
+   3) Enterobacter          0.92%
 
 ===============================================
 
 ########## File: cell6_Area01_001_shift_cos.arc_data ##########
-Top-1 → Escherichia (89.44%)
+Top-1 → Escherichia (99.70%)
 Top-k predictions:
-   1) Escherichia           89.44%
-   2) Klebsiella            7.45%
-   3) Enterobacter          2.90%
+   1) Escherichia           99.70%
+   2) Enterobacter          0.11%
+   3) Proteus               0.11%
 
 ===============================================
 
 ########## File: cell7_Area01_000_shift_cos.arc_data ##########
-Top-1 → Escherichia (89.38%)
+Top-1 → Escherichia (98.78%)
 Top-k predictions:
-   1) Escherichia           89.38%
-   2) Klebsiella            9.00%
-   3) Enterobacter          1.56%
+   1) Escherichia           98.78%
+   2) Klebsiella            0.80%
+   3) Enterobacter          0.31%
 
 ===============================================
 
 ########## File: cell7_Area01_001_shift_cos.arc_data ##########
-Top-1 → Escherichia (57.77%)
+Top-1 → Escherichia (98.66%)
 Top-k predictions:
-   1) Escherichia           57.77%
-   2) Klebsiella            38.23%
-   3) Enterobacter          2.13%
+   1) Escherichia           98.66%
+   2) Proteus               0.57%
+   3) Klebsiella            0.51%
 
 ===============================================
 
 ########## File: cell8_Area01_000_shift_cos.arc_data ##########
-Top-1 → Escherichia (48.38%)
+Top-1 → Escherichia (98.60%)
 Top-k predictions:
-   1) Escherichia           48.38%
-   2) Klebsiella            38.11%
-   3) Enterobacter          12.67%
+   1) Escherichia           98.60%
+   2) Enterobacter          0.69%
+   3) Proteus               0.49%
 
 ===============================================
 
 ########## File: cell8_Area01_001_shift_cos.arc_data ##########
-Top-1 → Escherichia (68.04%)
+Top-1 → Escherichia (98.92%)
 Top-k predictions:
-   1) Escherichia           68.04%
-   2) Enterobacter          23.09%
-   3) Klebsiella            8.68%
+   1) Escherichia           98.92%
+   2) Enterobacter          0.96%
+   3) Klebsiella            0.08%
 
 ===============================================
 
 ########## File: cell9_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (75.91%)
+Top-1 → Escherichia (84.31%)
 Top-k predictions:
-   1) Klebsiella            75.91%
-   2) Escherichia           20.75%
-   3) Enterobacter          1.80%
+   1) Escherichia           84.31%
+   2) Proteus               7.24%
+   3) Klebsiella            6.49%
 
 ===============================================
 
 ########## File: cell9_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (63.42%)
+Top-1 → Escherichia (95.60%)
 Top-k predictions:
-   1) Klebsiella            63.42%
-   2) Escherichia           23.08%
-   3) Enterobacter          12.68%
+   1) Escherichia           95.60%
+   2) Proteus               2.31%
+   3) Enterobacter          1.18%
 
 ===============================================
 
 ########## File: cell10_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (95.01%)
+Top-1 → Escherichia (48.61%)
 Top-k predictions:
-   1) Klebsiella            95.01%
-   2) Escherichia           3.17%
-   3) Enterobacter          1.57%
+   1) Escherichia           48.61%
+   2) Klebsiella            28.70%
+   3) Enterobacter          18.03%
 
 ===============================================
 
 ########## File: cell10_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (70.24%)
+Top-1 → Escherichia (72.05%)
 Top-k predictions:
-   1) Klebsiella            70.24%
-   2) Escherichia           26.49%
-   3) Proteus               2.30%
+   1) Escherichia           72.05%
+   2) Klebsiella            14.09%
+   3) Proteus               11.04%
 
 ===============================================
 
 ########## File: cell11_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (92.97%)
+Top-1 → Escherichia (67.93%)
 Top-k predictions:
-   1) Klebsiella            92.97%
-   2) Escherichia           4.66%
-   3) Proteus               1.80%
+   1) Escherichia           67.93%
+   2) Proteus               17.17%
+   3) Klebsiella            13.46%
 
 ===============================================
 
 ########## File: cell11_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (54.85%)
+Top-1 → Escherichia (53.07%)
 Top-k predictions:
-   1) Klebsiella            54.85%
-   2) Escherichia           40.21%
-   3) Enterobacter          4.30%
+   1) Escherichia           53.07%
+   2) Klebsiella            43.99%
+   3) Enterobacter          1.75%
 
 ===============================================
 
 ########## File: cell12_Area01_000_shift_cos.arc_data ##########
-Top-1 → Escherichia (68.70%)
+Top-1 → Escherichia (97.08%)
 Top-k predictions:
-   1) Escherichia           68.70%
-   2) Enterobacter          15.71%
-   3) Klebsiella            15.34%
+   1) Escherichia           97.08%
+   2) Klebsiella            1.18%
+   3) Enterobacter          1.10%
 
 ===============================================
 
 ########## File: cell12_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (90.89%)
+Top-1 → Klebsiella (47.01%)
 Top-k predictions:
-   1) Klebsiella            90.89%
-   2) Escherichia           7.78%
-   3) Enterobacter          0.69%
+   1) Klebsiella            47.01%
+   2) Escherichia           44.54%
+   3) Proteus               4.81%
 
 ===============================================
 
 ########## File: cell13_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (44.64%)
+Top-1 → Escherichia (66.01%)
 Top-k predictions:
-   1) Klebsiella            44.64%
-   2) Escherichia           35.93%
-   3) Enterobacter          17.60%
+   1) Escherichia           66.01%
+   2) Enterobacter          18.94%
+   3) Klebsiella            11.16%
 
 ===============================================
 
 ########## File: cell13_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (89.19%)
+Top-1 → Escherichia (46.54%)
 Top-k predictions:
-   1) Klebsiella            89.19%
-   2) Escherichia           9.05%
-   3) Enterobacter          1.29%
+   1) Escherichia           46.54%
+   2) Klebsiella            46.45%
+   3) Serratia              4.05%
 
 ===============================================
 
 ########## File: cell14_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (80.55%)
+Top-1 → Proteus (60.56%)
 Top-k predictions:
-   1) Klebsiella            80.55%
-   2) Escherichia           15.63%
-   3) Proteus               2.28%
+   1) Proteus               60.56%
+   2) Escherichia           33.76%
+   3) Klebsiella            4.13%
 
 ===============================================
 
 ########## File: cell14_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (59.82%)
+Top-1 → Klebsiella (40.25%)
 Top-k predictions:
-   1) Klebsiella            59.82%
-   2) Enterobacter          27.10%
-   3) Escherichia           11.70%
+   1) Klebsiella            40.25%
+   2) Enterobacter          29.16%
+   3) Escherichia           23.25%
 
 ===============================================
 
 ########## File: cell15_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (80.16%)
+Top-1 → Escherichia (77.57%)
 Top-k predictions:
-   1) Klebsiella            80.16%
-   2) Escherichia           15.34%
-   3) Enterobacter          3.70%
+   1) Escherichia           77.57%
+   2) Klebsiella            12.81%
+   3) Serratia              5.62%
 
 ===============================================
 
 ########## File: cell15_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (80.44%)
+Top-1 → Escherichia (57.58%)
 Top-k predictions:
-   1) Klebsiella            80.44%
-   2) Escherichia           18.02%
-   3) Enterobacter          0.66%
+   1) Escherichia           57.58%
+   2) Klebsiella            28.37%
+   3) Proteus               11.75%
 
 ===============================================
 
 ########## File: cell16_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (50.52%)
+Top-1 → Escherichia (81.15%)
 Top-k predictions:
-   1) Klebsiella            50.52%
-   2) Escherichia           47.68%
-   3) Proteus               1.17%
+   1) Escherichia           81.15%
+   2) Klebsiella            8.97%
+   3) Proteus               7.23%
 
 ===============================================
 
 ########## File: cell16_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (98.71%)
+Top-1 → Klebsiella (36.35%)
 Top-k predictions:
-   1) Klebsiella            98.71%
-   2) Escherichia           0.52%
-   3) Serratia              0.30%
+   1) Klebsiella            36.35%
+   2) Escherichia           27.16%
+   3) Proteus               23.95%
 
 ===============================================
 
 ########## File: cell17_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (68.66%)
+Top-1 → Escherichia (88.44%)
 Top-k predictions:
-   1) Klebsiella            68.66%
-   2) Escherichia           28.85%
-   3) Enterobacter          1.91%
+   1) Escherichia           88.44%
+   2) Klebsiella            5.10%
+   3) Proteus               3.23%
 
 ===============================================
 
 ########## File: cell17_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (90.34%)
+Top-1 → Escherichia (55.36%)
 Top-k predictions:
-   1) Klebsiella            90.34%
-   2) Serratia              3.79%
-   3) Escherichia           3.33%
+   1) Escherichia           55.36%
+   2) Klebsiella            26.78%
+   3) Proteus               12.69%
 
 ===============================================
 
 ########## File: cell18_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (88.75%)
+Top-1 → Escherichia (51.34%)
 Top-k predictions:
-   1) Klebsiella            88.75%
-   2) Escherichia           8.90%
-   3) Enterobacter          1.78%
+   1) Escherichia           51.34%
+   2) Klebsiella            44.13%
+   3) Proteus               2.41%
 
 ===============================================
 
 ########## File: cell18_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (48.90%)
+Top-1 → Escherichia (79.61%)
 Top-k predictions:
-   1) Klebsiella            48.90%
-   2) Escherichia           42.68%
-   3) Enterobacter          7.79%
+   1) Escherichia           79.61%
+   2) Klebsiella            11.11%
+   3) Serratia              4.04%
 
 ===============================================
 
 ########## File: cell19_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (95.45%)
+Top-1 → Escherichia (71.60%)
 Top-k predictions:
-   1) Klebsiella            95.45%
-   2) Enterobacter          2.38%
-   3) Escherichia           1.70%
+   1) Escherichia           71.60%
+   2) Klebsiella            15.98%
+   3) Proteus               7.70%
 
 ===============================================
 
 ########## File: cell19_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (98.89%)
+Top-1 → Klebsiella (75.33%)
 Top-k predictions:
-   1) Klebsiella            98.89%
-   2) Escherichia           0.46%
-   3) Serratia              0.33%
+   1) Klebsiella            75.33%
+   2) Proteus               12.83%
+   3) Escherichia           6.10%
 
 ===============================================
 
 ########## File: cell20_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (96.32%)
+Top-1 → Klebsiella (72.51%)
 Top-k predictions:
-   1) Klebsiella            96.32%
-   2) Escherichia           3.07%
-   3) Serratia              0.22%
+   1) Klebsiella            72.51%
+   2) Escherichia           19.46%
+   3) Proteus               5.58%
 
 ===============================================
 
 ########## File: cell20_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (93.84%)
+Top-1 → Escherichia (59.36%)
 Top-k predictions:
-   1) Klebsiella            93.84%
-   2) Escherichia           5.02%
-   3) Enterobacter          0.82%
+   1) Escherichia           59.36%
+   2) Klebsiella            15.93%
+   3) Proteus               13.67%
 
 ===============================================
 
 ########## File: cell21_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (89.09%)
+Top-1 → Escherichia (44.49%)
 Top-k predictions:
-   1) Klebsiella            89.09%
-   2) Escherichia           7.81%
-   3) Enterobacter          2.49%
+   1) Escherichia           44.49%
+   2) Klebsiella            40.23%
+   3) Enterobacter          8.30%
 
 ===============================================
 
 ########## File: cell21_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (96.65%)
+Top-1 → Escherichia (46.87%)
 Top-k predictions:
-   1) Klebsiella            96.65%
-   2) Enterobacter          1.23%
-   3) Escherichia           1.19%
+   1) Escherichia           46.87%
+   2) Klebsiella            35.76%
+   3) Proteus               11.48%
 
 ===============================================
 
 ########## File: cell22_Area01_000_shift_cos.arc_data ##########
-Top-1 → Klebsiella (79.48%)
+Top-1 → Escherichia (57.60%)
 Top-k predictions:
-   1) Klebsiella            79.48%
-   2) Escherichia           13.13%
-   3) Enterobacter          6.04%
+   1) Escherichia           57.60%
+   2) Proteus               23.58%
+   3) Klebsiella            10.56%
 
 ===============================================
 
 ########## File: cell22_Area01_001_shift_cos.arc_data ##########
-Top-1 → Klebsiella (79.98%)
+Top-1 → Escherichia (83.24%)
 Top-k predictions:
-   1) Klebsiella            79.98%
-   2) Escherichia           13.97%
-   3) Enterobacter          5.02%
+   1) Escherichia           83.24%
+   2) Klebsiella            11.00%
+   3) Proteus               2.55%
 
 ===============================================
 

@@ -39,14 +39,14 @@ class Config:
     target_points = 896  # 插值参考点数
     delta = (cut_max - cut_min) / (target_points - 1)
     # BAD_BANDS = [(900, 940)] # 厌氧菌
-    BAD_BANDS = [(905, 940.0)] # 细菌
-    # BAD_BANDS = [(900, 950.0)] # 耐药菌
+    # BAD_BANDS = [(905, 940.0)] # 耐药菌
+    BAD_BANDS = [(900, 950.0)] # 细菌
     bad_bands = BAD_BANDS
 
     # 输出目录（由 train 在运行期确定，绑定时间戳）
     timestamp = None
     output_dir = None
-    seed = 42 # 分组随机种子
+    seed = 88 # 分组随机种子
     deterministic = True  # 是否保持训练可复现（GPU 稳定性优先）
     early_stop_w_f1 = 0.6
     early_stop_w_acc = 0.4
@@ -56,7 +56,7 @@ class Config:
     norm_method = "snv"       # 选择标准化方式 snv/l2/minmax
 
     # 打开通道
-    snv_posneg_split = True  # SNV pos/neg split
+    snv_posneg_split = False  # SNV pos/neg split
     smooth_use = True    # 是否使用smooth作为额外通道
     d1_use = False       # 是否使用一阶导作为额外通道
 
@@ -72,6 +72,10 @@ class Config:
     # SE 模块
     se_use = True
     reduction = 8
+    # backbone_activation:
+    # - "relu": 当前默认配置
+    # - "silu": 更平滑，常用于小模型或希望保留弱负响应时
+    backbone_activation = "silu"
 
     # Focal loss 强度
     gamma = 0.8 # 控制“压容易样本”的力度
@@ -93,7 +97,7 @@ class Config:
     identity_pool_kernel = 16
 
     # encoder_type: "transformer" | "lstm" | "none"
-    encoder_type = "lstm"
+    encoder_type = "transformer"
     # 常用消融组合：
     # - 仅 CNN: backbone_type="cnn", encoder_type="none"
     # - 仅 LSTM: backbone_type="identity", encoder_type="lstm"

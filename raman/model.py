@@ -3,6 +3,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
+def build_activation(name, inplace=True):
+    name = str(name).lower()
+    if name == "relu":
+        return nn.ReLU(inplace=inplace)
+    if name == "silu":
+        return nn.SiLU(inplace=inplace)
+    raise ValueError(f"Unknown backbone activation: {name}")
+
 class SEBlock1D(nn.Module):
     """
     增强版 SE 模块：
@@ -10,14 +18,14 @@ class SEBlock1D(nn.Module):
     - 自动记录 scale 用于重要性分析
     - 保证 backward hook 获取到的梯度有效
     """
-    def __init__(self, channels, reduction, se_use):
+    def __init__(self, channels, reduction, se_use, activation_name="relu"):
         super().__init__()
 
         self.se_use = se_use
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.fc = nn.Sequential(
             nn.Linear(channels, channels // reduction),
-            nn.ReLU(inplace=False),   # 避免破坏 Autograd 需要的中间值
+            build_activation(activation_name, inplace=False),   # 避免破坏 Autograd 需要的中间值
             nn.Linear(channels // reduction, channels),
             nn.Sigmoid()
         )
@@ -65,7 +73,8 @@ class ResNeXtBlock1D(nn.Module):
                  cardinality = None,
                  base_width = None,
                  reduction= None,
-                 se_use = True):
+                 se_use = True,
+                 activation_name="relu"):
         super().__init__()
 
         # 内部通道数 D
@@ -76,7 +85,7 @@ class ResNeXtBlock1D(nn.Module):
         self.conv_reduce = nn.Sequential(
             nn.Conv1d(in_channels, D, kernel_size=1, stride=1, bias=False),
             nn.BatchNorm1d(D),
-            nn.ReLU(inplace=True)
+            build_activation(activation_name, inplace=True)
         )
 
         # 3x3 group conv
@@ -91,7 +100,7 @@ class ResNeXtBlock1D(nn.Module):
                 bias=False
             ),
             nn.BatchNorm1d(D),
-            nn.ReLU(inplace=True)
+            build_activation(activation_name, inplace=True)
         )
 
         # 1x1 升维
@@ -103,7 +112,8 @@ class ResNeXtBlock1D(nn.Module):
         self.se = SEBlock1D(
             out_channels,
             reduction=reduction,
-            se_use=se_use
+            se_use=se_use,
+            activation_name=activation_name
         )
 
         # shortcut
@@ -116,7 +126,7 @@ class ResNeXtBlock1D(nn.Module):
         else:
             self.shortcut = nn.Identity()
 
-        self.relu = nn.ReLU(inplace=True)
+        self.out_act = build_activation(activation_name, inplace=True)
 
     def forward(self, x):
         identity = x
@@ -129,7 +139,7 @@ class ResNeXtBlock1D(nn.Module):
         out = self.se(out)
 
         out = out + self.shortcut(identity)
-        out = self.relu(out)
+        out = self.out_act(out)
         return out
 
 # ============================================================
@@ -195,6 +205,10 @@ class ResNeXt1D_Transformer(nn.Module):
         self.lstm_on = (self.encoder_type == "lstm")
         self.reduction = self.config.reduction
         self.se_use = self.config.se_use
+        self.backbone_activation_name = str(
+            getattr(self.config, "backbone_activation", "relu")
+        ).lower()
+        build_activation(self.backbone_activation_name, inplace=True)
         self.proj_dim = int(getattr(self.config, "transformer_dim", 192))
 
         if self.cnn_backbone_on:
@@ -301,7 +315,7 @@ class ResNeXt1D_Transformer(nn.Module):
                         bias=False
                     ),
                     nn.BatchNorm1d(out_ch),
-                    nn.ReLU(inplace=True)
+                    build_activation(self.backbone_activation_name, inplace=True)
                 )
                 for k, out_ch in zip(kernel_sizes, branch_channels)
             ])
@@ -317,7 +331,7 @@ class ResNeXt1D_Transformer(nn.Module):
                     bias=False
                 ),
                 nn.BatchNorm1d(64),
-                nn.ReLU(inplace=True),
+                build_activation(self.backbone_activation_name, inplace=True),
                 nn.AvgPool1d(kernel_size=2)
             )
 
@@ -367,7 +381,8 @@ class ResNeXt1D_Transformer(nn.Module):
                 cardinality=cardinality,
                 base_width=base_width,
                 reduction=self.reduction,
-                se_use=self.se_use
+                se_use=self.se_use,
+                activation_name=self.backbone_activation_name
             )
         )
         self.in_planes = planes
@@ -381,7 +396,8 @@ class ResNeXt1D_Transformer(nn.Module):
                     cardinality=cardinality,
                     base_width=base_width,
                     reduction=self.reduction,
-                    se_use=self.se_use
+                    se_use=self.se_use,
+                    activation_name=self.backbone_activation_name
                 )
             )
 
