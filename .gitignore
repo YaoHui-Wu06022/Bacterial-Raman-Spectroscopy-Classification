@@ -1,1 +1,8 @@
 /dataset/
+/output/
+/PCA+SVM/output/
+/__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+raman.zip
