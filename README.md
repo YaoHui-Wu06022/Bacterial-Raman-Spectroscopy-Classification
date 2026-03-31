@@ -634,10 +634,13 @@ $$
 Focal Loss 在 CrossEntropy 的基础上增加一个可调节因子，抑制易样本梯度，放大难样本梯度，从而聚焦训练难样本
 
 `CrossEntropy Loss`：
+
 $$
 CE(p_t) = - \log(p_t)
 $$
+
 `Focal Loss`：
+
 $$
 FL(p_t) = - \alpha_t (1 - p_t)^\gamma \log(p_t)
 $$
@@ -683,10 +686,13 @@ DRW / EMA 关注类别难度 → 类别层面的权重调整
 1. 统计当前训练层每个类别的样本数
 2. 对计数做下界保护，避免出现 0
 3. 按下式计算基础权重：
+
    $$
    \text{weight}_g = \frac{1}{\log(\text{count}_g + 1.5)}
    $$
+
 4. 再把所有类别权重归一化到平均值为 1：
+
    $$
    \text{weight}_g \leftarrow \frac{\text{weight}_g}{\frac{1}{C} \sum_{i=1}^{C} \text{weight}_i}
    $$
@@ -710,12 +716,15 @@ DRW / EMA 关注类别难度 → 类别层面的权重调整
 1. 对每个类别在训练过程中计算当前 batch 的 CrossEntropy 平均损失
 
 2. 用 EMA 平滑历史损失，公式为：
+
    $$
    \text{EMA}_g(t) = \alpha \cdot \text{EMA}_g(t-1) + (1-\alpha) \cdot \text{CE}_g^{\text{batch}}
    $$
+
    $\alpha$ 控制平滑程度（训练中为 0.9）
 
 3. 根据 EMA 相对差异调整类别权重：
+
    $$
    \text{raw\_diff}_g = \frac{\text{EMA}_g(t)}{\frac{1}{C} \sum_{i=1}^{C} \text{EMA}_i(t)}
    $$
@@ -727,6 +736,7 @@ DRW / EMA 关注类别难度 → 类别层面的权重调整
    损失大的类别权重提升，损失小的类别权重降低
 
 4. 归一化权重，保证平均为 1，以避免总梯度过大
+
    $$
    \text{weight}_g \leftarrow \frac{\text{weight}_g}{\frac{1}{C} \sum_{i=1}^{C} \text{weight}_i}
    $$
@@ -807,14 +817,17 @@ DRW / EMA 关注类别难度 → 类别层面的权重调整
 
 公式与实现：
 1. 对 embedding 做 L2 正则化：
+
    $$
    z_i = \frac{feat_i}{||feat_i||_2}
    $$
 
 2. 计算两两相似度矩阵：
+
    $$
    sim(i,j) = \frac{z_i \cdot z_j}{\tau}
    $$
+
    $\tau$：temperature，控制对比“硬度”
 
 3. 构造 mask，确定正样本对（同类样本，`i != j`）
@@ -822,16 +835,19 @@ DRW / EMA 关注类别难度 → 类别层面的权重调整
 4. 数值稳定化，每行减去最大值
 
 5. 计算 log-prob：
+
    $$
    \log p_{ij} = sim(i,j) - \log\sum_{k \neq i} e^{sim(i,k)}
    $$
 
 6. 对每个 anchor 平均所有正样本：
+
    $$
    L_i = - \frac{1}{|P(i)|} \sum_{p \in P(i)} \log p_{ip}
    $$
 
 7. Batch 平均：
+
    $$
    L = \frac{1}{B} \sum_i L_i
    $$
