@@ -26,9 +26,7 @@ def make_tsne_compatible(**kwargs):
         kwargs["n_iter"] = kwargs.pop("max_iter")
 
     return TSNE(**kwargs)
-# ============================================================
 # Utils
-# ============================================================
 def _ensure_dir(d):
     if d is None:
         return
@@ -62,9 +60,7 @@ def _select_logits(pred, head_name=None):
     return pred
 
 
-# ============================================================
 # Integrated Gradients：输入通道重要性
-# ============================================================
 @torch.no_grad()
 def _compute_baseline_mean_spectrum(loader, device, num_batches=10):
     """
@@ -216,9 +212,7 @@ def compute_input_channel_importance_IG(
     return channel_importance
 
 
-# ============================================================
 # Grad-CAM Layer-wise: 多层重要性
-# ============================================================
 def collect_analyzable_layers(model):
     """
     自动收集：

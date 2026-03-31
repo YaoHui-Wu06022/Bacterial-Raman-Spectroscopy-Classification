@@ -1,9 +1,4 @@
 def _PREPROCESS_PIPELINE_DOC():
-    # 数据增强参数（增强概率）
-    # 设计总原则：
-    # 1）增强严格区分 RAW 强度空间 与 SNV 后形状空间
-    # 2）所有增强均具有明确的仪器 / 物理来源，不引入非物理畸变
-    # 3）增强只改变“观测条件”，不改变“物质类别语义”
     #   RAW intensity
     #     ├─ 分段强度比例扰动（成分比例差异）
     #     ├─ 噪声（高斯 / 强度相关，二选一）
@@ -33,18 +28,16 @@ def SNV(x):
     作用：
     - 消除整体强度尺度差异
     - 保留相对谱形信息
-    - 仅对有效波段做统计
-    - NaN 位置保持 NaN（代表不可用物理区域）
+    - 对整条输入光谱做标准化
     """
     if isinstance(x, torch.Tensor):
-        mask = ~torch.isnan(x)
-        mean = x[mask].mean()
-        std = x[mask].std(unbiased=False)
+        mean = x.mean()
+        std = x.std(unbiased=False)
         return (x - mean) / (std + EPS)
     else:
         x = np.asarray(x, dtype=np.float32)
-        mean = np.nanmean(x)
-        std  = np.nanstd(x)
+        mean = np.mean(x)
+        std  = np.std(x)
         return (x - mean) / (std + EPS)
 
 def L2Normalize(x, eps=1e-8):
@@ -53,29 +46,15 @@ def L2Normalize(x, eps=1e-8):
     - 消除整体强度尺度
     - 保留谱形方向
     - 不强制零均值
-    - NaN-safe
     """
     if isinstance(x, torch.Tensor):
-        mask = torch.isfinite(x)
-        if not mask.any():
-            return x
-
-        norm = torch.sqrt(torch.sum(x[mask] ** 2)).clamp_min(eps)
-        out = x.clone()
-        out[mask] = out[mask] / norm
-        return out
+        norm = torch.sqrt(torch.sum(x ** 2)).clamp_min(eps)
+        return x / norm
     else:
         x = np.asarray(x, dtype=np.float32)
-        mask = np.isfinite(x)
-        if not mask.any():
-            return x
-
-        norm = np.sqrt(np.sum(x[mask] ** 2))
+        norm = np.sqrt(np.sum(x ** 2))
         norm = max(norm, eps)
-
-        out = x.copy()
-        out[mask] = out[mask] / norm
-        return out
+        return x / norm
 
 def MinMaxNormalize(x, eps=1e-8):
     """
@@ -83,43 +62,48 @@ def MinMaxNormalize(x, eps=1e-8):
     作用：
     - 将单条光谱缩放到 [0, 1]
     - 不引入跨样本统计
-    - NaN-safe
     """
     if isinstance(x, torch.Tensor):
-        mask = torch.isfinite(x)
-        if not mask.any():
-            return x
-
-        min_v = torch.min(x[mask])
-        max_v = torch.max(x[mask])
+        min_v = torch.min(x)
+        max_v = torch.max(x)
         denom = (max_v - min_v).clamp_min(eps)
-
-        out = x.clone()
-        out[mask] = (out[mask] - min_v) / denom
-        return out
+        return (x - min_v) / denom
     else:
         x = np.asarray(x, dtype=np.float32)
-        mask = np.isfinite(x)
-        if not mask.any():
-            return x
-
-        min_v = np.min(x[mask])
-        max_v = np.max(x[mask])
+        min_v = np.min(x)
+        max_v = np.max(x)
         denom = max(max_v - min_v, eps)
+        return (x - min_v) / denom
 
-        out = x.copy()
-        out[mask] = (out[mask] - min_v) / denom
-        return out
+
+def load_arc_intensity(path):
+    """
+    读取 .arc_data 文件的强度列，统一返回 float32 一维数组。
+    """
+    data = np.loadtxt(path, dtype=np.float32)
+    data = np.atleast_2d(data)
+    return data[:, 1].astype(np.float32, copy=False)
+
+
+def normalize_spectrum(x, norm_method):
+    """
+    按配置指定的方式对单条光谱做标准化。
+    """
+    if norm_method == "snv":
+        return SNV(x)
+    if norm_method == "l2":
+        return L2Normalize(x)
+    if norm_method == "minmax":
+        return MinMaxNormalize(x)
+    raise ValueError(f"Unknown norm_method: {norm_method}")
 
 def _robust_amp(x):
     """
     估计光谱的稳健振幅范围（robust amplitude）
-    - 只使用 finite 区域
-    - NaN 表示物理无效波段，不参与统计
+    - 使用 1% 和 99% 分位数抑制极端值影响
     """
     x = np.asarray(x, dtype=np.float32)
-    valid = np.isfinite(x)
-    p1, p99 = np.percentile(x[valid], [1, 99])
+    p1, p99 = np.percentile(x, [1, 99])
     amp = float(p99 - p1)
     return max(amp, 1e-6)
 
@@ -140,15 +124,13 @@ def _random_piecewise_segments(n, min_len=50, max_len=200):
         i = r
     return segments
 
-# =========================
-# Pre-NORM / RAW 空间增强（强度空间）
-# - 该类增强发生在 NORM 之前（或 RAW 输入空间）
-# - 主要模拟仪器与采集条件变化
-# - 对 RAW 输入影响最直接，对 NORM 输入仍可改变相对形态
-# =========================
+# RAW 域增强
+# - 发生在标准化之前
+# - 主要模拟仪器和采集条件变化
+# - 对原始强度输入影响最直接
 def aug_piecewise_gain(x, segments, gain_std=0.15):
     """
-    分段幅度扰动（NaN-safe）
+    分段幅度扰动
     模拟：
     - 不同培养条件
     - 生化组分比例变化
@@ -163,47 +145,33 @@ def aug_piecewise_gain(x, segments, gain_std=0.15):
 
 def aug_noise_gaussian(x, rel_min=0.005, rel_max=0.02):
     """
-    高斯噪声增强（NaN-safe）
-    噪声幅度与光谱有效振幅相关，
+    高斯噪声增强
+    噪声幅度与光谱振幅相关，
     避免强谱 / 弱谱噪声比例失衡
     峰形：轻微抖动
     基线：随机抖动
     """
     # 相对噪声：sigma = rel * robust_amp
     x = np.asarray(x, dtype=np.float32)
-    mask = np.isfinite(x)
-
     amp = _robust_amp(x)
     rel = np.random.uniform(rel_min, rel_max)
     sigma = rel * amp
-
-    noise = np.zeros_like(x)
-    noise[mask] = sigma * np.random.randn(mask.sum()).astype(np.float32)
-
-    out = x.copy()
-    out[mask] = out[mask] + noise[mask]
-    return out
+    noise = sigma * np.random.randn(*x.shape).astype(np.float32)
+    return x + noise
 
 def aug_noise_poisson(x, strength_min=0.0, strength_max=0.015):
     """
-    强度相关噪声（NaN-safe）
+    强度相关噪声
     噪声幅度与 |x| 相关
     """
     x = np.asarray(x, dtype=np.float32)
-    mask = np.isfinite(x)
-
     amp = _robust_amp(x)
     k = np.random.uniform(strength_min, strength_max) * amp
-    max_abs = np.max(np.abs(x[mask])) + EPS
-    sigma = np.zeros_like(x)
+    max_abs = np.max(np.abs(x)) + EPS
     # sqrt(|x|) 型噪声（光子统计的味道）
-    sigma[mask] = k * np.sqrt(np.abs(x[mask]) / max_abs)
-    noise = np.zeros_like(x)
-    noise[mask] = sigma[mask] * np.random.randn(mask.sum()).astype(np.float32)
-
-    out = x.copy()
-    out[mask] = out[mask] + noise[mask]
-    return out
+    sigma = k * np.sqrt(np.abs(x) / max_abs)
+    noise = sigma * np.random.randn(*x.shape).astype(np.float32)
+    return x + noise
 
 # 模拟基线去除不干净
 def aug_weak_baseline(x,
@@ -218,7 +186,6 @@ def aug_weak_baseline(x,
     背景出现缓慢起伏
     """
     x = np.asarray(x, dtype=np.float32)
-    mask = np.isfinite(x)
     amp = _robust_amp(x)
     L = len(x)
     t = np.linspace(-0.5, 0.5, L, dtype=np.float32)
@@ -229,10 +196,7 @@ def aug_weak_baseline(x,
     phi = np.random.uniform(0, 2*np.pi)
 
     baseline = a * t + b * np.sin(2*np.pi*f*t + phi).astype(np.float32)
-
-    out = x.copy()
-    out[mask] = out[mask] + baseline[mask]
-    return out
+    return x + baseline
 
 def aug_strong_baseline(x,
                         amp_min=0.05, amp_max=0.15,
@@ -246,7 +210,6 @@ def aug_strong_baseline(x,
     局部峰对比度被压缩或放大
     """
     x = np.asarray(x, dtype=np.float32)
-    mask = np.isfinite(x)
     amp = _robust_amp(x)
     L = len(x)
 
@@ -265,10 +228,7 @@ def aug_strong_baseline(x,
         xs,
         ys
     ).astype(np.float32)
-
-    out = x.copy()
-    out[mask] = out[mask] + baseline[mask]
-    return out
+    return x + baseline
 
 def aug_axis_warp(x, config):
     """
@@ -312,12 +272,10 @@ def aug_axis_warp(x, config):
 
     return y.astype(np.float32)
 
-# =========================
-# Post-NORM / 形状空间增强（峰位置/形状）
-# - 该类增强发生在 NORM 之后
+# 标准化后形状增强
+# - 发生在标准化之后
 # - 主要影响峰位置与峰形
 # - 不改变整体强度统计
-# =========================
 def aug_shift(x, max_shift=3):
     """
     随机峰位平移
@@ -352,7 +310,7 @@ def _gauss_kernel1d(sigma, truncate=3.0):
 
 def aug_broadening(x, sigma_min=0.4, sigma_max=1.0, truncate=3.0):
     """
-    小核高斯展宽（NaN-safe）
+    小核高斯展宽
     设计约束：
     - 仅局部展宽峰形
     - 避免全谱模糊导致物理语义丢失
@@ -360,21 +318,9 @@ def aug_broadening(x, sigma_min=0.4, sigma_max=1.0, truncate=3.0):
     x = np.asarray(x, dtype=np.float32)
     sigma = float(np.random.uniform(sigma_min, sigma_max))
     k = _gauss_kernel1d(sigma, truncate=truncate)
-
-    mask = np.isfinite(x).astype(np.float32)
-    x0 = np.nan_to_num(x, nan=0.0).astype(np.float32)
     pad = len(k) // 2
-    x_pad = np.pad(x0, (pad, pad), mode="reflect")
-    m_pad = np.pad(mask, (pad, pad), mode="reflect")
-
-    num = np.convolve(x_pad, k, mode="valid").astype(np.float32)
-    den = np.convolve(m_pad, k, mode="valid").astype(np.float32)
-
-    y = num / (den + EPS)
-
-    # 恢复坏段：原来是 NaN 的位置仍保持 NaN（不制造信息）
-    y[mask == 0] = np.nan
-    return y
+    x_pad = np.pad(x, (pad, pad), mode="reflect")
+    return np.convolve(x_pad, k, mode="valid").astype(np.float32)
 
 def aug_mask_attenuate(x, width_min=10, width_max=40,
                        atten_min=0.0, atten_max=0.3):
@@ -413,9 +359,7 @@ def aug_mask_attenuate(x, width_min=10, width_max=40,
     x2[start:start + w] *= factor
     return x2
 
-# =========================
-# RAW数据增强
-# =========================
+# RAW 数据增强入口
 def augment_raw_spectrum(x, config):
     """
     - training=True : 做增强
@@ -429,9 +373,7 @@ def augment_raw_spectrum(x, config):
         x = np.asarray(x, dtype=np.float32)
     pre_ops = []
 
-    # =====================================================
-    # 1. Cross-domain augment
-    # =====================================================
+    # 1. 跨批次风格增强
     # --- 分段峰比例扰动（核心） ---
     if np.random.rand() < config.p_piecewise_gain:
         segments = _random_piecewise_segments(
@@ -446,9 +388,7 @@ def augment_raw_spectrum(x, config):
         ))
 
 
-    # =====================================================
-    # 2. Noise augment（最多 1 个）
-    # =====================================================
+    # 2. 噪声增强，最多启用 1 项
     r = np.random.rand()
     if r < config.p_noise:
         pre_ops.append(lambda z: aug_noise_gaussian(
@@ -460,9 +400,7 @@ def augment_raw_spectrum(x, config):
     if np.random.rand() < config.p_axis:
         pre_ops.append(lambda z: aug_axis_warp(z, config))
 
-    # =====================================================
-    # 3. Intra-domain augment（最多 1 个）
-    # =====================================================
+    # 3. 基线相关增强，最多启用 1 项
     r = np.random.rand()
     if r < config.p_baseline_weak:
         pre_ops.append(lambda z: aug_weak_baseline(
@@ -488,9 +426,6 @@ def augment_raw_spectrum(x, config):
     else:
         return x.astype(np.float32)
 
-# =========================
-# 标准化数据增强
-# =========================
 def augment_norm_spectrum(x, config):
     """
     - training=True : 做增强
@@ -589,6 +524,114 @@ def sg_kernel(window_length, polyorder, deriv, device):
     kernel = torch.tensor(coeff, dtype=torch.float32).to(device)
     return kernel.view(1, 1, -1)
 
+
+def build_sg_kernels(config, device):
+    """
+    按当前配置一次性构造 smooth 和 d1 的 SG 卷积核。
+    """
+    return (
+        sg_kernel(config.win_smooth, 3, 0, device),
+        sg_kernel(config.win1, 3, 1, device),
+    )
+
+
+def build_pre_smooth_source(signal, config, sg_smooth):
+    """为 smooth 通道构造“先平滑、后标准化”的输入源。"""
+    smooth = F.conv1d(
+        signal,
+        sg_smooth,
+        padding=config.win_smooth // 2,
+    )
+    return smooth[0, 0]
+
+
+def build_input_channels(signal, config, sg_smooth, sg_d1, smooth_signal=None):
+    """
+    从标准化后的单通道信号构造模型实际输入通道。
+    """
+    base = signal[0, 0]
+    if getattr(config, "snv_posneg_split", False):
+        channels = [
+            torch.clamp(base, min=0.0),
+            torch.clamp(-base, min=0.0),
+        ]
+    else:
+        channels = [base]
+
+    if config.smooth_use:
+        smooth = (
+            F.conv1d(
+                signal,
+                sg_smooth,
+                padding=config.win_smooth // 2,
+            )[0, 0]
+            if smooth_signal is None
+            else smooth_signal[0, 0]
+        )
+        channels.append(smooth)
+
+    if config.d1_use:
+        d1 = F.conv1d(
+            signal,
+            sg_d1,
+            padding=config.win1 // 2,
+        )[0, 0]
+        d1 = d1 / config.delta
+        d1 = d1 / torch.max(torch.abs(d1)).clamp_min(1e-8)
+        channels.append(d1)
+
+    if len(channels) != config.in_channels:
+        raise ValueError(
+            f"Channel mismatch: built {len(channels)} channels, "
+            f"but config.in_channels={config.in_channels}."
+        )
+
+    return torch.stack(channels, dim=0)
+
+
+def build_model_input(
+    raw_intensity,
+    config,
+    sg_smooth,
+    sg_d1,
+    device,
+    augment=False,
+):
+    """
+    把单条原始强度光谱统一转换为模型输入张量 [C, L]。
+    """
+    x = np.asarray(raw_intensity, dtype=np.float32)
+
+    if augment and (not config.input_is_norm):
+        x = augment_raw_spectrum(x, config)
+    else:
+        x = x.copy()
+
+    smooth_x = None
+    if config.smooth_use:
+        raw_signal = torch.as_tensor(x, dtype=torch.float32, device=device).view(1, 1, -1)
+        smooth_x = build_pre_smooth_source(raw_signal, config, sg_smooth)
+
+    if not config.input_is_norm:
+        x = normalize_spectrum(x, config.norm_method)
+        if smooth_x is not None:
+            smooth_x = normalize_spectrum(smooth_x, config.norm_method)
+
+    if augment:
+        x = augment_norm_spectrum(x, config)
+
+    signal = torch.as_tensor(x, dtype=torch.float32, device=device).view(1, 1, -1)
+    smooth_signal = None
+    if smooth_x is not None:
+        smooth_signal = smooth_x.view(1, 1, -1)
+    return build_input_channels(
+        signal,
+        config,
+        sg_smooth,
+        sg_d1,
+        smooth_signal=smooth_signal,
+    )
+
 class InputPreprocessor:
     """
     模型输入前的光谱预处理
@@ -604,8 +647,7 @@ class InputPreprocessor:
         # ------------------------------
         # SG kernels（一次性构造）
         # ------------------------------
-        self.sg_smooth = sg_kernel(config.win_smooth, 3, 0, device)
-        self.sg_d1 = sg_kernel(config.win1, 3, 1, device)
+        self.sg_smooth, self.sg_d1 = build_sg_kernels(config, device)
 
     def __call__(self, path):
         """
@@ -614,85 +656,18 @@ class InputPreprocessor:
         """
         return self.preprocess_arc(path)
 
-    # ======================================================
-    # Core API
-    # ======================================================
     def preprocess_arc(self, path):
         """
         对单个 .arc_data 文件进行预处理
         返回 shape: [1, C, L]
         """
-
-        data = np.loadtxt(path).astype(np.float32)
-        raw_intensity = data[:, 1]
-
-        x = raw_intensity.copy()
-
-        # 如果没标准化过处理一下
-        if not self.config.input_is_norm:
-            if self.config.norm_method == "snv":
-                x = SNV(x)
-            elif self.config.norm_method == "l2":
-                x = L2Normalize(x)
-            elif self.config.norm_method == "minmax":
-                x = MinMaxNormalize(x)
-            else:
-                raise ValueError(
-                    f"Unknown norm_method: {self.config.norm_method}"
-                )
-
-        # 构造 Tensor
-        signal = torch.tensor(
-            x, dtype=torch.float32, device=self.device
-        ).view(1, 1, -1)
-
-        # 通道构建
-        base = signal[0, 0]
-        if getattr(self.config, "snv_posneg_split", False):
-            pos = torch.clamp(base, min=0.0)
-            neg = torch.clamp(-base, min=0.0)
-            channels = [pos, neg]
-        else:
-            channels = [base]
-
-        # -----------------------------
-        # smooth 通道
-        # -----------------------------
-        if self.config.smooth_use:
-            smooth = F.conv1d(
-                signal,
-                self.sg_smooth,
-                padding=self.config.win_smooth // 2
-            )[0, 0]
-            channels.append(smooth)
-
-
-        # -----------------------------
-        # 一阶导数
-        # -----------------------------
-        if self.config.d1_use:
-            d1 = F.conv1d(
-                signal,
-                self.sg_d1,
-                padding=self.config.win1 // 2
-            )[0, 0]
-
-            d1 = d1 / self.config.delta
-            # ---- 弱 scale 对齐 ----
-            scale = torch.max(torch.abs(d1)).clamp_min(1e-8)
-            d1 = d1 / scale
-            channels.append(d1)
-
-
-        # -----------------------------
-        # 最终检查 & stack
-        # -----------------------------
-        if len(channels) != self.config.in_channels:
-            raise ValueError(
-                f"Channel mismatch: built {len(channels)} channels, "
-                f"but config.in_channels={self.config.in_channels}."
-            )
-
-        X = torch.stack(channels, dim=0)
-
+        raw_intensity = load_arc_intensity(path)
+        X = build_model_input(
+            raw_intensity,
+            config=self.config,
+            sg_smooth=self.sg_smooth,
+            sg_d1=self.sg_d1,
+            device=self.device,
+            augment=False,
+        )
         return X.unsqueeze(0)

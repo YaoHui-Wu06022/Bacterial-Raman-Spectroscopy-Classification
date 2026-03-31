@@ -1,11 +1,10 @@
-# ============================================================
-# 训练结果分析核心逻辑（供 analyze_single / analyze_aggregate 调用）
-# ============================================================
+# 训练结果分析核心逻辑（供根目录 analyze.py 调用）
 
 import os
 import json
 import csv
 from dataclasses import dataclass
+from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
@@ -14,50 +13,37 @@ from matplotlib.collections import PolyCollection
 from torch.utils.data import DataLoader, Subset, Dataset
 
 from raman.config_io import load_experiment
-from raman.data_paths import resolve_dataset_stage
-from raman.dataset import RamanDataset
+from raman.data import RamanDataset, resolve_dataset_stage
 from raman.model import ResNeXt1D_Transformer, SEBlock1D
-from raman.train_utils import (
+from raman.training import (
     AutoHierarchicalBatchSampler,
+    build_label_map_np,
     split_by_lowest_level_ratio,
     load_split_files
 )
-try:
-    from .analysis_utils import (
-        _compute_baseline_mean_spectrum,
-        _needs_cudnn_rnn_guard,
-        compute_input_channel_importance_IG,
-        collect_analyzable_layers,
-        LayerGradCAMAnalyzer,
-        merge_scores_by_group,
-        collect_embeddings,
-        collect_embeddings_train_test,
-        plot_embedding_hierarchical
-    )
-except ImportError:
-    from analysis_utils import (
-        _compute_baseline_mean_spectrum,
-        _needs_cudnn_rnn_guard,
-        compute_input_channel_importance_IG,
-        collect_analyzable_layers,
-        LayerGradCAMAnalyzer,
-        merge_scores_by_group,
-        collect_embeddings,
-        collect_embeddings_train_test,
-        plot_embedding_hierarchical
-    )
+from .utils import (
+    _compute_baseline_mean_spectrum,
+    _needs_cudnn_rnn_guard,
+    compute_input_channel_importance_IG,
+    collect_analyzable_layers,
+    LayerGradCAMAnalyzer,
+    merge_scores_by_group,
+    collect_embeddings,
+    collect_embeddings_train_test,
+    plot_embedding_hierarchical,
+)
 
-# BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-BASE_DIR = ""
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def resolve_path(path):
-    """将相对路径拼到 BASE_DIR，绝对路径保持不变。"""
+def _resolve_project_path(path):
+    """将相对路径解析到项目根目录，绝对路径保持不变。"""
     if path is None:
         return path
-    if os.path.isabs(path):
-        return path
-    return os.path.abspath(os.path.join(BASE_DIR, path))
+    path = Path(path)
+    if path.is_absolute():
+        return os.fspath(path)
+    return os.fspath((PROJECT_ROOT / path).resolve())
 
 
 def _load_hierarchy_meta(exp_dir):
@@ -84,22 +70,17 @@ def _load_hierarchy_meta(exp_dir):
 
 
 def resolve_analysis_level(dataset, level_name, config):
-    """解析分析层级，None 时回退到训练层级。"""
+    """解析分析层级，None 时回退到当前训练层级。"""
     if level_name is None:
-        level_name = getattr(config, "train_level", None) or "leaf"
+        level_name = (
+            getattr(config, "current_train_level", None)
+            or "leaf"
+        )
     if level_name not in dataset.head_names:
         raise ValueError(
             f"Unknown analysis level: {level_name}. Available: {dataset.head_names}"
         )
     return level_name
-
-
-def build_label_map_np(child_ids, num_classes):
-    """将全局 class id 映射为局部索引（父类内子模型）。"""
-    mapping = np.full(num_classes, -1, dtype=np.int64)
-    for local_idx, global_idx in enumerate(child_ids):
-        mapping[int(global_idx)] = int(local_idx)
-    return mapping
 
 
 class LabelMapDataset(Dataset):
@@ -132,6 +113,19 @@ class HeatmapConfig:
     row_norm: str = "max"          # 行归一化方式：max / sum / none
     use_train_loader: bool = True  # True=训练集，False=测试集
     topk_per_class: int = 5        # 每类 top-k 波段导出
+
+
+@dataclass
+class AnalysisOverrides:
+    """统一收拢分析入口的覆盖项。"""
+
+    exp_dir: str | None = None
+    mode: str = "single"
+    analysis_level: str | None = None
+    parent_idx: int | str | None = None
+    use_train_aug: bool = True
+    inherit_missing_levels: bool = False
+    fallback_to_single: bool = True
 
 
 def _ensure_heatmap_cfg(cfg):
@@ -1403,9 +1397,7 @@ def run_single_analysis(
 
     log(f"Input channel importance: {importance}")
 
-    # ============================================================
     # 多层 Grad-CAM 级联 Layer-wise Importance 分析
-    # ============================================================
     log("")
     log("=== Running Multi-layer Grad-CAM Analysis ===")
     analyzable, groups = collect_analyzable_layers(model)
@@ -1429,9 +1421,7 @@ def run_single_analysis(
     for k, v in merged_scores.items():
         log(f"{k:30s}: {v:.4f}")
 
-    # ============================================================
     # SE 模块分析
-    # ============================================================
     if config.se_use:
         log("")
         log("===== SE Module Summary (Compact) =====")
@@ -1450,9 +1440,7 @@ def run_single_analysis(
                     f"max={s.max():.4f}"
                 )
 
-    # ============================================================
     # Embedding 可视化
-    # ============================================================
     embed_method = str(config.embedding_method).lower()
     embed_tag = embed_method.replace("-", "").replace("_", "")
 
@@ -1526,9 +1514,7 @@ def run_single_analysis(
         label_names=label_names,
     )
 
-    # ============================================================
     # 波段重要性热图（按类别）
-    # ============================================================
     log("")
     log("=== Computing band importance heatmap ===")
     heatmap_loader = train_loader if heatmap_cfg.use_train_loader else test_loader
@@ -1610,14 +1596,14 @@ def build_analysis_context(
     inherit_missing_levels=False,
 ):
     """构建通用上下文（数据集 / 划分 / 任务列表）。"""
-    exp_dir = resolve_path(exp_dir)
+    exp_dir = _resolve_project_path(exp_dir)
     config = load_experiment(exp_dir)
 
     dataset_root = os.fspath(
         resolve_dataset_stage(
-            resolve_path(config.dataset_root),
+            _resolve_project_path(config.dataset_root),
             stage="train",
-            project_root=BASE_DIR,
+            project_root=os.fspath(PROJECT_ROOT),
             must_exist=True,
         )
     )
@@ -1688,22 +1674,8 @@ def build_analysis_context(
     }
 
 
-def run_single_pipeline(
-    exp_dir,
-    analysis_level,
-    parent_idx,
-    use_train_aug=True,
-    heatmap_cfg=None,
-    inherit_missing_levels=False,
-):
-    """单模型（或按 parent）分析入口。"""
-    ctx = build_analysis_context(
-        exp_dir,
-        analysis_level,
-        parent_idx,
-        use_train_aug,
-        inherit_missing_levels=inherit_missing_levels,
-    )
+def _run_single_tasks(ctx, heatmap_cfg=None):
+    """执行单模型分析任务列表。"""
     if ctx["auto_all"]:
         print(
             f"No global model for {ctx['analysis_level']}; "
@@ -1728,41 +1700,33 @@ def run_single_pipeline(
         )
 
 
-def run_aggregate_pipeline(
-    exp_dir,
-    analysis_level,
-    parent_idx,
-    use_train_aug=True,
-    heatmap_cfg=None,
-    fallback_to_single=True,
-    inherit_missing_levels=False,
-):
-    """跨 parent 聚合分析入口（可退化为单模型）。"""
+def run_analysis_pipeline(overrides=None, heatmap_cfg=None):
+    """统一分析入口：按 mode 切换单模型或聚合分析。"""
+    overrides = overrides or AnalysisOverrides()
+    if not overrides.exp_dir:
+        raise ValueError("analyze 需要显式传入 exp_dir。")
+
+    mode = str(overrides.mode).lower()
+    if mode not in ("single", "aggregate"):
+        raise ValueError(f"未知分析模式：{overrides.mode}，可选值为：single / aggregate")
+
     ctx = build_analysis_context(
-        exp_dir,
-        analysis_level,
-        parent_idx,
-        use_train_aug,
-        inherit_missing_levels=inherit_missing_levels,
+        overrides.exp_dir,
+        overrides.analysis_level,
+        overrides.parent_idx,
+        overrides.use_train_aug,
+        inherit_missing_levels=overrides.inherit_missing_levels,
     )
+
+    if mode == "single":
+        _run_single_tasks(ctx, heatmap_cfg=heatmap_cfg)
+        return
+
     parent_tasks = [t for t in ctx["tasks"] if t["parent_idx"] is not None]
     if not parent_tasks:
-        if fallback_to_single:
+        if overrides.fallback_to_single:
             print("Aggregate fallback: no parent models found; running single-model analysis.")
-            for task in ctx["tasks"]:
-                run_single_analysis(
-                    ctx["exp_dir"],
-                    ctx["config"],
-                    ctx["full_dataset"],
-                    ctx["analysis_level"],
-                    ctx["head_index"],
-                    task,
-                    ctx["train_idx_all"],
-                    ctx["test_idx_all"],
-                    ctx["base_train_dataset"],
-                    ctx["base_test_dataset"],
-                    heatmap_cfg=heatmap_cfg,
-                )
+            _run_single_tasks(ctx, heatmap_cfg=heatmap_cfg)
         else:
             print("Aggregate analysis skipped: no parent models found.")
         return

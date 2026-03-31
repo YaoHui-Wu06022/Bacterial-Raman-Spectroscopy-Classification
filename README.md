@@ -1,767 +1,1093 @@
-# 拉曼光谱层级分类项目（细菌 + 耐药）
-
-本文档按当前代码实现整理项目的完整技术细节，覆盖：
-
-- 数据预处理
-- 数据集构建与层级标签系统
-- 模型结构（ResNeXt + Transformer/LSTM）
-- 训练流程（层级训练、损失、调度、早停）
-- 级联预测
-- 测试评估
-- 可解释性分析
-- PCA+SVM 对照基线
-
-更新时间：`2026-03-04`
-
----
+# 拉曼光谱层级分类项目
 
 ## 1. 项目目标与任务定义
 
-项目用于拉曼光谱分类，包含两类典型任务：
-
-- 细菌 `species` 分类
-- 耐药 `phenotype` 分类
+项目用于拉曼光谱分类，可实现多层级分类
 
 核心特点：
 
 - 统一训练入口：`train.py`
-- 自动从目录结构构建层级标签（`level_1 ... level_N + leaf`）
+- 自动从目录结构构建层级标签
 - 支持按父类拆分训练子模型（`train_per_parent=True`）
 - 推理时按层级级联，支持缺失子模型回退
 
----
-
-## 2. 端到端技术路线
-
-```text
-原始 .arc_data
-  -> (离线) baseline校正 + 截断 + 插值 + 坏波段剔除 + PCA异常值过滤
-  -> dataset/<分类名>/dataset_train 或 dataset/<分类名>/dataset_test
-  -> (在线) RAW域增强 -> 标准化 -> SNV后增强 -> 多通道构建
-  -> ResNeXt1D 主干 -> 序列编码器(Transformer/LSTM/None) -> 池化(attn/stat) -> 分类头(cosine/linear)
-  -> 训练：Focal + Align + SupCon (+DRW/EMA动态权重)
-  -> 输出：多层模型、parent子模型、层级元数据、split清单
-  -> 推理：层级级联 + parent mask
-  -> 评估/解释：指标、混淆矩阵、IG/GradCAM/Embedding/波段热图
-```
-
----
-
-## 3. 仓库结构与模块职责
+## 2. 仓库结构与模块职责
 
 ```text
 拉曼光谱分类/
 ├─ train.py                          # 统一训练入口（含层级训练逻辑）
+├─ evaluate_test_set.py              # 测试集评估入口
+├─ pca_svm_baseline.py               # PCA+SVM 基线入口
+├─ analyze.py                        # 统一分析入口（single / aggregate）
 ├─ raman/
-│  ├─ config.py                      # 训练配置（唯一配置源）
-│  ├─ config_io.py                   # config.yaml读写、实验重载
-│  ├─ dataset.py                     # 层级数据集、标签映射、通道构建
-│  ├─ preprocess.py                  # 在线预处理与两阶段增强
-│  ├─ model.py                       # ResNeXt1D + (Transformer/LSTM) + 分类头
-│  └─ train_utils.py                 # split/评估/损失/采样器工具
+│  ├─ config.py                      # 训练配置
+│  ├─ config_io.py                   # config.yaml 读写、实验重载
+│  ├─ model.py                       # ResNeXt1D + Transformer/LSTM + 分类头
+│  ├─ data/
+│  │  ├─ paths.py                    # 数据目录阶段解析
+│  │  ├─ dataset.py                  # 层级数据集、标签映射、通道构建
+│  │  └─ preprocess.py               # 在线预处理与增强
+│  ├─ analysis/
+│  │  ├─ core.py                     # 单模型/聚合分析主流程
+│  │  └─ utils.py                    # IG、GradCAM、embedding 等分析底层实现
+│  ├─ eval/
+│  │  ├─ experiment.py               # 实验路径、配置和层级名解析
+│  │  ├─ report.py                   # 分类报告与混淆矩阵输出
+│  │  ├─ test_set_evaluator.py       # 测试集评估实现
+│  │  └─ baseline.py                 # PCA+SVM 基线实现
+│  └─ training/
+│     ├─ split.py                    # 数据切分与训练范围解析
+│     ├─ eval.py                     # 训练期评估工具
+│     ├─ losses.py                   # 损失函数与权重工具
+│     ├─ session.py                  # 训练会话、输出配置与复现控制
+│     └─ sampler.py                  # 分层采样器
+├─ dataset_process/
+│  ├─ cli.py                         # 离线数据处理统一入口
+│  ├─ profiles.py                    # 不同数据集的目录和坏波段配置
+│  ├─ common.py                      # 离线预处理公共函数
+│  └─ pipeline.py                    # 打包、重组、清洗、统计主流程
 ├─ predict/
 │  ├─ predict_core.py                # 级联推理核心
 │  ├─ predict_folder.py              # 批量目录预测
-│  └─ predict_single.py              # 单目录预测（文件级输出）
-├─ evalute/
-│  └─ evalute_test.py                # 测试集评估（注意目录名是 evalute）
-├─ analysis/
-│  ├─ analysis_utils.py              # IG/GradCAM/embedding等分析底层实现
-│  ├─ analysis_core.py               # 单模型/聚合分析主流程
-│  ├─ analyze_single.py              # 单模型分析入口
-│  └─ analyze_aggregate.py           # 按parent聚合分析入口
-├─ dataset_process/                   # 统一离线预处理与数据集整理入口
-├─ PCA+SVM/
-│  └─ pca_svm_from_split.py          # 传统基线（按训练split复现）
+│  └─ predict_single.py              # 单目录预测
 └─ dataset/
    ├─ 细菌/
    ├─ 耐药菌/
-   └─ 厌氧菌/
+   ├─ 厌氧菌/
+   └─ 丁/
 ```
 
----
+## 3. 离线数据预处理
 
-## 4. 数据格式与层级标签系统
+离线数据预处理统一走 `dataset_process`，当前常用命令只有：
 
-### 4.1 输入文件格式
+- `pack-init`
+- `unpack-init`
+- `classify`
+- `preview-init`
+- `preprocess-train`
+- `preprocess-test`
+- `count`
 
-- 文件后缀：`.arc_data`
-- 内容：两列数值
-- 第1列：波数（wavenumber）
-- 第2列：强度（intensity）
+### 3.1 参数修改位置
 
-### 4.2 目录到标签映射（`raman/dataset.py`）
+当前离线清洗参数不从 CLI 传入，统一在 `dataset_process/pipeline.py` 里修改：
 
-`RamanDataset` 扫描数据根目录后自动生成：
+- `DEFAULT_PIPELINE_CONFIG`
 
-- `level_names`: `level_1 ... level_N`
-- `head_names`: `level_1 ... level_N + leaf`
-- `label_maps_by_level`: 每层 `name -> id`
-- `inv_label_maps_by_level`: 每层 `id -> name`
-- `parent_to_children`: `parent_id -> child_ids`
-- `level_labels`: 每个样本的多层标签矩阵（无效为 `-1`）
-- `hier_names`: 每个样本的层级路径字典
+这里集中控制：
 
-### 4.3 split 机制（防泄漏）
+- 波段裁剪范围 `cut_min` / `cut_max`
+- 插值点数 `target_points`
+- AsLS 参数 `asls_lam` / `asls_p` / `asls_max_iter`
+- 训练集最小样本数 `min_samples_per_class`
+- 绘图归一化方式 `norm_method`
+- PCA 异常值过滤相关参数
 
-训练/测试划分调用：
+不同数据集的目录名和坏波段配置在 `dataset_process/profiles.py` 里维护
 
-- `split_by_lowest_level_ratio(dataset, lowest_level=split_level, train_ratio, seed)`
+### 3.2 输入目录与输出目录
 
-行为：
+以 `dataset/细菌` 为例，离线流程主要使用这些目录：
 
-- 按 `split_level` 分组后切分（默认 `leaf`）
-- 每个组独立打乱
-- 单样本组默认放入训练集，避免测试集空组
-- 切分结果保存为 `train_files.json` / `test_files.json`
+- `dataset_init/`：原始按测量文件夹组织的数据
+- `dataset_init.npz`：`dataset_init/` 的打包版本
+- `dataset_raw/`：按类别前缀重组后的中间结果
+- `dataset_train/`：训练集离线清洗结果
+- `dataset_test/`：测试集离线清洗结果
+- `dataset_train_fig/`：训练集均值谱图
+- `dataset_test_fig/`：测试集均值谱图
+- `dataset_init_fig/`：原始数据预览图
+- `测试菌/`：测试集原始输入目录
+- `log.txt`：训练集 PCA 异常值剔除日志
 
-这保证后续评估、基线、分析都能复用同一 split。
+### 3.3 阶段 1：打包与解包
 
----
+如果原始数据太散，可以先把 `dataset_init/` 打成一个压缩包：
 
-## 5. 离线数据预处理（`dataset_process` + `dataset/<分类名>`）
+```bash
+python -m dataset_process pack-init 细菌
+```
 
-不同数据集共用一套流程，差异参数（例如 `BAD_BANDS`）集中在 `dataset_process/profiles.py`。
+需要恢复成目录时：
 
-### 5.1 阶段1：原始目录重组（`classify_dataset.py`）
+```bash
+python -m dataset_process unpack-init 细菌
+```
 
-输入支持：
+### 3.4 阶段 2：原始目录重组
 
-- 目录 `dataset_init/`
-- 压缩包 `dataset_init.npz`（通过 `packed_dataset.py`）
+```bash
+python -m dataset_process classify 细菌
+```
 
-处理：
+作用：
 
-- 从叶子目录名提取前缀作为类别（细菌：字母前缀；耐药：支持 `+/-`）
-- 文件重命名为 `叶子名_原文件名`
-- 输出到 `dataset_raw/`
+- 扫描 `dataset_init/` 或 `dataset_init.npz`
 
-### 5.2 阶段2：训练集预处理（`preprocess_dataset.py`）
+- 读取叶子目录名
+
+- 统一按 `letters_sign` 规则提取类别前缀
+  
+  例如：`ABC12 -> ABC`，`ESBL+03 -> ESBL+`
+  
+- 将样本复制或写出到 `dataset_raw/`
+
+- 输出文件名统一改成 `叶子目录名_原文件名`
+
+这一步的目的是先把原始采集目录整理成更稳定的类别目录结构，供后续统一清洗
+
+### 3.5 阶段 3：原始数据预览
+
+```bash
+python -m dataset_process preview-init 细菌
+```
+
+作用：
+
+- 直接基于 `dataset_init/` 或 `dataset_init.npz` 做预处理预览
+- 执行基线校正、裁剪、插值、坏波段剔除
+- 不做 PCA 异常值过滤
+- 不落盘清洗后的光谱
+- 只输出每个分组的均值谱图到 `dataset_init_fig/`
+
+这一步适合先检查原始数据质量和类别分布是否合理
+
+### 3.6 阶段 4：训练集离线清洗
+
+```bash
+python -m dataset_process preprocess-train 细菌
+```
 
 每条光谱执行：
 
 1. 读取 `.arc_data`
 2. AsLS 基线校正
-3. 波段截断（`CUT_MIN`~`CUT_MAX`）
-4. 插值到 `TARGET_POINTS`
-5. 剔除坏波段 `BAD_BANDS`
-6. （可选）PCA 重构误差异常值过滤（按 `PCA_OUTLIER_RATIO` 去除尾部）
-
-类别样本数 `< MIN_SAMPLES_PER_CLASS` 会跳过。
-
-输出：
-
-- 清洗后光谱到 `dataset/<分类名>/dataset_train`
-- 类别均值谱图到 `dataset/<分类名>/dataset_train_fig/`
-- PCA剔除日志 `log.txt`
-
-### 5.3 阶段3：测试集预处理（`preprocess_testdata.py`）
-
-流程与训练集一致，但不做 PCA 异常值剔除，输出到 `dataset/<分类名>/dataset_test`，并保存类别均值谱图到 `dataset/<分类名>/dataset_test_fig/`。
-
-### 5.4 其他脚本
-
-- `count_dataset.py`：递归统计各层目录样本数
-- `pack_dataset_init.py` + `packed_dataset.py`：将 `dataset_init` 打包/读取为 `npz`，便于迁移和存储
-
----
-
-## 6. 在线预处理与增强（训练/推理时）
-
-实现文件：
-
-- `raman/preprocess.py`
-- `raman/dataset.py`
-- `raman/preprocess.py::InputPreprocessor`（预测/评估一致预处理）
-
-### 6.1 训练样本主流程（`RamanDataset.__getitem__`）
-
-1. 读取强度列
-2. 训练时 RAW 域增强（`augment_raw_spectrum`）
-3. 标准化（`snv/l2/minmax`）
-4. 训练时 SNV 后增强（`augment_norm_spectrum`）
-5. 构建输入通道（`snv_posneg_split` + `smooth` + `d1`）
-
-这里的在线预处理不负责重做离线 `cut / 插值 / bad bands / baseline`。
-这些步骤已经在 `dataset_process preprocess-train` 和 `dataset_process preprocess-test` 中完成。
-因此训练、评估、预测默认都建立在“输入文件已经是 `dataset_train/` 或 `dataset_test/` 口径”的前提上：
-
-- 训练：在离线处理后的 `dataset_train/` 上再做在线增强、标准化和通道构建
-- `evalute_test.py`：读取 `dataset_train/` 中由 split 划出的测试子集，只做标准化和通道构建
-- `predict_folder.py` / `predict_single.py`：读取离线处理后的 `dataset_test/`，只做标准化和通道构建
-
-### 6.2 RAW 域增强（pre-augment）
-
-函数：`augment_raw_spectrum`
-
-这一阶段的目标不是“凭空造新谱”，而是模拟采集条件和仪器响应变化。实现上分成几组候选操作：
-
-- `aug_piecewise_gain`：
-  将整条谱随机切成若干区段，每段乘一个接近 `1.0` 的随机比例，模拟不同 Raman band 相对强度变化。
-- `aug_noise_gaussian`：
-  噪声强度按当前谱的稳健振幅缩放，不是固定绝对值，避免强谱和弱谱加同样大小噪声。
-- `aug_noise_poisson`：
-  噪声幅度与局部强度相关，近似模拟“信号越强，噪声也越大”的采集特征。
-- `aug_axis_warp`：
-  用“小线性漂移 + 低频正弦扰动 + 插值回原网格”的方式模拟波数轴轻微标定误差。
-- `aug_weak_baseline`：
-  用线性项和低频正弦项叠加出弱背景，模拟 baseline 去除不干净。
-- `aug_strong_baseline`：
-  通过少量控制点插值构造低频弯曲基线，模拟跨批次或跨仪器背景差异。
-
-执行策略：
-
-- `piecewise_gain`、`axis_warp` 独立按概率决定是否加入
-- `gaussian / poisson` 二选一，避免两种噪声同时叠加
-- `weak_baseline / strong_baseline` 二选一，避免同一次增强里叠两套背景
-- 采样出的操作会随机打乱顺序，再截断到 `max_pre_augs`
-- 全部实现都按有效波段工作，坏段或 `NaN` 不会被拿去造假信息
-
-### 6.3 SNV 后增强（post-augment）
-
-函数：`augment_norm_spectrum`
-
-这一阶段不再模拟整体强度，而是针对“谱形”和“局部峰形”做轻扰动：
-
-- `aug_shift`：
-  以整数点为单位整体微移，模拟重复测量时峰位轻微偏差。
-- `aug_broadening`：
-  对谱做小核高斯卷积，让局部峰轻微展宽，但不会把整条谱抹平。
-- `aug_mask_attenuate`：
-  随机选一段区间，用带平滑边缘的衰减窗压低局部响应，模拟局部污染、坏点或局部失真。
-
-执行策略：
-
-- 每种操作独立按概率采样
-- 采样后随机打乱，再截断到 `max_post_augs`
-- 这类增强发生在标准化之后，主要改变形状与局部模式，而不是整体能量尺度
-- 因此它更像“提高重复测量鲁棒性”，而不是模拟跨仪器强度漂移
-
-### 6.4 通道构建
-
-默认支持：
-
-- `snv_posneg_split=True`：`pos=max(x,0)` + `neg=max(-x,0)`
-- `smooth_use=True`：SG 平滑通道
-- `d1_use=True/False`：一阶导通道（按 `delta` 缩放并归一）
-
-`in_channels` 由配置属性自动计算并与实际构建通道数强校验。
+3. 波段裁剪
+4. 插值到统一波数坐标
+5. 按 `bad_bands` 剔除坏波段
+6. 对同一分组样本按 PCA 重构误差做异常值过滤
 
 补充说明：
 
-- 当前主线仍推荐保留 `snv_posneg_split=True`
-- 即使 backbone 激活从 `ReLU` 切到 `SiLU`，也建议先不要同步改通道设计
-- 更干净的对比方式是：先只比较 `relu` vs `silu`，确认有效后，再单独做“是否保留 SNV+/SNV- 分裂”的消融
+- 如果某个分组预处理后样本数少于 `min_samples_per_class`，该分组会跳过
+- 被 PCA 剔除的样本会记录到 `log.txt`
 
----
+输出：
 
-## 7. 模型架构细节（`raman/model.py`）
+- 清洗后光谱写入 `dataset_train/`
+- 每个分组的均值谱图写入 `dataset_train_fig/`
 
-模型类：`ResNeXt1D_Transformer`
+### 3.7 阶段 5：测试集离线清洗
 
-### 7.1 主干网络（ResNeXt1D + SE）
+```bash
+python -m dataset_process preprocess-test 细菌
+```
 
-- Stem：
-  - 单尺度 `Conv1d + BN + backbone_activation + AvgPool`
-  - 或多尺度分支 `kernel_sizes=(3,7,15)` 后拼接，再 `AvgPool`
-- 主干层：
-  - `layer1(64x2)`、`layer2(128x2)`、`layer3(256x2)`、`layer4(384x2)`
-  - 层间下采样使用 `AvgPool1d`
-- 基本块 `ResNeXtBlock1D`：
-  - `1x1` 降维
-  - `3x3 group conv`
-  - `1x1` 升维
-  - `SEBlock1D`
-  - shortcut 残差
+作用：
 
-其中 `backbone_activation` 目前支持：
+- 从 `测试菌/` 读取测试原始数据
+- 执行基线校正、裁剪、插值、坏波段剔除
+- 不做 PCA 异常值过滤
+- 输出到 `dataset_test/`
+- 同时为每个测试文件夹生成均值谱图到 `dataset_test_fig/`
 
-- `relu`
-- `silu`
+### 3.8 数据统计
 
-对于当前 Raman 光谱任务，backbone 下采样仍默认使用 `AvgPool1d`，不建议仅因为切到 `SiLU` 就改成 `MaxPool1d`。原因是平均池化更能保留连续峰形和局部峰面积，而最大池化更容易放大尖峰噪声。
+```bash
+python -m dataset_process count 细菌
+```
 
-### 7.2 序列编码器角色
+默认统计 `count_root` 指向的目录，一般是 `dataset_train/`
 
-- ResNeXt：局部峰形/局部组合模式提取（局部模式编码）
-- Transformer/LSTM：长程依赖与全局上下文建模（跨峰关系编码）
+如果要统计其他子目录，可以用：
 
-当前可选：
+```bash
+python -m dataset_process count 细菌 --subdir dataset_raw
+```
 
-- `backbone_type="cnn"`：使用 ResNeXt1D 主干
-- `backbone_type="identity"`：跳过 CNN，直接平均下采样后做通道投影
-- `encoder_type="transformer"`：位置编码 + TransformerEncoder
-- `encoder_type="lstm"`：单/双向 LSTM
-- `encoder_type="none"`：跳过序列编码，仅用前端特征
+输出是按目录层级展开的样本数统计，方便检查重组和清洗结果
 
-常用消融组合：
+## 4. 训练数据输入
 
-- 仅 CNN：`backbone_type="cnn"`，`encoder_type="none"`
-- 仅 LSTM：`backbone_type="identity"`，`encoder_type="lstm"`
-- 仅 Transformer：`backbone_type="identity"`，`encoder_type="transformer"`
-- CNN + LSTM：`backbone_type="cnn"`，`encoder_type="lstm"`
-- CNN + Transformer：`backbone_type="cnn"`，`encoder_type="transformer"`
+### 训练数据处理流程
 
-### 7.3 池化与分类头
+在数据离线处理后，`raman` 负责在线标准化、增强和模型输入通道构造
 
-池化：
+1. `RamanDataset` 从 `dataset_train/` 扫描目录树，自动构建：
+   - `level_1 ... level_N`
+   - `leaf`
+   - 每层类别名与类别 id 映射
+   - `parent_to_children`
+2. 训练时 `__getitem__()` 读取单个 `.arc_data`，只取强度列
+3. 强度列进入 `build_model_input()`，按当前配置构造成模型输入
+4. `DataLoader` 将单条样本堆叠成 batch，送入模型
 
-- `pooling_type="attn"`：可学习注意力加权
-- `pooling_type="stat"`：`mean + std` 统计池化（输出维度翻倍）
+### 在线预处理与增强
 
-分类头：
+`raman/data/preprocess.py` 当前的在线处理顺序是：
 
-- 线性头：`Linear`
-- 余弦头：`CosineClassifier`
-  - 对特征和权重做 L2 归一化
-  - 输出 `scale * cos(theta)`
-  - 对幅值漂移更稳，方向判别更强
+1. 读取离线清洗后的单条强度光谱
+2. 如果是训练集并且 `augment=True`，先做 RAW 域增强
+3. 按 `norm_method` 做标准化，默认是 `snv`
+4. 如果是训练集，再做标准化后的形状增强
+5. 构造模型输入通道
 
----
+其中 RAW 域增强主要模拟采集条件变化，包括：
 
-## 8. 损失函数与优化策略
+- 分段峰强比例扰动
+- 高斯噪声或强度相关噪声
+- 波数轴扰动
+- 弱 / 强 baseline 扰动
 
-实现文件：`raman/train_utils.py` + `train.py`
+标准化后的增强主要模拟重复测量和局部形状波动，包括：
 
-### 8.1 主损失：FocalLoss
+- 峰位平移
+- 峰展宽
+- 局部衰减遮挡
 
-`FocalLoss(gamma, class_weight, ignore_index=-1)`  
-用于抑制易分类样本、增强难样本梯度。
+### 模型输入
 
-### 8.2 可选难度再加权（`use_severity_weight`）
+标准化后的单通道光谱不会直接送进模型，而是会按配置构造成多通道输入：
 
-对每个样本的主损失再乘样本权重：
+- 如果开启 `snv_posneg_split`，主光谱拆成正值通道和负值通道
+- 如果开启 `smooth_use`，再增加一个 SG 平滑通道
+- 如果开启 `d1_use`，再增加一个一阶导通道
 
-- top2/top3 命中真类可减轻惩罚
-- 高置信错分（top1_conf>0.8 且错误）加重惩罚
+因此单条样本最终形状是：
 
-### 8.3 Align Loss（层级中心收紧）
+```text
+[C, L]
+```
 
-`hierarchical_center_loss(feat, hier_labels, level_weights)`  
-按目标层级计算类内中心半径损失，增强类内紧凑性。
+其中：
 
-### 8.4 SupCon Loss（监督对比）
+- `C` 是输入通道数，由配置决定
+- `L` 是离线统一后的光谱长度
 
-`SupConLoss(temperature=tau)`  
-在 embedding 空间拉近同类、拉远异类。  
-支持通过 `supcon_level` 指定对比标签层级，不必等于当前训练层。
+经过 `DataLoader` 后，模型实际接收的是：
 
-### 8.5 DRW/EMA 动态类别权重（`use_drw`）
+```text
+[B, C, L]
+```
 
-训练中维护每类 CE 的 EMA：
+### 训练集、验证集、测试集
 
-- `ema_class_ce`
-- 根据难度比例生成 `dynamic_weights`
-- 替换 Focal 的 `criterion.weight`
+- 训练入口使用的基础数据目录是 `dataset_train/`
+- 训练集和验证集都是从 `dataset_train/` 内部分割得到
+- 如果实验目录下已有 `train_files.json` 和 `test_files.json`，会优先复用原切分
+- 如果没有，就按 `split_level` 重新分组切分
 
-### 8.6 损失权重调度
+当前训练代码中：
 
-- `align_w`、`supcon_w` 在 `[start, end]` 线性 warm-up
-- 到 `decay_start_ratio * epochs` 后线性衰减，最小保持 `0.2`
+- `train_dataset = RamanDataset(..., augment=True)`，用于训练
+- `test_dataset = RamanDataset(..., augment=False)`，用于训练过程中的验证
 
-`decay_start_ratio` 规则：
+这里的 `test_dataset` 其实是“验证集视角”，不是外部测试集
 
-- 直接在 `raman/config.py` 中显式设置具体值
-- 训练时按该值读取，并限制在 `[0.0, 1.0]`
+独立测试集位于dataset下
 
-### 8.7 优化器与学习率
+## 5. 模型
 
-- Adam + weight decay
-- 参数分组学习率：
-  - stem：`0.6 * lr`
-  - backbone：`1.0 * lr`
-  - head：`1.2 * lr`
-- 调度器：`CosineAnnealingLR`
+### 5.1 总体结构
 
-### 8.8 早停指标
+当前模型定义在 `raman/model.py`，整体结构可以写成：
 
-`score = w_f1 * macro_f1 + w_acc * acc`  
-超过历史最佳则保存模型，超过 `patience` 触发早停。
+```text
+输入 [B, C, L]
+→ backbone（cnn / identity）
+→ encoder（transformer / lstm / none）
+→ pooling（attn / stat）
+→ classifier（cosine / linear）
+```
 
----
+其中：
 
-## 9. 训练流程（`train.py`）
+- `B`：batch size
+- `C`：输入通道数，由 `snv_posneg_split`、`smooth_use`、`d1_use` 决定
+- `L`：离线统一后的光谱长度
 
-### 9.1 顶部手动覆盖项（高频实验开关）
+这套结构的设计目标不是做一个完全通用的 1D 分类器，而是围绕拉曼光谱的特点，把局部峰形建模、跨峰关系建模和最终判别头拆开，便于做消融实验。
 
-包括：
+### 5.2 Backbone
 
-- `TRAIN_ONLY_LEVEL`
-- `TRAIN_ONLY_PARENT_NAME` / `TRAIN_ONLY_PARENT`
-- `OVERRIDE_DECAY_START_RATIO`
-- `OVERRIDE_ALIGN_LOSS_WEIGHT`
-- `OVERRIDE_SUPCON_TAU`
-- `OVERRIDE_SUPCON_LOSS_WEIGHT`
-- `SUPCON_LEVEL_OVERRIDE`
-- `OVERRIDE_TIMESTAMP`
-- `OVERRIDE_OUTPUT_DIR`
+前端特征提取器由 `backbone_type` 控制：
 
-注意：当前代码中 `TRAIN_ONLY_LEVEL="level_1"`、`SUPCON_LEVEL_OVERRIDE="level_1"`。  
-如果希望按 `config.train_level` 正常全流程训练，需将二者设为 `None`。
+- `cnn`：使用 `ResNeXt1D_Transformer` 内部的 1D ResNeXt 主干
+- `identity`：跳过 CNN，仅做平均下采样和 `1x1` 通道投影
 
-### 9.2 训练组织模式
+默认配置使用 `cnn`，即：
 
-- `train_per_parent=False`：每个层级一个全局模型
-- `train_per_parent=True`：
-  - 顶层（无父类）训练全局模型
-  - 下层按父类训练子模型
-  - 父类仅一个子类时跳过建模（推理直接确定）
+- 多尺度 stem：`stem_multiscale=True`
+- `stem_kernel_sizes=(3, 7, 15)`
+- `cardinality=4`
+- `base_width=4`
+- `reduction=8`
+- `se_use=True`
 
-### 9.3 训练过程关键点
+其中 CNN 路径的结构是：
 
-- split 优先复用实验目录已有 `train_files.json/test_files.json`
-- 支持 `train_filter_level/train_filter_value` 过滤训练子集
-- 每个模型单独保存 best 权重
-- 评估函数按模型类型选择：
-  - 全局模型：`evaluate_file_level`（可父类mask）
-  - 局部子模型：`evaluate_file_level_local`（全局id到局部id映射）
+1. 输入 stem  
+   - 单尺度时：`Conv1d + BN + Activation + AvgPool1d`
+   - 多尺度时：并联多个不同卷积核的 stem 分支，再在通道维拼接后统一池化
+2. 四个 ResNeXt stage  
+   - 每个 stage 由两个 `ResNeXtBlock1D` 组成
+   - stage 之间通过 `AvgPool1d` 做时序下采样
+3. `1x1 Conv` 投影到统一的 `transformer_dim`
 
-### 9.4 训练产物
+`ResNeXtBlock1D` 自身采用：
 
-每次实验目录通常包含：
+- `1x1` 降维
+- `3x3` group convolution
+- `1x1` 升维
+- `SEBlock1D`
+- residual shortcut
 
-- `config.yaml`：完整配置快照
-- `logs/log.txt`：训练日志
-- `class_names.json`：全层级类别名
-- `hierarchy_meta.json`：层级结构和模型映射
-- `level_x_model.pt` / `level_x_parent_k_model.pt`
-- `train_files.json` / `test_files.json`
+这里的多尺度 stem 对拉曼光谱比较重要，因为不同宽度的卷积核分别更擅长：
 
-`hierarchy_meta.json` 关键字段：
+- 捕捉尖锐峰和窄局部结构
+- 捕捉中尺度的峰群关系
+- 捕捉更宽的缓变背景与峰包络
 
-- `head_names`
-- `class_names_by_level`
+### 5.3 Encoder
+
+前端 backbone 输出的是 `[B, C, L]` 形式的时序特征，之后会转成 `[B, L, C]`，再交给序列编码器
+
+`encoder_type` 支持三种模式：
+
+- `transformer`
+- `lstm`
+- `none`
+
+默认配置使用 `transformer`，参数是：
+
+- `transformer_dim = 192`
+- `transformer_nhead = 6`
+- `transformer_ffn_dim = 384`
+- `transformer_layers = 1`
+- `transformer_dropout = 0.2`
+
+这一层的作用不是重新做全部局部峰提取，而是在 backbone 已经提炼出局部响应之后，继续建模不同波段之间的上下文关系
+
+对拉曼光谱来说，可以理解为：
+
+- backbone 更像“先找出哪些局部峰形有响应”
+- encoder 更像“让峰 A 感知峰 B 是否同时出现，以及这些峰之间的组合关系”
+
+### 5.4 Pooling
+
+时序编码完成后，还需要把整条光谱压缩成一个固定长度的 embedding
+
+`pooling_type` 支持：
+
+- `attn`：注意力池化
+- `stat`：统计池化（`mean + std`）
+
+默认配置使用 `stat`，即：
+
+```text
+feat = concat(mean(out, dim=1), std(out, dim=1))
+```
+
+这样做的好处是：
+
+- `mean` 保留整体平均激活水平
+- `std` 保留不同波段响应的离散程度
+- 对拉曼这种“峰值分布 + 局部变化幅度”都重要的信号，通常比单纯平均池化更稳
+
+### 5.5 Classifier
+
+最终分类头由 `cosine_head` 控制：
+
+- `True`：`CosineClassifier`
+- `False`：普通 `Linear`
+
+默认配置使用余弦分类头：
+
+- `cosine_head=True`
+- `cosine_scale=25`
+
+余弦头的核心思想是：
+
+- 先对 embedding 和分类权重都做 L2 归一化
+- 再计算余弦相似度
+- 最后乘以一个可调的缩放系数 `scale`
+
+这种做法的优点是：
+
+- 更强调角度而不是绝对范数
+- 和 SupCon 这类基于 embedding 几何关系的损失更一致
+- 对长尾类别和类间边界较近的任务通常更稳
+
+### 5.6 当前默认组合
+
+当前默认配置下，实际训练的模型组合是：
+
+```text
+多通道输入
+→ 多尺度 ResNeXt1D backbone
+→ Transformer encoder
+→ Statistical Pooling
+→ Cosine Classifier
+```
+
+这套默认组合背后的思路是：
+
+- 用多通道输入显式提供不同光谱视角
+- 用 CNN 先提峰形和局部结构
+- 用 Transformer 建模跨波段关系
+- 用统计池化保留整体均值和波动信息
+- 用余弦头约束 embedding 判别边界
+
+它本质上是一套“先局部建模，再全局关联，最后在 embedding 空间判别”的光谱分类模型
+
+## 6. 训练
+
+### 6.1 训练入口与实验目录
+
+训练统一从根目录的 `train.py` 进入。
+
+训练入口需要显式设置：
+
+- `DATASET_NAME`
+- `CURRENT_TRAIN_LEVEL`
+- 是否只训练某个父类分支
+- 若干手动覆盖项（如时间戳、输出目录、SupCon 权重等）
+
+运行时会自动生成实验目录：
+
+```text
+output/<数据集名>/<时间戳>/
+```
+
+例如：
+
+```text
+output/细菌/20260330_153000/
+```
+
+实验目录内会保存：
+
+- `config.yaml`
+- `logs/config.txt`
+- `logs/log.txt`
+- `train_files.json`
+- `test_files.json`
+- `class_names.json`
+- `hierarchy_meta.json`
+- 各层级或各父类对应的模型权重
+
+其中 `hierarchy_meta.json` 很重要，它记录了：
+
+- 层级顺序
+- 每层类别名
 - `parent_to_children`
-- `parent_level_name`
-- `train_level`
-- `level_models`
-- `parent_models`
+- 本次训练得到的全局模型和 parent 子模型文件名
 
----
+后续预测、评估和分析都会复用这些元数据
 
-## 10. 预测流程（`predict/predict_core.py`）
+### 6.2 层级训练逻辑
 
-核心接口：
+训练入口里设置的是 `CURRENT_TRAIN_LEVEL`，但这里的含义不是“数据集中只有这一层”，而是：
 
-- `load_predictor(exp_dir, device, predict_level=None)`
-- `predict_one(path, predictor, top_k=3, parent_mask=None)`
+- 数据集层级始终由 `dataset_train/` 目录树自动扫描得到
+- `CURRENT_TRAIN_LEVEL` 只表示“这次训练实际要训练的那一层”
 
-### 10.1 加载模式
+例如：
 
-- `single`：无 `hierarchy_meta.json` 时，加载单模型
-- `cascade`：读取层级元数据，逐层级联
+- 若 `CURRENT_TRAIN_LEVEL = "level_1"`，就只训练顶层模型
+- 若 `CURRENT_TRAIN_LEVEL = "level_3"`，这一次只训练 `level_3`
+- 若 `CURRENT_TRAIN_LEVEL = "leaf"`，就表示训练当前数据集实际存在的最细层级
 
-### 10.2 级联逻辑
+也就是说，当前训练入口的行为等价于过去“只训练某一层”的模式，而不是自动从顶层一路训练到目标层。
 
-每一层：
+当 `train_per_parent=True` 时，训练行为是：
 
-1. 若存在对应 parent 子模型，优先使用子模型
-2. 否则回退全局层模型 + 父类mask
-3. 若子模型缺失/无效，回退到“当前路径最深可用层级”结果
+- 顶层没有父层，因此训练全局模型
+- 对更细层级，如果某层有父层，就按父类拆成多个子模型分别训练
+- 如果某个父类下只有一个子类，则不训练该 parent 子模型，只在元数据中记录这条确定关系
 
-### 10.3 parent mask
+如果当前实验目录缺少上一级模型或单子类记录，训练开始时会打印提示，提醒先训练哪一级。
 
-`parent_mask` 支持：
+这样做的好处是：
 
-- 按名称约束：`{"level_1": ["feike"]}`
-- 按索引约束：`{"level_1": [0]}`
+- 可以降低细粒度层级的类别混淆
+- 让下层模型只在当前父类的候选子类范围内学习
+- 在预测和评估时自然形成层级级联
 
-用于把预测限制在业务先验允许的类别范围。
+### 6.3 训练/验证切分
 
----
+训练代码扫描的是 `dataset_train/`，然后在内部再做 train/val 切分
 
-## 11. 测试集评估（`evalute/evalute_test.py`）
+切分逻辑位于 `raman/training/split.py`：
 
-### 11.1 可配置项（脚本顶部）
+1. 优先检查实验目录里是否已有 `train_files.json` 和 `test_files.json`
+2. 如果已有，则直接复用旧切分
+3. 如果没有，则按 `split_level` 分组后再做比例切分
+
+默认配置：
+
+- `split_level = "leaf"`
+- `train_split = 0.8`
+- `seed = 42`
+
+按 `leaf` 分组再切分的目的是尽量避免同一来源分组的样本同时落入训练集和验证集，从而减少信息泄漏
+
+### 6.4 优化器、学习率和早停
+
+当前训练器使用：
+
+- `Adam`
+- `weight_decay = 5e-4`
+- `CosineAnnealingLR`
+
+并按模块做了分组学习率：
+
+- 输入 stem：`0.6 × learning_rate`
+- backbone 其他部分：`1.0 × learning_rate`
+- 分类头：`1.2 × learning_rate`
+
+默认主学习率为：
+
+```text
+learning_rate = 4e-4
+```
+
+学习率调度参数：
+
+- `scheduler_Tmax = epochs`
+- `scheduler_eta_min = 1e-5`
+
+早停评分不是单纯看验证集准确率，而是：
+
+$$
+\text{score} = w_{f1} \cdot \text{MacroF1} + w_{acc} \cdot \text{Accuracy}
+$$
+
+默认权重：
+
+- `early_stop_w_f1 = 0.6`
+- `early_stop_w_acc = 0.4`
+
+也就是说，模型选择时会稍微更偏向宏平均 F1，而不是只偏向头部类别的整体准确率
+
+### 6.5 训练增强
+
+训练阶段的数据增强仍然来自 `raman/data/preprocess.py`，但在训练语境下可以更明确地分成两份数据流：
+
+- `train_dataset = RamanDataset(..., augment=True)`
+- `test_dataset = RamanDataset(..., augment=False)`
+
+也就是说：
+
+- 训练集看到的是“离线清洗后 + 在线增强”的输入
+- 验证集看到的是“离线清洗后 + 仅标准化”的输入
+
+当前在线增强分成两段：
+
+1. RAW 域增强  
+   - 分段峰强比例扰动
+   - 高斯噪声 / 强度相关噪声
+   - 波数轴扰动
+   - baseline 扰动
+2. 标准化后增强  
+   - 峰位平移
+   - 峰展宽
+   - 局部衰减遮挡
+
+其中 `smooth` 通道当前的构造方式是：
+
+1. 基于 RAW 域增强后的光谱先做 SG 平滑
+2. 再按 `norm_method` 做标准化
+3. 不再额外叠加标准化后的增强
+
+这样做的目的是让 `smooth` 通道更稳定地表达“平滑后的整体峰形”，避免它和主通道共享过多后增强造成语义混乱
+
+### 6.6 当前训练总损失
+
+训练时总损失由三部分组成：
+
+$$
+L_{\text{total}} = L_{\text{primary}} + \lambda_{\text{align}} L_{\text{align}} + \lambda_{\text{supcon}} L_{\text{supcon}}
+$$
+
+其中：
+
+- `L_primary`：主分类损失，当前使用 `FocalLoss`
+- `L_align`：层级中心损失，对应 `hierarchical_center_loss`
+- `L_supcon`：监督式对比损失
+
+`align` 和 `supcon` 两个辅助损失不是一开始就全权启用，而是：
+
+- 在 `align_start ~ align_end`、`supcon_start ~ supcon_end` 区间线性拉升
+- 在训练后期再按 `decay_start_ratio` 开始共同衰减
+
+这样做的目的有两个：
+
+- 前期先让模型把基本分类边界学稳
+- 中期再逐步加强 embedding 结构约束
+
+#### Focal Loss
+
+在光谱层级分类任务中，不同样本难度差异较大，容易样本会主导梯度，导致模型忽略难样本
+
+Focal Loss 在 CrossEntropy 的基础上增加一个可调节因子，抑制易样本梯度，放大难样本梯度，从而聚焦训练难样本
+
+`CrossEntropy Loss`：
+$$
+CE(p_t) = - \log(p_t)
+$$
+`Focal Loss`：
+$$
+FL(p_t) = - \alpha_t (1 - p_t)^\gamma \log(p_t)
+$$
+
+- $p_t$：模型对样本的预测概率 
+- $\gamma$：控制对易样本的抑制程度
+- $\alpha_t$：类别权重（可静态或动态，例如结合 DRW / EMA）  
+
+```python
+criterion = FocalLoss(
+    gamma=config.gamma,               # 0.8
+    weight=dynamic_weights,           # DRW / EMA 输出的类别动态权重
+    ignore_index=-1,
+    label_smoothing=config.label_smoothing
+)
+```
+
+Focal Loss 关注样本难度 → 难样本梯度被放大，易样本梯度被抑制 
+
+DRW / EMA 关注类别难度 → 类别层面的权重调整
+
+在本项目中的使用方式：
+
+- 主分类损失默认就是 `FocalLoss`
+- `ignore_index=-1`，因此缺失标签不会参与当前层的主损失
+- `label_smoothing` 默认关闭
+- `gamma=0.8`，抑制强度相对温和，不是特别激进的 Focal 版本
+
+除此之外，当前训练器还叠加了一层 `severity weight`：
+
+- 若真实类别排到 top-2，样本权重下调到 `0.8`
+- 若真实类别排到 top-3，样本权重下调到 `0.9`
+- 若 top-1 高置信度预测错误且 `conf > 0.8`，样本权重提升到 `2.0`
+
+这相当于在 Focal Loss 之外，再按“错得有多离谱”做一次样本级重加权。
+
+#### class_weights
+
+在进入 Focal Loss 之前，训练器会先根据当前训练层的标签分布构造一份基础类别权重 `class_weights`
+
+当前实现不是直接使用简单的反频率，而是做了对数平滑：
+
+1. 统计当前训练层每个类别的样本数
+2. 对计数做下界保护，避免出现 0
+3. 按下式计算基础权重：
+   $$
+   \text{weight}_g = \frac{1}{\log(\text{count}_g + 1.5)}
+   $$
+4. 再把所有类别权重归一化到平均值为 1：
+   $$
+   \text{weight}_g \leftarrow \frac{\text{weight}_g}{\frac{1}{C} \sum_{i=1}^{C} \text{weight}_i}
+   $$
+
+这么做的目的，是在照顾少数类的同时避免极端长尾下权重过大，导致训练不稳定
+
+在本项目中的使用方式：
+
+- `class_weights` 只根据当前训练层的训练样本计算
+- 若当前训练的是父类内子模型，会先把全局标签映射到该子模型的局部标签空间，再统计类别分布
+- 这份权重会先作为主分类损失的基础权重，再被后面的 `DRW / EMA` 进一步动态调整
+
+可以把它理解成“静态的类别不平衡校正”
+
+#### DRW / EMA class weight
+
+在训练光谱层级分类模型时，类别分布通常不均衡，少数类样本容易被模型忽略
+
+为缓解这一问题，采用动态类权重（Dynamic Re-weighting, DRW）结合指数移动平均（EMA）来动态调整每个类别的损失权重
+
+1. 对每个类别在训练过程中计算当前 batch 的 CrossEntropy 平均损失
+
+2. 用 EMA 平滑历史损失，公式为：
+   $$
+   \text{EMA}_g(t) = \alpha \cdot \text{EMA}_g(t-1) + (1-\alpha) \cdot \text{CE}_g^{\text{batch}}
+   $$
+   $\alpha$ 控制平滑程度（训练中为 0.9）
+
+3. 根据 EMA 相对差异调整类别权重：
+   $$
+   \text{raw\_diff}_g = \frac{\text{EMA}_g(t)}{\frac{1}{C} \sum_{i=1}^{C} \text{EMA}_i(t)}
+   $$
+
+   $$
+   \text{weight}_g = \text{class\_weight}_g \cdot \Big( 1 + \lambda (\text{raw\_diff}_g - 1) \Big)
+   $$
+
+   损失大的类别权重提升，损失小的类别权重降低
+
+4. 归一化权重，保证平均为 1，以避免总梯度过大
+   $$
+   \text{weight}_g \leftarrow \frac{\text{weight}_g}{\frac{1}{C} \sum_{i=1}^{C} \text{weight}_i}
+   $$
+
+目的与作用：
+
+- 平衡类间训练强度：少数类或难学类别在梯度中被放大，增强学习能力
+- 平滑权重变化：EMA 让权重随训练逐步调整，避免单个 batch 异常值冲击训练
+- 提高模型泛化能力：配合 Focal Loss 或 CrossEntropy，可显著提升长尾类别的识别准确率。
+
+在本项目中的使用方式：
+
+- 训练前先根据全训练集标签分布构造一份基础类权重 `class_weights`
+- 从 `epoch >= 10` 开始启用 DRW/EMA
+- 当前实现里：
+  - `ema_momentum = 0.9`
+  - `lambda_diff = 0.3`
+- 每个 epoch 开始时，根据上一阶段累计的 `ema_class_ce` 更新 `criterion.weight`
+
+也就是说，这里的 DRW / EMA 不是单纯按样本数静态加权，而是：
+
+- 先考虑类别频次
+- 再结合最近训练难度动态调整
+
+这样能更好地区分“样本少但已经学会的类”和“样本少而且仍然学不好的类”。
+
+#### severity weight
+
+除了类别层面的重加权，当前训练器还会在样本层面再做一次“错误严重程度”加权
+
+它的核心思路是：
+
+- 如果模型虽然没把真实类排到第一，但已经排到 top-2 或 top-3，说明这个样本并不是完全错离谱
+- 如果模型以很高置信度把样本分错，说明这是更危险的错误，应该放大梯度
+
+当前实现里，训练器会对每个有效样本：
+
+1. 计算当前 logits 的 softmax 概率
+2. 取前 `k=min(3, num_classes)` 个预测类别
+3. 统计真实类别在 top-k 中的排名
+4. 按排名给样本损失乘一个额外权重
+
+当前规则会按类别数自适应：
+
+- 二分类：
+  - 不额外做 `severity weight`
+  - 权重保持 `1.0`
+- 三分类：
+  - 若真实类别排在 top-2，样本权重设为 `0.90`
+  - 若高置信度错判且真实类别排在 top-2，权重提高到 `1.10`
+  - 若高置信度错判且真实类别落到 rank-3，权重提高到 `1.45`
+- 四类及以上：
+  - 若真实类别排在 top-2，样本权重设为 `0.85`
+  - 若真实类别排在 top-3，样本权重设为 `0.95`
+  - 若高置信度错判且真实类别排在 top-2，权重提高到 `1.20`
+  - 若高置信度错判且真实类别排在 rank-3 或更后，权重提高到 `1.80`
+
+其中高置信度阈值也会按类别数调整：
+
+- 三分类使用 `0.85`
+- 四类及以上使用 `0.80`
+
+因此这部分更准确地说，是一种“按预测错误严重程度调节主损失”的策略
+
+- 降低“几乎分对”的样本对梯度的占用
+- 提高“高置信度错判”样本的学习强度
+- 和 `FocalLoss` 形成互补：`FocalLoss` 更关注概率难度，`severity weight` 更关注错误排序结构
+
+#### SupCon Loss
+
+核心思想：
+
+- 在 embedding 空间约束样本的相对距离：
+  - 同类样本靠近
+  - 不同类样本远离
+- 支持多模态类（一个类可以有多个簇），不要求类内单中心
+- 主要用于表征学习，提高特征区分度
+
+公式与实现：
+1. 对 embedding 做 L2 正则化：
+   $$
+   z_i = \frac{feat_i}{||feat_i||_2}
+   $$
+
+2. 计算两两相似度矩阵：
+   $$
+   sim(i,j) = \frac{z_i \cdot z_j}{\tau}
+   $$
+   $\tau$：temperature，控制对比“硬度”
+
+3. 构造 mask，确定正样本对（同类样本，`i != j`）
+
+4. 数值稳定化，每行减去最大值
+
+5. 计算 log-prob：
+   $$
+   \log p_{ij} = sim(i,j) - \log\sum_{k \neq i} e^{sim(i,k)}
+   $$
+
+6. 对每个 anchor 平均所有正样本：
+   $$
+   L_i = - \frac{1}{|P(i)|} \sum_{p \in P(i)} \log p_{ip}
+   $$
+
+7. Batch 平均：
+   $$
+   L = \frac{1}{B} \sum_i L_i
+   $$
+
+在本项目中的使用方式：
+
+- SupCon 使用的是当前训练层级的标签，不再单独绑定一个配置层级
+- 只有当前 batch 中存在至少两个有效同类样本时，SupCon 才会产生有效梯度
+- 损失权重不是恒定的，而是通过 `supcon_start`、`supcon_end` 线性拉升
+- 到训练后期，又会和 `align` 一起按 `decay_start_ratio` 逐步衰减
+
+这样设计的考虑是：
+
+- 前期先由主分类损失把类别边界学出来
+- 中后期再用 SupCon 去整理 embedding 的几何结构
+- 避免一开始就用对比损失把特征空间拉得过硬，影响分类头收敛
+
+#### Center Loss
+
+核心思想：
+- 强制每个类别在 embedding 空间形成单一中心，最小化类内方差
+- 对多层级标签可分别加权计算（`hierarchical_center_loss`）
+
+公式：
+$$
+L = \frac{1}{N_c} \sum_{i=1}^{N_c} ||x_i - c_{y_i}||_2^2
+$$
+
+- $x_i$：样本 embedding
+- $c_{y_i}$：该类别中心
+- $N_c$：该类别样本数
+
+特点：
+
+- 类内紧凑性强，适合单模态类
+- 对多模态类可能过强，导致信息损失
+- 可与交叉熵联合使用，提高特征可分性
+
+在本项目中的使用方式：
+
+- 实现上对应的是 `hierarchical_center_loss`
+- 当前训练某一层模型时，只对当前层级施加这一项约束
+- 因此虽然函数支持“多层级分别加权”，但当前默认训练配置里实际是单层权重 `{level_name: 1.0}`
+- 这项损失在训练日志里以 `AlignLoss` 记录
+
+这么做的原因是：
+
+- 当前层模型最直接的目标仍然是把本层 embedding 收紧
+- 不在同一次训练里同时对所有层级都施加 center 约束，可以减少多层目标之间的梯度冲突
+
+| 特性              | SupCon Loss                | Center Loss                  |
+| ----------------- | -------------------------- | ---------------------------- |
+| 类内约束          | 同类靠近（允许多簇）       | 强制单中心                   |
+| 类间约束          | 间接推远不同类             | 不直接约束                   |
+| 对 batch 大小敏感 | 高（需要足够正样本对）     | 低，单样本也能计算中心       |
+| 使用场景          | 表征学习、对比学习、多模态 | 分类增强、特征紧凑化         |
+| 复杂度            | 中等（矩阵相似度计算）     | 低（仅计算类中心和欧氏距离） |
+
+| Loss                     | 约束目标           | 作用对象                       |
+| ------------------------ | ------------------ | ------------------------------ |
+| CrossEntropy / FocalLoss | 分类概率           | 样本层面，保证分类准确         |
+| class_weights            | 静态类别重加权     | 类别层面，缓解基础长尾不平衡   |
+| DRW / EMA                | 类别动态梯度权重   | 调整主分类损失梯度，针对少数类 |
+| severity weight          | 样本错误严重程度   | 样本层面，突出高置信度错判     |
+| SupCon Loss              | 类内靠近、类间分离 | embedding 层面，相对距离约束   |
+| Center Loss              | 类内单中心         | embedding 层面，绝对距离约束   |
+
+### 6.7 训练损失之间的分工
+
+可以把当前训练里用到的几类损失理解成三层约束：
+
+1. 主分类层`FocalLoss`：直接约束最终类别概率
+
+2. embedding 几何层：
+   - `SupCon Loss`
+   - `Center Loss`
+   
+   约束特征空间内部结构
+   
+3. 类别重加权层  
+   - `class_weights`
+   - `DRW / EMA`
+   - `severity weight`
+   
+   调整不同类别和不同难度样本的梯度贡献
+
+它们并不是互相替代，而是：
+
+- `FocalLoss` 负责“分对”
+- `SupCon` 负责“拉开”
+- `Center Loss` 负责“收紧”
+- `DRW / EMA` 负责“别让少数类被淹没”
+
+## 7. 评估
+
+### 7.1 测试集评估入口
+
+测试集评估入口是根目录的：
+
+- `evaluate_test_set.py`
+
+实际实现位于：
+
+- `raman/eval/test_set_evaluator.py`
+
+需要手动设置的核心参数通常包括：
 
 - `EXP_DIR`
 - `EVAL_LEVEL`
+- `INHERIT_MISSING_LEVELS`
 - `EVAL_ONLY_LEVEL`
 - `EVAL_ONLY_PARENT`
-- `INHERIT_MISSING_LEVELS`
 
-### 11.2 评估行为
+注意
 
-- 优先使用训练时保存 split
-- fallback 才按 `split_level` 重新切分
-- 支持级联到目标层级并结合 parent 子模型
-- `INHERIT_MISSING_LEVELS=True` 时，缺失层级可向 `leaf` 继承用于展示/统计
+- 默认评估的是训练阶段保存下来的 `test_files.json` 对应样本，即`dataset_train/` 内部分出的 test split
+- 而非 `dataset_test/` 目录里的外部测试集
 
-### 11.3 输出文件
+### 7.2 评估流程
 
-在 `EXP_DIR/{EVAL_LEVEL}_test_result/`：
+1. 从 `EXP_DIR` 读取 `config.yaml`、`hierarchy_meta.json`
+2. 重建 `RamanDataset`
+3. 读取训练阶段保存的 `train_files.json` / `test_files.json`
+4. 按层级顺序逐层加载模型
+5. 对每个样本做级联预测，直到目标层级
+6. 汇总分类报告和混淆矩阵
 
-- `test_eval_results.csv`：样本明细
-- `classification_report.txt`：类别精确率/召回/F1
-- `confusion_matrix_raw.csv`：原始混淆矩阵
-- `confusion_matrix.png`：归一化混淆矩阵热图
+当某一层是按父类拆开的子模型时，评估会自动：
 
----
+- 先看上一层父类预测结果
+- 再找到对应 parent 的子模型
+- 如果该 parent 只有一个子类且训练时没有生成模型，则直接继承该唯一子类
 
-## 12. 可解释性分析（`analysis/`）
+这与真实预测流程保持一致
 
-### 12.1 入口脚本
+### 7.3 层级继承
 
-- 单模型/按parent分析：`analysis/analyze_single.py`
-- parent聚合分析：`analysis/analyze_aggregate.py`
-- 流程编排：`analysis/analysis_core.py`
-- 可复用分析函数：`analysis/analysis_utils.py`
+这个开关用于控制：
 
-### 12.2 单模型分析输出
+- 如果样本在当前评估层级没有有效标签
+- 是否回退到它实际存在的最深有效层级继续参与统计
 
-目录：`EXP_DIR/{tag}_analysis/`
+当它为 `True` 时：
 
-- `figures/channel_importance_IG.png`
-- `figures/layer_importance.png`
-- `figures/{tsne|umap}_hier.png`
-- `figures/{tsne|umap}_hier_train_test.png`
-- `figures/band_importance_heatmap.png`
-- `figures/band_topK_per_class.csv`
-- `logs/analysis_log.txt`
+- 适合展示不完整层级下的整体级联效果
+- 对多层训练但部分分支没继续下钻的情况更友好
 
-### 12.3 聚合分析输出
+当它为 `False` 时：
 
-目录：`EXP_DIR/{analysis_level}_aggregate_analysis/`
+- 只有当前层真实有标签的样本才参与统计
+- 指标更严格，也更“纯”
 
-- `figures/channel_importance_IG_aggregate.png`
-- `figures/layer_importance_aggregate.png`
-- `figures/band_importance_heatmap_aggregate.png`
-- `figures/band_topK_per_class_aggregate.csv`
-- `logs/analysis_log.txt`
+### 7.4 评估输出
 
-### 12.4 分析方法实现
+`evaluate_test_set.py` 会在实验目录内生成：
 
-- 输入通道重要性：Integrated Gradients（支持 mean baseline）
-- 层重要性：多层 Grad-CAM 风格 `|A*G|` 聚合
-- SE统计：读取 `SEBlock1D.latest_scale` 统计摘要
-- 嵌入可视化：UMAP/TSNE（自动适配 sklearn TSNE 参数）
-- 波段热图：按类平均 IG 重要性 + 均值谱叠加 + bad bands 标注
+```text
+<EXP_DIR>/<EVAL_LEVEL>_test_result/
+```
 
----
+其中主要文件包括：
 
-## 13. PCA+SVM 对照基线（`PCA+SVM/pca_svm_from_split.py`）
-
-流程：
-
-1. 从 `EXP_DIR` 读取 `config.yaml` 和 split 清单
-2. 按指定层级提取样本特征
-3. `StandardScaler` 标准化
-4. PCA 降维（`n_components` 支持方差比例或固定维数）
-5. SVM 分类（默认 RBF）
-6. 输出分类报告与混淆矩阵
-
-特征方式：
-
-- `USE_ALL_CHANNELS=False`：只用第1通道
-- `USE_ALL_CHANNELS=True`：展平特征使用全部通道
-
-输出：
-
-- `metrics.txt`
-- `confusion_matrix.csv`
+- `test_eval_results.csv`
+- `classification_report.txt`
+- `confusion_matrix_raw.csv`
 - `confusion_matrix.png`
-- `pca_scatter.png`
 
-当前已统一为百分比格式输出，`accuracy/macro avg/weighted avg` 保留 `4` 位小数百分比。
+### 7.5 PCA + SVM 基线
 
----
+传统基线入口是：
 
-## 14. 配置使用原则（`raman/config.py`）
+- `pca_svm_baseline.py`
 
-README 不再逐项抄写 `config.py` 的全部默认值；配置源码本身是唯一准确来源。这里更强调“怎么改”和“优先改什么”。
+实际实现位于：
 
-### 14.1 最常改的几组配置
+- `raman/eval/baseline.py`
 
-- 任务与数据：
-  `dataset_root`、`train_level`、`train_per_parent`、`split_level`、`BAD_BANDS`
-- 输入与预处理：
-  `norm_method`、`snv_posneg_split`、`smooth_use`、`d1_use`
-- 模型结构：
-  `backbone_type`、`encoder_type`、`backbone_activation`、`pooling_type`、`cosine_head`
-- 编码器容量：
-  `transformer_dim / nhead / ffn_dim / layers`，或 `lstm_hidden / layers / bidirectional`
-- 训练控制：
-  `learning_rate`、`batch_size`、`epochs`、`patience`、`seed`
-- 增强强度：
-  `p_*` 系列概率、`max_pre_augs`、`max_post_augs`
+它和深度模型评估共用同一份训练/测试切分，因此可以做相对公平的对比。
 
-### 14.2 结构开关的常用组合
+当前流程是：
 
-- `仅CNN`：`backbone_type="cnn"`，`encoder_type="none"`
-- `仅LSTM`：`backbone_type="identity"`，`encoder_type="lstm"`
-- `仅Transformer`：`backbone_type="identity"`，`encoder_type="transformer"`
-- `CNN+LSTM`：`backbone_type="cnn"`，`encoder_type="lstm"`
-- `CNN+Transformer`：`backbone_type="cnn"`，`encoder_type="transformer"`
+1. 从 `dataset_train/` 中按训练时的 split 提取 train/test 样本
+2. 选择第一个输入通道，或把全部通道展平
+3. `StandardScaler`
+4. `PCA`
+5. `SVM`
+6. 输出准确率、分类报告、混淆矩阵和 PCA 散点图
 
-其中 `identity_pool_kernel` 只在 `backbone_type="identity"` 时生效，用来控制“非 CNN 路线”送进序列编码器前的长度压缩量。
+输出目录为：
 
-如果只是想比较 `ReLU` 和 `SiLU`，推荐先只改：
-
-- `backbone_activation="relu"` 或 `backbone_activation="silu"`
-
-其余结构、池化方式和输入通道先保持不变，这样实验更容易解释。
-
-### 14.3 推荐的调参顺序
-
-1. 先固定数据入口、训练层级和 split 策略。
-2. 再固定主结构组合，例如先确定是 `CNN+Transformer` 还是 `仅LSTM`。
-3. 结构定下来后，再调编码器容量和 dropout。
-4. 最后再调增强强度、损失权重和 early stop 相关参数。
-
-### 14.4 关于增强参数的理解方式
-
-- `RAW` 域参数主要控制“采集条件变化”的模拟强度。
-- `SNV后` 参数主要控制“谱形局部扰动”的强度。
-- 如果出现训练早期塌成单类、测试集长时间不动，优先检查结构与学习率，不要只靠加大增强概率硬顶。
-- 如果训练集很高、测试集明显掉，优先考虑减弱 `strong baseline` 和 `cut` 这一类强扰动。
-
----
-
-## 15. 运行手册（推荐顺序）
-
-### 15.1 环境依赖（按代码导入）
-
-- Python 3.9+
-- `torch`
-- `numpy`
-- `scipy`
-- `scikit-learn`
-- `matplotlib`
-- `seaborn`
-- `pandas`
-- `pyyaml`
-- `tqdm`
-- `umap-learn`
-
-### 15.2 离线预处理
-
-所有 `dataset_process` 命令都在项目根目录执行：
-
-```bash
-python -m dataset_process <command> <数据集名>
+```text
+<EXP_DIR>/<LEVEL>_baseline_test_result/
 ```
 
-支持的数据集名：
+## 8. 分析
 
-- `细菌`
-- `耐药菌`
-- `厌氧菌`
+### 8.1 分析入口
 
-可用指令：
+分析入口保留在仓库根目录：
 
-- `python -m dataset_process list`
-- `python -m dataset_process pack-init 细菌`
-- `python -m dataset_process unpack-init 细菌`
-- `python -m dataset_process classify 细菌`
-- `python -m dataset_process preview-init 细菌`
-- `python -m dataset_process preprocess-train 细菌`
-- `python -m dataset_process preprocess-test 细菌`
-- `python -m dataset_process count 细菌`
-- `python -m dataset_process count 细菌 --subdir dataset_raw`
+- `analyze.py`
 
-指令说明：
+实际实现位于：
 
-- `list`：列出当前支持的数据集 profile。
-- `pack-init`：将 `dataset/<数据集名>/dataset_init/` 打包为 `dataset_init.npz`。
-- `unpack-init`：将 `dataset_init.npz` 解包回 `dataset_init/`。
-- `classify`：从 `dataset_init/` 或 `dataset_init.npz` 分类整理到 `dataset_raw/`。
-- `preview-init`：对 `dataset_init` 中每个原始叶子文件夹单独做预处理并输出图到 `dataset_init_fig/`，不会执行 PCA 异常点剔除。
-- `preprocess-train`：从 `dataset_raw/` 生成 `dataset_train/` 和 `dataset_train_fig/`。
-- `preprocess-test`：从 `测试菌/` 生成 `dataset_test/` 和 `dataset_test_fig/`。
-- `count`：统计默认目录或指定子目录中的 `.arc_data` 数量。
+- `raman/analysis/core.py`
+- `raman/analysis/utils.py`
 
-常用流程示例：
+入口内部通过 `ANALYSIS_MODE` 切换两种模式：
 
-```bash
-python -m dataset_process unpack-init 厌氧菌
-python -m dataset_process preview-init 厌氧菌
-python -m dataset_process classify 厌氧菌
-python -m dataset_process preprocess-train 厌氧菌
-python -m dataset_process preprocess-test 厌氧菌
-python -m dataset_process count 厌氧菌
+- `single`：分析单个全局模型，或某个 parent 对应的单个子模型
+- `aggregate`：把多个 parent 子模型的结果按样本数加权聚合
+
+### 8.2 单模型分析
+
+单模型分析会围绕一个具体模型输出多种解释结果，包括：
+
+- 输入通道重要性（Integrated Gradients）
+- 中间层重要性 / Layer Grad-CAM
+- 类别级波段重要性热图
+- embedding 可视化
+
+对应输出目录通常是：
+
+```text
+<EXP_DIR>/<tag>_analysis/
 ```
 
-### 15.3 训练
+### 8.3 聚合分析
 
-```bash
-python train.py
+聚合分析主要用于“某一层是按 parent 拆开训练”的场景
+
+它会：
+
+1. 逐个加载该层所有 parent 子模型
+2. 分别计算每个子模型的波段重要性、通道重要性等结果
+3. 再按样本数做加权聚合
+
+聚合输出目录通常是：
+
+```text
+<EXP_DIR>/<analysis_level>_aggregate_analysis/
 ```
 
-训练前建议先检查：
+这种方式更适合回答：
 
-- `raman/config.py`（任务路径、train_level、增强参数）
-- `train.py` 顶部覆盖项（尤其 `TRAIN_ONLY_LEVEL`）
+- 在整一层上，哪些波段最稳定地重要
+- 不同 parent 子模型的关注模式是否一致
 
-### 15.4 预测
+### 8.4 目的
 
-```bash
-python predict/predict_folder.py
-python predict/predict_single.py
-```
+- 检查模型到底依赖了哪些波段和通道
+- 比较不同层级、不同 parent 子模型的判别模式
+- 观察 embedding 在训练集 / 测试集上的分布结构
 
-### 15.5 测试评估
+对拉曼光谱任务来说，这些分析结果常常比单个 accuracy 更有解释价值，因为它能回答：
 
-```bash
-python evalute/evalute_test.py
-```
-
-训练、`evalute_test`、批量/单文件预测三条链路的输入口径如下：
-
-| 链路 | 实际输入目录 | 是否使用 split | 运行时处理 | 说明 |
-|---|---|---|---|---|
-| `train.py` | `dataset/<分类名>/dataset_train` | 是 | 训练集启用在线增强，再做标准化和通道构建 | 训练和验证都来自 `dataset_train` |
-| `evalute/evalute_test.py` | `dataset/<分类名>/dataset_train` | 是 | 不做在线增强，只做标准化和通道构建 | 评估的是训练时那份 hold-out 测试子集 |
-| `predict/predict_folder.py` | `dataset/<分类名>/dataset_test` | 否 | 不做在线增强，只做标准化和通道构建 | 面向离线 `preprocess-test` 后的外部测试目录 |
-| `predict/predict_single.py` | `dataset/<分类名>/dataset_test` | 否 | 不做在线增强，只做标准化和通道构建 | 与批量预测保持同一输入口径 |
-
-补充说明：
-
-- `dataset_process preprocess-train` 负责把原始训练样本整理成 `dataset_train/`
-- `dataset_process preprocess-test` 负责把 `测试菌/` 整理成 `dataset_test/`
-- `predict_folder.py` 和 `predict_single.py` 现在默认读取处理后的 `dataset_test/`，不再直接读原始 `测试菌/`
-
-### 15.6 可解释性分析
-
-```bash
-python analysis/analyze_single.py
-python analysis/analyze_aggregate.py
-```
-
-### 15.7 PCA+SVM 基线
-
-```bash
-python "PCA+SVM/pca_svm_from_split.py"
-```
-
----
-
-## 16. 常见坑位与排查建议
-
-- 训练层级不符合预期：先检查 `train.py` 顶部覆盖变量是否仍启用。
-- 推理找不到模型：确认 `EXP_DIR` 下 `config.yaml`、`hierarchy_meta.json`、`*_model.pt` 是否完整。
-- 评估结果与训练不一致：确认是否复用了同一 `train_files.json/test_files.json`。
-- 通道数报错：检查 `snv_posneg_split/smooth_use/d1_use` 与 `in_channels`。
-- bad bands 长度差异：离线预处理 `BAD_BANDS` 应与训练配置保持一致。
-- `evalute` 目录名是历史拼写（不是 `evaluate`），脚本路径注意不要写错。
-
----
-
-## 17. 概念补充（与当前实现对应）
-
-### 17.1 SupCon vs Align
-
-- SupCon：同类拉近 + 异类拉远，强调判别边界。
-- Align：主要做类内收紧，强调表示一致性。
-- 本项目可同时启用，并通过 warm-up 与后期衰减降低过约束风险。
-
-### 17.2 统计池化 vs 注意力池化
-
-- `stat`：稳定、抗过拟合、对小样本友好。
-- `attn`：表达更强，能突出关键波段，但更依赖数据规模与正则。
-
-### 17.3 余弦分类头 vs 普通线性头
-
-- 线性头：方向 + 幅值共同影响决策。
-- 余弦头：方向主导，幅值影响弱，跨批次强度漂移下通常更稳。
-
----
+- 模型是学到了稳定峰位，还是学到了偶然噪声
+- 不同类别的判别主要依赖局部峰，还是依赖组合关系
+- 多层级拆模后，不同 parent 子模型的关注区域是否发生迁移

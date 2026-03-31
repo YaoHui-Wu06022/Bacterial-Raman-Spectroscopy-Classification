@@ -4,12 +4,12 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class DatasetProfile:
+    """描述一个数据集在离线预处理阶段需要的固定目录和坏波段配置。"""
     profile_id: str
     dataset_name: str
     train_bad_bands: tuple[tuple[float, float], ...]
     test_bad_bands: tuple[tuple[float, float], ...]
     count_root: str
-    prefix_mode: str = "letters"
     root_init: str = "dataset_init"
     root_init_pack: str = "dataset_init.npz"
     root_process_raw: str = "dataset_raw"
@@ -35,17 +35,16 @@ PROFILES = {
     "resistance": DatasetProfile(
         profile_id="resistance",
         dataset_name="耐药菌",
-        train_bad_bands=((905.0, 940.0),),
-        test_bad_bands=((905.0, 940.0),),
+        train_bad_bands=((900.0, 940.0),),
+        test_bad_bands=((900.0, 940.0),),
         count_root="dataset_train",
-        prefix_mode="letters_sign",
         aliases=("耐药菌", "resistance"),
     ),
     "anaerobe": DatasetProfile(
         profile_id="anaerobe",
         dataset_name="厌氧菌",
-        train_bad_bands=((900.0,940.0),),
-        test_bad_bands=((900.0,940.0),),
+        train_bad_bands=((890.0,940.0),),
+        test_bad_bands=((890.0,940.0),),
         count_root="dataset_train",
         aliases=("厌氧菌", "anaerobe"),
     ),

@@ -8,7 +8,7 @@ EPS = 1e-8
 
 
 def read_arc_data(path):
-    """Read .arc_data/.txt files with two columns: wavenumber and intensity."""
+    """读取两列文本光谱文件，返回波数和强度数组。"""
     wn, sp = [], []
     with open(path, "r", encoding="utf-8", errors="ignore") as file:
         for line in file:
@@ -24,10 +24,12 @@ def read_arc_data(path):
 
 
 def build_wn_ref(cut_min, cut_max, target_points):
+    """生成裁剪后统一插值使用的波数坐标。"""
     return np.linspace(cut_min, cut_max, target_points)
 
 
 def normalize_bad_bands(bad_bands):
+    """规范化坏波段配置，过滤非法项并统一转成浮点区间。"""
     if not bad_bands:
         return ()
 
@@ -48,6 +50,7 @@ def normalize_bad_bands(bad_bands):
 
 
 def build_valid_mask(wn, bad_bands):
+    """根据坏波段区间构造有效波段掩码；未配置坏波段时返回 None。"""
     bad_bands = normalize_bad_bands(bad_bands)
     if not bad_bands:
         return None
@@ -58,6 +61,7 @@ def build_valid_mask(wn, bad_bands):
 
 
 def asls_baseline(spectrum, lam=1e5, p=0.01, niter=10, valid_mask=None):
+    """使用 AsLS 估计基线，可选择跳过坏波段对应位置。"""
     length = len(spectrum)
     diff = sparse.diags([1, -2, 1], [0, -1, -2], shape=(length, length - 2))
     weights = np.ones(length)
@@ -78,6 +82,7 @@ def asls_baseline(spectrum, lam=1e5, p=0.01, niter=10, valid_mask=None):
 
 
 def snv(data, eps=EPS):
+    """对单条或多条光谱做 SNV 标准化。"""
     data = np.asarray(data, dtype=np.float32)
     if data.ndim == 1:
         mean = data.mean()
@@ -88,23 +93,8 @@ def snv(data, eps=EPS):
     return (data - mean) / (std + eps)
 
 
-def snv_masked(spectra, masks, eps=EPS):
-    spectra = spectra.astype(np.float32)
-    masks = masks.astype(bool)
-    output = np.full_like(spectra, np.nan)
-
-    for index in range(spectra.shape[0]):
-        valid = masks[index]
-        if not np.any(valid):
-            continue
-        mean = spectra[index, valid].mean()
-        std = max(spectra[index, valid].std(), eps)
-        output[index, valid] = (spectra[index, valid] - mean) / std
-
-    return output
-
-
 def minmax_normalize(data, eps=EPS):
+    """对单条或多条光谱做 Min-Max 归一化。"""
     data = np.asarray(data, dtype=np.float32)
     if data.ndim == 1:
         min_value = np.min(data)
@@ -118,6 +108,7 @@ def minmax_normalize(data, eps=EPS):
 
 
 def normalize_for_plot(spectra, method):
+    """按指定方法对绘图用光谱做归一化。"""
     method = method.lower()
     if method == "minmax":
         return minmax_normalize(spectra)
@@ -137,6 +128,7 @@ def preprocess_single_spectrum(
     asls_p,
     asls_max_iter,
 ):
+    """对单条光谱执行基线校正、裁剪、插值和坏波段剔除。"""
     bad_bands = normalize_bad_bands(bad_bands)
     valid_mask = build_valid_mask(wn, bad_bands)
 
@@ -167,6 +159,7 @@ def preprocess_single_spectrum(
 
 
 def save_mean_plot(wn, spectra, out_path, norm_method, bad_bands, title):
+    """保存一组光谱的均值谱图，并在图上标出坏波段区域。"""
     bad_bands = normalize_bad_bands(bad_bands)
     spectra_norm = normalize_for_plot(spectra, norm_method)
     mean_spec = np.mean(spectra_norm, axis=0)

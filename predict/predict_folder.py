@@ -1,13 +1,11 @@
-# ============================================================
 #  预测文件夹（批量，基于实验目录）
-# ============================================================
 
 import os
 import torch
 from tqdm import tqdm
 from predict_core import load_predictor, predict_one
 import re
-from raman.data_paths import resolve_dataset_stage
+from raman.data import resolve_dataset_stage
 
 # 项目根目录解析（支持子目录运行）
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -34,9 +32,7 @@ def get_cell_number(fname):
     return int(1e9)
 
 
-# ============================================================
 # Batch prediction for one folder
-# ============================================================
 def predict_folder(folder_path, output_dir, predictor, top_k=3, parent_mask=None):
 
     folder_path = resolve_path(folder_path)
@@ -85,9 +81,7 @@ def predict_folder(folder_path, output_dir, predictor, top_k=3, parent_mask=None
 
         details_lines.append("\n===============================================\n\n")
 
-    # ======================================================
     # FILE-LEVEL SUMMARY
-    # ======================================================
     summary_lines = []
     summary_lines.append("===== FILE-LEVEL SUMMARY =====\n\n")
 
@@ -96,23 +90,17 @@ def predict_folder(folder_path, output_dir, predictor, top_k=3, parent_mask=None
 
     summary_lines.append("\n===============================================\n\n")
 
-    # ======================================================
     # SAVE
-    # ======================================================
     with open(output_file_txt, "w", encoding="utf-8") as f:
         f.writelines(summary_lines)
         f.writelines(details_lines)
 
     print(f"[Saved] file-level → {output_file_txt}")
-# ============================================================
 # Main
-# ============================================================
 if __name__ == "__main__":
 
-    # ========================================================
     # 指定实验输出目录（必须包含 config_.yaml + *_model.pt）
-    # ========================================================
-    EXP_DIR = resolve_path("output/厌氧菌/20260318_053928")
+    EXP_DIR = resolve_path("output/细菌/20260331_032757")
     # 手动设置预测层级（None 则使用 config）
     PREDICT_LEVEL = "level_1"
 
@@ -125,7 +113,7 @@ if __name__ == "__main__":
     MANUAL_PARENT_MASK = None
 
     # 待预测数据根目录
-    PREDICT_DATASET = resolve_path("dataset/厌氧菌")
+    PREDICT_DATASET = resolve_path("dataset/细菌")
     PREDICT_ROOT = os.fspath(
         resolve_dataset_stage(
             PREDICT_DATASET,
@@ -139,14 +127,10 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # ========================================================
     # 构建 predictor
-    # ========================================================
     predictor = load_predictor(EXP_DIR, device, predict_level=PREDICT_LEVEL)
 
-    # ========================================================
     # 输出目录：统一放到实验目录下
-    # ========================================================
     out_root = os.path.join(EXP_DIR, f"predict_results_{PREDICT_LEVEL}")
     os.makedirs(out_root, exist_ok=True)
 

@@ -1,33 +1,27 @@
-﻿# NOTE:
-# This module must NOT import config.py.
-# All runtime behavior is driven by explicit config injection.
-# 只在CPU
-
-import os
+﻿import os
+from pathlib import Path
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch.utils.data import Dataset
 from collections import defaultdict
-from .data_paths import resolve_dataset_stage
-from .preprocess import (
-    SNV,
-    L2Normalize,
-    MinMaxNormalize,
-    augment_raw_spectrum,
-    augment_norm_spectrum,
-    sg_coeff,
+from raman.data.paths import resolve_dataset_stage
+from raman.data.preprocess import (
+    build_model_input,
+    build_sg_kernels,
+    load_arc_intensity,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class RamanDataset(Dataset):
     """
     层级自适应 Raman 数据集。
 
-    目录结构:
+    目录结构示例：
         root / ... / ... / *.arc_data
 
-    功能:
+    主要功能：
         - 自动识别目录深度
         - 生成各层级与 leaf 的标签映射
         - 维护父类 -> 子类映射，便于级联训练/推理
@@ -35,35 +29,25 @@ class RamanDataset(Dataset):
 
     ROOT_TAG = "__root__"
     MISSING_TAG = "__missing__"
-    PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
     def __init__(self, root_dir, augment=False, config=None):
         resolved_root = resolve_dataset_stage(
             root_dir,
             stage="train",
-            project_root=self.PROJECT_ROOT,
+            project_root=PROJECT_ROOT,
             must_exist=True,
         )
         self.root_dir = os.fspath(resolved_root)
         self.augment = augment
-        assert config is not None, "RamanDataset requires an explicit config"
+        assert config is not None, "RamanDataset 必须显式传入 config"
         self.config = config
 
-        # --------------------------------------------------
-        # 主任务层级（兼容旧接口，默认 leaf）
-        # --------------------------------------------------
-        self.primary_level = getattr(self.config, "primary_level", None)
-
-        # ==============================
         # 样本容器
-        # ==============================
-        self.samples = []          # file path
+        self.samples = []          # 样本文件路径
         self.level_labels = []     # 每个样本的多层标签（含 leaf）
         self.hier_names = []       # 每个样本的层级路径（前缀路径）
 
-        # ==============================
         # 层级信息（扫描后填充）
-        # ==============================
         self.level_names = []
         self.head_names = []
         self.head_name_to_idx = {}
@@ -72,40 +56,17 @@ class RamanDataset(Dataset):
         self.class_names_by_level = []
         self.num_classes_by_level = {}
 
-        # ==============================
-        # 主任务兼容字段（用于旧脚本/评估）
-        # ==============================
-        self.labels = []
-        self.class_names = []
-        self.label_map = {}
-        self.inv_label_map = {}
-
         # leaf 映射（便于外部读取）
         self.leaf_label_map = {}
         self.parent_level_name = {}
         self.parent_to_children = {}
 
-        # ==============================
-        # SG kernel 预生成（完全保留）
-        # ==============================
-        self.sg_smooth = torch.tensor(
-            sg_coeff(self.config.win_smooth, 3, 0),
-            dtype=torch.float32
-        ).view(1, 1, -1)
+        # SG kernel 预生成
+        self.sg_smooth, self.sg_d1 = build_sg_kernels(self.config, device="cpu")
 
-        self.sg_d1 = torch.tensor(
-            sg_coeff(self.config.win1, 3, 1),
-            dtype=torch.float32
-        ).view(1, 1, -1)
-
-        # ==============================
-        # 扫描数据（统一入口）
-        # ==============================
+        # 扫描数据
         self._scan()
 
-    # ======================================================
-    # 统一层级扫描（核心）
-    # ======================================================
     def _iter_leaf_dirs(self, root_dir):
         # 遍历所有包含 .arc_data 的叶子目录
         for root, dirs, files in os.walk(root_dir):
@@ -122,16 +83,14 @@ class RamanDataset(Dataset):
         return "/".join(parts)
 
     def _resolve_level_name(self, level_name):
-        # 兼容旧字段：仍允许 leaf/level_x
         if level_name is None:
             return "leaf"
-        if level_name in self.head_name_to_idx:
-            return level_name
-        if level_name == "leaf":
-            return "leaf"
-        if level_name.startswith("level_") and level_name in self.head_name_to_idx:
-            return level_name
-        return "leaf"
+        if level_name not in self.head_name_to_idx:
+            valid_levels = ", ".join(self.head_names)
+            raise ValueError(
+                f"未知层级名：{level_name}，可选值为：{valid_levels}"
+            )
+        return level_name
 
     def _scan(self):
         """
@@ -243,141 +202,33 @@ class RamanDataset(Dataset):
         self.level_labels = np.array(self.level_labels, dtype=np.int64)
         self.hier_names = np.array(self.hier_names)
 
-        # 绑定主任务（用于旧接口/评估）
-        primary = self._resolve_level_name(self.primary_level)
-        if primary not in self.head_name_to_idx:
-            primary = "leaf"
-        self.primary_level = primary
-        primary_idx = self.head_name_to_idx[primary]
-
-        if len(self.level_labels) > 0:
-            self.labels = self.level_labels[:, primary_idx]
-        else:
-            self.labels = np.array([], dtype=np.int64)
-
-        self.class_names = (
-            self.class_names_by_level[primary_idx] if self.class_names_by_level else []
-        )
-        self.label_map = (
-            self.label_maps_by_level[primary_idx] if self.label_maps_by_level else {}
-        )
-        self.inv_label_map = (
-            self.inv_label_maps_by_level[primary_idx] if self.inv_label_maps_by_level else {}
-        )
-        self.num_classes = len(self.class_names)
-        self.task_name = primary
-
-    # ======================================================
-    # Dataset 基本接口
-    # ======================================================
     def __len__(self):
         return len(self.samples)
 
-    # ======================================================
-    # 读取 + 增强 + SG + 通道堆叠
-    # ======================================================
     def __getitem__(self, idx):
         path = self.samples[idx]  # 路径
         labels = self.level_labels[idx]  # 多层标签
         hier = self.hier_names[idx]  # 层级
-        # DataLoader default collate can't handle None in dict values.
+        # DataLoader 默认的 collate 不能直接处理 dict 中的 None 值。
         if isinstance(hier, dict):
             hier = {
                 k: (v if v is not None else self.MISSING_TAG)
                 for k, v in hier.items()
             }
 
-        # ------------------------------
-        # 读取光谱
-        # ------------------------------
-        data = np.loadtxt(path).astype(np.float32)
-        raw_intensity = data[:, 1]
-
-        # -------- RAW + pre-augment（强度空间）--------
-        if self.augment and (not self.config.input_is_norm):
-            raw_aug = augment_raw_spectrum(raw_intensity, self.config)
-        else:
-            raw_aug = raw_intensity.copy()
-
-        x = raw_aug.copy()
-
-        if not self.config.input_is_norm:
-            if self.config.norm_method == "snv":
-                x = SNV(x)
-
-            elif self.config.norm_method == "l2":
-                x = L2Normalize(x)
-
-            elif self.config.norm_method == "minmax":
-                x = MinMaxNormalize(x)
-            else:
-                raise ValueError(
-                    f"Unknown norm_method: {self.config.norm_method}"
-                )
-
-        # -------- 形状空间 --------
-        if self.augment:
-            x = augment_norm_spectrum(x, self.config)
-
-        # 构造 Tensor(cpu)
-        signal = torch.tensor(
-            x, dtype=torch.float32, device="cpu"
-        ).view(1, 1, -1)
-
-        # 通道构建
-        base = signal[0, 0]
-        if getattr(self.config, "snv_posneg_split", False):
-            pos = torch.clamp(base, min=0.0)
-            neg = torch.clamp(-base, min=0.0)
-            channels = [pos, neg]
-        else:
-            channels = [base]
-
-        # -----------------------------
-        # smooth 通道
-        # -----------------------------
-        if self.config.smooth_use:
-            smooth = F.conv1d(
-                signal,
-                self.sg_smooth,
-                padding=self.config.win_smooth // 2
-            )[0, 0]
-            channels.append(smooth)
-
-
-        # -----------------------------
-        # 一阶导数
-        # -----------------------------
-        if self.config.d1_use:
-            d1 = F.conv1d(
-                signal,
-                self.sg_d1,
-                padding=self.config.win1 // 2
-            )[0, 0]
-
-            d1 = d1 / self.config.delta
-            # ---- scale 对齐 ----
-            scale = torch.max(torch.abs(d1)).clamp_min(1e-8)
-            d1 = d1 / scale
-            channels.append(d1)
-
-
-        # -----------------------------
-        # 最终检查 & stack
-        # -----------------------------
-        if len(channels) != self.config.in_channels:
-            raise ValueError(
-                f"Channel mismatch: built {len(channels)} channels, "
-                f"but config.in_channels={self.config.in_channels}."
-            )
-
-        X = torch.stack(channels, dim=0)
+        # 与 InputPreprocessor 复用同一套输入构建逻辑，避免训练/评估分支漂移。
+        raw_intensity = load_arc_intensity(path)
+        X = build_model_input(
+            raw_intensity,
+            config=self.config,
+            sg_smooth=self.sg_smooth,
+            sg_d1=self.sg_d1,
+            device="cpu",
+            augment=self.augment,
+        )
 
         return X, labels, hier
 
-    # ======================================================
-    # --------- 额外接口（为 train / eval 预留）---------
-    # ======================================================
     def get_hierarchy(self, idx):
         """
         返回某个样本的完整层级信息：
@@ -398,8 +249,9 @@ class RamanDataset(Dataset):
 
     def get_split_key(self, idx, split_mode):
         """
-        根据 split_mode 构造分组 key
-        示例:
+        根据 split_mode 构造分组键。
+
+        示例：
             split_mode = "level_2/leaf"
             -> (hier["level_2"], hier["leaf"])
         """
@@ -410,10 +262,15 @@ class RamanDataset(Dataset):
 
     def encode_hierarchy(self, hier_list, device=None):
         """
-        hier_list:
-            - DataLoader default collate will turn list[dict] into dict[str, list]
-            - Some callers may still pass list[dict] or numpy array of dict
-        return: dict of tensors {level_1, level_2, ..., leaf}
+        将层级名称结构编码成各层的整数标签张量。
+
+        输入允许两种形式：
+            - DataLoader 默认 collate 后得到的 dict[str, list]
+            - 调用方直接传入的 list[dict] 或 numpy array[dict]
+
+        返回：
+            - dict[str, torch.Tensor]
+            - 键为各层级名，值为对应的标签张量
         """
         # --------------------------------------------------
         # 统一输入格式
@@ -434,8 +291,8 @@ class RamanDataset(Dataset):
                 }
             else:
                 raise TypeError(
-                    "encode_hierarchy expects a dict[str, list] (from DataLoader collate) "
-                    "or a list/array of dicts from __getitem__."
+                    "encode_hierarchy 只接受 DataLoader collate 后的 "
+                    "dict[str, list]，或由 __getitem__ 返回的 dict 列表/数组。"
                 )
 
         # --------------------------------------------------

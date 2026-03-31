@@ -13,7 +13,7 @@ def build_activation(name, inplace=True):
 
 class SEBlock1D(nn.Module):
     """
-    增强版 SE 模块：
+    SE 模块：
     - 支持开关
     - 自动记录 scale 用于重要性分析
     - 保证 backward hook 获取到的梯度有效
@@ -53,9 +53,7 @@ class SEBlock1D(nn.Module):
         # 注意：这里不要 clone，否则 backward hook 获取不到梯度
         return x * y
 
-# ============================================================
-# ResNeXt Block + SE
-# ============================================================
+# ResNeXt 残差块与 SE 模块
 class ResNeXtBlock1D(nn.Module):
     """
     1D ResNeXt block:
@@ -69,7 +67,6 @@ class ResNeXtBlock1D(nn.Module):
     def __init__(self,
                  in_channels,
                  out_channels,
-                 stride=1,
                  cardinality = None,
                  base_width = None,
                  reduction= None,
@@ -117,10 +114,9 @@ class ResNeXtBlock1D(nn.Module):
         )
 
         # shortcut
-        if stride != 1 or in_channels != out_channels:
+        if in_channels != out_channels:
             self.shortcut = nn.Sequential(
-                nn.Conv1d(in_channels, out_channels, kernel_size=1,
-                          stride=stride, bias=False),
+                nn.Conv1d(in_channels, out_channels, kernel_size=1, bias=False),
                 nn.BatchNorm1d(out_channels)
             )
         else:
@@ -142,9 +138,7 @@ class ResNeXtBlock1D(nn.Module):
         out = self.out_act(out)
         return out
 
-# ============================================================
-# Positional Encoding（1D）
-# ============================================================
+# 一维位置编码
 class PositionalEncoding1D(nn.Module):
     def __init__(self, d_model, max_len=1000):  # 位置编码最长1000
         super().__init__()
@@ -168,9 +162,7 @@ class PositionalEncoding1D(nn.Module):
         L = x.size(1)
         return x + self.pe[:, :L, :]
 
-# ============================================================
-# Cosine Classifier
-# ============================================================
+# 余弦分类头
 class CosineClassifier(nn.Module):
     def __init__(self, in_features, out_features, scale=30.0):
         super().__init__()
@@ -183,11 +175,9 @@ class CosineClassifier(nn.Module):
         w = F.normalize(self.weight, p=2, dim=1)
         return self.scale * torch.matmul(x, w.t())
 
-# ============================================================
-# Raman 消融模型:
-# - backbone_type 控制前端特征提取器（CNN / 直连）
-# - encoder_type 控制序列编码器（Transformer / LSTM / None）
-# ============================================================
+# Raman 主模型
+# - `backbone_type` 控制前端特征提取器
+# - `encoder_type` 控制序列编码器
 class ResNeXt1D_Transformer(nn.Module):
     def __init__(self, num_classes, config):
         super().__init__()
@@ -228,9 +218,7 @@ class ResNeXt1D_Transformer(nn.Module):
                 nn.GELU()
             )
 
-        # ============================
-        # Sequence Encoder
-        # ============================
+        # 序列编码器
         self.seq_dim = self.proj_dim
         if self.transformer_on:
             self.pos_encoder = PositionalEncoding1D(d_model=self.proj_dim)
@@ -291,19 +279,17 @@ class ResNeXt1D_Transformer(nn.Module):
             self.head = nn.Linear(self.feat_dim, int(num_classes))
 
     def _build_cnn_backbone(self):
-        # ============================
-        # Stem
-        # ============================
+        # 输入 stem
         self.stem_multiscale = bool(getattr(self.config, "stem_multiscale", False))
         if self.stem_multiscale:
             kernel_sizes = getattr(self.config, "stem_kernel_sizes", None) or [3, 7, 15]
             kernel_sizes = [int(k) for k in kernel_sizes]
             num_branches = max(1, len(kernel_sizes))
             base_ch = 64 // num_branches
-            rem = 64 - base_ch * num_branches
+            rem = 64 - base_ch * num_branches # 不一定整除，判断剩余
             branch_channels = [base_ch] * num_branches
             for i in range(rem):
-                branch_channels[i] += 1
+                branch_channels[i] += 1 # 按顺序补上
             self.stem_branches = nn.ModuleList([
                 nn.Sequential(
                     nn.Conv1d(
@@ -335,9 +321,7 @@ class ResNeXt1D_Transformer(nn.Module):
                 nn.AvgPool1d(kernel_size=2)
             )
 
-        # ============================
-        # ResNeXt Backbone
-        # ============================
+        # ResNeXt 主干
         self.in_planes = 64
         self.layer1 = self._make_layer(
             64, 2,

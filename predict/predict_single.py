@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
-# ============================================================
 #  预测单个文件夹（基于实验目录）
-# ============================================================
 
 import os
 import re
 import torch
 from predict_core import load_predictor, predict_one
-from raman.data_paths import resolve_dataset_stage
+from raman.data import resolve_dataset_stage
 
 # 项目根目录解析（支持子目录运行）
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -122,9 +120,7 @@ if __name__ == "__main__":
 
         details_lines.append("\n===============================================\n\n")
 
-    # ======================================================
     # FILE-LEVEL SUMMARY
-    # ======================================================
     summary_lines = []
     summary_lines.append("===== FILE-LEVEL SUMMARY =====\n\n")
 
@@ -133,9 +129,7 @@ if __name__ == "__main__":
 
     summary_lines.append("\n===============================================\n\n")
 
-    # ======================================================
     # SAVE
-    # ======================================================
     with open(output_file_txt, "w", encoding="utf-8") as f:
         f.writelines(summary_lines)
         f.writelines(details_lines)

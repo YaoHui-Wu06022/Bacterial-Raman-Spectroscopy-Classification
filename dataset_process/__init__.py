@@ -9,7 +9,6 @@ from dataset_process.common import (
     read_arc_data,
     save_mean_plot,
     snv,
-    snv_masked,
 )
 from dataset_process.pipeline import (
     PackedArcDataset,
@@ -52,7 +51,6 @@ __all__ = [
     "read_arc_data",
     "save_mean_plot",
     "snv",
-    "snv_masked",
     "unpack_dataset_init",
     "write_arc_data",
 ]

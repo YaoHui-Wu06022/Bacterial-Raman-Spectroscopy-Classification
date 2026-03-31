@@ -1,14 +1,5 @@
 from pathlib import Path
 
-LEGACY_DATASET_DIR_MAP = {
-    "dataset_train_细菌": Path("dataset") / "细菌" / "dataset_train",
-    "dataset_test_细菌": Path("dataset") / "细菌" / "dataset_test",
-    "dataset_train_耐药菌": Path("dataset") / "耐药菌" / "dataset_train",
-    "dataset_test_耐药菌": Path("dataset") / "耐药菌" / "dataset_test",
-    "dataset_train_厌氧菌": Path("dataset") / "厌氧菌" / "dataset_train",
-    "dataset_test_厌氧菌": Path("dataset") / "厌氧菌" / "dataset_test",
-}
-
 DATASET_BUNDLE_STAGE_MAP = {
     "train": ("dataset_train",),
     "test": ("dataset_test",),
@@ -32,26 +23,8 @@ def _is_dataset_bundle_dir(path):
     return any((path / child).exists() for children in DATASET_BUNDLE_STAGE_MAP.values() for child in children)
 
 
-def resolve_legacy_dataset_path(path_value, project_root=None):
-    path = _coerce_path(path_value)
-    if project_root is not None:
-        root = Path(project_root)
-    elif path.is_absolute():
-        root = path.parent
-    else:
-        root = Path.cwd()
-    if path.is_absolute():
-        name = path.name
-    else:
-        name = path.as_posix().rstrip("/")
-    mapped = LEGACY_DATASET_DIR_MAP.get(name)
-    if mapped is None:
-        return path
-    return (root / mapped).resolve()
-
-
 def resolve_dataset_stage(path_value, stage="train", project_root=None, must_exist=False):
-    path = resolve_legacy_dataset_path(path_value, project_root=project_root)
+    path = _coerce_path(path_value)
     root = Path(project_root) if project_root is not None else Path.cwd()
     if not path.is_absolute():
         path = (root / path).resolve()

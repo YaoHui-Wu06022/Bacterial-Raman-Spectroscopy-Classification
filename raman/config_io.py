@@ -52,11 +52,11 @@ def load_experiment(exp_dir):
     # 绑定实验目录
     config.output_dir = exp_dir
 
-    # 模型路径：默认指向 train_level 对应模型
+    # 模型路径：默认指向当前训练层级对应模型
     config.model_dir = exp_dir
-    train_level = getattr(config, "train_level", None)
-    if train_level:
-        model_name = f"{train_level}_model.pt"
+    current_train_level = getattr(config, "current_train_level", None)
+    if current_train_level:
+        model_name = f"{current_train_level}_model.pt"
     else:
         model_name = "model.pt"
     config.model_path = os.path.join(exp_dir, model_name)

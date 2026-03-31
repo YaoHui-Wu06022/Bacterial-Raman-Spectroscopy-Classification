@@ -1,6 +1,4 @@
-﻿# ============================================================
 # 预测核心（级联推理）
-# ============================================================
 
 import os
 import json
@@ -8,9 +6,9 @@ import torch
 import torch.nn.functional as F
 
 from raman.config_io import load_experiment
+from raman.data import InputPreprocessor
 from raman.model import ResNeXt1D_Transformer
-from raman.preprocess import InputPreprocessor
-from raman.train_utils import mask_logits_by_parent
+from raman.training import mask_logits_by_parent
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -82,9 +80,7 @@ def _infer_parent_models(exp_dir, head_names, parent_to_children, class_names_by
     return parent_models
 
 
-# ============================================================
 # 加载模型与层级元数据
-# ============================================================
 
 def load_predictor(exp_dir, device, predict_level=None):
     """
@@ -115,7 +111,7 @@ def load_predictor(exp_dir, device, predict_level=None):
             level = (
                 predict_level
                 or getattr(config, "predict_level", None)
-                or getattr(config, "train_level", None)
+                or getattr(config, "current_train_level", None)
                 or "leaf"
             )
             if level not in class_names and class_names:
@@ -204,9 +200,7 @@ def load_predictor(exp_dir, device, predict_level=None):
     }
 
 
-# ============================================================
 # 单样本预测（核心接口）
-# ============================================================
 
 def _mask_logits_by_allowed(logits, allowed_indices):
     # 仅保留允许的类别索引

@@ -11,7 +11,7 @@ from dataset_process.pipeline import (
     print_results,
     unpack_dataset_init,
 )
-from dataset_process.profiles import get_dataset_dir, get_profile, list_profiles
+from dataset_process.profiles import get_dataset_dir, get_profile
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -86,17 +86,9 @@ def run_count(args):
     print_results(tree, total_files)
 
 
-def run_list(_args):
-    for profile in list_profiles():
-        print(f"{profile.dataset_name} ({profile.profile_id})")
-
-
 def build_parser():
     parser = argparse.ArgumentParser(description="Unified dataset processing entrypoint.")
     subparsers = parser.add_subparsers(dest="command", required=True)
-
-    parser_list = subparsers.add_parser("list", help="List available dataset profiles")
-    parser_list.set_defaults(func=run_list)
 
     for command, handler, help_text in (
         ("pack-init", run_pack_init, "Pack dataset_init into dataset_init.npz"),

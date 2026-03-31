@@ -1,6 +1,7 @@
 import os
 import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -32,11 +33,38 @@ PCA_CENTER = True
 PCA_OUTLIER_RATIO = 0.05
 
 
+@dataclass(frozen=True)
+class PipelineConfig:
+    """集中管理离线预处理阶段的固定参数，便于 CLI 统一覆盖。"""
+    cut_min: float = CUT_MIN
+    cut_max: float = CUT_MAX
+    target_points: int = TARGET_POINTS
+    asls_lam: float = ASLS_LAM
+    asls_p: float = ASLS_P
+    asls_max_iter: int = ASLS_MAX_ITER
+    min_samples_per_class: int = MIN_SAMPLES_PER_CLASS
+    norm_method: str = NORM_METHOD
+    pca_enabled: bool = PCA_ENABLED
+    pca_components: float | int = PCA_COMPONENTS
+    pca_center: bool = PCA_CENTER
+    pca_outlier_ratio: float = PCA_OUTLIER_RATIO
+
+    def build_wn_ref(self):
+        """根据当前裁剪范围和目标点数生成统一插值坐标。"""
+        return build_wn_ref(self.cut_min, self.cut_max, self.target_points)
+
+
+DEFAULT_PIPELINE_CONFIG = PipelineConfig()
+# 需要调整清洗参数时，直接修改这里即可；CLI 不再暴露这些细节参数。
+
+
 def resolve_path(base_dir, path_value):
+    """将相对路径解析到当前数据集根目录下，统一得到绝对路径。"""
     return (Path(base_dir) / path_value).resolve()
 
 
 def iter_arc_dirs(root_dir):
+    """递归遍历目录树，只返回包含 .arc_data 文件的叶子目录。"""
     root_dir = os.fspath(root_dir)
     for root, dirs, files in os.walk(root_dir):
         dirs.sort()
@@ -46,28 +74,58 @@ def iter_arc_dirs(root_dir):
             yield Path(root), arc_files
 
 
-def get_prefix(name, prefix_mode):
-    if prefix_mode == "letters_sign":
-        matched = re.match(r"([A-Za-z]+)([+-])?", name)
-        if not matched:
-            return None
-        return f"{matched.group(1)}{matched.group(2) or ''}"
-    if prefix_mode == "letters":
-        matched = re.match(r"([A-Za-z]+)", name)
-        return matched.group(1) if matched else None
-    raise ValueError(f"Unknown prefix mode: {prefix_mode}")
+def get_prefix(name):
+    """统一按 letters_sign 规则提取类别前缀，兼容纯字母和字母后缀 +/-。"""
+    matched = re.match(r"([A-Za-z]+)([+-])?", name)
+    if not matched:
+        return None
+    return f"{matched.group(1)}{matched.group(2) or ''}"
 
 
 def is_packed_path(path):
+    """判断一个路径是否是可读取的打包数据文件。"""
     return os.path.isfile(path) and str(path).lower().endswith(PACK_EXT)
 
 
 def write_arc_data(path, wn, sp, fmt="%.8f"):
+    """把一条光谱写回两列文本格式，供后续训练和人工检查使用。"""
     arr = np.column_stack([wn, sp])
     np.savetxt(path, arr, fmt=[fmt, fmt])
 
 
+def resolve_pipeline_config(pipeline_config=None):
+    """返回离线预处理配置；未传入时使用库内默认配置。"""
+    return pipeline_config or DEFAULT_PIPELINE_CONFIG
+
+
+def _resolve_classify_target_dir(root_process_raw, rel_dir, leaf_name):
+    """根据叶子目录名推断目标类别目录，统一处理顶层和多级目录。"""
+    rel_parent = rel_dir.parent
+    prefix = get_prefix(leaf_name)
+    target_cls = prefix if prefix else leaf_name
+    if rel_parent in (Path("."), Path("")):
+        return root_process_raw / target_cls
+    return root_process_raw / rel_parent / target_cls
+
+
+def _resolve_group_figure_dir(root_figure, rel_dir):
+    """为一个分组解析均值谱图输出目录，避免多处重复拼接父目录。"""
+    rel_parent = rel_dir.parent
+    if rel_parent in (Path("."), Path("")):
+        return root_figure
+    return root_figure / rel_parent
+
+
+def _save_spectra_files(save_dir, filenames, wn_list, spectra_arr, fmt="%.3f"):
+    """批量写出预处理后的光谱文件，统一文本精度和目录创建行为。"""
+    save_dir.mkdir(parents=True, exist_ok=True)
+    for fname, wn_u, sp_u in zip(filenames, wn_list, spectra_arr):
+        write_arc_data(save_dir / fname, wn_u, sp_u, fmt=fmt)
+
+
 class PackedArcDataset:
+    """从 dataset_init.npz 中按样本迭代恢复光谱内容。"""
+
     def __init__(self, npz_path):
         if not is_packed_path(npz_path):
             raise FileNotFoundError(f"Missing packed file: {npz_path}")
@@ -99,6 +157,7 @@ class PackedArcDataset:
 
 
 def resolve_init_input(base_dir, profile):
+    """优先解析 dataset_init 目录，其次回退到打包后的 dataset_init.npz。"""
     root_init = resolve_path(base_dir, profile.root_init)
     root_init_pack = resolve_path(base_dir, profile.root_init_pack)
 
@@ -113,6 +172,7 @@ def resolve_init_input(base_dir, profile):
 
 
 def iter_init_groups(input_path):
+    """按叶子目录分组迭代原始样本，兼容目录输入和 npz 打包输入。"""
     input_path = Path(input_path)
 
     if input_path.is_dir():
@@ -147,6 +207,7 @@ def iter_init_groups(input_path):
 
 
 def pack_dataset_init(input_dir, output_path, verbose=True):
+    """把 dataset_init 下的散落光谱打包成一个 npz，便于迁移和归档。"""
     input_dir = Path(input_dir)
     output_path = Path(output_path)
     if not input_dir.is_dir():
@@ -199,6 +260,7 @@ def pack_dataset_init(input_dir, output_path, verbose=True):
 
 
 def unpack_dataset_init(npz_path, output_dir, verbose=True):
+    """把 dataset_init.npz 恢复回目录树，便于重新检查和手工处理。"""
     npz_path = Path(npz_path)
     output_dir = Path(output_dir)
     packed = PackedArcDataset(npz_path)
@@ -216,6 +278,7 @@ def unpack_dataset_init(npz_path, output_dir, verbose=True):
 
 
 def classify_dataset(profile, base_dir):
+    """将 dataset_init 重新归类到 dataset_raw，统一使用 letters_sign 前缀规则。"""
     base_dir = Path(base_dir)
     root_process_raw = resolve_path(base_dir, profile.root_process_raw)
     root_process_raw.mkdir(parents=True, exist_ok=True)
@@ -226,37 +289,25 @@ def classify_dataset(profile, base_dir):
     if Path(input_path).is_dir():
         for leaf_dir, arc_files in iter_arc_dirs(input_path):
             rel_dir = leaf_dir.relative_to(input_path)
-            rel_parent = rel_dir.parent
             leaf_name = leaf_dir.name
-
-            prefix = get_prefix(leaf_name, profile.prefix_mode)
-            target_cls = prefix if prefix else leaf_name
-            target_dir = (
-                root_process_raw / target_cls
-                if rel_parent == Path(".")
-                else root_process_raw / rel_parent / target_cls
+            target_dir = _resolve_classify_target_dir(
+                root_process_raw, rel_dir, leaf_name
             )
             target_dir.mkdir(parents=True, exist_ok=True)
 
             for fname in arc_files:
-                src = leaf_dir / fname
                 dst = target_dir / f"{leaf_name}_{fname}"
-                shutil.copy(src, dst)
+                shutil.copy(leaf_dir / fname, dst)
                 copied += 1
     else:
         packed = PackedArcDataset(input_path)
         for rel_path, wn, sp in packed.iter_samples():
             normalized_rel_path = rel_path.replace("\\", "/")
             rel_dir = Path(os.path.dirname(normalized_rel_path) or ".")
-            rel_parent = rel_dir.parent
             leaf_name = packed.root_name if rel_dir == Path(".") else rel_dir.name
 
-            prefix = get_prefix(leaf_name, profile.prefix_mode)
-            target_cls = prefix if prefix else leaf_name
-            target_dir = (
-                root_process_raw / target_cls
-                if rel_parent in (Path("."), Path(""))
-                else root_process_raw / rel_parent / target_cls
+            target_dir = _resolve_classify_target_dir(
+                root_process_raw, rel_dir, leaf_name
             )
             target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -269,6 +320,7 @@ def classify_dataset(profile, base_dir):
 
 
 def pca_reconstruct_and_error(spectra, n_components=0.95, center=True):
+    """用 PCA 重构样本并返回逐样本误差，供训练集异常值过滤使用。"""
     spectra = np.asarray(spectra, dtype=np.float32)
     if spectra.ndim != 2 or spectra.shape[0] < 2:
         return spectra, 0, np.zeros((spectra.shape[0],), dtype=np.float32)
@@ -308,6 +360,7 @@ def pca_reconstruct_and_error(spectra, n_components=0.95, center=True):
 
 
 def log_removed_samples(label, filenames, errors, threshold, log_path):
+    """把 PCA 剔除掉的异常样本写入日志，方便后续追溯。"""
     if not filenames:
         return
     with open(log_path, "a", encoding="utf-8") as file:
@@ -323,10 +376,19 @@ def preprocess_group_samples(
     samples,
     bad_bands,
     label_display,
-    min_samples,
+    min_samples=None,
     log_path=None,
-    apply_pca=True,
+    apply_pca=None,
+    pipeline_config=None,
 ):
+    """对一个分组内的多条光谱做统一清洗，并按需执行 PCA 异常值过滤。"""
+    cfg = resolve_pipeline_config(pipeline_config)
+    wn_ref = cfg.build_wn_ref()
+    if min_samples is None:
+        min_samples = int(cfg.min_samples_per_class)
+    if apply_pca is None:
+        apply_pca = bool(cfg.pca_enabled)
+
     spectra = []
     wn_list = []
     filenames = []
@@ -338,13 +400,13 @@ def preprocess_group_samples(
         wn_u, sp_u = preprocess_single_spectrum(
             wn,
             sp,
-            cut_min=CUT_MIN,
-            cut_max=CUT_MAX,
-            wn_ref=WN_REF,
+            cut_min=cfg.cut_min,
+            cut_max=cfg.cut_max,
+            wn_ref=wn_ref,
             bad_bands=bad_bands,
-            asls_lam=ASLS_LAM,
-            asls_p=ASLS_P,
-            asls_max_iter=ASLS_MAX_ITER,
+            asls_lam=cfg.asls_lam,
+            asls_p=cfg.asls_p,
+            asls_max_iter=cfg.asls_max_iter,
         )
         if wn_u is None:
             continue
@@ -368,14 +430,14 @@ def preprocess_group_samples(
         return None, stats
 
     spectra_arr = np.vstack(spectra)
-    if apply_pca and PCA_ENABLED and spectra_arr.shape[0] > 1:
+    if apply_pca and spectra_arr.shape[0] > 1:
         _, pca_components, errors = pca_reconstruct_and_error(
             spectra_arr,
-            n_components=PCA_COMPONENTS,
-            center=PCA_CENTER,
+            n_components=cfg.pca_components,
+            center=cfg.pca_center,
         )
         if pca_components > 0:
-            ratio = max(0.0, min(float(PCA_OUTLIER_RATIO), 1.0))
+            ratio = max(0.0, min(float(cfg.pca_outlier_ratio), 1.0))
             if ratio <= 0.0:
                 keep_mask = np.ones(errors.shape, dtype=bool)
                 threshold = float("inf")
@@ -422,7 +484,9 @@ def preprocess_group_samples(
     }, stats
 
 
-def preprocess_train_dataset(profile, base_dir):
+def preprocess_train_dataset(profile, base_dir, pipeline_config=None):
+    """从 dataset_raw 构建 dataset_train，并输出每类均值谱图和异常值日志。"""
+    cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
     root_process_raw = resolve_path(base_dir, profile.root_process_raw)
     root_process_clean = resolve_path(base_dir, profile.root_train_clean)
@@ -451,8 +515,8 @@ def preprocess_train_dataset(profile, base_dir):
             samples=samples,
             bad_bands=profile.train_bad_bands,
             label_display=label_display,
-            min_samples=MIN_SAMPLES_PER_CLASS,
             log_path=log_path,
+            pipeline_config=cfg,
         )
 
         if stats["skip_reason"] == "too_few_preprocessed":
@@ -476,16 +540,9 @@ def preprocess_train_dataset(profile, base_dir):
         wn_list = processed_group["wn_list"]
 
         save_dir = root_process_clean / rel_dir
-        save_dir.mkdir(parents=True, exist_ok=True)
+        _save_spectra_files(save_dir, filenames, wn_list, spectra_arr)
 
-        for fname, wn_u, sp_u in zip(filenames, wn_list, spectra_arr):
-            out_path = save_dir / fname
-            with open(out_path, "w", encoding="utf-8") as file:
-                for wavenumber, value in zip(wn_u, sp_u):
-                    file.write(f"{wavenumber:.3f} {value:.3f}\n")
-
-        rel_parent = rel_dir.parent
-        fig_dir = root_figure if rel_parent == Path(".") else root_figure / rel_parent
+        fig_dir = _resolve_group_figure_dir(root_figure, rel_dir)
         fig_dir.mkdir(parents=True, exist_ok=True)
         fig_save_path = fig_dir / f"{cls_raw_dir.name}.png"
         title = " - ".join(rel_dir.parts) + " (mean +/- std)"
@@ -493,7 +550,7 @@ def preprocess_train_dataset(profile, base_dir):
             wn=wn_list[0],
             spectra=spectra_arr,
             out_path=fig_save_path,
-            norm_method=NORM_METHOD,
+            norm_method=cfg.norm_method,
             bad_bands=profile.train_bad_bands,
             title=title,
         )
@@ -505,7 +562,9 @@ def preprocess_train_dataset(profile, base_dir):
     print(f"- Mean plots: {root_figure}")
 
 
-def preview_init_dataset(profile, base_dir):
+def preview_init_dataset(profile, base_dir, pipeline_config=None):
+    """基于 dataset_init 生成预览图，不落盘清洗结果，适合先检查原始数据质量。"""
+    cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
     input_path = resolve_init_input(base_dir, profile)
     root_init_fig = resolve_path(base_dir, profile.root_init_fig)
@@ -527,6 +586,7 @@ def preview_init_dataset(profile, base_dir):
             min_samples=1,
             log_path=None,
             apply_pca=False,
+            pipeline_config=cfg,
         )
 
         if stats["skip_reason"] is not None:
@@ -543,8 +603,7 @@ def preview_init_dataset(profile, base_dir):
                 f"threshold={stats['threshold']:.6f}, removed={stats['removed']}"
             )
 
-        rel_parent = rel_dir.parent
-        fig_dir = root_init_fig if rel_parent == Path(".") else root_init_fig / rel_parent
+        fig_dir = _resolve_group_figure_dir(root_init_fig, rel_dir)
         fig_dir.mkdir(parents=True, exist_ok=True)
         fig_save_path = fig_dir / f"{leaf_name}.png"
 
@@ -557,7 +616,7 @@ def preview_init_dataset(profile, base_dir):
             wn=processed_group["wn"],
             spectra=processed_group["spectra"],
             out_path=fig_save_path,
-            norm_method=NORM_METHOD,
+            norm_method=cfg.norm_method,
             bad_bands=profile.train_bad_bands,
             title=title,
         )
@@ -570,7 +629,16 @@ def preview_init_dataset(profile, base_dir):
     print(f"- Generated={generated}, Skipped={skipped}")
 
 
-def preprocess_test_dataset(profile, base_dir, input_dir=None, output_dir=None):
+def preprocess_test_dataset(
+    profile,
+    base_dir,
+    input_dir=None,
+    output_dir=None,
+    pipeline_config=None,
+):
+    """从测试原始目录构建 dataset_test，并输出每个文件夹的均值谱图。"""
+    cfg = resolve_pipeline_config(pipeline_config)
+    wn_ref = cfg.build_wn_ref()
     base_dir = Path(base_dir)
     input_dir = (
         Path(input_dir)
@@ -610,13 +678,13 @@ def preprocess_test_dataset(profile, base_dir, input_dir=None, output_dir=None):
                 wn_u, sp_u = preprocess_single_spectrum(
                     wn,
                     sp,
-                    cut_min=CUT_MIN,
-                    cut_max=CUT_MAX,
-                    wn_ref=WN_REF,
+                    cut_min=cfg.cut_min,
+                    cut_max=cfg.cut_max,
+                    wn_ref=wn_ref,
                     bad_bands=profile.test_bad_bands,
-                    asls_lam=ASLS_LAM,
-                    asls_p=ASLS_P,
-                    asls_max_iter=ASLS_MAX_ITER,
+                    asls_lam=cfg.asls_lam,
+                    asls_p=cfg.asls_p,
+                    asls_max_iter=cfg.asls_max_iter,
                 )
                 if wn_u is None:
                     rel_path = in_path.relative_to(input_dir).as_posix()
@@ -624,9 +692,7 @@ def preprocess_test_dataset(profile, base_dir, input_dir=None, output_dir=None):
                     skipped += 1
                     continue
 
-                with open(out_path, "w", encoding="utf-8") as file:
-                    for wavenumber, signal in zip(wn_u, sp_u):
-                        file.write(f"{wavenumber:.3f} {signal:.3f}\n")
+                write_arc_data(out_path, wn_u, sp_u, fmt="%.3f")
 
                 spectra.append(sp_u)
                 wn_list.append(wn_u)
@@ -641,10 +707,7 @@ def preprocess_test_dataset(profile, base_dir, input_dir=None, output_dir=None):
             wn_ref = wn_list[0]
 
             rel_dir = root.relative_to(input_dir)
-            rel_parent = rel_dir.parent
-            fig_dir = (
-                root_test_fig if rel_parent == Path(".") else root_test_fig / rel_parent
-            )
+            fig_dir = _resolve_group_figure_dir(root_test_fig, rel_dir)
             fig_dir.mkdir(parents=True, exist_ok=True)
             fig_path = fig_dir / f"{root.name}.png"
 
@@ -652,7 +715,7 @@ def preprocess_test_dataset(profile, base_dir, input_dir=None, output_dir=None):
                 wn=wn_ref,
                 spectra=spectra_arr,
                 out_path=fig_path,
-                norm_method=NORM_METHOD,
+                norm_method=cfg.norm_method,
                 bad_bands=profile.test_bad_bands,
                 title=f"{rel_dir.as_posix()} (mean +/- std)",
             )
@@ -666,6 +729,7 @@ def preprocess_test_dataset(profile, base_dir, input_dir=None, output_dir=None):
 
 
 def compute_totals(node):
+    """递归回填每个目录节点的总样本数。"""
     total = node.get("__count__", 0)
     for name, child in node.items():
         if name.startswith("__"):
@@ -676,6 +740,7 @@ def compute_totals(node):
 
 
 def build_tree(root_dir):
+    """把目录树转成带计数的嵌套字典，供 count 子命令打印。"""
     tree = {}
     for leaf_dir, arc_files in iter_arc_dirs(root_dir):
         rel_dir = Path(leaf_dir).relative_to(root_dir)
@@ -692,6 +757,7 @@ def build_tree(root_dir):
 
 
 def count_dataset(root_dir):
+    """统计一个数据目录下各层文件数，并返回树形结构。"""
     root_dir = Path(root_dir)
     if not root_dir.is_dir():
         raise FileNotFoundError(f"Missing input dir: {root_dir}")
@@ -702,6 +768,7 @@ def count_dataset(root_dir):
 
 
 def print_tree(node, level=0, name=None):
+    """按缩进样式打印统计树，便于终端查看目录层级分布。"""
     indent = "  " * level
     if name is not None:
         count = node.get("__count__", 0)
@@ -720,6 +787,7 @@ def print_tree(node, level=0, name=None):
 
 
 def print_results(tree, total_files):
+    """统一打印 count 子命令的统计结果摘要。"""
     print("\n================ 数据集统计 ================\n")
     print(f"总文件数: {total_files}\n")
 

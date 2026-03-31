@@ -2,16 +2,17 @@
 # config.py is intended for TRAINING ONLY.
 # Use config_io.load_experiment for eval / predict.
 
+from pathlib import Path
+
+from dataset_process.pipeline import DEFAULT_PIPELINE_CONFIG
+from dataset_process.profiles import get_profile
+
+
 class Config:
+    # 全局设置
+    train_per_parent = True  # 是否按父类分别训练子模型
 
-    # ===================== 全局设置 =====================
-    # 训练层级（评估/预测层级在 evalute/predict 脚本里单独设置）
-    train_level = "level_1"
-    # train_level = "level_2"
-    # train_level = "level_3"
-    train_per_parent = True  # 是否层级训练
-
-    # 训练分割层级（默认按 leaf 分组，避免泄漏）
+    # 训练切分层级（默认按 leaf 分组，避免泄漏）
     split_level = "leaf"
 
     use_align_loss = True
@@ -24,52 +25,64 @@ class Config:
     supcon_tau = 0.15
     supcon_start = 30
     supcon_end = 50
-    supcon_level = "leaf"
     # 对齐/SupCon 后期衰减起点（占总 epoch 比例）
-    # 直接手动设置具体值，例如 0.6 / 0.7
     decay_start_ratio = 0.7
 
-    # ===================== 基础目录 =====================
-    # 数据根目录
-    # dataset_root = "dataset/厌氧菌"
-    # dataset_root = "dataset/耐药菌"
-    dataset_root = "dataset/细菌"
-    # dataset_root = "dataset/丁"
-    cut_min = 600
-    cut_max = 1800
-    target_points = 896  # 插值参考点数
-    delta = (cut_max - cut_min) / (target_points - 1)
-    # BAD_BANDS = [(900, 940)] # 厌氧菌
-    # BAD_BANDS = [(905, 940.0)] # 耐药菌
-    BAD_BANDS = [(900, 950.0)] # 细菌
-    # bad_bands = () # 丁
-    bad_bands = BAD_BANDS
+    # 数据集设置
+    # 只需要改这里的数据集名称，预处理设置来源于dataset_process
+    dataset_name = "细菌"
+
+    @property
+    def dataset_root(self):
+        profile = get_profile(self.dataset_name)
+        return str(Path("dataset") / profile.dataset_name)
+
+    @property
+    def cut_min(self):
+        return float(DEFAULT_PIPELINE_CONFIG.cut_min)
+
+    @property
+    def cut_max(self):
+        return float(DEFAULT_PIPELINE_CONFIG.cut_max)
+
+    @property
+    def target_points(self):
+        return int(DEFAULT_PIPELINE_CONFIG.target_points)
+
+    @property
+    def delta(self):
+        return (self.cut_max - self.cut_min) / (self.target_points - 1)
+
+    @property
+    def bad_bands(self):
+        profile = get_profile(self.dataset_name)
+        return [tuple(band) for band in profile.train_bad_bands]
 
     # 输出目录（由 train 在运行期确定，绑定时间戳）
     timestamp = None
     output_dir = None
-    seed = 42 # 分组随机种子
+    seed = 42  # 分组随机种子
     deterministic = True  # 是否保持训练可复现（GPU 稳定性优先）
     early_stop_w_f1 = 0.6
     early_stop_w_acc = 0.4
 
-    # ===================== 模型参数 =====================
-    input_is_norm = False    # 输入数据是否已经标准化过
-    norm_method = "snv"       # 选择标准化方式 snv/l2/minmax
+    # 模型参数
+    input_is_norm = False  # 输入数据是否已经标准化过
+    norm_method = "snv"  # 选择标准化方式 snv/l2/minmax
 
-    # 打开通道
+    # 输入通道
     snv_posneg_split = True  # SNV pos/neg split
-    smooth_use = True    # 是否使用smooth作为额外通道
-    d1_use = False       # 是否使用一阶导作为额外通道
+    smooth_use = True  # 是否使用 smooth 作为额外通道
+    d1_use = False  # 是否使用一阶导作为额外通道
 
     @property
     def in_channels(self):
-        n = 2 if self.snv_posneg_split else 1  # base channels
+        channels = 2 if self.snv_posneg_split else 1
         if self.smooth_use:
-            n += 1
+            channels += 1
         if self.d1_use:
-            n += 1
-        return n
+            channels += 1
+        return channels
 
     # SE 模块
     se_use = True
@@ -80,22 +93,21 @@ class Config:
     backbone_activation = "relu"
 
     # Focal loss 强度
-    gamma = 0.8 # 控制“压容易样本”的力度
-    use_severity_weight = True  # 训练时是否启用严重程度感知重加权
+    gamma = 0.8  # 控制“压容易样本”的力度
+    use_severity_weight = True  # 是否启用严重程度感知重加权
     use_drw = True  # 是否启用动态类权重（EMA / DRW）
-    label_smoothing = 0.0  # 分层掩码训练默认关闭 label smoothing，避免数值不稳定
+    label_smoothing = 0.0  # 分层掩码训练默认关闭 label smoothing
 
     # SG 预处理窗口参数
-    win_res = 15      # 残差窗口
-    win_smooth = 15   # 平滑窗口
-    win1 = 15   # 一阶导窗口
+    win_res = 15
+    win_smooth = 15
+    win1 = 15
 
     # backbone_type:
     # - "cnn": ResNeXt1D 主干
     # - "identity": 跳过 CNN，只做平均下采样 + 1x1 通道投影
     backbone_type = "cnn"
-    # identity 路径的时序下采样倍率；默认 16，用来和 CNN 主干的长度压缩量大致对齐
-    # 1 表示不下采样
+    # identity 路径的时序下采样倍率；1 表示不下采样
     identity_pool_kernel = 16
 
     # encoder_type: "transformer" | "lstm" | "none"
@@ -106,100 +118,79 @@ class Config:
     # - 仅 Transformer: backbone_type="identity", encoder_type="transformer"
     # - CNN + LSTM: backbone_type="cnn", encoder_type="lstm"
     # - CNN + Transformer: backbone_type="cnn", encoder_type="transformer"
-    # Transformer 配置
-    transformer_nhead = 6  # 定死
-    transformer_dim = 192  # 定死
-    transformer_ffn_dim = 384  # 定死
-    transformer_layers = 1 # 轻量
-    transformer_dropout = 0.2  # 定死
-    # LSTM 配置
+    transformer_nhead = 6
+    transformer_dim = 192
+    transformer_ffn_dim = 384
+    transformer_layers = 1
+    transformer_dropout = 0.2
     lstm_hidden = 192
     lstm_layers = 1
     lstm_dropout = 0.2
-    lstm_bidirectional = False # 是否双向LSTM
+    lstm_bidirectional = False
 
-    # Attention Pooling dropout（pooling_type="attn"时生效）
+    # Attention Pooling dropout（pooling_type="attn" 时生效）
     att_pool_dropout = 0.2
     # pooling_type:
-    # - "attn": 注意力池化（原版）
+    # - "attn": 注意力池化
     # - "stat": 统计池化(mean+std)
     pooling_type = "stat"
     # cosine_head:
-    # - True : 余弦分类头（特征/权重归一化，配合cosine_scale）
+    # - True : 余弦分类头
     # - False: 线性分类头
     cosine_head = True
-    # 余弦分类头的缩放系数
     cosine_scale = 25
 
-    # ===================== ResNeXt 参数 =====================
-    # cardinality = 路数，分组卷积的并行分支数量
+    # ResNeXt 参数
     cardinality = 4
-    # base_width = 每条路径的宽度
     base_width = 4
-    # Stem 卷积核大小（单尺度）
     stem_kernel_size = 15
     # stem_multiscale:
-    # - True : 多尺度 stem（并联多卷积核后拼接）
-    # - False: 单尺度 stem（使用 stem_kernel_size）
+    # - True : 多尺度 stem
+    # - False: 单尺度 stem
     stem_multiscale = True
-    # 多尺度 stem 的卷积核列表
     stem_kernel_sizes = (3, 7, 15)
 
-    # ===================== 训练相关 =====================
-    # 训练轮数
+    # 训练相关
     epochs = 80
-    # 每 batch 的光谱数量
     batch_size = 64
-    # Adam 学习率
+    train_loader_num_workers = 4
+    eval_loader_num_workers = 4
+    loader_pin_memory = True
+    loader_persistent_workers = True
+    loader_prefetch_factor = 2
     learning_rate = 4e-4
-    # 训练集划分比例
     train_split = 0.8
-    # EarlyStopping 容忍次数
     patience = 40
-    # 是否使用 GPU（如果为 False 强制使用 CPU）
     use_gpu = True
-    # CosineAnnealingLR 调度器
     scheduler_Tmax = int(epochs)
     scheduler_eta_min = 1e-5
 
-    # ===================== 可视化/嵌入 =====================
+    # 可视化与嵌入
     embedding_method = "tsne"  # "umap" | "tsne"
     umap_neighbors = 15
     umap_min_dist = 0.1
     tsne_perplexity = 30
     tsne_iter = 1000
 
-    # ========= RAW 强度域（跨批次核心） =========
+    # RAW 强度域增强
     # 噪声（两者互斥抽取）
-    # p_noise：
-    #   高斯加性噪声
-    # p_poisson：
-    #   强度相关噪声（近似泊松）
-    #   避免同时叠加两类噪声导致非真实噪声分布
     p_noise = 0.4
     p_poisson = 0.2
 
     # baseline 扰动
-    # p_baseline_weak：
-    #   弱基线扰动
-    # p_baseline_strong：
-    #   强基线扰动（跨域级）
-    p_baseline_weak = 0.5  # 同域残余，稳定训练
-    p_baseline_strong = 0.3  # 跨域模拟，但低频
+    p_baseline_weak = 0.5
+    p_baseline_strong = 0.3
 
-    # 频轴扰动（域级，但比 baseline 弱）
+    # 频轴扰动
     p_axis = 0.2
-    # 实际位移量 ≈ alpha * (x - mean_x)
-    axis_warp_alpha = 0.002  # 建议 0.001 ~ 0.005
-    # 非线性扰动幅度（单位：采样点）
-    axis_warp_beta = 1.0  # 建议 0.5 ~ 2.0
+    axis_warp_alpha = 0.002
+    axis_warp_beta = 1.0
 
-    # 分段峰比例扰动（核心）
+    # 分段峰比例扰动
     p_piecewise_gain = 0.30
     piecewise_gain_std = 0.12
 
-    # ========= SNV 后形状域 =========
-    # ---------- 峰位平移 ----------
+    # 标准化后形状域增强
     p_shift = 0.3
     shift_max = 3
 
@@ -215,11 +206,7 @@ class Config:
     broad_sigma_max = 1.2
     broad_truncate = 3.0
 
-    # ---------- 局部衰减遮挡 ----------
-    # mask_width_min/max：
-    #   被衰减区域长度（单位：点）
-    # mask_atten_min/max：
-    #   衰减比例（0 表示完全抑制，0.3 表示保留 30%）
+    # 局部衰减遮挡
     p_cut = 0.3
     mask_width_min = 40
     mask_width_max = 100
@@ -230,15 +217,11 @@ class Config:
     max_pre_augs = 4
     max_post_augs = 2
 
-    # ---------- 高斯噪声 ----------
-    #   噪声相对幅度（相对于谱的有效振幅）
-    #   避免强谱/弱谱噪声比例不一致
+    # 高斯噪声
     noise_rel_min = 0.005
     noise_rel_max = 0.02
 
-    # ---------- 强度相关噪声（泊松型） ----------
-    #   控制噪声与信号幅度的耦合强度
-    #   用于模拟光子统计噪声
+    # 强度相关噪声（泊松型）
     poisson_strength_min = 0.0
     poisson_strength_max = 0.015
 
@@ -258,5 +241,6 @@ class Config:
 
     baseline_strong_amp_min = 0.05
     baseline_strong_amp_max = 0.15
+
 
 config = Config()
