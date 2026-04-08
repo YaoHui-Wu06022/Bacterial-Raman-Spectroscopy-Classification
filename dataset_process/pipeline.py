@@ -12,6 +12,7 @@ from dataset_process.common import (
     read_arc_data,
     save_mean_plot,
 )
+from dataset_process.profiles import COMMON_BAD_BANDS
 
 PACK_EXT = ".npz"
 
@@ -28,9 +29,9 @@ MIN_SAMPLES_PER_CLASS = 8
 NORM_METHOD = "snv"
 
 PCA_ENABLED = True
-PCA_COMPONENTS = 0.95
+PCA_COMPONENTS = 50
 PCA_CENTER = True
-PCA_OUTLIER_RATIO = 0.05
+PCA_OUTLIER_RATIO = 0.02
 
 
 @dataclass(frozen=True)
@@ -278,7 +279,7 @@ def unpack_dataset_init(npz_path, output_dir, verbose=True):
 
 
 def classify_dataset(profile, base_dir):
-    """将 dataset_init 重新归类到 dataset_raw，统一使用 letters_sign 前缀规则。"""
+    """将 dataset_init 重新归类到 dataset_train_raw，统一使用 letters_sign 前缀规则。"""
     base_dir = Path(base_dir)
     root_process_raw = resolve_path(base_dir, profile.root_process_raw)
     root_process_raw.mkdir(parents=True, exist_ok=True)
@@ -485,7 +486,7 @@ def preprocess_group_samples(
 
 
 def preprocess_train_dataset(profile, base_dir, pipeline_config=None):
-    """从 dataset_raw 构建 dataset_train，并输出每类均值谱图和异常值日志。"""
+    """从 dataset_train_raw 构建 dataset_train，并输出每类均值谱图和异常值日志。"""
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
     root_process_raw = resolve_path(base_dir, profile.root_process_raw)
@@ -513,7 +514,7 @@ def preprocess_train_dataset(profile, base_dir, pipeline_config=None):
 
         processed_group, stats = preprocess_group_samples(
             samples=samples,
-            bad_bands=profile.train_bad_bands,
+            bad_bands=COMMON_BAD_BANDS,
             label_display=label_display,
             log_path=log_path,
             pipeline_config=cfg,
@@ -551,7 +552,7 @@ def preprocess_train_dataset(profile, base_dir, pipeline_config=None):
             spectra=spectra_arr,
             out_path=fig_save_path,
             norm_method=cfg.norm_method,
-            bad_bands=profile.train_bad_bands,
+            bad_bands=COMMON_BAD_BANDS,
             title=title,
         )
 
@@ -581,7 +582,7 @@ def preview_init_dataset(profile, base_dir, pipeline_config=None):
 
         processed_group, stats = preprocess_group_samples(
             samples=samples,
-            bad_bands=profile.train_bad_bands,
+            bad_bands=COMMON_BAD_BANDS,
             label_display=label_display,
             min_samples=1,
             log_path=None,
@@ -617,7 +618,7 @@ def preview_init_dataset(profile, base_dir, pipeline_config=None):
             spectra=processed_group["spectra"],
             out_path=fig_save_path,
             norm_method=cfg.norm_method,
-            bad_bands=profile.train_bad_bands,
+            bad_bands=COMMON_BAD_BANDS,
             title=title,
         )
 
@@ -681,7 +682,7 @@ def preprocess_test_dataset(
                     cut_min=cfg.cut_min,
                     cut_max=cfg.cut_max,
                     wn_ref=wn_ref,
-                    bad_bands=profile.test_bad_bands,
+                    bad_bands=COMMON_BAD_BANDS,
                     asls_lam=cfg.asls_lam,
                     asls_p=cfg.asls_p,
                     asls_max_iter=cfg.asls_max_iter,
@@ -716,7 +717,7 @@ def preprocess_test_dataset(
                 spectra=spectra_arr,
                 out_path=fig_path,
                 norm_method=cfg.norm_method,
-                bad_bands=profile.test_bad_bands,
+                bad_bands=COMMON_BAD_BANDS,
                 title=f"{rel_dir.as_posix()} (mean +/- std)",
             )
 

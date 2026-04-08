@@ -3,9 +3,9 @@ from pathlib import Path
 DATASET_BUNDLE_STAGE_MAP = {
     "train": ("dataset_train",),
     "test": ("dataset_test",),
-    "raw": ("dataset_raw",),
+    "raw": ("dataset_train_raw",),
     "init": ("dataset_init",),
-    "predict_input": ("测试菌", "dataset_test"),
+    "predict_input": ("dataset_test_raw", "dataset_test"),
     "train_fig": ("dataset_train_fig",),
     "test_fig": ("dataset_test_fig",),
 }

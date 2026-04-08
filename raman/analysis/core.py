@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader, Subset, Dataset
 
 from raman.config_io import load_experiment
 from raman.data import RamanDataset, resolve_dataset_stage
-from raman.model import ResNeXt1D_Transformer, SEBlock1D
+from raman.model import RamanClassifier1D, SEBlock1D
 from raman.training import (
     AutoHierarchicalBatchSampler,
     build_label_map_np,
@@ -864,12 +864,11 @@ def run_aggregate_analysis(
     log(f"Aggregate analysis for {analysis_level} over {len(tasks)} parents.")
 
     # ---------------- 模型与统计缓存 ----------------
-    if getattr(config, "snv_posneg_split", False):
-        channel_names = ["snv_pos", "snv_neg"]
-    else:
-        channel_names = [f"{config.norm_method}"]
+    channel_names = [f"{config.norm_method}"]
     if config.smooth_use:
         channel_names.append("smooth")
+    if getattr(config, "raw_use", False):
+        channel_names.append("raw")
     if config.d1_use:
         channel_names.append("d1")
 
@@ -906,7 +905,7 @@ def run_aggregate_analysis(
             log(f"Skip parent {parent_idx}: no samples after filtering.")
             continue
 
-        model = ResNeXt1D_Transformer(
+        model = RamanClassifier1D(
             num_classes=task["num_classes"],
             config=config
         ).to(device)
@@ -1049,7 +1048,7 @@ def run_aggregate_analysis(
                     parent_train_loader if heatmap_cfg.use_train_loader else parent_test_loader
                 )
 
-                parent_model = ResNeXt1D_Transformer(
+                parent_model = RamanClassifier1D(
                     num_classes=num_parent_classes,
                     config=config
                 ).to(device)
@@ -1188,7 +1187,7 @@ def run_aggregate_analysis(
                                     parent_train_loader if heatmap_cfg.use_train_loader else parent_test_loader
                                 )
 
-                                parent_model = ResNeXt1D_Transformer(
+                                parent_model = RamanClassifier1D(
                                     num_classes=len(child_ids),
                                     config=config
                                 ).to(device)
@@ -1350,7 +1349,7 @@ def run_single_analysis(
         f"cuda_available={torch.cuda.is_available()})"
     )
 
-    model = ResNeXt1D_Transformer(
+    model = RamanClassifier1D(
         num_classes=num_classes,
         config=config
     ).to(device)
@@ -1371,12 +1370,11 @@ def run_single_analysis(
     # 使用 Integrated Gradients 评估不同输入通道的相对贡献
     log("")
     log("=== Computing input channel importance ===")
-    if getattr(config, "snv_posneg_split", False):
-        channel_names = ["snv_pos", "snv_neg"]
-    else:
-        channel_names = [f"{config.norm_method}"]
+    channel_names = [f"{config.norm_method}"]
     if config.smooth_use:
         channel_names.append("smooth")
+    if getattr(config, "raw_use", False):
+        channel_names.append("raw")
     if config.d1_use:
         channel_names.append("d1")
 

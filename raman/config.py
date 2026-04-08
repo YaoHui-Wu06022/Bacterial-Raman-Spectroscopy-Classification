@@ -5,7 +5,7 @@
 from pathlib import Path
 
 from dataset_process.pipeline import DEFAULT_PIPELINE_CONFIG
-from dataset_process.profiles import get_profile
+from dataset_process.profiles import COMMON_BAD_BANDS, get_profile
 
 
 class Config:
@@ -55,8 +55,7 @@ class Config:
 
     @property
     def bad_bands(self):
-        profile = get_profile(self.dataset_name)
-        return [tuple(band) for band in profile.train_bad_bands]
+        return [tuple(band) for band in COMMON_BAD_BANDS]
 
     # 输出目录（由 train 在运行期确定，绑定时间戳）
     timestamp = None
@@ -71,14 +70,16 @@ class Config:
     norm_method = "snv"  # 选择标准化方式 snv/l2/minmax
 
     # 输入通道
-    snv_posneg_split = True  # SNV pos/neg split
     smooth_use = True  # 是否使用 smooth 作为额外通道
+    raw_use = False  # 是否保留 raw 增强后、未标准化的输入通道
     d1_use = False  # 是否使用一阶导作为额外通道
 
     @property
     def in_channels(self):
-        channels = 2 if self.snv_posneg_split else 1
+        channels = 1
         if self.smooth_use:
+            channels += 1
+        if self.raw_use:
             channels += 1
         if self.d1_use:
             channels += 1
@@ -88,9 +89,11 @@ class Config:
     se_use = True
     reduction = 8
     # backbone_activation:
-    # - "relu": 当前默认配置
+    # - "relu": 标准 ReLU
+    # - "leaky_relu": 保留少量负响应
     # - "silu": 更平滑，常用于小模型或希望保留弱负响应时
-    backbone_activation = "relu"
+    backbone_activation = "leaky_relu"
+    backbone_activation_negative_slope = 0.05
 
     # Focal loss 强度
     gamma = 0.8  # 控制“压容易样本”的力度
@@ -99,14 +102,19 @@ class Config:
     label_smoothing = 0.0  # 分层掩码训练默认关闭 label smoothing
 
     # SG 预处理窗口参数
-    win_res = 15
     win_smooth = 15
     win1 = 15
 
     # backbone_type:
-    # - "cnn": ResNeXt1D 主干
+    # - "cnn": 使用卷积主干
     # - "identity": 跳过 CNN，只做平均下采样 + 1x1 通道投影
     backbone_type = "cnn"
+    # cnn_block_type:
+    # - "resnext": 当前默认配置
+    # - "resnet": 与 ResNeXt 共用同一套 bottleneck 骨架，但中间卷积改成普通卷积
+    cnn_block_type = "resnext"
+    # ResNet 模式下 bottleneck 中间通道缩放比例
+    resnet_bottleneck_ratio = 4
     # identity 路径的时序下采样倍率；1 表示不下采样
     identity_pool_kernel = 16
 
@@ -137,10 +145,17 @@ class Config:
     # cosine_head:
     # - True : 余弦分类头
     # - False: 线性分类头
-    cosine_head = True
+    cosine_head = False
     cosine_scale = 25
+    # prototype_fusion_mode:
+    # - "classifier": 只用分类头
+    # - "prototype": 只用 prototype 相似度
+    # - "fusion": 融合两路概率
+    prototype_fusion_mode = "fusion"
+    prototype_fusion_weight = 0.35
+    prototype_similarity_scale = 20.0
 
-    # ResNeXt 参数
+    # ResNeXt 参数（仅在 cnn_block_type="resnext" 时生效）
     cardinality = 4
     base_width = 4
     stem_kernel_size = 15

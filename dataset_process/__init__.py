@@ -24,10 +24,17 @@ from dataset_process.pipeline import (
     unpack_dataset_init,
     write_arc_data,
 )
-from dataset_process.profiles import DatasetProfile, get_dataset_dir, get_profile, list_profiles
+from dataset_process.profiles import (
+    COMMON_BAD_BANDS,
+    DatasetProfile,
+    get_dataset_dir,
+    get_profile,
+    list_profiles,
+)
 
 __all__ = [
     "DatasetProfile",
+    "COMMON_BAD_BANDS",
     "PackedArcDataset",
     "asls_baseline",
     "build_valid_mask",

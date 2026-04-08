@@ -545,18 +545,35 @@ def build_pre_smooth_source(signal, config, sg_smooth):
     return smooth[0, 0]
 
 
-def build_input_channels(signal, config, sg_smooth, sg_d1, smooth_signal=None):
+def build_pre_d1_source(signal, config, sg_smooth, sg_d1):
+    """为 d1 通道构造“先平滑、后求导、再标准化”的输入源。"""
+    smooth = F.conv1d(
+        signal,
+        sg_smooth,
+        padding=config.win_smooth // 2,
+    )
+    d1 = F.conv1d(
+        smooth,
+        sg_d1,
+        padding=config.win1 // 2,
+    )[0, 0]
+    return d1 / config.delta
+
+
+def build_input_channels(
+    signal,
+    config,
+    sg_smooth,
+    sg_d1,
+    smooth_signal=None,
+    raw_signal=None,
+    d1_signal=None,
+):
     """
     从标准化后的单通道信号构造模型实际输入通道。
     """
     base = signal[0, 0]
-    if getattr(config, "snv_posneg_split", False):
-        channels = [
-            torch.clamp(base, min=0.0),
-            torch.clamp(-base, min=0.0),
-        ]
-    else:
-        channels = [base]
+    channels = [base]
 
     if config.smooth_use:
         smooth = (
@@ -570,14 +587,21 @@ def build_input_channels(signal, config, sg_smooth, sg_d1, smooth_signal=None):
         )
         channels.append(smooth)
 
+    if getattr(config, "raw_use", False):
+        if raw_signal is None:
+            raise ValueError("raw_use=True 时必须提供 raw_signal。")
+        channels.append(raw_signal[0, 0])
+
     if config.d1_use:
-        d1 = F.conv1d(
-            signal,
-            sg_d1,
-            padding=config.win1 // 2,
-        )[0, 0]
-        d1 = d1 / config.delta
-        d1 = d1 / torch.max(torch.abs(d1)).clamp_min(1e-8)
+        d1 = (
+            F.conv1d(
+                signal,
+                sg_d1,
+                padding=config.win1 // 2,
+            )[0, 0]
+            if d1_signal is None
+            else d1_signal[0, 0]
+        )
         channels.append(d1)
 
     if len(channels) != config.in_channels:
@@ -607,15 +631,34 @@ def build_model_input(
     else:
         x = x.copy()
 
+    raw_signal = None
+    if getattr(config, "raw_use", False):
+        raw_signal = torch.as_tensor(x, dtype=torch.float32, device=device).view(1, 1, -1)
+
     smooth_x = None
     if config.smooth_use:
-        raw_signal = torch.as_tensor(x, dtype=torch.float32, device=device).view(1, 1, -1)
-        smooth_x = build_pre_smooth_source(raw_signal, config, sg_smooth)
+        smooth_source = (
+            raw_signal
+            if raw_signal is not None
+            else torch.as_tensor(x, dtype=torch.float32, device=device).view(1, 1, -1)
+        )
+        smooth_x = build_pre_smooth_source(smooth_source, config, sg_smooth)
+
+    d1_x = None
+    if config.d1_use:
+        d1_source = (
+            raw_signal
+            if raw_signal is not None
+            else torch.as_tensor(x, dtype=torch.float32, device=device).view(1, 1, -1)
+        )
+        d1_x = build_pre_d1_source(d1_source, config, sg_smooth, sg_d1)
 
     if not config.input_is_norm:
         x = normalize_spectrum(x, config.norm_method)
         if smooth_x is not None:
             smooth_x = normalize_spectrum(smooth_x, config.norm_method)
+        if d1_x is not None:
+            d1_x = normalize_spectrum(d1_x, config.norm_method)
 
     if augment:
         x = augment_norm_spectrum(x, config)
@@ -624,12 +667,17 @@ def build_model_input(
     smooth_signal = None
     if smooth_x is not None:
         smooth_signal = smooth_x.view(1, 1, -1)
+    d1_signal = None
+    if d1_x is not None:
+        d1_signal = d1_x.view(1, 1, -1)
     return build_input_channels(
         signal,
         config,
         sg_smooth,
         sg_d1,
         smooth_signal=smooth_signal,
+        raw_signal=raw_signal,
+        d1_signal=d1_signal,
     )
 
 class InputPreprocessor:

@@ -19,10 +19,14 @@
 ├─ evaluate_test_set.py              # 测试集评估入口
 ├─ pca_svm_baseline.py               # PCA+SVM 基线入口
 ├─ analyze.py                        # 统一分析入口（single / aggregate）
+├─ compare_test_train_means.py       # 外部测试菌与训练类均值谱对比
+├─ pack_raman.py                     # 打包 raman 库，便于上传到 Colab
 ├─ raman/
 │  ├─ config.py                      # 训练配置
 │  ├─ config_io.py                   # config.yaml 读写、实验重载
-│  ├─ model.py                       # ResNeXt1D + Transformer/LSTM + 分类头
+│  ├─ model.py                       # 可切换 ResNet/ResNeXt + Transformer/LSTM + 分类头
+│  ├─ prototype.py                   # 原型向量保存与融合推理
+│  ├─ trainer.py                     # 训练主流程与单模型训练实现
 │  ├─ data/
 │  │  ├─ paths.py                    # 数据目录阶段解析
 │  │  ├─ dataset.py                  # 层级数据集、标签映射、通道构建
@@ -50,11 +54,14 @@
 │  ├─ predict_core.py                # 级联推理核心
 │  ├─ predict_folder.py              # 批量目录预测
 │  └─ predict_single.py              # 单目录预测
+├─ colab/
+│  └─ colab_unified.ipynb            # Colab 训练/评估/分析一体化 notebook
+├─ notebooks/
+│  └─ single_process_AsLS_cut_SNV.ipynb # 单条光谱处理流程可视化 notebook
 └─ dataset/
    ├─ 细菌/
    ├─ 耐药菌/
    ├─ 厌氧菌/
-   └─ 丁/
 ```
 
 ## 3. 离线数据预处理
@@ -78,13 +85,18 @@
 这里集中控制：
 
 - 波段裁剪范围 `cut_min` / `cut_max`
-- 插值点数 `target_points`
+- 统一参考波数轴点数 `target_points`
 - AsLS 参数 `asls_lam` / `asls_p` / `asls_max_iter`
 - 训练集最小样本数 `min_samples_per_class`
 - 绘图归一化方式 `norm_method`
 - PCA 异常值过滤相关参数
 
-不同数据集的目录名和坏波段配置在 `dataset_process/profiles.py` 里维护
+不同数据集的目录名在 `dataset_process/profiles.py` 里维护；坏波段现在全局固定为 `890~950 cm^-1`
+
+补充说明：
+
+- `target_points=896` 指的是完整参考波数轴长度
+- 当前流程会在参考轴上同步删掉 `890~950 cm^-1`，因此最终落盘光谱长度不是 `896`，而是 `851`
 
 ### 3.2 输入目录与输出目录
 
@@ -92,18 +104,18 @@
 
 - `dataset_init/`：原始按测量文件夹组织的数据
 - `dataset_init.npz`：`dataset_init/` 的打包版本
-- `dataset_raw/`：按类别前缀重组后的中间结果
+- `dataset_train_raw/`：按类别前缀重组后的中间结果
 - `dataset_train/`：训练集离线清洗结果
+- `dataset_test_raw/`：测试集原始输入目录
 - `dataset_test/`：测试集离线清洗结果
 - `dataset_train_fig/`：训练集均值谱图
 - `dataset_test_fig/`：测试集均值谱图
 - `dataset_init_fig/`：原始数据预览图
-- `测试菌/`：测试集原始输入目录
 - `log.txt`：训练集 PCA 异常值剔除日志
 
 ### 3.3 阶段 1：打包与解包
 
-如果原始数据太散，可以先把 `dataset_init/` 打成一个压缩包：
+先把 `dataset_init/` 打成一个压缩包：
 
 ```bash
 python -m dataset_process pack-init 细菌
@@ -131,7 +143,7 @@ python -m dataset_process classify 细菌
   
   例如：`ABC12 -> ABC`，`ESBL+03 -> ESBL+`
   
-- 将样本复制或写出到 `dataset_raw/`
+- 将样本复制或写出到 `dataset_train_raw/`
 
 - 输出文件名统一改成 `叶子目录名_原文件名`
 
@@ -146,7 +158,7 @@ python -m dataset_process preview-init 细菌
 作用：
 
 - 直接基于 `dataset_init/` 或 `dataset_init.npz` 做预处理预览
-- 执行基线校正、裁剪、插值、坏波段剔除
+- 执行基线校正、裁剪、坏波段剔除与统一参考轴插值
 - 不做 PCA 异常值过滤
 - 不落盘清洗后的光谱
 - 只输出每个分组的均值谱图到 `dataset_init_fig/`
@@ -164,14 +176,15 @@ python -m dataset_process preprocess-train 细菌
 1. 读取 `.arc_data`
 2. AsLS 基线校正
 3. 波段裁剪
-4. 插值到统一波数坐标
-5. 按 `bad_bands` 剔除坏波段
+4. 在裁剪后的原始波数轴上删除 `890~950 cm^-1` 坏段
+5. 只对保留的统一目标波数轴做线性插值，不跨坏段补点
 6. 对同一分组样本按 PCA 重构误差做异常值过滤
 
 补充说明：
 
 - 如果某个分组预处理后样本数少于 `min_samples_per_class`，该分组会跳过
 - 被 PCA 剔除的样本会记录到 `log.txt`
+- 当前默认 `cut_min=600`、`cut_max=1800`、`target_points=896`，最终写入 `dataset_train/` 的每条谱长度为 `851`
 
 输出：
 
@@ -186,8 +199,8 @@ python -m dataset_process preprocess-test 细菌
 
 作用：
 
-- 从 `测试菌/` 读取测试原始数据
-- 执行基线校正、裁剪、插值、坏波段剔除
+- 从 `dataset_test_raw/` 读取测试原始数据
+- 执行基线校正、裁剪、坏波段剔除与统一参考轴插值
 - 不做 PCA 异常值过滤
 - 输出到 `dataset_test/`
 - 同时为每个测试文件夹生成均值谱图到 `dataset_test_fig/`
@@ -203,7 +216,7 @@ python -m dataset_process count 细菌
 如果要统计其他子目录，可以用：
 
 ```bash
-python -m dataset_process count 细菌 --subdir dataset_raw
+python -m dataset_process count 细菌 --subdir dataset_train_raw
 ```
 
 输出是按目录层级展开的样本数统计，方便检查重组和清洗结果
@@ -250,9 +263,19 @@ python -m dataset_process count 细菌 --subdir dataset_raw
 
 标准化后的单通道光谱不会直接送进模型，而是会按配置构造成多通道输入：
 
-- 如果开启 `snv_posneg_split`，主光谱拆成正值通道和负值通道
-- 如果开启 `smooth_use`，再增加一个 SG 平滑通道
-- 如果开启 `d1_use`，再增加一个一阶导通道
+- 主通道是按 `norm_method` 标准化后的光谱，当前默认是 `snv`
+
+- 如果开启 `smooth_use`，再增加一个 `smooth` 通道
+  
+  这个通道来自“RAW 增强后 -> SG 平滑 -> 标准化”，不再额外叠加标准化后的增强
+  
+- 如果开启 `raw_use`，再增加一个 `raw` 通道
+  
+  这个通道保留 RAW 增强后的未标准化输入，用来补充绝对强度和原始形状信息
+  
+- 如果开启 `d1_use`，再增加一个 `d1` 通道
+  
+  这个通道来自“RAW 增强后 -> 先平滑 -> 求一阶导 -> 标准化”，同样不再额外叠加标准化后的增强
 
 因此单条样本最终形状是：
 
@@ -263,7 +286,10 @@ python -m dataset_process count 细菌 --subdir dataset_raw
 其中：
 
 - `C` 是输入通道数，由配置决定
+
 - `L` 是离线统一后的光谱长度
+  
+  当前默认离线流程下，`L=851`
 
 经过 `DataLoader` 后，模型实际接收的是：
 
@@ -283,9 +309,9 @@ python -m dataset_process count 细菌 --subdir dataset_raw
 - `train_dataset = RamanDataset(..., augment=True)`，用于训练
 - `test_dataset = RamanDataset(..., augment=False)`，用于训练过程中的验证
 
-这里的 `test_dataset` 其实是“验证集视角”，不是外部测试集
+`test_dataset` 其实是“验证集视角”，不是外部测试集
 
-独立测试集位于dataset下
+独立测试集位于dataset下，另外使用`predict`预测
 
 ## 5. 模型
 
@@ -304,7 +330,7 @@ python -m dataset_process count 细菌 --subdir dataset_raw
 其中：
 
 - `B`：batch size
-- `C`：输入通道数，由 `snv_posneg_split`、`smooth_use`、`d1_use` 决定
+- `C`：输入通道数，由 `smooth_use`、`raw_use`、`d1_use` 决定；当前默认是 `3`
 - `L`：离线统一后的光谱长度
 
 这套结构的设计目标不是做一个完全通用的 1D 分类器，而是围绕拉曼光谱的特点，把局部峰形建模、跨峰关系建模和最终判别头拆开，便于做消融实验。
@@ -313,13 +339,15 @@ python -m dataset_process count 细菌 --subdir dataset_raw
 
 前端特征提取器由 `backbone_type` 控制：
 
-- `cnn`：使用 `ResNeXt1D_Transformer` 内部的 1D ResNeXt 主干
+- `cnn`：使用 `RamanClassifier1D` 内部的 1D CNN 主干
 - `identity`：跳过 CNN，仅做平均下采样和 `1x1` 通道投影
 
 默认配置使用 `cnn`，即：
 
+- `cnn_block_type="resnext"`，也可切换到 `resnet`
 - 多尺度 stem：`stem_multiscale=True`
 - `stem_kernel_sizes=(3, 7, 15)`
+- `backbone_activation="leaky_relu"`
 - `cardinality=4`
 - `base_width=4`
 - `reduction=8`
@@ -330,12 +358,14 @@ python -m dataset_process count 细菌 --subdir dataset_raw
 1. 输入 stem  
    - 单尺度时：`Conv1d + BN + Activation + AvgPool1d`
    - 多尺度时：并联多个不同卷积核的 stem 分支，再在通道维拼接后统一池化
-2. 四个 ResNeXt stage  
-   - 每个 stage 由两个 `ResNeXtBlock1D` 组成
+2. 四个 residual bottleneck stage  
+   - 每个 stage 由两个 `ResidualBottleneck1D` 组成
    - stage 之间通过 `AvgPool1d` 做时序下采样
 3. `1x1 Conv` 投影到统一的 `transformer_dim`
 
-`ResNeXtBlock1D` 自身采用：
+当 `cnn_block_type="resnext"` 时，中间 `3x3` 卷积使用 group convolution；当 `cnn_block_type="resnet"` 时则退化为普通 bottleneck 结构。
+
+`ResidualBottleneck1D` 自身采用：
 
 - `1x1` 降维
 - `3x3` group convolution
@@ -402,12 +432,13 @@ feat = concat(mean(out, dim=1), std(out, dim=1))
 - `True`：`CosineClassifier`
 - `False`：普通 `Linear`
 
-默认配置使用余弦分类头：
+当前默认配置使用线性分类头：
 
-- `cosine_head=True`
-- `cosine_scale=25`
+- `cosine_head=False`
 
-余弦头的核心思想是：
+主要是避免和后续预测时采用的`prototype`融合产生重叠
+
+若开启余弦头，其核心思想是：
 
 - 先对 embedding 和分类权重都做 L2 归一化
 - 再计算余弦相似度
@@ -428,7 +459,7 @@ feat = concat(mean(out, dim=1), std(out, dim=1))
 → 多尺度 ResNeXt1D backbone
 → Transformer encoder
 → Statistical Pooling
-→ Cosine Classifier
+→ Linear Classifier
 ```
 
 这套默认组合背后的思路是：
@@ -437,7 +468,13 @@ feat = concat(mean(out, dim=1), std(out, dim=1))
 - 用 CNN 先提峰形和局部结构
 - 用 Transformer 建模跨波段关系
 - 用统计池化保留整体均值和波动信息
-- 用余弦头约束 embedding 判别边界
+- 用线性头完成当前层级分类
+
+此外，训练结束后还可以基于训练集 embedding 额外保存一份 `*_prototypes.pt`，并在预测/评估时按配置切换：
+
+- `classifier`：仅使用分类头输出
+- `fusion`：分类头与 prototype 相似度融合
+- `prototype`：仅使用 prototype 相似度
 
 它本质上是一套“先局部建模，再全局关联，最后在 embedding 空间判别”的光谱分类模型
 
@@ -469,20 +506,22 @@ output/细菌/20260330_153000/
 实验目录内会保存：
 
 - `config.yaml`
-- `logs/config.txt`
-- `logs/log.txt`
+- `logs/config_<timestamp>.txt`
+- `logs/run_<timestamp>.log`
+- `logs/<model_tag>_<timestamp>.log`
 - `train_files.json`
 - `test_files.json`
 - `class_names.json`
 - `hierarchy_meta.json`
 - 各层级或各父类对应的模型权重
+- 各层级或各父类对应的 `*_prototypes.pt`
 
 其中 `hierarchy_meta.json` 很重要，它记录了：
 
 - 层级顺序
 - 每层类别名
 - `parent_to_children`
-- 本次训练得到的全局模型和 parent 子模型文件名
+- 本次训练得到的全局模型、parent 子模型和 prototype 文件名
 
 后续预测、评估和分析都会复用这些元数据
 
@@ -602,6 +641,15 @@ $$
 3. 不再额外叠加标准化后的增强
 
 这样做的目的是让 `smooth` 通道更稳定地表达“平滑后的整体峰形”，避免它和主通道共享过多后增强造成语义混乱
+
+其中 `d1` 通道当前的构造方式是：
+
+1. 基于 RAW 域增强后的光谱先做 SG 平滑
+2. 再求一阶导
+3. 再按 `norm_method` 做标准化
+4. 不再额外叠加标准化后的增强
+
+另外当前默认还会保留一个 `raw` 通道，它直接使用 RAW 增强后的未标准化输入，用来补充绝对强度与原始谱形信息
 
 ### 6.6 当前训练总损失
 
@@ -975,6 +1023,8 @@ $$
 5. 对每个样本做级联预测，直到目标层级
 6. 汇总分类报告和混淆矩阵
 
+如果实验目录下存在对应的 `*_prototypes.pt`，评估会按 `prototype_fusion_mode` 自动切换为分类头、prototype 或两者融合的打分方式；如果不存在，则自动回退到纯分类头结果。
+
 当某一层是按父类拆开的子模型时，评估会自动：
 
 - 先看上一层父类预测结果
@@ -1055,6 +1105,12 @@ $$
 - `raman/analysis/core.py`
 - `raman/analysis/utils.py`
 
+此外，根目录还提供了：
+
+- `compare_test_train_means.py`
+
+用于把外部测试菌与训练集中对应类、最近错误类的均值谱做直接对比，便于判断测试样本到底是模型没分开，还是光谱本身就更接近其他训练类。
+
 入口内部通过 `ANALYSIS_MODE` 切换两种模式：
 
 - `single`：分析单个全局模型，或某个 parent 对应的单个子模型
@@ -1064,16 +1120,84 @@ $$
 
 单模型分析会围绕一个具体模型输出多种解释结果，包括：
 
-- 输入通道重要性（Integrated Gradients）
-- 中间层重要性 / Layer Grad-CAM
-- 类别级波段重要性热图
-- embedding 可视化
+- Integrated Gradients（IG）：用于解释输入（通道 & 波段）
+- Layer Grad-CAM：用于评估各层的重要性
 
-对应输出目录通常是：
+#### Integrated Gradients（IG）
 
-```text
-<EXP_DIR>/<tag>_analysis/
-```
+对输入(x)，baseline(x')，目标函数 (F(x))
+$$
+\mathrm{IG}_i(x) = (x_i - x_i') \int_0^1 
+\frac{\partial F(x' + \alpha(x - x'))}{\partial x_i} d\alpha
+$$
+
+- 从 baseline → 真实输入
+- 沿路径累积梯度
+- 得到每个输入维度的“累计贡献”
+
+当前分析实现里：
+
+- baseline 默认不是全零，而是从数据集中统计得到的平均光谱 `mean spectrum`
+- 目标类别既可以选真实标签，也可以选模型预测类别
+- 最终结果会对多个 batch 再做平均，因此比单次前向更稳定
+
+如果某个峰在所有样本里都很强（平均光谱里已经有），那它在 IG 中可能贡献很小
+
+所以 IG 更偏向发现区分性特征（discriminative features）而不是共有特征
+
+在计算得到结果以后，IG的形状为`[B,C,L]`
+
+对于输入通道重要性
+$$
+\mathrm{channel\space importance}_c= \mathrm{mean}_{b,l}(|\mathrm{IG}_{b,c,l}|)
+$$
+
+- 先对 attribution 取绝对值
+
+  > 因为 attribution 可能有正有负，取绝对值后，强调的是“影响强度”，不是“方向”
+
+- 再对 batch 维和波段维求平均
+
+- 得到每个通道一个标量
+
+对于类别波段重要性：
+
+先沿通道维平均，得到每个样本一条长度为L的波段重要性曲线
+$$
+\mathrm{IG\_ band}_{b,l} = \mathrm{mean}_c (|\mathrm{IG}_{b,c,l}|)
+$$
+然后再按类别累加平均，最后得到：
+$$
+\mathrm{importance}[class,band]
+$$
+热图在回答：对某个类别而言，哪些波数位置最重要
+
+#### Layer Grad-CAM
+
+Layer Importance 不是传统二维图像里那种空间热图版本，而是把每一层压成一个标量重要性分数
+
+实现方式是在待分析层上注册 forward / backward hook，分别保存：
+
+- 前向输出 activation `A`
+- 目标类别对该层输出的梯度 `G`
+
+然后对每一层计算：
+
+$$
+\mathrm{Importance} = \mathrm{mean}|A\odot  G|
+$$
+
+- `A` 大，说明这一层在当前样本上激活强
+- `G` 大，说明目标类别对这一层敏感
+- 两者乘起来，再取绝对值平均，可以近似表示“这一层对当前决策有多重要”
+
+当前实现会先在 block 级别算分，再做归一化
+
+---
+
+IG 用 (x - baseline) × grad是因为它在做路径积分，要衡量“从无到有”的贡献
+
+Grad-CAM 用 A × grad是因为它在做局部线性近似，只看当前激活对输出的影响
 
 ### 8.3 聚合分析
 

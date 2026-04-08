@@ -17,12 +17,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_DATASET_SUBDIRS = (
     "dataset_init",
-    "dataset_raw",
+    "dataset_train_raw",
     "dataset_train",
     "dataset_test",
     "dataset_train_fig",
     "dataset_test_fig",
-    "测试菌",
+    "dataset_test_raw",
 )
 
 
@@ -93,14 +93,14 @@ def build_parser():
     for command, handler, help_text in (
         ("pack-init", run_pack_init, "Pack dataset_init into dataset_init.npz"),
         ("unpack-init", run_unpack_init, "Unpack dataset_init.npz into dataset_init"),
-        ("classify", run_classify, "Classify dataset_init into dataset_raw"),
+        ("classify", run_classify, "Classify dataset_init into dataset_train_raw"),
         (
             "preview-init",
             run_preview_init,
             "Generate per-folder preview figures from dataset_init",
         ),
-        ("preprocess-train", run_preprocess_train, "Build dataset_train from dataset_raw"),
-        ("preprocess-test", run_preprocess_test, "Build dataset_test from 测试菌"),
+        ("preprocess-train", run_preprocess_train, "Build dataset_train from dataset_train_raw"),
+        ("preprocess-test", run_preprocess_test, "Build dataset_test from dataset_test_raw"),
         ("count", run_count, "Count arc_data files in a dataset subdir"),
     ):
         sub = subparsers.add_parser(command, help=help_text)

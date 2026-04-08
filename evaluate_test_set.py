@@ -3,7 +3,7 @@
 from raman.eval import EvaluateOverrides, run_evaluate_test_set
 
 # 手动覆盖
-EXP_DIR = "output/ding/20260318_055705"
+EXP_DIR = ""
 EVAL_LEVEL = "level_1"
 INHERIT_MISSING_LEVELS = True
 EVAL_ONLY_LEVEL = None

@@ -123,6 +123,7 @@ def save_hierarchy_meta(
     current_train_level,
     level_models,
     parent_models,
+    level_prototypes=None,
 ):
     """
     保存层级类别名、父子关系和训练得到的模型索引信息。
@@ -140,6 +141,7 @@ def save_hierarchy_meta(
         for level, mapping in full_dataset.parent_to_children.items()
     }
     level_models_json = dict(level_models)
+    level_prototypes_json = dict(level_prototypes or {})
     parent_models_json = {
         level: {str(key): value for key, value in mapping.items()}
         for level, mapping in parent_models.items()
@@ -156,6 +158,9 @@ def save_hierarchy_meta(
         old_level_models = (
             old_meta.get("level_models", {}) if isinstance(old_meta, dict) else {}
         )
+        old_level_prototypes = (
+            old_meta.get("level_prototypes", {}) if isinstance(old_meta, dict) else {}
+        )
         old_parent_models = (
             old_meta.get("parent_models", {}) if isinstance(old_meta, dict) else {}
         )
@@ -163,6 +168,10 @@ def save_hierarchy_meta(
         merged_level_models = dict(old_level_models)
         merged_level_models.update(level_models_json)
         level_models_json = merged_level_models
+
+        merged_level_prototypes = dict(old_level_prototypes)
+        merged_level_prototypes.update(level_prototypes_json)
+        level_prototypes_json = merged_level_prototypes
 
         merged_parent_models = {}
         for level, mapping in old_parent_models.items():
@@ -183,6 +192,7 @@ def save_hierarchy_meta(
                 "parent_level_name": full_dataset.parent_level_name,
                 "current_train_level": current_train_level,
                 "level_models": level_models_json,
+                "level_prototypes": level_prototypes_json,
                 "parent_models": parent_models_json,
             },
             file,

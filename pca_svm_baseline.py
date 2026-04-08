@@ -3,7 +3,7 @@
 from raman.eval import BaselineOverrides, run_pca_svm_baseline
 
 # 手动覆盖
-EXP_DIR = "output/ding/20260318_055705"
+EXP_DIR = ""
 LEVEL = "level_1"
 USE_ALL_CHANNELS = False
 PCA_N_COMPONENTS = 0.95

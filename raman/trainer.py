@@ -12,7 +12,12 @@ import torch.nn.functional as F
 
 from raman.config import config as default_config
 from raman.data import RamanDataset
-from raman.model import ResNeXt1D_Transformer
+from raman.model import RamanClassifier1D
+from raman.prototype import (
+    compute_class_prototypes,
+    resolve_prototype_path,
+    save_prototype_bundle,
+)
 from raman.training.eval import (
     evaluate_file_level,
     evaluate_file_level_local,
@@ -236,6 +241,49 @@ def _compute_severity_weights(prob, targets):
     return severity_w
 
 
+def _save_model_prototypes(
+    model_path,
+    dataset,
+    train_indices,
+    level_idx,
+    num_classes,
+    device,
+    config,
+    loader_kwargs,
+    label_map_tensor=None,
+):
+    """使用训练集 clean view embedding 保存类别 prototype。"""
+    if not model_path or not os.path.exists(model_path) or len(train_indices) == 0:
+        return None
+
+    model = RamanClassifier1D(num_classes=num_classes, config=config).to(device)
+    state = torch.load(model_path, map_location=device)
+    model.load_state_dict(state)
+    model.eval()
+
+    bundle = compute_class_prototypes(
+        model=model,
+        dataset=dataset,
+        indices=train_indices,
+        level_idx=level_idx,
+        num_classes=num_classes,
+        device=device,
+        loader_kwargs=loader_kwargs,
+        label_map_tensor=label_map_tensor,
+    )
+
+    prototype_path = None
+    if bundle is not None:
+        prototype_path = resolve_prototype_path(model_path)
+        save_prototype_bundle(bundle, prototype_path)
+
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return prototype_path
+
+
 
 def run_training(config_obj=None, overrides=None):
     """执行一次完整训练流程。"""
@@ -320,6 +368,7 @@ def run_training(config_obj=None, overrides=None):
     levels_to_train = resolve_levels_to_train(current_train_level)
 
     level_models = {}
+    level_prototypes = {}
     parent_models = {}
     def train_single_model(
         model_tag,
@@ -364,7 +413,7 @@ def run_training(config_obj=None, overrides=None):
             )
 
         # 单层模型
-        model = ResNeXt1D_Transformer(
+        model = RamanClassifier1D(
             num_classes=num_classes,
             config=config
         ).to(device)
@@ -460,6 +509,7 @@ def run_training(config_obj=None, overrides=None):
             config.output_dir,
             f"{model_tag}_model.pt"
         )
+        prototype_path = None
         # 将全局类别索引映射成当前子模型使用的局部类别索引
         label_map_tensor = None
         if label_map_np is not None:
@@ -675,6 +725,22 @@ def run_training(config_obj=None, overrides=None):
                     break
 
             model_log(f"=== Best model epoch: {best_epoch} ===")
+            prototype_path = _save_model_prototypes(
+                model_path=best_model_path,
+                dataset=test_dataset,
+                train_indices=train_indices,
+                level_idx=level_idx,
+                num_classes=num_classes,
+                device=device,
+                config=config,
+                loader_kwargs=_build_loader_kwargs(config, device, train=False),
+                label_map_tensor=label_map_tensor,
+            )
+            if prototype_path is not None:
+                model_log(
+                    f"[{model_tag}] prototype saved to "
+                    f"{os.path.basename(prototype_path)}"
+                )
         finally:
             model_log_file.close()
 
@@ -686,6 +752,7 @@ def run_training(config_obj=None, overrides=None):
 
         return {
             "best_model_path": best_model_path,
+            "prototype_path": prototype_path,
             "model": None,
             "level_name": level_name,
             "model_log_path": model_log_path,
@@ -714,6 +781,8 @@ def run_training(config_obj=None, overrides=None):
             if result is None:
                 continue
             level_models[level_name] = os.path.basename(result["best_model_path"])
+            if result.get("prototype_path"):
+                level_prototypes[level_name] = os.path.basename(result["prototype_path"])
         else:
             # 父类内子类独立模型
             parent_models[level_name] = {}
@@ -781,6 +850,11 @@ def run_training(config_obj=None, overrides=None):
 
                 parent_models[level_name][parent_idx] = {
                     "model_path": os.path.basename(result["best_model_path"]),
+                    "prototype_path": (
+                        os.path.basename(result["prototype_path"])
+                        if result.get("prototype_path")
+                        else None
+                    ),
                     "child_ids": child_ids,
                     "child_names": child_names
                 }
@@ -792,6 +866,7 @@ def run_training(config_obj=None, overrides=None):
         current_train_level,
         level_models,
         parent_models,
+        level_prototypes=level_prototypes,
     )
 
     config_log_file.close()

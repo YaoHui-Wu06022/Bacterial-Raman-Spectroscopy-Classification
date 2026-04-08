@@ -217,14 +217,14 @@ def collect_analyzable_layers(model):
     """
     自动收集：
     - conv1 / input_proj
-    - 所有 ResNeXtBlock1D
+    - 所有 ResidualBottleneck1D
     - 所有 TransformerEncoderLayer
     - LSTM
     返回:
         analyzable: { "layer1.0": module, ... }
         groups:     { "layer1.0": "layer1", "layer1.1": "layer1", ... }
     """
-    from raman.model import ResNeXtBlock1D
+    from raman.model import ResidualBottleneck1D
 
     analyzable = {}
     groups = {}
@@ -234,9 +234,9 @@ def collect_analyzable_layers(model):
             full_name = f"{prefix}.{name}" if prefix else name
 
             # --------------------------------------------------
-            # ResNeXtBlock1D 归到它所在的 layer
+            # ResidualBottleneck1D 归到它所在的 layer
             # --------------------------------------------------
-            if isinstance(child, ResNeXtBlock1D):
+            if isinstance(child, ResidualBottleneck1D):
                 analyzable[full_name] = child
                 groups[full_name] = full_name.split(".")[0]  # layer1.0 -> layer1
                 continue

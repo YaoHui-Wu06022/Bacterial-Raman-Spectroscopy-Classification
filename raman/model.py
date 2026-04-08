@@ -3,10 +3,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-def build_activation(name, inplace=True):
+def build_activation(name, inplace=True, negative_slope=0.01):
     name = str(name).lower()
     if name == "relu":
         return nn.ReLU(inplace=inplace)
+    if name in ("leaky_relu", "leakyrelu"):
+        return nn.LeakyReLU(negative_slope=float(negative_slope), inplace=inplace)
     if name == "silu":
         return nn.SiLU(inplace=inplace)
     raise ValueError(f"Unknown backbone activation: {name}")
@@ -18,14 +20,25 @@ class SEBlock1D(nn.Module):
     - 自动记录 scale 用于重要性分析
     - 保证 backward hook 获取到的梯度有效
     """
-    def __init__(self, channels, reduction, se_use, activation_name="relu"):
+    def __init__(
+        self,
+        channels,
+        reduction,
+        se_use,
+        activation_name="relu",
+        activation_negative_slope=0.01,
+    ):
         super().__init__()
 
         self.se_use = se_use
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.fc = nn.Sequential(
             nn.Linear(channels, channels // reduction),
-            build_activation(activation_name, inplace=False),   # 避免破坏 Autograd 需要的中间值
+            build_activation(
+                activation_name,
+                inplace=False,
+                negative_slope=activation_negative_slope,
+            ),   # 避免破坏 Autograd 需要的中间值
             nn.Linear(channels // reduction, channels),
             nn.Sigmoid()
         )
@@ -44,7 +57,6 @@ class SEBlock1D(nn.Module):
 
         # 计算 SE 权重（scale）
         y = self.fc(y)  # [B, C]
-        # y = torch.clamp(y, 0.1, 0.9)  # 防止极端通道放大
         self.latest_scale = y   # 保存 scale，供重要性分析用
 
         # 扩展到序列维度
@@ -54,55 +66,85 @@ class SEBlock1D(nn.Module):
         return x * y
 
 # ResNeXt 残差块与 SE 模块
-class ResNeXtBlock1D(nn.Module):
+def resolve_mid_channels(
+    out_channels,
+    block_type,
+    cardinality=None,
+    base_width=None,
+    bottleneck_ratio=None,
+):
+    """按 block 类型计算 bottleneck 中间通道数。"""
+    block_type = str(block_type).lower()
+    if block_type == "resnext":
+        mid_channels = int(out_channels * (base_width / 64.0)) * cardinality
+        return max(mid_channels, cardinality)
+    if block_type == "resnet":
+        return max(int(out_channels // bottleneck_ratio), 1)
+    raise ValueError(f"Unknown cnn_block_type: {block_type}")
+
+
+class ResidualBottleneck1D(nn.Module):
     """
-    1D ResNeXt block:
-    - 1x1 conv  降维
-    - 3x3 group conv (cardinality 路)
-    - 1x1 conv  升维
-    - se + shortcut
-    参考 ResNeXt 论文的宽度公式(社区设计)：
-    D = cardinality * base_width * (planes / 64)
+    统一的 1D bottleneck 残差块。
+
+    - `resnet` 使用普通 3x3 卷积
+    - `resnext` 使用 group conv，并按 cardinality/base_width 控制宽度
     """
-    def __init__(self,
-                 in_channels,
-                 out_channels,
-                 cardinality = None,
-                 base_width = None,
-                 reduction= None,
-                 se_use = True,
-                 activation_name="relu"):
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        block_type="resnext",
+        cardinality=None,
+        base_width=None,
+        bottleneck_ratio=4,
+        reduction=None,
+        se_use=True,
+        activation_name="relu",
+        activation_negative_slope=0.01,
+    ):
         super().__init__()
-
-        # 内部通道数 D
-        D = int(out_channels * (base_width / 64.0)) * cardinality
-        D = max(D, cardinality)  # 防止太小
-
-        # 1x1 降维
-        self.conv_reduce = nn.Sequential(
-            nn.Conv1d(in_channels, D, kernel_size=1, stride=1, bias=False),
-            nn.BatchNorm1d(D),
-            build_activation(activation_name, inplace=True)
+        self.block_type = str(block_type).lower()
+        groups = 1 if self.block_type == "resnet" else int(cardinality)
+        mid_channels = resolve_mid_channels(
+            out_channels,
+            block_type=self.block_type,
+            cardinality=cardinality,
+            base_width=base_width,
+            bottleneck_ratio=bottleneck_ratio,
         )
 
-        # 3x3 group conv
+        self.conv_reduce = nn.Sequential(
+            nn.Conv1d(in_channels, mid_channels, kernel_size=1, stride=1, bias=False),
+            nn.BatchNorm1d(mid_channels),
+            build_activation(
+                activation_name,
+                inplace=True,
+                negative_slope=activation_negative_slope,
+            )
+        )
+
         self.conv_group = nn.Sequential(
             nn.Conv1d(
-                D, # 输入通道
-                D, # 输出通道
+                mid_channels,
+                mid_channels,
                 kernel_size=3,
-                stride=1,  # 不再在卷积里下采样
+                stride=1,
                 padding=1,
-                groups=cardinality,
+                groups=groups,
                 bias=False
             ),
-            nn.BatchNorm1d(D),
-            build_activation(activation_name, inplace=True)
+            nn.BatchNorm1d(mid_channels),
+            build_activation(
+                activation_name,
+                inplace=True,
+                negative_slope=activation_negative_slope,
+            )
         )
 
-        # 1x1 升维
         self.conv_expand = nn.Sequential(
-            nn.Conv1d(D, out_channels, kernel_size=1, stride=1, bias=False),
+            nn.Conv1d(mid_channels, out_channels, kernel_size=1, stride=1, bias=False),
             nn.BatchNorm1d(out_channels)
         )
 
@@ -110,10 +152,10 @@ class ResNeXtBlock1D(nn.Module):
             out_channels,
             reduction=reduction,
             se_use=se_use,
-            activation_name=activation_name
+            activation_name=activation_name,
+            activation_negative_slope=activation_negative_slope,
         )
 
-        # shortcut
         if in_channels != out_channels:
             self.shortcut = nn.Sequential(
                 nn.Conv1d(in_channels, out_channels, kernel_size=1, bias=False),
@@ -122,18 +164,18 @@ class ResNeXtBlock1D(nn.Module):
         else:
             self.shortcut = nn.Identity()
 
-        self.out_act = build_activation(activation_name, inplace=True)
+        self.out_act = build_activation(
+            activation_name,
+            inplace=True,
+            negative_slope=activation_negative_slope,
+        )
 
     def forward(self, x):
         identity = x
-
         out = self.conv_reduce(x)
         out = self.conv_group(out)
         out = self.conv_expand(out)
-
-        # Classic SE placement: BEFORE residual add
         out = self.se(out)
-
         out = out + self.shortcut(identity)
         out = self.out_act(out)
         return out
@@ -178,13 +220,18 @@ class CosineClassifier(nn.Module):
 # Raman 主模型
 # - `backbone_type` 控制前端特征提取器
 # - `encoder_type` 控制序列编码器
-class ResNeXt1D_Transformer(nn.Module):
+class RamanClassifier1D(nn.Module):
     def __init__(self, num_classes, config):
         super().__init__()
         self.config = config
         self.backbone_type = str(getattr(self.config, "backbone_type", "cnn")).lower()
         if self.backbone_type not in ("cnn", "identity"):
             raise ValueError(f"Unknown backbone_type: {self.backbone_type}")
+        self.cnn_block_type = str(
+            getattr(self.config, "cnn_block_type", "resnext")
+        ).lower()
+        if self.cnn_block_type not in ("resnet", "resnext"):
+            raise ValueError(f"Unknown cnn_block_type: {self.cnn_block_type}")
 
         self.encoder_type = str(getattr(self.config, "encoder_type", "transformer")).lower()
         if self.encoder_type not in ("transformer", "lstm", "none"):
@@ -198,7 +245,14 @@ class ResNeXt1D_Transformer(nn.Module):
         self.backbone_activation_name = str(
             getattr(self.config, "backbone_activation", "relu")
         ).lower()
-        build_activation(self.backbone_activation_name, inplace=True)
+        self.backbone_activation_negative_slope = float(
+            getattr(self.config, "backbone_activation_negative_slope", 0.01)
+        )
+        build_activation(
+            self.backbone_activation_name,
+            inplace=True,
+            negative_slope=self.backbone_activation_negative_slope,
+        )
         self.proj_dim = int(getattr(self.config, "transformer_dim", 192))
 
         if self.cnn_backbone_on:
@@ -301,7 +355,11 @@ class ResNeXt1D_Transformer(nn.Module):
                         bias=False
                     ),
                     nn.BatchNorm1d(out_ch),
-                    build_activation(self.backbone_activation_name, inplace=True)
+                    build_activation(
+                        self.backbone_activation_name,
+                        inplace=True,
+                        negative_slope=self.backbone_activation_negative_slope,
+                    )
                 )
                 for k, out_ch in zip(kernel_sizes, branch_channels)
             ])
@@ -317,71 +375,65 @@ class ResNeXt1D_Transformer(nn.Module):
                     bias=False
                 ),
                 nn.BatchNorm1d(64),
-                build_activation(self.backbone_activation_name, inplace=True),
+                build_activation(
+                    self.backbone_activation_name,
+                    inplace=True,
+                    negative_slope=self.backbone_activation_negative_slope,
+                ),
                 nn.AvgPool1d(kernel_size=2)
             )
 
-        # ResNeXt 主干
+        # CNN 主干
         self.in_planes = 64
-        self.layer1 = self._make_layer(
-            64, 2,
-            cardinality=self.config.cardinality,
-            base_width=self.config.base_width
-        )
+        self.layer1 = self._make_layer(64, 2)
         self.layer2 = nn.Sequential(
             nn.AvgPool1d(kernel_size=2),
-            self._make_layer(
-                128, 2,
-                cardinality=self.config.cardinality,
-                base_width=self.config.base_width
-            )
+            self._make_layer(128, 2)
         )
         self.layer3 = nn.Sequential(
             nn.AvgPool1d(kernel_size=2),
-            self._make_layer(
-                256, 2,
-                cardinality=self.config.cardinality,
-                base_width=self.config.base_width
-            )
+            self._make_layer(256, 2)
         )
         self.layer4 = nn.Sequential(
             nn.AvgPool1d(kernel_size=2),
-            self._make_layer(
-                384, 2,
-                cardinality=self.config.cardinality,
-                base_width=self.config.base_width
-            )
+            self._make_layer(384, 2)
         )
         self.proj = nn.Conv1d(384, self.proj_dim, kernel_size=1, bias=False)
 
-    def _make_layer(self, planes, blocks, cardinality, base_width):
+    def _make_layer(self, planes, blocks):
         layers = []
 
-        # 第一个 block：in_planes → planes
+        # 第一个 block：in_planes -> planes
         layers.append(
-            ResNeXtBlock1D(
+            ResidualBottleneck1D(
                 in_channels=self.in_planes,
                 out_channels=planes,
-                cardinality=cardinality,
-                base_width=base_width,
+                block_type=self.cnn_block_type,
+                cardinality=self.config.cardinality,
+                base_width=self.config.base_width,
+                bottleneck_ratio=getattr(self.config, "resnet_bottleneck_ratio", 4),
                 reduction=self.reduction,
                 se_use=self.se_use,
-                activation_name=self.backbone_activation_name
+                activation_name=self.backbone_activation_name,
+                activation_negative_slope=self.backbone_activation_negative_slope,
             )
         )
         self.in_planes = planes
 
-        # 后续 block：planes → planes
+        # 后续 block：planes -> planes
         for _ in range(1, blocks):
             layers.append(
-                ResNeXtBlock1D(
+                ResidualBottleneck1D(
                     in_channels=self.in_planes,
                     out_channels=planes,
-                    cardinality=cardinality,
-                    base_width=base_width,
+                    block_type=self.cnn_block_type,
+                    cardinality=self.config.cardinality,
+                    base_width=self.config.base_width,
+                    bottleneck_ratio=getattr(self.config, "resnet_bottleneck_ratio", 4),
                     reduction=self.reduction,
                     se_use=self.se_use,
-                    activation_name=self.backbone_activation_name
+                    activation_name=self.backbone_activation_name,
+                    activation_negative_slope=self.backbone_activation_negative_slope,
                 )
             )
 
@@ -437,3 +489,6 @@ class ResNeXt1D_Transformer(nn.Module):
         if return_feat:
             return logits, feat
         return logits
+
+
+# 兼容现有导入名

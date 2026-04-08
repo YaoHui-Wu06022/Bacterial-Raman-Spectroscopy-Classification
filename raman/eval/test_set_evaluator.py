@@ -23,7 +23,12 @@ from .report import (
     write_text,
 )
 from raman.data import InputPreprocessor, RamanDataset
-from raman.model import ResNeXt1D_Transformer
+from raman.model import RamanClassifier1D
+from raman.prototype import (
+    compute_fused_probs,
+    load_prototype_bundle,
+    resolve_prototype_path,
+)
 from raman.training import load_split_files, mask_logits_by_parent
 
 
@@ -66,6 +71,7 @@ def _load_hierarchy_meta(exp_dir):
     meta["parent_to_children"] = parent_to_children
     meta["parent_models"] = parent_models
     meta["level_models"] = meta.get("level_models", {})
+    meta["level_prototypes"] = meta.get("level_prototypes", {})
     return meta
 
 
@@ -243,8 +249,10 @@ def evaluate_test_set(context):
     parent_models = meta.get("parent_models", {})
     parent_to_children = meta.get("parent_to_children", dataset.parent_to_children)
     level_models_meta = meta.get("level_models", {})
+    level_prototypes_meta = meta.get("level_prototypes", {})
 
     level_model_paths = {}
+    level_prototype_paths = {}
 
     def _build_parent_models_from_files(level):
         """从实验目录扫描某一层已有的 parent 子模型文件。"""
@@ -267,6 +275,11 @@ def evaluate_test_set(context):
     for level in level_order:
         model_name = level_models_meta.get(level, f"{level}_model.pt")
         level_model_paths[level] = os.path.join(exp_dir, model_name)
+        prototype_name = level_prototypes_meta.get(level)
+        level_prototype_paths[level] = resolve_prototype_path(
+            level_model_paths[level],
+            os.path.join(exp_dir, prototype_name) if prototype_name else None,
+        )
 
     for level in level_order:
         if os.path.exists(level_model_paths[level]):
@@ -341,7 +354,9 @@ def evaluate_test_set(context):
         print(f"{i:2d} -> {classes[i]}")
 
     level_model_cache = {}
+    level_prototype_cache = {}
     parent_model_cache = {}
+    parent_prototype_cache = {}
 
     def get_level_model(level):
         """延迟加载某一层的全局模型。"""
@@ -349,7 +364,7 @@ def evaluate_test_set(context):
             return level_model_cache[level]
 
         num = dataset.num_classes_by_level[level]
-        model = ResNeXt1D_Transformer(num_classes=num, config=config).to(device)
+        model = RamanClassifier1D(num_classes=num, config=config).to(device)
 
         model_path = level_model_paths.get(level)
         if not model_path or not os.path.exists(model_path):
@@ -362,6 +377,14 @@ def evaluate_test_set(context):
         model.eval()
         level_model_cache[level] = model
         return model
+
+    def get_level_prototype(level):
+        """延迟加载某一层的 prototype。"""
+        if level in level_prototype_cache:
+            return level_prototype_cache[level]
+        bundle = load_prototype_bundle(level_prototype_paths.get(level), device)
+        level_prototype_cache[level] = bundle
+        return bundle
 
     def get_parent_model(level, parent_idx, child_ids, model_path):
         """延迟加载某个父类对应的子模型。"""
@@ -378,13 +401,44 @@ def evaluate_test_set(context):
                 f"Parent model not found: {full_path}"
             )
 
-        model = ResNeXt1D_Transformer(num_classes=len(child_ids), config=config).to(device)
+        model = RamanClassifier1D(num_classes=len(child_ids), config=config).to(device)
 
         state = torch.load(full_path, map_location=device)
         model.load_state_dict(state)
         model.eval()
         parent_model_cache[key] = model
         return model
+
+    def get_parent_prototype(level, parent_idx, model_path, entry):
+        """延迟加载某个父类对应子模型的 prototype。"""
+        key = (level, parent_idx)
+        if key in parent_prototype_cache:
+            return parent_prototype_cache[key]
+
+        prototype_name = entry.get("prototype_path")
+        if prototype_name:
+            full_path = prototype_name
+            if not os.path.isabs(full_path):
+                full_path = os.path.join(exp_dir, full_path)
+        else:
+            full_path = resolve_prototype_path(
+                model_path if os.path.isabs(model_path) else os.path.join(exp_dir, model_path)
+            )
+
+        bundle = load_prototype_bundle(full_path, device)
+        parent_prototype_cache[key] = bundle
+        return bundle
+
+    def forward_level(model, x, prototype_bundle):
+        """计算单层模型的融合概率。"""
+        logits, feat = model(x, return_feat=True)
+        probs = compute_fused_probs(
+            logits,
+            feat,
+            prototype_bundle,
+            config,
+        )
+        return logits, feat, probs
 
     def _map_pred_to_display(pred_level, pred_id, x):
         """把预测结果映射到展示坐标；必要时继续下钻到 eval_level。"""
@@ -411,8 +465,12 @@ def evaluate_test_set(context):
                 return (eval_level, child_ids[0])
             return (pred_level, pred_id)
 
-        logits = get_parent_model(eval_level, int(pred_id), child_ids, model_path)(x)
-        pred_local = logits.argmax(1).item()
+        logits, _, probs = forward_level(
+            get_parent_model(eval_level, int(pred_id), child_ids, model_path),
+            x,
+            get_parent_prototype(eval_level, int(pred_id), model_path, entry),
+        )
+        pred_local = probs.argmax(1).item()
         pred_global = child_ids[pred_local]
         return (eval_level, pred_global)
 
@@ -422,8 +480,12 @@ def evaluate_test_set(context):
 
         for level in level_order:
             if parent_pred is None:
-                logits = get_level_model(level)(x)
-                pred_global = logits.argmax(1).item()
+                logits, feat, probs = forward_level(
+                    get_level_model(level),
+                    x,
+                    get_level_prototype(level),
+                )
+                pred_global = probs.argmax(1).item()
             else:
                 parent_idx = int(parent_pred)
                 if level in parent_models and parent_models[level]:
@@ -438,20 +500,34 @@ def evaluate_test_set(context):
                         else:
                             return -1
                     else:
-                        logits = get_parent_model(level, parent_idx, child_ids, model_path)(x)
-                        pred_local = logits.argmax(1).item()
+                        logits, feat, probs = forward_level(
+                            get_parent_model(level, parent_idx, child_ids, model_path),
+                            x,
+                            get_parent_prototype(level, parent_idx, model_path, entry),
+                        )
+                        pred_local = probs.argmax(1).item()
                         pred_global = child_ids[pred_local]
                 else:
-                    logits = get_level_model(level)(x)
+                    logits, feat, probs = forward_level(
+                        get_level_model(level),
+                        x,
+                        get_level_prototype(level),
+                    )
                     if level in parent_to_children:
                         logits, valid_parent = mask_logits_by_parent(
                             logits,
                             torch.tensor([parent_pred], device=device),
                             parent_to_children[level]
                         )
+                        probs = compute_fused_probs(
+                            logits,
+                            feat,
+                            get_level_prototype(level),
+                            config,
+                        )
                         if not valid_parent.any():
                             return -1
-                    pred_global = logits.argmax(1).item()
+                    pred_global = probs.argmax(1).item()
 
             if level == target_level:
                 return pred_global

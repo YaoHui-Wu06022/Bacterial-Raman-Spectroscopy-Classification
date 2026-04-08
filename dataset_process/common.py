@@ -128,7 +128,7 @@ def preprocess_single_spectrum(
     asls_p,
     asls_max_iter,
 ):
-    """对单条光谱执行基线校正、裁剪、插值和坏波段剔除。"""
+    """对单条光谱执行基线校正、裁剪，并让坏波段同时退出插值与最终输出。"""
     bad_bands = normalize_bad_bands(bad_bands)
     valid_mask = build_valid_mask(wn, bad_bands)
 
@@ -148,12 +148,18 @@ def preprocess_single_spectrum(
     if wn_cut.size < 10:
         return None, None
 
-    sp_interp = np.interp(wn_ref, wn_cut, sp_cut)
-
     if bad_bands:
-        keep_mask = build_valid_mask(wn_ref, bad_bands)
-        wn_ref = wn_ref[keep_mask]
-        sp_interp = sp_interp[keep_mask]
+        src_keep_mask = build_valid_mask(wn_cut, bad_bands)
+        wn_cut = wn_cut[src_keep_mask]
+        sp_cut = sp_cut[src_keep_mask]
+
+        target_keep_mask = build_valid_mask(wn_ref, bad_bands)
+        wn_ref = wn_ref[target_keep_mask]
+
+    if wn_cut.size < 10 or wn_ref.size == 0:
+        return None, None
+
+    sp_interp = np.interp(wn_ref, wn_cut, sp_cut)
 
     return wn_ref, sp_interp
 
