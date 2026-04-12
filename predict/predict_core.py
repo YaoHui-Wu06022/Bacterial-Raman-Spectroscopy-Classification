@@ -3,15 +3,11 @@
 import os
 import json
 import torch
+import torch.nn.functional as F
 
 from raman.config_io import load_experiment
 from raman.data import InputPreprocessor
 from raman.model import RamanClassifier1D
-from raman.prototype import (
-    compute_fused_probs,
-    load_prototype_bundle,
-    resolve_prototype_path,
-)
 from raman.training import mask_logits_by_parent
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -52,7 +48,6 @@ def _load_hierarchy_meta(exp_dir):
     meta["parent_to_children"] = parent_to_children
     meta["parent_models"] = parent_models
     meta["level_models"] = meta.get("level_models", {})
-    meta["level_prototypes"] = meta.get("level_prototypes", {})
     return meta
 
 
@@ -139,17 +134,11 @@ def load_predictor(exp_dir, device, predict_level=None):
         state = torch.load(model_path, map_location=device)
         model.load_state_dict(state)
         model.eval()
-        prototype_bundle = load_prototype_bundle(
-            resolve_prototype_path(model_path),
-            device,
-        )
-
         preprocessor = InputPreprocessor(config, device)
 
         return {
             "mode": "single",
             "model": model,
-            "prototype_bundle": prototype_bundle,
             "class_names": class_names,
             "device": device,
             "preprocessor": preprocessor,
@@ -161,7 +150,6 @@ def load_predictor(exp_dir, device, predict_level=None):
     parent_to_children = meta.get("parent_to_children", {})
     parent_models = meta.get("parent_models", {})
     level_models_meta = meta.get("level_models", {})
-    level_prototypes_meta = meta.get("level_prototypes", {})
 
     if predict_level is None:
         predict_level = (
@@ -188,26 +176,17 @@ def load_predictor(exp_dir, device, predict_level=None):
             parent_models = inferred
 
     level_model_paths = {}
-    level_prototype_paths = {}
     for level in level_order:
         model_name = level_models_meta.get(level, f"{level}_model.pt")
         level_model_paths[level] = os.path.join(exp_dir, model_name)
-        prototype_name = level_prototypes_meta.get(level)
-        level_prototype_paths[level] = resolve_prototype_path(
-            level_model_paths[level],
-            os.path.join(exp_dir, prototype_name) if prototype_name else None,
-        )
 
     preprocessor = InputPreprocessor(config, device)
 
     return {
         "mode": "cascade",
         "level_model_paths": level_model_paths,
-        "level_prototype_paths": level_prototype_paths,
         "level_model_cache": {},
-        "level_prototype_cache": {},
         "parent_model_cache": {},
-        "parent_prototype_cache": {},
         "class_names_by_level": class_names_by_level,
         "parent_to_children": parent_to_children,
         "parent_models": parent_models,
@@ -255,6 +234,11 @@ def _resolve_allowed_indices(class_names, allowed):
     return sorted(set(indices))
 
 
+def _compute_probs(logits):
+    """将单头分类 logits 转成概率。"""
+    return F.softmax(logits, dim=1)
+
+
 def predict_one(path, predictor, top_k=3, parent_mask=None):
     """
     对单个 .arc_data 文件进行预测
@@ -264,16 +248,10 @@ def predict_one(path, predictor, top_k=3, parent_mask=None):
 
     if predictor.get("mode") == "single":
         model = predictor["model"]
-        prototype_bundle = predictor.get("prototype_bundle")
         class_names = predictor["class_names"]
         with torch.no_grad():
-            logits, feat = model(x, return_feat=True)
-            probs = compute_fused_probs(
-                logits,
-                feat,
-                prototype_bundle,
-                predictor["config"],
-            ).cpu().numpy().reshape(-1)
+            logits = model(x)
+            probs = _compute_probs(logits).cpu().numpy().reshape(-1)
         idx = probs.argsort()[::-1][:top_k]
         return [
             {
@@ -284,11 +262,8 @@ def predict_one(path, predictor, top_k=3, parent_mask=None):
         ]
 
     level_model_paths = predictor["level_model_paths"]
-    level_prototype_paths = predictor["level_prototype_paths"]
     level_model_cache = predictor["level_model_cache"]
-    level_prototype_cache = predictor["level_prototype_cache"]
     parent_model_cache = predictor["parent_model_cache"]
-    parent_prototype_cache = predictor["parent_prototype_cache"]
     class_names_by_level = predictor["class_names_by_level"]
     parent_to_children = predictor["parent_to_children"]
     parent_models = predictor["parent_models"]
@@ -323,13 +298,6 @@ def predict_one(path, predictor, top_k=3, parent_mask=None):
         level_model_cache[level] = model
         return model
 
-    def get_level_prototype(level):
-        if level in level_prototype_cache:
-            return level_prototype_cache[level]
-        bundle = load_prototype_bundle(level_prototype_paths.get(level), device)
-        level_prototype_cache[level] = bundle
-        return bundle
-
     def get_parent_model(level, parent_idx, child_ids, model_path):
         key = (level, parent_idx)
         if key in parent_model_cache:
@@ -355,35 +323,10 @@ def predict_one(path, predictor, top_k=3, parent_mask=None):
         parent_model_cache[key] = model
         return model
 
-    def get_parent_prototype(level, parent_idx, model_path, entry):
-        key = (level, parent_idx)
-        if key in parent_prototype_cache:
-            return parent_prototype_cache[key]
-
-        prototype_name = entry.get("prototype_path")
-        full_path = None
-        if prototype_name:
-            full_path = prototype_name
-            if not os.path.isabs(full_path):
-                full_path = os.path.join(exp_dir, full_path)
-        else:
-            full_path = resolve_prototype_path(
-                model_path if os.path.isabs(model_path) else os.path.join(exp_dir, model_path)
-            )
-
-        bundle = load_prototype_bundle(full_path, device)
-        parent_prototype_cache[key] = bundle
-        return bundle
-
-    def forward_level(model, prototype_bundle):
-        logits, feat = model(x, return_feat=True)
-        probs = compute_fused_probs(
-            logits,
-            feat,
-            prototype_bundle,
-            config,
-        )
-        return logits, feat, probs
+    def forward_level(model):
+        logits = model(x)
+        probs = _compute_probs(logits)
+        return logits, probs
 
     parent_pred = None
     probs_at_target = None
@@ -395,10 +338,7 @@ def predict_one(path, predictor, top_k=3, parent_mask=None):
     with torch.no_grad():
         for level in level_order:
             if parent_pred is None:
-                logits, feat, probs = forward_level(
-                    get_level_model(level),
-                    get_level_prototype(level),
-                )
+                logits, probs = forward_level(get_level_model(level))
                 last_probs = probs
                 last_class_names = class_names_by_level.get(level, [])
 
@@ -408,12 +348,7 @@ def predict_one(path, predictor, top_k=3, parent_mask=None):
                         parent_mask[level]
                     )
                     logits, valid = _mask_logits_by_allowed(logits, allowed_global)
-                    probs = compute_fused_probs(
-                        logits,
-                        feat,
-                        get_level_prototype(level),
-                        config,
-                    )
+                    probs = _compute_probs(logits)
                     if valid is not None and not valid.any():
                         if last_probs is not None and last_class_names:
                             probs_at_target = last_probs
@@ -458,9 +393,8 @@ def predict_one(path, predictor, top_k=3, parent_mask=None):
                         break
                     return [{"label": "unknown", "prob": 0.0}]
 
-                logits, feat, probs = forward_level(
-                    get_parent_model(level, parent_idx, child_ids, model_path),
-                    get_parent_prototype(level, parent_idx, model_path, entry),
+                logits, probs = forward_level(
+                    get_parent_model(level, parent_idx, child_ids, model_path)
                 )
                 last_probs = probs
                 last_class_names = [
@@ -474,12 +408,7 @@ def predict_one(path, predictor, top_k=3, parent_mask=None):
                     )
                     allowed_local = [i for i, cid in enumerate(child_ids) if cid in allowed_global]
                     logits, valid = _mask_logits_by_allowed(logits, allowed_local)
-                    probs = compute_fused_probs(
-                        logits,
-                        feat,
-                        get_parent_prototype(level, parent_idx, model_path, entry),
-                        config,
-                    )
+                    probs = _compute_probs(logits)
                     if valid is not None and not valid.any():
                         if last_probs is not None and last_class_names:
                             probs_at_target = last_probs
@@ -500,22 +429,14 @@ def predict_one(path, predictor, top_k=3, parent_mask=None):
                 parent_pred = torch.tensor([pred_global], device=device)
                 continue
 
-            logits, feat, probs = forward_level(
-                get_level_model(level),
-                get_level_prototype(level),
-            )
+            logits, probs = forward_level(get_level_model(level))
             last_probs = probs
             last_class_names = class_names_by_level.get(level, [])
             if parent_pred is not None and level in parent_to_children:
                 logits, valid_parent = mask_logits_by_parent(
-                    logits, parent_pred, parent_to_children[level]
+                        logits, parent_pred, parent_to_children[level]
                 )
-                probs = compute_fused_probs(
-                    logits,
-                    feat,
-                    get_level_prototype(level),
-                    config,
-                )
+                probs = _compute_probs(logits)
                 if not valid_parent.any():
                     if last_probs is not None and last_class_names:
                         probs_at_target = last_probs
@@ -529,12 +450,7 @@ def predict_one(path, predictor, top_k=3, parent_mask=None):
                     parent_mask[level]
                 )
                 logits, valid = _mask_logits_by_allowed(logits, allowed_global)
-                probs = compute_fused_probs(
-                    logits,
-                    feat,
-                    get_level_prototype(level),
-                    config,
-                )
+                probs = _compute_probs(logits)
                 if valid is not None and not valid.any():
                     if last_probs is not None and last_class_names:
                         probs_at_target = last_probs

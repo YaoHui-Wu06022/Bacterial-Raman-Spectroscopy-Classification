@@ -563,46 +563,30 @@ def build_pre_d1_source(signal, config, sg_smooth, sg_d1):
 def build_input_channels(
     signal,
     config,
-    sg_smooth,
-    sg_d1,
     smooth_signal=None,
     raw_signal=None,
     d1_signal=None,
 ):
     """
-    从标准化后的单通道信号构造模型实际输入通道。
+    将已经准备好的各支路信号按配置堆叠成模型最终输入通道。
     """
     base = signal[0, 0]
     channels = [base]
 
     if config.smooth_use:
-        smooth = (
-            F.conv1d(
-                signal,
-                sg_smooth,
-                padding=config.win_smooth // 2,
-            )[0, 0]
-            if smooth_signal is None
-            else smooth_signal[0, 0]
-        )
-        channels.append(smooth)
+        if smooth_signal is None:
+            raise ValueError("smooth_use=True 时必须显式传入 smooth_signal。")
+        channels.append(smooth_signal[0, 0])
 
     if getattr(config, "raw_use", False):
         if raw_signal is None:
-            raise ValueError("raw_use=True 时必须提供 raw_signal。")
+            raise ValueError("raw_use=True 时必须显式传入 raw_signal。")
         channels.append(raw_signal[0, 0])
 
     if config.d1_use:
-        d1 = (
-            F.conv1d(
-                signal,
-                sg_d1,
-                padding=config.win1 // 2,
-            )[0, 0]
-            if d1_signal is None
-            else d1_signal[0, 0]
-        )
-        channels.append(d1)
+        if d1_signal is None:
+            raise ValueError("d1_use=True 时必须显式传入 d1_signal。")
+        channels.append(d1_signal[0, 0])
 
     if len(channels) != config.in_channels:
         raise ValueError(
@@ -611,7 +595,6 @@ def build_input_channels(
         )
 
     return torch.stack(channels, dim=0)
-
 
 def build_model_input(
     raw_intensity,
@@ -626,7 +609,7 @@ def build_model_input(
     """
     x = np.asarray(raw_intensity, dtype=np.float32)
 
-    if augment and (not config.input_is_norm):
+    if augment:
         x = augment_raw_spectrum(x, config)
     else:
         x = x.copy()
@@ -653,12 +636,11 @@ def build_model_input(
         )
         d1_x = build_pre_d1_source(d1_source, config, sg_smooth, sg_d1)
 
-    if not config.input_is_norm:
-        x = normalize_spectrum(x, config.norm_method)
-        if smooth_x is not None:
-            smooth_x = normalize_spectrum(smooth_x, config.norm_method)
-        if d1_x is not None:
-            d1_x = normalize_spectrum(d1_x, config.norm_method)
+    x = normalize_spectrum(x, config.norm_method)
+    if smooth_x is not None:
+        smooth_x = normalize_spectrum(smooth_x, config.norm_method)
+    if d1_x is not None:
+        d1_x = normalize_spectrum(d1_x, config.norm_method)
 
     if augment:
         x = augment_norm_spectrum(x, config)
@@ -673,8 +655,6 @@ def build_model_input(
     return build_input_channels(
         signal,
         config,
-        sg_smooth,
-        sg_d1,
         smooth_signal=smooth_signal,
         raw_signal=raw_signal,
         d1_signal=d1_signal,

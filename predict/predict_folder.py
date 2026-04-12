@@ -100,7 +100,7 @@ def predict_folder(folder_path, output_dir, predictor, top_k=3, parent_mask=None
 if __name__ == "__main__":
 
     # 指定实验输出目录（必须包含 config_.yaml + *_model.pt）
-    EXP_DIR = resolve_path("output/细菌/20260408_115130")
+    EXP_DIR = resolve_path("output/细菌/20260412_143849")
     # 手动设置预测层级（None 则使用 config）
     PREDICT_LEVEL = "level_1"
 

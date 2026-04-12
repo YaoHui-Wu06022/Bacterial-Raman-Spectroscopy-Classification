@@ -31,7 +31,7 @@ NORM_METHOD = "snv"
 PCA_ENABLED = True
 PCA_COMPONENTS = 50
 PCA_CENTER = True
-PCA_OUTLIER_RATIO = 0.02
+PCA_OUTLIER_RATIO = 0.03
 
 
 @dataclass(frozen=True)

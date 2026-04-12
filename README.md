@@ -180,16 +180,70 @@ python -m dataset_process preprocess-train 细菌
 5. 只对保留的统一目标波数轴做线性插值，不跨坏段补点
 6. 对同一分组样本按 PCA 重构误差做异常值过滤
 
-补充说明：
+如果某个分组预处理后样本数少于 `min_samples_per_class`，该分组会跳过
 
-- 如果某个分组预处理后样本数少于 `min_samples_per_class`，该分组会跳过
-- 被 PCA 剔除的样本会记录到 `log.txt`
-- 当前默认 `cut_min=600`、`cut_max=1800`、`target_points=896`，最终写入 `dataset_train/` 的每条谱长度为 `851`
+被 PCA 剔除的样本会记录到 `log.txt`
+
+当前默认 `cut_min=600`、`cut_max=1800`、`target_points=896`，最终写入 `dataset_train/` 的每条谱长度为 `851`
 
 输出：
 
 - 清洗后光谱写入 `dataset_train/`
 - 每个分组的均值谱图写入 `dataset_train_fig/`
+
+#### AsLS 基线校正原理
+
+AsLS（Asymmetric Least Squares，非对称最小二乘）是一种通过“加权平滑 + 非对称惩罚”来估计光谱基线的方法：
+
+- 用二阶差分约束基线的“平滑性”
+- 用非对称权重抑制峰值对基线拟合的影响（峰值被当作“异常点”处理）
+- 通过迭代更新权重，使基线逐步贴合“背景”而避开“信号峰”
+
+目标是估计基线$z$
+
+优化问题为：
+$$
+\min_{z} \sum_{i=1}^{n} w_i (y_i - z_i)^2  +  \lambda \sum_{i=1}^{n-2} (z_{i+2} - 2z_{i+1} + z_i)^2
+$$
+矩阵形式为：
+$$
+\min_{z}  (y - z)^T W (y - z) + \lambda z^T D^T D z
+$$
+其中：
+
+- $W = \mathrm{diag}(w_1, w_2, \dots, w_n)$：权重矩阵
+
+  权重 $w_i$ 根据残差动态更新
+  $$
+  w_i =
+  \begin{cases}
+  p, & y_i > z_i \\
+  1 - p, & y_i \le z_i
+  \end{cases}
+  $$
+  $y_i > z_i$（可能是峰） → 权重小 → 不强制拟合；$y_i \le z_i$（基线区域） → 权重大 → 强制贴合 
+
+- $D$：二阶差分矩阵
+  $$
+  D =
+  \begin{bmatrix}
+  1 & -2 & 1 & 0 & \cdots \\
+  0 & 1 & -2 & 1 & \cdots \\
+  \vdots & & & & \ddots
+  \end{bmatrix}
+  $$
+  二阶差分矩阵是用于惩罚基线的“弯曲度”，保证基线平滑
+
+- $\lambda$：平滑参数（控制基线光滑程度）
+
+对目标函数求导(对$z$求导)可得：
+$$
+(W + \lambda D^T D) z = W y
+$$
+每次迭代：
+
+1. 解线性方程
+2. 更新权重 $w_i$
 
 ### 3.7 阶段 5：测试集离线清洗
 
@@ -296,6 +350,78 @@ python -m dataset_process count 细菌 --subdir dataset_train_raw
 ```text
 [B, C, L]
 ```
+
+#### SG平滑
+
+SG（Savitzky–Golay）平滑本质是：在滑动窗口内做局部多项式最小二乘拟合，再用拟合多项式在中心点的值替代原始值
+
+在每个位置 $i$，取一个窗口$[i-m, \dots, i, \dots, i+m]$
+
+在这个窗口内，用一个低阶多项式去拟合数据：
+$$
+y(i + k) \approx a_0 + a_1 k + a_2 k^2 + \cdots + a_d k^d
+$$
+其中：
+
+- $i$：当前中心点
+- $k$：相对偏移（offset），$k \in [-m, m]$
+- $d$：多项式阶数
+
+在窗口内求解：
+$$
+\min_{a_0, \dots, a_d} \sum_{k=-m}^{m} \left( y(i+k) - \sum_{j=0}^{d} a_j k^j \right)^2
+$$
+进一步地，将窗口内数据写成向量形式：
+
+$$
+\mathbf y_i =
+\begin{bmatrix}
+y(i-m) \\
+y(i-m+1) \\
+\vdots \\
+y(i+m)
+\end{bmatrix}
+$$
+
+构造多项式拟合的设计矩阵：
+
+$$
+X =
+\begin{bmatrix}
+1 & (-m) & (-m)^2 & \cdots & (-m)^d \\
+1 & (-m+1) & (-m+1)^2 & \cdots & (-m+1)^d \\
+\vdots & \vdots & \vdots & & \vdots \\
+1 & m & m^2 & \cdots & m^d
+\end{bmatrix}
+$$
+
+则局部最小二乘问题可写为：
+
+$$
+\min_{\mathbf a} \|\mathbf y_i - X\mathbf a\|_2^2
+$$
+
+对$a$求导，其解析解为：
+
+$$
+\hat{\mathbf a} = (X^T X)^{-1} X^T \mathbf y_i
+$$
+
+由于平滑后的输出为中心点 $k=0$ 处的函数值，其实只需要关注$a_0$
+
+对于$a_0$代换一下
+$$
+\mathbf{c}=\left[\begin{array}{llll}
+1 & 0 & \cdots & 0
+\end{array}\right]\left(X^{T} X\right)^{-1} X^{T}
+$$
+所以：
+$$
+\hat{y}(i) = \sum_{k=-m}^{m} c_k \, y(i+k)
+$$
+$c_k$只和$X$有关，$X$是根据窗口大小和阶数写死的，所以 $c_k$ 仅由窗口大小 $2m+1$ 和多项式阶数 $d$ 决定
+
+因此，SG 平滑可等价表示为一个固定卷积核的线性滤波过程
 
 ### 训练集、验证集、测试集
 

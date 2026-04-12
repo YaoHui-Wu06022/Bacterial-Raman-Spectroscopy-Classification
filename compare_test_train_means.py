@@ -1,241 +1,382 @@
+from __future__ import annotations
+
+from collections import Counter
 from pathlib import Path
 import csv
+import json
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
+import torch.nn.functional as F
 
-from raman.analysis.core import build_wavenumber_axis
-from raman.config_io import load_experiment
-
-
-# 手动设置实验目录
-EXP_DIR = "output/细菌/20260408_115130"
-
-
-def load_processed_spectrum(path):
-    """读取预处理后的 .arc_data 强度列。"""
-    arr = np.loadtxt(path, comments="#")
-    if arr.ndim == 1:
-        arr = arr.reshape(1, -1)
-    return arr[:, 1].astype(np.float32)
+from raman.data import InputPreprocessor, RamanDataset
+from raman.eval.experiment import load_experiment_with_train_dataset, resolve_head_level_name
+from raman.model import RamanClassifier1D
+from raman.training import load_split_files
 
 
-def snv(x):
-    """单条光谱做 SNV，和模型默认输入视角保持一致。"""
-    mean = float(np.mean(x))
-    std = float(np.std(x))
-    if std < 1e-8:
-        return x - mean
-    return (x - mean) / std
+# 手动设置实验目录；None 时使用 config.current_train_level
+EXP_DIR = "output/细菌/20260412_113319"
+COMPARE_LEVEL = "level_1"
+TOP_K = 3
 
 
-def mean_of_spectra(paths, use_snv=False):
-    """对一组光谱求均值谱。"""
-    spectra = []
-    for path in paths:
-        x = load_processed_spectrum(path)
-        if use_snv:
-            x = snv(x)
-        spectra.append(x)
-    if not spectra:
-        raise RuntimeError("No spectra found.")
-    return np.mean(np.stack(spectra, axis=0), axis=0)
+def _load_hierarchy_meta(exp_dir: Path) -> dict:
+    meta_path = exp_dir / "hierarchy_meta.json"
+    if not meta_path.exists():
+        return {}
+    with open(meta_path, "r", encoding="utf-8") as file:
+        return json.load(file)
 
 
-def minmax(x):
-    """用于原始均值谱展示的简单缩放。"""
-    x = np.asarray(x, dtype=np.float32)
-    lo = float(np.min(x))
-    hi = float(np.max(x))
-    if hi - lo < 1e-8:
-        return np.zeros_like(x)
-    return (x - lo) / (hi - lo)
+def _resolve_model_path(exp_dir: Path, compare_level: str) -> Path:
+    meta = _load_hierarchy_meta(exp_dir)
+    level_models = meta.get("level_models", {})
+    model_name = level_models.get(compare_level, f"{compare_level}_model.pt")
+    model_path = exp_dir / model_name
+    if not model_path.exists():
+        raise FileNotFoundError(f"Missing model for {compare_level}: {model_path}")
+    return model_path
 
 
-def cosine(a, b):
-    """计算余弦相似度。"""
-    da = float(np.linalg.norm(a))
-    db = float(np.linalg.norm(b))
-    if da < 1e-12 or db < 1e-12:
-        return float("nan")
-    return float(np.dot(a, b) / (da * db))
-
-
-def infer_expected_leaf(folder_name, leaf_labels):
-    """根据测试菌文件夹名后缀推断对应训练叶子类。"""
+def _normalize_suffix(folder_name: str) -> str:
     suffix = "".join(ch for ch in folder_name if not ch.isdigit())
     if suffix.startswith("CS"):
         suffix = suffix[2:]
-
-    matches = []
-    for leaf_label in leaf_labels:
-        leaf_name = leaf_label.split("/")[-1]
-        if suffix.endswith(leaf_name):
-            matches.append((leaf_name, leaf_label))
-
-    if not matches:
-        return None
-    matches.sort(key=lambda item: len(item[0]), reverse=True)
-    return matches[0][1]
+    return suffix
 
 
-def build_train_leaf_stats(train_root):
-    """为每个训练叶子类预先计算原始均值谱和 SNV 均值谱。"""
-    leaf_stats = {}
-    for path in sorted(train_root.rglob("*.arc_data")):
-        rel = path.relative_to(train_root)
-        parts = rel.parts[:-1]
-        if len(parts) < 2:
+def _build_leaf_lookup(dataset: RamanDataset, compare_level: str) -> list[tuple[str, str, str]]:
+    seen = set()
+    entries = []
+    for hier in dataset.hier_names:
+        leaf_label = hier.get("leaf")
+        if not leaf_label or leaf_label in seen:
             continue
-        label = f"{parts[0]}/{parts[-1]}"
-        leaf_stats.setdefault(label, []).append(path)
-
-    out = {}
-    for label, paths in sorted(leaf_stats.items()):
-        out[label] = {
-            "count": len(paths),
-            "paths": paths,
-            "mean_raw": mean_of_spectra(paths, use_snv=False),
-            "mean_snv": mean_of_spectra(paths, use_snv=True),
-        }
-    return out
+        seen.add(leaf_label)
+        leaf_name = leaf_label.split("/")[-1]
+        compare_label = hier.get(compare_level) or leaf_label
+        entries.append((leaf_name, leaf_label, compare_label))
+    entries.sort(key=lambda item: len(item[0]), reverse=True)
+    return entries
 
 
-def collect_test_folder_stats(test_root):
-    """收集每个测试菌文件夹下的样本。"""
+def _infer_expected_labels(folder_name: str, leaf_lookup: list[tuple[str, str, str]]) -> tuple[str | None, str | None]:
+    suffix = _normalize_suffix(folder_name)
+    for leaf_name, leaf_label, compare_label in leaf_lookup:
+        if suffix.endswith(leaf_name):
+            return leaf_label, compare_label
+    return None, None
+
+
+def _iter_test_folders(test_root: Path) -> dict[str, list[Path]]:
     folders = {}
-    for folder in sorted([p for p in test_root.iterdir() if p.is_dir()]):
+    for folder in sorted(path for path in test_root.iterdir() if path.is_dir()):
         paths = sorted(folder.rglob("*.arc_data"))
         if paths:
             folders[folder.name] = paths
     return folders
 
 
-def plot_compare(
-    save_path,
-    folder_name,
-    expected_label,
-    nearest_label,
-    test_mean_raw,
-    test_mean_snv,
-    expected_mean_raw,
-    expected_mean_snv,
-    nearest_mean_raw,
-    nearest_mean_snv,
-    wavenumbers,
-    scores,
+def _l2_normalize_rows(x: torch.Tensor) -> torch.Tensor:
+    return F.normalize(x, p=2, dim=1)
+
+
+def _topk_counter(counter: Counter, inv_label_map: dict[int, str], total: int, top_k: int) -> list[dict]:
+    items = []
+    for label_id, count in counter.most_common(top_k):
+        items.append(
+            {
+                "label": inv_label_map[int(label_id)],
+                "count": int(count),
+                "ratio": float(count / total) if total else 0.0,
+            }
+        )
+    return items
+
+
+def _counter_ratio(counter: Counter, label_id: int | None, total: int) -> float:
+    if label_id is None or total == 0:
+        return 0.0
+    return float(counter.get(int(label_id), 0) / total)
+
+
+def _nearest_wrong_neighbor(counter: Counter, expected_id: int | None, inv_label_map: dict[int, str]) -> tuple[str, float]:
+    total = sum(counter.values())
+    for label_id, count in counter.most_common():
+        if expected_id is None or int(label_id) != int(expected_id):
+            return inv_label_map[int(label_id)], float(count / total) if total else 0.0
+    return "", 0.0
+
+
+def _format_topk(items: list[dict]) -> str:
+    return json.dumps(items, ensure_ascii=False)
+
+
+def _plot_folder_summary(
+    save_path: Path,
+    folder_name: str,
+    expected_label: str | None,
+    model_items: list[dict],
+    neighbor_items: list[dict],
+    centroid_top1_label: str,
 ):
-    """画测试菌均值谱与训练类均值谱对比。"""
-    fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
 
-    axes[0].plot(wavenumbers, minmax(test_mean_raw), label=f"{folder_name} test", linewidth=2.0)
-    if expected_mean_raw is not None:
-        axes[0].plot(wavenumbers, minmax(expected_mean_raw), label=f"{expected_label} train", linewidth=1.8)
-    axes[0].plot(wavenumbers, minmax(nearest_mean_raw), label=f"{nearest_label} nearest", linewidth=1.8)
-    axes[0].set_ylabel("Min-Max Mean")
-    axes[0].set_title(
+    def plot_bar(ax, title, items):
+        labels = [item["label"] for item in items]
+        values = [item["count"] for item in items]
+        ax.bar(range(len(labels)), values, color="#4C78A8")
+        ax.set_title(title)
+        ax.set_xticks(range(len(labels)))
+        ax.set_xticklabels(labels, rotation=25, ha="right")
+        ax.grid(axis="y", alpha=0.25)
+        for i, item in enumerate(items):
+            ax.text(i, values[i], f'{item["count"]}\n{item["ratio"]:.2f}', ha="center", va="bottom", fontsize=9)
+
+    plot_bar(axes[0], "Model Vote Top-K", model_items)
+    plot_bar(axes[1], "Embedding Neighbor Vote Top-K", neighbor_items)
+
+    model_top1 = model_items[0]["label"] if model_items else ""
+    neighbor_top1 = neighbor_items[0]["label"] if neighbor_items else ""
+    fig.suptitle(
         f"{folder_name} | expected={expected_label or 'None'} | "
-        f"nearest={nearest_label} | "
-        f"expected_cos={scores.get('expected_cos')} | nearest_cos={scores.get('nearest_cos')}"
+        f"model_top1={model_top1} | neighbor_top1={neighbor_top1} | centroid_top1={centroid_top1_label}",
+        fontsize=13,
     )
-    axes[0].grid(alpha=0.25)
-    axes[0].legend(fontsize=9)
-
-    axes[1].plot(wavenumbers, test_mean_snv, label=f"{folder_name} test", linewidth=2.0)
-    if expected_mean_snv is not None:
-        axes[1].plot(wavenumbers, expected_mean_snv, label=f"{expected_label} train", linewidth=1.8)
-    axes[1].plot(wavenumbers, nearest_mean_snv, label=f"{nearest_label} nearest", linewidth=1.8)
-    axes[1].set_xlabel("Wavenumber")
-    axes[1].set_ylabel("SNV Mean")
-    axes[1].grid(alpha=0.25)
-    axes[1].legend(fontsize=9)
-
-    tick_count = 6
-    idx = np.linspace(0, len(wavenumbers) - 1, tick_count, dtype=int)
-    axes[1].set_xticks(wavenumbers[idx])
-    axes[1].set_xticklabels([f"{wavenumbers[i]:.0f}" for i in idx])
-
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
     plt.close(fig)
 
 
-def main():
-    exp_dir = Path(EXP_DIR)
-    config = load_experiment(str(exp_dir))
-    dataset_root = Path(config.dataset_root)
-    train_root = dataset_root / "dataset_train"
-    test_root = dataset_root / "dataset_test"
+def _build_train_embedding_bank(
+    dataset: RamanDataset,
+    model: RamanClassifier1D,
+    compare_level: str,
+    train_indices: np.ndarray,
+    device: torch.device,
+    batch_size: int = 64,
+):
+    level_idx = dataset.head_name_to_idx[compare_level]
+    feats_list = []
+    labels_list = []
+    paths_list = []
 
-    out_dir = exp_dir / "test_train_mean_compare"
+    with torch.no_grad():
+        for start in range(0, len(train_indices), batch_size):
+            batch_indices = train_indices[start : start + batch_size]
+            valid_indices = [int(i) for i in batch_indices if int(dataset.level_labels[int(i), level_idx]) >= 0]
+            if not valid_indices:
+                continue
+
+            xs = torch.stack([dataset[int(i)][0] for i in valid_indices], dim=0).to(device)
+            _, feat = model(xs, return_feat=True)
+            feat = _l2_normalize_rows(feat).cpu()
+
+            feats_list.append(feat)
+            labels_list.append(dataset.level_labels[valid_indices, level_idx].astype(np.int64))
+            paths_list.extend(dataset.samples[valid_indices].tolist())
+
+    if not feats_list:
+        raise RuntimeError("No training embeddings were collected.")
+
+    train_feats = torch.cat(feats_list, dim=0)
+    train_labels = np.concatenate(labels_list, axis=0)
+    return train_feats, train_labels, paths_list
+
+
+def _build_class_centroids(train_feats: torch.Tensor, train_labels: np.ndarray, num_classes: int) -> torch.Tensor:
+    feat_dim = train_feats.size(1)
+    centroids = torch.zeros((num_classes, feat_dim), dtype=torch.float32)
+    valid_mask = torch.zeros(num_classes, dtype=torch.bool)
+
+    for class_id in range(num_classes):
+        mask = train_labels == class_id
+        if not np.any(mask):
+            continue
+        center = train_feats[mask].mean(dim=0, keepdim=True)
+        centroids[class_id] = _l2_normalize_rows(center)[0]
+        valid_mask[class_id] = True
+
+    if not valid_mask.any():
+        raise RuntimeError("No valid class centroids were built.")
+    return centroids
+
+
+def _collect_folder_embeddings(
+    model: RamanClassifier1D,
+    preprocessor: InputPreprocessor,
+    paths: list[Path],
+    device: torch.device,
+):
+    feats = []
+    preds = []
+
+    with torch.no_grad():
+        for path in paths:
+            x = preprocessor(str(path))
+            logits, feat = model(x.to(device), return_feat=True)
+            probs = torch.softmax(logits, dim=1)[0]
+            preds.append(int(torch.argmax(probs).item()))
+            feats.append(_l2_normalize_rows(feat)[0].cpu())
+
+    folder_feats = torch.stack(feats, dim=0)
+    return folder_feats, preds
+
+
+def main():
+    exp_dir_str, config = load_experiment_with_train_dataset(EXP_DIR)
+    exp_dir = Path(exp_dir_str)
+    dataset_train_root = Path(config.dataset_root)
+    dataset_test_root = dataset_train_root.parent / "dataset_test"
+
+    device = torch.device("cuda" if getattr(config, "use_gpu", False) and torch.cuda.is_available() else "cpu")
+    full_dataset = RamanDataset(dataset_train_root, augment=False, config=config)
+    compare_level = resolve_head_level_name(
+        full_dataset,
+        COMPARE_LEVEL,
+        getattr(config, "current_train_level", None) or "leaf",
+    )
+    level_idx = full_dataset.head_name_to_idx[compare_level]
+    inv_label_map = full_dataset.inv_label_maps_by_level[level_idx]
+    label_map = full_dataset.label_maps_by_level[level_idx]
+    num_classes = full_dataset.num_classes_by_level[compare_level]
+    meta = _load_hierarchy_meta(exp_dir)
+    train_class_names = meta.get("class_names_by_level", {}).get(compare_level)
+    if train_class_names:
+        current_class_names = full_dataset.class_names_by_level[level_idx]
+        if list(train_class_names) != list(current_class_names):
+            raise ValueError(
+                f"{compare_level} 的实验类别顺序与当前 dataset_train 不一致，"
+                "请确认当前数据目录与实验目录来自同一版数据。"
+            )
+
+    model_path = _resolve_model_path(exp_dir, compare_level)
+    model = RamanClassifier1D(num_classes=num_classes, config=config).to(device)
+    state = torch.load(model_path, map_location=device)
+    model.load_state_dict(state)
+    model.eval()
+
+    split = load_split_files(full_dataset, str(exp_dir))
+    if split is None:
+        train_indices = np.arange(len(full_dataset), dtype=np.int64)
+    else:
+        train_indices, _ = split
+
+    train_feats, train_labels, _ = _build_train_embedding_bank(
+        full_dataset,
+        model,
+        compare_level,
+        train_indices,
+        device,
+    )
+    class_centroids = _build_class_centroids(train_feats, train_labels, num_classes)
+    train_feats_t = train_feats.t().contiguous()
+
+    preprocessor = InputPreprocessor(config, device)
+    test_folders = _iter_test_folders(dataset_test_root)
+    leaf_lookup = _build_leaf_lookup(full_dataset, compare_level)
+
+    out_dir = exp_dir / "test_train_embedding_compare"
     out_dir.mkdir(parents=True, exist_ok=True)
     summary_path = out_dir / "summary.csv"
 
-    train_leaf_stats = build_train_leaf_stats(train_root)
-    test_folders = collect_test_folder_stats(test_root)
-    leaf_labels = sorted(train_leaf_stats.keys())
-
-    first_train = next(iter(train_leaf_stats.values()))
-    wavenumbers = build_wavenumber_axis(len(first_train["mean_raw"]), config)
-
     rows = []
     for folder_name, paths in test_folders.items():
-        test_mean_raw = mean_of_spectra(paths, use_snv=False)
-        test_mean_snv = mean_of_spectra(paths, use_snv=True)
+        expected_leaf_label, expected_label = _infer_expected_labels(folder_name, leaf_lookup)
+        expected_id = label_map.get(expected_label) if expected_label is not None else None
 
-        expected_label = infer_expected_leaf(folder_name, leaf_labels)
-        scores = []
-        for label, stats in train_leaf_stats.items():
-            score = cosine(test_mean_snv, stats["mean_snv"])
-            scores.append((label, score))
-        scores.sort(key=lambda item: item[1], reverse=True)
+        folder_feats, model_preds = _collect_folder_embeddings(model, preprocessor, paths, device)
+        similarity = torch.matmul(folder_feats, train_feats_t)
+        nearest_indices = torch.argmax(similarity, dim=1).cpu().numpy()
+        neighbor_preds = train_labels[nearest_indices].astype(np.int64)
 
-        if expected_label is not None:
-            nearest_wrong = next(label for label, _ in scores if label != expected_label)
-            expected_cos = next(score for label, score in scores if label == expected_label)
-            nearest_cos = next(score for label, score in scores if label == nearest_wrong)
+        model_counter = Counter(int(pred) for pred in model_preds)
+        neighbor_counter = Counter(int(pred) for pred in neighbor_preds.tolist())
+        n_test = len(paths)
+
+        model_items = _topk_counter(model_counter, inv_label_map, n_test, TOP_K)
+        neighbor_items = _topk_counter(neighbor_counter, inv_label_map, n_test, TOP_K)
+
+        folder_centroid = _l2_normalize_rows(folder_feats.mean(dim=0, keepdim=True))[0]
+        centroid_scores = torch.matmul(class_centroids, folder_centroid)
+        centroid_topk_idx = torch.argsort(centroid_scores, descending=True)[:TOP_K].cpu().numpy().tolist()
+        centroid_items = [
+            {
+                "label": inv_label_map[int(class_id)],
+                "score": float(centroid_scores[int(class_id)].item()),
+            }
+            for class_id in centroid_topk_idx
+        ]
+        centroid_top1_id = int(centroid_topk_idx[0])
+        centroid_top1_label = inv_label_map[centroid_top1_id]
+        centroid_top1_cos = float(centroid_scores[centroid_top1_id].item())
+        expected_centroid_cos = float(centroid_scores[int(expected_id)].item()) if expected_id is not None else None
+
+        nearest_wrong_centroid_label = ""
+        nearest_wrong_centroid_cos = None
+        if expected_id is None:
+            nearest_wrong_centroid_label = centroid_top1_label
+            nearest_wrong_centroid_cos = centroid_top1_cos
         else:
-            nearest_wrong = scores[0][0]
-            expected_cos = None
-            nearest_cos = scores[0][1]
+            for class_id in centroid_topk_idx:
+                if int(class_id) != int(expected_id):
+                    nearest_wrong_centroid_label = inv_label_map[int(class_id)]
+                    nearest_wrong_centroid_cos = float(centroid_scores[int(class_id)].item())
+                    break
 
-        expected_stats = train_leaf_stats.get(expected_label)
-        nearest_stats = train_leaf_stats[nearest_wrong]
+        nearest_wrong_neighbor_label, nearest_wrong_neighbor_ratio = _nearest_wrong_neighbor(
+            neighbor_counter,
+            expected_id,
+            inv_label_map,
+        )
 
-        plot_path = out_dir / f"{folder_name}.png"
-        plot_compare(
-            save_path=plot_path,
-            folder_name=folder_name,
-            expected_label=expected_label,
-            nearest_label=nearest_wrong,
-            test_mean_raw=test_mean_raw,
-            test_mean_snv=test_mean_snv,
-            expected_mean_raw=None if expected_stats is None else expected_stats["mean_raw"],
-            expected_mean_snv=None if expected_stats is None else expected_stats["mean_snv"],
-            nearest_mean_raw=nearest_stats["mean_raw"],
-            nearest_mean_snv=nearest_stats["mean_snv"],
-            wavenumbers=wavenumbers,
-            scores={
-                "expected_cos": None if expected_cos is None else f"{expected_cos:.4f}",
-                "nearest_cos": f"{nearest_cos:.4f}",
-            },
+        model_top1_label = model_items[0]["label"] if model_items else ""
+        model_top1_count = model_items[0]["count"] if model_items else 0
+        model_top1_ratio = model_items[0]["ratio"] if model_items else 0.0
+        neighbor_top1_label = neighbor_items[0]["label"] if neighbor_items else ""
+        neighbor_top1_count = neighbor_items[0]["count"] if neighbor_items else 0
+        neighbor_top1_ratio = neighbor_items[0]["ratio"] if neighbor_items else 0.0
+
+        _plot_folder_summary(
+            out_dir / f"{folder_name}.png",
+            folder_name,
+            expected_label,
+            model_items,
+            neighbor_items,
+            centroid_top1_label,
         )
 
         rows.append(
             {
                 "folder": folder_name,
+                "expected_leaf_label": expected_leaf_label or "",
                 "expected_label": expected_label or "",
-                "nearest_wrong_label": nearest_wrong,
-                "expected_cos": "" if expected_cos is None else f"{expected_cos:.6f}",
-                "nearest_wrong_cos": f"{nearest_cos:.6f}",
-                "margin_expected_minus_wrong": (
-                    "" if expected_cos is None else f"{(expected_cos - nearest_cos):.6f}"
+                "model_top1_label": model_top1_label,
+                "model_top1_count": model_top1_count,
+                "model_top1_ratio": f"{model_top1_ratio:.6f}",
+                "neighbor_top1_label": neighbor_top1_label,
+                "neighbor_top1_count": neighbor_top1_count,
+                "neighbor_top1_ratio": f"{neighbor_top1_ratio:.6f}",
+                "expected_model_ratio": f"{_counter_ratio(model_counter, expected_id, n_test):.6f}",
+                "expected_neighbor_ratio": f"{_counter_ratio(neighbor_counter, expected_id, n_test):.6f}",
+                "nearest_wrong_neighbor_label": nearest_wrong_neighbor_label,
+                "nearest_wrong_neighbor_ratio": f"{nearest_wrong_neighbor_ratio:.6f}",
+                "centroid_top1_label": centroid_top1_label,
+                "centroid_top1_cos": f"{centroid_top1_cos:.6f}",
+                "expected_centroid_cos": "" if expected_centroid_cos is None else f"{expected_centroid_cos:.6f}",
+                "nearest_wrong_centroid_label": nearest_wrong_centroid_label,
+                "nearest_wrong_centroid_cos": "" if nearest_wrong_centroid_cos is None else f"{nearest_wrong_centroid_cos:.6f}",
+                "centroid_margin_expected_minus_wrong": (
+                    ""
+                    if expected_centroid_cos is None or nearest_wrong_centroid_cos is None
+                    else f"{(expected_centroid_cos - nearest_wrong_centroid_cos):.6f}"
                 ),
-                "top1_label": scores[0][0],
-                "top1_cos": f"{scores[0][1]:.6f}",
-                "top2_label": scores[1][0],
-                "top2_cos": f"{scores[1][1]:.6f}",
-                "n_test_spectra": len(paths),
+                "model_topk": _format_topk(model_items),
+                "neighbor_topk": _format_topk(neighbor_items),
+                "centroid_topk": json.dumps(centroid_items, ensure_ascii=False),
+                "n_test_spectra": n_test,
             }
         )
 
@@ -244,23 +385,34 @@ def main():
             file,
             fieldnames=[
                 "folder",
+                "expected_leaf_label",
                 "expected_label",
-                "nearest_wrong_label",
-                "expected_cos",
-                "nearest_wrong_cos",
-                "margin_expected_minus_wrong",
-                "top1_label",
-                "top1_cos",
-                "top2_label",
-                "top2_cos",
+                "model_top1_label",
+                "model_top1_count",
+                "model_top1_ratio",
+                "neighbor_top1_label",
+                "neighbor_top1_count",
+                "neighbor_top1_ratio",
+                "expected_model_ratio",
+                "expected_neighbor_ratio",
+                "nearest_wrong_neighbor_label",
+                "nearest_wrong_neighbor_ratio",
+                "centroid_top1_label",
+                "centroid_top1_cos",
+                "expected_centroid_cos",
+                "nearest_wrong_centroid_label",
+                "nearest_wrong_centroid_cos",
+                "centroid_margin_expected_minus_wrong",
+                "model_topk",
+                "neighbor_topk",
+                "centroid_topk",
                 "n_test_spectra",
             ],
         )
         writer.writeheader()
         writer.writerows(rows)
 
-    print(f"Saved plots to: {out_dir}")
-    print(f"Saved summary to: {summary_path}")
+    print("Embedding compare saved to:", out_dir)
 
 
 if __name__ == "__main__":

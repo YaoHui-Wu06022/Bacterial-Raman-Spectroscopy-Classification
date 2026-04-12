@@ -66,7 +66,6 @@ class Config:
     early_stop_w_acc = 0.4
 
     # 模型参数
-    input_is_norm = False  # 输入数据是否已经标准化过
     norm_method = "snv"  # 选择标准化方式 snv/l2/minmax
 
     # 输入通道
@@ -145,15 +144,8 @@ class Config:
     # cosine_head:
     # - True : 余弦分类头
     # - False: 线性分类头
-    cosine_head = False
+    cosine_head = True
     cosine_scale = 25
-    # prototype_fusion_mode:
-    # - "classifier": 只用分类头
-    # - "prototype": 只用 prototype 相似度
-    # - "fusion": 融合两路概率
-    prototype_fusion_mode = "fusion"
-    prototype_fusion_weight = 0.35
-    prototype_similarity_scale = 20.0
 
     # ResNeXt 参数（仅在 cnn_block_type="resnext" 时生效）
     cardinality = 4
