@@ -17,7 +17,7 @@ from raman.training import load_split_files
 
 
 # 手动设置实验目录；None 时使用 config.current_train_level
-EXP_DIR = "output/细菌/20260412_113319"
+EXP_DIR = ""
 COMPARE_LEVEL = "level_1"
 TOP_K = 3
 

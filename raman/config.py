@@ -1,7 +1,3 @@
-# WARNING:
-# config.py is intended for TRAINING ONLY.
-# Use config_io.load_experiment for eval / predict.
-
 from pathlib import Path
 
 from dataset_process.pipeline import DEFAULT_PIPELINE_CONFIG
@@ -15,11 +11,13 @@ class Config:
     # 训练切分层级（默认按 leaf 分组，避免泄漏）
     split_level = "leaf"
 
+    # 对齐损失
     use_align_loss = True
     align_loss_weight = 0.01
     align_start = 20
     align_end = 50
 
+    # SupCon 损失
     use_supcon_loss = True
     supcon_loss_weight = 0.03
     supcon_tau = 0.15
@@ -135,7 +133,7 @@ class Config:
     lstm_dropout = 0.2
     lstm_bidirectional = False
 
-    # Attention Pooling dropout（pooling_type="attn" 时生效）
+    # 池化与分类头
     att_pool_dropout = 0.2
     # pooling_type:
     # - "attn": 注意力池化
@@ -179,66 +177,36 @@ class Config:
     tsne_perplexity = 30
     tsne_iter = 1000
 
-    # RAW 强度域增强
-    # 噪声（两者互斥抽取）
-    p_noise = 0.4
-    p_poisson = 0.2
-
-    # baseline 扰动
-    p_baseline_weak = 0.5
-    p_baseline_strong = 0.3
-
-    # 频轴扰动
-    p_axis = 0.2
-    axis_warp_alpha = 0.002
-    axis_warp_beta = 1.0
-
-    # 分段峰比例扰动
+    # RAW 域增强概率
     p_piecewise_gain = 0.30
-    piecewise_gain_std = 0.12
+    p_noise = 0.60
+    p_axis = 0.20
+    p_baseline_weak = 0.50
+    p_baseline_strong = 0.30
 
-    # 标准化后形状域增强
-    p_shift = 0.3
-    shift_max = 3
-
-    # ---------- 峰展宽 ----------
-    # broad_sigma_min/max：
-    #   高斯核 sigma（单位：点）
-    #   值越大，峰越宽
-    # broad_truncate：
-    #   高斯核截断范围（sigma 的倍数）
-    #   控制卷积核长度，避免全谱模糊
+    # 标准化后增强概率
+    p_shift = 0.30
     p_broadening = 0.35
-    broad_sigma_min = 0.6
-    broad_sigma_max = 1.2
-    broad_truncate = 3.0
+    p_cut = 0.30
 
-    # 局部衰减遮挡
-    p_cut = 0.3
-    mask_width_min = 40
-    mask_width_max = 100
-    mask_atten_min = 0.1
-    mask_atten_max = 0.3
-
-    # 增强叠加数量控制
+    # 增强叠加数量上限
     max_pre_augs = 4
     max_post_augs = 2
 
-    # 高斯噪声
-    noise_rel_min = 0.005
-    noise_rel_max = 0.02
+    # 分段峰强比例扰动
+    piecewise_gain_std = 0.12
 
-    # 强度相关噪声（泊松型）
-    poisson_strength_min = 0.0
-    poisson_strength_max = 0.015
+    # 强度相关高斯噪声，sigma = a + b * |x|
+    noise_base_rel_min = 0.005
+    noise_base_rel_max = 0.02
+    noise_slope_rel_min = 0.0
+    noise_slope_rel_max = 0.015
 
-    # ---------- 残余基线扰动 ----------
-    # baseline_lin_min/max：
-    #   线性基线扰动强度（相对于谱振幅）
-    # baseline_sin_min/max：
-    #   正弦基线扰动强度（相对于谱振幅）
-    # baseline_freq_min/max：
-    #   正弦基线频率（越小越“慢”，越像荧光背景）
+    # 波数轴扰动
+    axis_warp_alpha = 0.002
+    axis_warp_beta = 1.0
+
+    # 弱 baseline 扰动
     baseline_lin_min = 0.0
     baseline_lin_max = 0.02
     baseline_sin_min = 0.0
@@ -246,8 +214,21 @@ class Config:
     baseline_freq_min = 0.5
     baseline_freq_max = 2.0
 
+    # 强 baseline 扰动
     baseline_strong_amp_min = 0.05
     baseline_strong_amp_max = 0.15
+
+    # 标准化后弱形状扰动
+    shift_max = 3
+    broad_sigma_min = 0.6
+    broad_sigma_max = 1.2
+    broad_truncate = 3.0
+
+    # 局部衰减遮挡
+    mask_width_min = 40
+    mask_width_max = 100
+    mask_atten_min = 0.1
+    mask_atten_max = 0.3
 
 
 config = Config()
