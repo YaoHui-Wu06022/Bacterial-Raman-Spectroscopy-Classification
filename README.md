@@ -210,11 +210,10 @@ $$\begin{aligned} \min_{z}  (y - z)^T W (y - z) + \lambda z^T D^T D z\end{aligne
 
 - $D$为二阶差分矩阵，用于惩罚基线的“弯曲度”，保证基线平滑
 
-  $$D =
-  \begin{bmatrix}
-  1 & -2 & 1 & 0 & \cdots \\
-  0 & 1 & -2 & 1 & \cdots \\
-  \vdots & & & & \ddots
+  $$D =\begin{bmatrix}
+  1 & -2 & 1 & 0 & 0 & \cdots \\
+  0 & 1 & -2 & 1 & 0 & \cdots \\
+  \vdots & & & \ddots
   \end{bmatrix}$$
 
   ```python
@@ -256,27 +255,25 @@ weights = np.where(spectrum > baseline, p, 1 - p)
 
 经过多次迭代后，基线会逐步贴近背景区域，同时避开主要信号峰
 
+> AsLS vs airPLS / arPLS
+
 #### PCA 异常值过滤
 
-PCA（Principal Component Analysis，主成分分析）是一种经典的线性降维方法，其核心思想是：
+PCA（Principal Component Analysis，主成分分析）是一种经典的线性降维方法，其基本思想是在原始高维空间中寻找一组新的两两正交的坐标轴，使样本在这些方向上的投影方差依次最大
+
+通过保留前几个主成分，可以在尽量保留主要信息的同时去除冗余噪声
 
 - 在原始高维空间中寻找一组新的正交基（主成分）
 - 使得数据在这些方向上的投影方差最大
 - 用前几个主成分尽可能保留原始数据的主要信息
 
-对于光谱数据矩阵：
-$$
-X \in \mathbb{R}^{n \times p}
-$$
-对数据进行中心化：
-$$
-X_c = X - \bar{X}
-$$
-计算协方差矩阵：
-$$
-S = \frac{1}{n} X_c^TX_c
-$$
-对协方差矩阵做特征分解得到特征向量
+对于某一类别内的光谱数据矩阵 $X \in \mathbb{R}^{n \times p}$
+
+首先对数据按列中心化，得到 $X_c = X - \bar{X}$
+
+在中心化数据基础上，构造协方差矩阵 $S = \frac{1}{n} X_c^TX_c$
+
+对协方差矩阵进行特征分解，可得
 $$
 S = P\Lambda  P^T
 $$
@@ -311,22 +308,6 @@ $$
 
 - $r$：异常值比例
 - $Q_{1-r}(e)$：误差向量 $e$ 的 `1-r` 分位数
-
-### 3.7 数据统计
-
-```bash
-python -m dataset_process count 细菌
-```
-
-默认统计 `count_root` 指向的目录，一般是 `dataset_train/`
-
-如果要统计其他子目录，可以用：
-
-```bash
-python -m dataset_process count 细菌 --subdir dataset_train_raw
-```
-
-输出是按目录层级展开的样本数统计，方便检查重组和清洗结果
 
 ## 4. 训练数据输入
 
