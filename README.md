@@ -198,7 +198,7 @@ $$\begin{aligned} \min_{z} \sum_{i=1}^{n} w_i (y_i - z_i)^2  +  \lambda \sum_{i=
 
 矩阵形式为
 
-$\begin{aligned} \min_{z}  (y - z)^T W (y - z) + \lambda z^T D^T D z\end{aligned}$
+$$\begin{aligned} \min_{z}  (y - z)^T W (y - z) + \lambda z^T D^T D z\end{aligned}$$
 
 其中：
 
@@ -210,12 +210,12 @@ $\begin{aligned} \min_{z}  (y - z)^T W (y - z) + \lambda z^T D^T D z\end{aligned
 
 - $D$为二阶差分矩阵，用于惩罚基线的“弯曲度”，保证基线平滑
 
-  $D =
+  $$D =
   \begin{bmatrix}
   1 & -2 & 1 & 0 & \cdots \\
   0 & 1 & -2 & 1 & \cdots \\
   \vdots & & & & \ddots
-  \end{bmatrix}$
+  \end{bmatrix}$$
 
   ```python
   diff = sparse.diags([1, -2, 1], [0, -1, -2], shape=(length, length - 2))
@@ -225,29 +225,36 @@ $\begin{aligned} \min_{z}  (y - z)^T W (y - z) + \lambda z^T D^T D z\end{aligned
 
 在权重固定时，对目标函数关于 $z$ 求导并令其为零，可得到线性方程组
 
-$(W + \lambda D^T D) z = W y$
+$$(W + \lambda D^T D) z = W y$$
 
-
+```python
+matrix_z = (matrix_w + lam * (diff.T @ diff)).tocsc()  # W + λD^T D
+baseline = spsolve(matrix_z, weights * spectrum)       # 解 z
+```
 
 由于权重 $w_i$ 本身依赖于当前基线估计 $z$，因此 AsLS 需要通过迭代方式求解
 
-权重更新规则通常写为
+权重更新规则：
 
-$w_i =
+$$w_i =
 \begin{cases}
 p, & y_i > z_i \\
 1-p, & y_i \le z_i
-\end{cases}$
+\end{cases}$$
 
 - 当 $y_i > z_i$ 时，该点更可能位于峰上方，赋予较小权重
 - 当 $y_i \le z_i$ 时，该点更可能属于背景区域，赋予较大权重
 
+```python
+weights = np.where(spectrum > baseline, p, 1 - p)
+```
 
+所以 AsLS 的求解过程其实就是不断重复两步：
 
-1. 在当前权重固定的情况下，解带权最小二乘问题，得到基线估计 $z$
-2. 根据当前 $z$ 与观测值 $y$ 的关系，重新判断哪些点属于峰（赋小权重），哪些点属于基线（赋大权重）
+1. 固定当前权重，求解基线
+2. 根据新的基线更新权重
 
-通过不断重复“拟合 → 重新加权”的过程，使基线逐步向信号的下包络收敛
+经过多次迭代后，基线会逐步贴近背景区域，同时避开主要信号峰
 
 #### PCA 异常值过滤
 
