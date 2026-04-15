@@ -394,17 +394,16 @@ def run_training(config_obj=None, overrides=None):
         lambda_diff = 0.3
         drw_start_epoch = 10
 
-        # 对齐损失仅约束当前训练层级
-        hier_level_weights = {level_name: 1.0}
-
         supcon_level = train_dataset._resolve_level_name(level_name)
 
         if USE_ALIGN_LOSS:
             def align_loss_fn(feat, hier_labels):
+                level_labels = hier_labels.get(level_name)
+                if level_labels is None:
+                    return zero_loss(feat)
                 return hierarchical_center_loss(
                     feat,
-                    hier_labels,
-                    hier_level_weights
+                    level_labels,
                 )
         else:
             def align_loss_fn(feat, hier_labels):

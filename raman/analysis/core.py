@@ -16,7 +16,6 @@ from raman.config_io import load_experiment
 from raman.data import RamanDataset, resolve_dataset_stage
 from raman.model import RamanClassifier1D, SEBlock1D
 from raman.training import (
-    AutoHierarchicalBatchSampler,
     build_label_map_np,
     split_by_lowest_level_ratio,
     load_split_files
@@ -784,30 +783,12 @@ def _build_task_loaders(
     train_subset = Subset(train_dataset, train_idx)
     test_subset = Subset(test_dataset, test_idx)
 
-    use_hier_sampler = getattr(config, "use_hier_sampler", False)
-    if use_hier_sampler and parent_idx is None:
-        top_level = getattr(config, "hier_sampler_top", None)
-        if top_level is None:
-            top_level = full_dataset.head_names[0] if full_dataset.head_names else "leaf"
-        sampler = AutoHierarchicalBatchSampler(
-            dataset=train_subset,
-            batch_size=config.batch_size,
-            top_level=top_level,
-            leaf_level="leaf",
-            min_samples_per_leaf=2
-        )
-        train_loader = DataLoader(
-            train_subset,
-            batch_sampler=sampler,
-            num_workers=2
-        )
-    else:
-        train_loader = DataLoader(
-            train_subset,
-            batch_size=config.batch_size,
-            shuffle=True,
-            num_workers=2
-        )
+    train_loader = DataLoader(
+        train_subset,
+        batch_size=config.batch_size,
+        shuffle=True,
+        num_workers=2
+    )
 
     test_loader = DataLoader(
         test_subset,

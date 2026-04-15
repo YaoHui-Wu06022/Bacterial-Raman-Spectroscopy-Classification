@@ -54,10 +54,7 @@ class PipelineConfig:
         """根据当前裁剪范围和目标点数生成统一插值坐标。"""
         return build_wn_ref(self.cut_min, self.cut_max, self.target_points)
 
-
 DEFAULT_PIPELINE_CONFIG = PipelineConfig()
-# 需要调整清洗参数时，直接修改这里即可；CLI 不再暴露这些细节参数。
-
 
 def resolve_path(base_dir, path_value):
     """将相对路径解析到当前数据集根目录下，统一得到绝对路径。"""

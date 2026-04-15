@@ -66,35 +66,29 @@ class FocalLoss(nn.Module):
         return ((1 - pt) ** self.gamma) * ce_loss
 
 
-def hierarchical_center_loss(feat, hier_labels, level_weights):
+def hierarchical_center_loss(feat, labels):
     """
-    按多个层级分别计算类内中心损失，并按层级权重汇总。
+    仅按当前训练层标签计算 batch 内类内紧凑损失。
     """
+    valid = labels >= 0
+    if not valid.any():
+        return torch.tensor(0.0, device=feat.device)
+
+    labels = labels[valid]
+    feat_valid = feat[valid]
+
     loss = 0.0
     count = 0
-
-    for level, weight in level_weights.items():
-        if level not in hier_labels:
+    for class_id in labels.unique():
+        feat_class = feat_valid[labels == class_id]
+        if feat_class.size(0) <= 1:
             continue
 
-        labels = hier_labels[level]
-        valid = labels >= 0
-        if not valid.any():
-            continue
-
-        labels = labels[valid]
-        feat_valid = feat[valid]
-
-        for class_id in labels.unique():
-            feat_class = feat_valid[labels == class_id]
-            if feat_class.size(0) <= 1:
-                continue
-
-            center = feat_class.mean(dim=0, keepdim=True)
-            diff = feat_class - center
-            radial = (diff * diff).sum(dim=1)
-            loss += weight * radial.mean()
-            count += 1
+        center = feat_class.mean(dim=0, keepdim=True)
+        diff = feat_class - center
+        radial = (diff * diff).sum(dim=1)
+        loss += radial.mean()
+        count += 1
 
     if count == 0:
         return torch.tensor(0.0, device=feat.device)

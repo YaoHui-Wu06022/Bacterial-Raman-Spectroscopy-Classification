@@ -21,7 +21,6 @@ from .session import (
     save_hierarchy_meta,
     set_seed,
 )
-from .sampler import AutoHierarchicalBatchSampler
 from .split import (
     apply_train_filter,
     build_label_map_np,
@@ -36,7 +35,6 @@ from .split import (
 )
 
 __all__ = [
-    "AutoHierarchicalBatchSampler",
     "FocalLoss",
     "SupConLoss",
     "apply_train_filter",

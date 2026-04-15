@@ -110,10 +110,13 @@ class Config:
     # - "resnext": 当前默认配置
     # - "resnet": 与 ResNeXt 共用同一套 bottleneck 骨架，但中间卷积改成普通卷积
     cnn_block_type = "resnext"
+    # ResNeXt 参数
+    cardinality = 4
+    base_width = 4
     # ResNet 模式下 bottleneck 中间通道缩放比例
     resnet_bottleneck_ratio = 4
     # identity 路径的时序下采样倍率；1 表示不下采样
-    identity_pool_kernel = 16
+    identity_pool_kernel = 8
 
     # encoder_type: "transformer" | "lstm" | "none"
     encoder_type = "transformer"
@@ -145,9 +148,6 @@ class Config:
     cosine_head = True
     cosine_scale = 25
 
-    # ResNeXt 参数（仅在 cnn_block_type="resnext" 时生效）
-    cardinality = 4
-    base_width = 4
     stem_kernel_size = 15
     # stem_multiscale:
     # - True : 多尺度 stem

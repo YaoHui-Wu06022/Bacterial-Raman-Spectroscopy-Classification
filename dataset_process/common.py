@@ -63,6 +63,7 @@ def build_valid_mask(wn, bad_bands):
 def asls_baseline(spectrum, lam=1e5, p=0.01, niter=10, valid_mask=None):
     """使用 AsLS 估计基线，可选择跳过坏波段对应位置。"""
     length = len(spectrum)
+    # 构造二阶差分矩阵
     diff = sparse.diags([1, -2, 1], [0, -1, -2], shape=(length, length - 2))
     weights = np.ones(length)
 
@@ -72,9 +73,9 @@ def asls_baseline(spectrum, lam=1e5, p=0.01, niter=10, valid_mask=None):
 
     for _ in range(niter):
         matrix_w = sparse.diags(weights, 0)
-        matrix_z = matrix_w + lam * diff @ diff.T
+        matrix_z = (matrix_w + lam * diff @ diff.T).tocsc()
         baseline = spsolve(matrix_z, weights * spectrum)
-        weights = p * (spectrum > baseline) + (1 - p) * (spectrum < baseline)
+        weights = np.where(spectrum > baseline, p, 1 - p)
         if valid_mask is not None:
             weights[~valid_mask] = 0.0
 

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+from functools import partial
 
 def build_activation(name, inplace=True, negative_slope=0.01):
     name = str(name).lower()
@@ -12,6 +13,17 @@ def build_activation(name, inplace=True, negative_slope=0.01):
     if name == "silu":
         return nn.SiLU(inplace=inplace)
     raise ValueError(f"Unknown backbone activation: {name}")
+
+
+def build_activation_factory(name, negative_slope=0.01):
+    """
+    先固定激活函数类型和负半轴斜率，后续按需生成新的激活模块实例。
+
+    这里不复用同一个 nn.Module，而是复用同一套配置。
+    这样可以减少重复代码，同时避免把同一个模块对象挂到多个子模块里。
+    """
+    build_activation(name, inplace=True, negative_slope=negative_slope)
+    return partial(build_activation, name, negative_slope=negative_slope)
 
 class SEBlock1D(nn.Module):
     """
@@ -31,14 +43,14 @@ class SEBlock1D(nn.Module):
         super().__init__()
 
         self.se_use = se_use
+        make_activation = build_activation_factory(
+            activation_name,
+            negative_slope=activation_negative_slope,
+        )
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.fc = nn.Sequential(
             nn.Linear(channels, channels // reduction),
-            build_activation(
-                activation_name,
-                inplace=False,
-                negative_slope=activation_negative_slope,
-            ),   # 避免破坏 Autograd 需要的中间值
+            make_activation(inplace=False),   # 避免破坏 Autograd 需要的中间值
             nn.Linear(channels // reduction, channels),
             nn.Sigmoid()
         )
@@ -106,6 +118,10 @@ class ResidualBottleneck1D(nn.Module):
     ):
         super().__init__()
         self.block_type = str(block_type).lower()
+        make_activation = build_activation_factory(
+            activation_name,
+            negative_slope=activation_negative_slope,
+        )
         groups = 1 if self.block_type == "resnet" else int(cardinality)
         mid_channels = resolve_mid_channels(
             out_channels,
@@ -114,17 +130,13 @@ class ResidualBottleneck1D(nn.Module):
             base_width=base_width,
             bottleneck_ratio=bottleneck_ratio,
         )
-
+        # 调整通道数（降维）
         self.conv_reduce = nn.Sequential(
             nn.Conv1d(in_channels, mid_channels, kernel_size=1, stride=1, bias=False),
             nn.BatchNorm1d(mid_channels),
-            build_activation(
-                activation_name,
-                inplace=True,
-                negative_slope=activation_negative_slope,
-            )
+            make_activation(inplace=True)
         )
-
+        # 卷积核
         self.conv_group = nn.Sequential(
             nn.Conv1d(
                 mid_channels,
@@ -136,13 +148,9 @@ class ResidualBottleneck1D(nn.Module):
                 bias=False
             ),
             nn.BatchNorm1d(mid_channels),
-            build_activation(
-                activation_name,
-                inplace=True,
-                negative_slope=activation_negative_slope,
-            )
+            make_activation(inplace=True)
         )
-
+        # 调整通道数（升维）
         self.conv_expand = nn.Sequential(
             nn.Conv1d(mid_channels, out_channels, kernel_size=1, stride=1, bias=False),
             nn.BatchNorm1d(out_channels)
@@ -164,11 +172,7 @@ class ResidualBottleneck1D(nn.Module):
         else:
             self.shortcut = nn.Identity()
 
-        self.out_act = build_activation(
-            activation_name,
-            inplace=True,
-            negative_slope=activation_negative_slope,
-        )
+        self.out_act = make_activation(inplace=True)
 
     def forward(self, x):
         identity = x
@@ -248,9 +252,8 @@ class RamanClassifier1D(nn.Module):
         self.backbone_activation_negative_slope = float(
             getattr(self.config, "backbone_activation_negative_slope", 0.01)
         )
-        build_activation(
+        self.make_backbone_activation = build_activation_factory(
             self.backbone_activation_name,
-            inplace=True,
             negative_slope=self.backbone_activation_negative_slope,
         )
         self.proj_dim = int(getattr(self.config, "transformer_dim", 192))
@@ -355,11 +358,7 @@ class RamanClassifier1D(nn.Module):
                         bias=False
                     ),
                     nn.BatchNorm1d(out_ch),
-                    build_activation(
-                        self.backbone_activation_name,
-                        inplace=True,
-                        negative_slope=self.backbone_activation_negative_slope,
-                    )
+                    self.make_backbone_activation(inplace=True)
                 )
                 for k, out_ch in zip(kernel_sizes, branch_channels)
             ])
@@ -375,11 +374,7 @@ class RamanClassifier1D(nn.Module):
                     bias=False
                 ),
                 nn.BatchNorm1d(64),
-                build_activation(
-                    self.backbone_activation_name,
-                    inplace=True,
-                    negative_slope=self.backbone_activation_negative_slope,
-                ),
+                self.make_backbone_activation(inplace=True),
                 nn.AvgPool1d(kernel_size=2)
             )
 
@@ -489,6 +484,3 @@ class RamanClassifier1D(nn.Module):
         if return_feat:
             return logits, feat
         return logits
-
-
-# 兼容现有导入名
