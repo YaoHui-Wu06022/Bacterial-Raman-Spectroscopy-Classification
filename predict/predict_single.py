@@ -39,7 +39,7 @@ if __name__ == "__main__":
     #   - config.yaml
     #   - {TASK}_model.pt
     EXP_DIR = resolve_path("output/耐药菌/20260129_052515")
-    # 手动设置预测层级（None 则使用 config）
+    # 手动设置预测层级，必须显式设置为业务层
     PREDICT_LEVEL = "level_3"
 
     # 待预测的文件夹（包含 .arc_data）

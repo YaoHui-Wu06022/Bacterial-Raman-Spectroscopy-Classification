@@ -8,7 +8,7 @@ class Config:
     # 全局设置
     train_per_parent = True  # 是否按父类分别训练子模型
 
-    # 训练切分层级（默认按 leaf 分组，避免泄漏）
+    # 训练切分层级（默认按 leaf 分组，避免泄漏；leaf 仅用于切分）
     split_level = "leaf"
 
     # 对齐损失

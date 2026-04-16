@@ -150,8 +150,6 @@ def evaluate_test_set(context):
     level = resolve_head_level_name(
         dataset,
         context.level,
-        getattr(config, "current_train_level", None)
-        or "leaf",
     )
     level_idx = dataset.head_name_to_idx[level]
     class_names = dataset.class_names_by_level[level_idx]

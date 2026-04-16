@@ -129,8 +129,8 @@ def save_hierarchy_meta(
     """
     class_names_path = os.path.join(config.output_dir, "class_names.json")
     class_names_by_level = {
-        name: full_dataset.class_names_by_level[i]
-        for i, name in enumerate(head_names)
+        name: full_dataset.class_names_by_level[full_dataset.head_name_to_idx[name]]
+        for name in head_names
     }
     with open(class_names_path, "w", encoding="utf-8") as file:
         json.dump(class_names_by_level, file, indent=2, ensure_ascii=False)
@@ -138,11 +138,13 @@ def save_hierarchy_meta(
     parent_to_children_json = {
         level: {str(key): value for key, value in mapping.items()}
         for level, mapping in full_dataset.parent_to_children.items()
+        if level in head_names
     }
     level_models_json = dict(level_models)
     parent_models_json = {
         level: {str(key): value for key, value in mapping.items()}
         for level, mapping in parent_models.items()
+        if level in head_names
     }
 
     hier_meta_path = os.path.join(config.output_dir, "hierarchy_meta.json")
@@ -160,13 +162,17 @@ def save_hierarchy_meta(
             old_meta.get("parent_models", {}) if isinstance(old_meta, dict) else {}
         )
 
-        merged_level_models = dict(old_level_models)
+        merged_level_models = {
+            level: model_path
+            for level, model_path in old_level_models.items()
+            if level in head_names
+        }
         merged_level_models.update(level_models_json)
         level_models_json = merged_level_models
 
         merged_parent_models = {}
         for level, mapping in old_parent_models.items():
-            if isinstance(mapping, dict):
+            if level in head_names and isinstance(mapping, dict):
                 merged_parent_models[level] = dict(mapping)
         for level, mapping in parent_models_json.items():
             merged_parent_models.setdefault(level, {})
@@ -177,10 +183,14 @@ def save_hierarchy_meta(
         json.dump(
             {
                 "head_names": head_names,
-                "level_names": full_dataset.level_names,
+                "level_names": head_names,
                 "class_names_by_level": class_names_by_level,
                 "parent_to_children": parent_to_children_json,
-                "parent_level_name": full_dataset.parent_level_name,
+                "parent_level_name": {
+                    level: parent
+                    for level, parent in full_dataset.parent_level_name.items()
+                    if level in head_names
+                },
                 "current_train_level": current_train_level,
                 "level_models": level_models_json,
                 "parent_models": parent_models_json,

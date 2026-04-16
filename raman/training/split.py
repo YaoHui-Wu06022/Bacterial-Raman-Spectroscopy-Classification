@@ -97,7 +97,7 @@ def split_by_lowest_level_ratio(
         else:
             key = dataset.get_level_key(i, lowest_level)
         if key is None:
-            key = dataset.get_level_key(i, "leaf")
+            key = dataset.get_leaf_key(i)
         group_to_indices.setdefault(key, []).append(i)
 
     train_idx = []
@@ -125,9 +125,12 @@ def resolve_level_order(dataset, target_level):
     """
     解析目标训练层级，并返回从顶层到该层的顺序列表。
     """
-    target_level = dataset._resolve_level_name(target_level)
-    stop_idx = dataset.head_names.index(target_level) + 1
-    return target_level, list(dataset.head_names[:stop_idx])
+    target_level = dataset._resolve_level_name(
+        target_level,
+        field_name="current_train_level",
+    )
+    stop_idx = dataset.level_names.index(target_level) + 1
+    return target_level, list(dataset.level_names[:stop_idx])
 
 
 def resolve_train_split(full_dataset, config):

@@ -30,13 +30,6 @@ def load_experiment_with_train_dataset(exp_dir):
     return os.fspath(exp_dir), config
 
 
-def resolve_head_level_name(dataset, level_name, fallback_level=None):
-    """解析并校验 head 层级名。"""
-    level_name = level_name or fallback_level or "leaf"
-    if hasattr(dataset, "_resolve_level_name"):
-        level_name = dataset._resolve_level_name(level_name)
-    if level_name not in dataset.head_names:
-        raise ValueError(
-            f"未知层级：{level_name}，可选层级：{dataset.head_names}"
-        )
-    return level_name
+def resolve_head_level_name(dataset, level_name):
+    """解析并校验业务层级名。"""
+    return dataset._resolve_level_name(level_name, field_name="level_name")

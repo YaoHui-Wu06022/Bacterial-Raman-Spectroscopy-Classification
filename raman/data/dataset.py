@@ -42,26 +42,18 @@ class RamanDataset(Dataset):
         assert config is not None, "RamanDataset 必须显式传入 config"
         self.config = config
 
-        # 样本容器
-        self.samples = []          # 样本文件路径
-        self.level_labels = []     # 每个样本的多层标签（含 leaf）
-        self.hier_names = []       # 每个样本的层级路径（前缀路径）
+        # 样本级基础状态：这是数据集真正长期持有的内容。
+        self.samples = []          # 每个样本对应的 .arc_data 文件路径
+        self.level_labels = []     # 每个样本在各层上的整数标签，最后一列始终是 leaf
+        self.hier_names = []       # 每个样本的业务层级名称字典，如 {level_1: ..., level_2: ...}
 
-        # 层级信息（扫描后填充）
-        self.level_names = []
-        self.head_names = []
-        self.head_name_to_idx = {}
-        self.label_maps_by_level = []
-        self.inv_label_maps_by_level = []
-        self.class_names_by_level = []
-        self.num_classes_by_level = {}
+        # 层级级基础状态：业务层请优先使用 level_names；head_names 仅保留给内部 split/编码。
+        self.head_names = []           # 内部层级顺序，如 [level_1, ..., leaf]
+        self.head_name_to_idx = {}     # 层级名 -> 列索引，便于从 level_labels 中定位某一层
+        self.label_maps_by_level = []  # 每层的名称 -> 整数标签映射，leaf 仍作为最后一层保留
+        self.parent_to_children = {}   # 仅业务层的父类 id -> 子类 id 列表，用于层级训练和级联推理
 
-        # leaf 映射（便于外部读取）
-        self.leaf_label_map = {}
-        self.parent_level_name = {}
-        self.parent_to_children = {}
-
-        # SG kernel 预生成
+        # SG kernel 预生成：避免 __getitem__ 每次重复创建平滑/一阶导卷积核。
         self.sg_smooth, self.sg_d1 = build_sg_kernels(self.config, device="cpu")
 
         # 扫描数据
@@ -82,15 +74,55 @@ class RamanDataset(Dataset):
             return self.ROOT_TAG
         return "/".join(parts)
 
-    def _resolve_level_name(self, level_name):
+    def _resolve_level_name(self, level_name, field_name="level_name"):
+        valid_levels = ", ".join(self.level_names)
         if level_name is None:
-            return "leaf"
-        if level_name not in self.head_name_to_idx:
-            valid_levels = ", ".join(self.head_names)
             raise ValueError(
-                f"未知层级名：{level_name}，可选值为：{valid_levels}"
+                f"{field_name} 必须显式提供，且只能是业务层级：{valid_levels}"
+            )
+        if not isinstance(level_name, str) or not level_name.startswith("level_"):
+            raise ValueError(
+                f"{field_name} 只能是形如 level_n 的业务层级，当前为：{level_name}"
+            )
+        if level_name not in self.level_names:
+            raise ValueError(
+                f"未知业务层级：{level_name}，可选值为：{valid_levels}"
             )
         return level_name
+
+    @property
+    def level_names(self):
+        # 非 leaf 的中间层名称；由 head_names 派生
+        return list(self.head_names[:-1])
+
+    @property
+    def inv_label_maps_by_level(self):
+        # 各层 label_maps 的反向视图：标签 id -> 层级名称。
+        return [
+            {idx: name for name, idx in label_map.items()}
+            for label_map in self.label_maps_by_level
+        ]
+
+    @property
+    def class_names_by_level(self):
+        # 各层类别名列表，顺序与对应的整数标签保持一致。
+        return [list(label_map.keys()) for label_map in self.label_maps_by_level]
+
+    @property
+    def num_classes_by_level(self):
+        # 各层类别数，键使用层级名而不是层级索引。
+        return {
+            level_name: len(self.label_maps_by_level[idx])
+            for idx, level_name in enumerate(self.head_names)
+        }
+
+    @property
+    def parent_level_name(self):
+        # 每个业务层对应的上一层名称；顶层没有父层，因此为 None。
+        return {
+            level_name: (None if idx == 0 else self.level_names[idx - 1])
+            for idx, level_name in enumerate(self.level_names)
+        }
 
     def _scan(self):
         """
@@ -112,8 +144,7 @@ class RamanDataset(Dataset):
                 leaf_records.append((os.path.join(leaf_dir, fname), parts))
 
         # 层级名称（level_1 ... level_N）+ leaf
-        self.level_names = [f"level_{i + 1}" for i in range(max_depth)]
-        self.head_names = list(self.level_names) + ["leaf"]
+        self.head_names = [f"level_{i + 1}" for i in range(max_depth)] + ["leaf"]
         self.head_name_to_idx = {n: i for i, n in enumerate(self.head_names)}
 
         level_maps = [dict() for _ in range(max_depth)]
@@ -131,44 +162,20 @@ class RamanDataset(Dataset):
 
         # 保存映射与类名
         self.label_maps_by_level = level_maps + [leaf_map]
-        self.leaf_label_map = leaf_map
-        self.class_names_by_level = []
-        self.inv_label_maps_by_level = []
-        self.num_classes_by_level = {}
 
-        for idx, name in enumerate(self.head_names):
-            label_map = self.label_maps_by_level[idx]
-            class_names = list(label_map.keys())
-            inv_map = {i: n for n, i in label_map.items()}
-            self.class_names_by_level.append(class_names)
-            self.inv_label_maps_by_level.append(inv_map)
-            self.num_classes_by_level[name] = len(class_names)
-
-        # 构建父类 -> 子类映射（用于分层训练/推理）
-        for idx, name in enumerate(self.head_names):
+        # 构建业务层的父类 -> 子类映射（用于分层训练/推理）
+        for idx, name in enumerate(self.level_names):
             if idx == 0:
-                self.parent_level_name[name] = None
                 self.parent_to_children[name] = {}
                 continue
 
-            parent_name = self.head_names[idx - 1]
-            self.parent_level_name[name] = parent_name
             mapping = defaultdict(set)
 
             for _, parts in leaf_records:
-                if name == "leaf":
-                    if len(parts) < idx:
-                        continue
-                else:
-                    if len(parts) < idx + 1:
-                        continue
-
+                if len(parts) < idx + 1:
+                    continue
                 parent_key = self._parts_to_key(parts[:idx])
-                if name == "leaf":
-                    child_key = self._parts_to_key(parts)
-                else:
-                    child_key = self._parts_to_key(parts[: idx + 1])
-
+                child_key = self._parts_to_key(parts[: idx + 1])
                 parent_idx = self.label_maps_by_level[idx - 1][parent_key]
                 if child_key not in self.label_maps_by_level[idx]:
                     continue
@@ -182,7 +189,7 @@ class RamanDataset(Dataset):
         # 写入样本与标签
         for fpath, parts in leaf_records:
             labels = [-1] * len(self.head_names)
-            hier = {n: None for n in self.head_names}
+            hier = {n: None for n in self.level_names}
 
             for i in range(len(parts)):
                 key = self._parts_to_key(parts[: i + 1])
@@ -191,8 +198,6 @@ class RamanDataset(Dataset):
 
             leaf_key = self._parts_to_key(parts)
             labels[self.head_name_to_idx["leaf"]] = leaf_map[leaf_key]
-            hier["leaf"] = leaf_key
-
             self.samples.append(fpath)
             self.level_labels.append(labels)
             self.hier_names.append(hier)
@@ -231,12 +236,17 @@ class RamanDataset(Dataset):
 
     def get_hierarchy(self, idx):
         """
-        返回某个样本的完整层级信息：
-            {level_1: ..., level_2: ..., leaf: ...}
+        返回某个样本的业务层级信息：
+            {level_1: ..., level_2: ...}
 
         不参与 __getitem__，避免影响 DataLoader
         """
         return self.hier_names[idx]
+
+    def get_leaf_key(self, idx):
+        leaf_idx = self.head_name_to_idx["leaf"]
+        leaf_id = int(self.level_labels[idx][leaf_idx])
+        return self.inv_label_maps_by_level[leaf_idx].get(leaf_id)
 
     def get_level_key(self, idx, level_name):
         level = self._resolve_level_name(level_name)
@@ -253,12 +263,16 @@ class RamanDataset(Dataset):
 
         示例：
             split_mode = "level_2/leaf"
-            -> (hier["level_2"], hier["leaf"])
+            -> (hier["level_2"], leaf_key)
         """
         keys = split_mode.split("/")
         if len(keys) == 1:
-            return self.get_level_key(idx, keys[0])
-        return tuple(self.get_level_key(idx, k) for k in keys)
+            key = keys[0]
+            return self.get_leaf_key(idx) if key == "leaf" else self.get_level_key(idx, key)
+        return tuple(
+            self.get_leaf_key(idx) if k == "leaf" else self.get_level_key(idx, k)
+            for k in keys
+        )
 
     def encode_hierarchy(self, hier_list, device=None):
         """
@@ -276,8 +290,13 @@ class RamanDataset(Dataset):
         # 统一输入格式
         # --------------------------------------------------
         if isinstance(hier_list, dict):
+            batch_size = 0
+            for value in hier_list.values():
+                if hasattr(value, "__len__"):
+                    batch_size = len(value)
+                    break
             names_by_level = {
-                k: hier_list.get(k, []) for k in self.head_names
+                k: hier_list.get(k, [None] * batch_size) for k in self.head_names
             }
         else:
             if hasattr(hier_list, "tolist"):

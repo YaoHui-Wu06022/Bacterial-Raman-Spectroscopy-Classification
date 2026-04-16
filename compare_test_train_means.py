@@ -16,9 +16,9 @@ from raman.model import RamanClassifier1D
 from raman.training import load_split_files
 
 
-# 手动设置实验目录；None 时使用 config.current_train_level
+# 手动设置实验目录
 EXP_DIR = ""
-COMPARE_LEVEL = "level_1"
+COMPARE_LEVEL = "level_1"  # 必须显式设置为业务层
 TOP_K = 3
 
 
@@ -47,27 +47,27 @@ def _normalize_suffix(folder_name: str) -> str:
     return suffix
 
 
-def _build_leaf_lookup(dataset: RamanDataset, compare_level: str) -> list[tuple[str, str, str]]:
+def _build_compare_lookup(dataset: RamanDataset, compare_level: str) -> list[tuple[str, str]]:
     seen = set()
     entries = []
-    for hier in dataset.hier_names:
-        leaf_label = hier.get("leaf")
-        if not leaf_label or leaf_label in seen:
+    for idx, hier in enumerate(dataset.hier_names):
+        leaf_label = dataset.get_leaf_key(idx)
+        compare_label = hier.get(compare_level)
+        if not leaf_label or not compare_label or leaf_label in seen:
             continue
         seen.add(leaf_label)
         leaf_name = leaf_label.split("/")[-1]
-        compare_label = hier.get(compare_level) or leaf_label
-        entries.append((leaf_name, leaf_label, compare_label))
+        entries.append((leaf_name, compare_label))
     entries.sort(key=lambda item: len(item[0]), reverse=True)
     return entries
 
 
-def _infer_expected_labels(folder_name: str, leaf_lookup: list[tuple[str, str, str]]) -> tuple[str | None, str | None]:
+def _infer_expected_label(folder_name: str, compare_lookup: list[tuple[str, str]]) -> str | None:
     suffix = _normalize_suffix(folder_name)
-    for leaf_name, leaf_label, compare_label in leaf_lookup:
+    for leaf_name, compare_label in compare_lookup:
         if suffix.endswith(leaf_name):
-            return leaf_label, compare_label
-    return None, None
+            return compare_label
+    return None
 
 
 def _iter_test_folders(test_root: Path) -> dict[str, list[Path]]:
@@ -233,11 +233,7 @@ def main():
 
     device = torch.device("cuda" if getattr(config, "use_gpu", False) and torch.cuda.is_available() else "cpu")
     full_dataset = RamanDataset(dataset_train_root, augment=False, config=config)
-    compare_level = resolve_head_level_name(
-        full_dataset,
-        COMPARE_LEVEL,
-        getattr(config, "current_train_level", None) or "leaf",
-    )
+    compare_level = resolve_head_level_name(full_dataset, COMPARE_LEVEL)
     level_idx = full_dataset.head_name_to_idx[compare_level]
     inv_label_map = full_dataset.inv_label_maps_by_level[level_idx]
     label_map = full_dataset.label_maps_by_level[level_idx]
@@ -276,7 +272,7 @@ def main():
 
     preprocessor = InputPreprocessor(config, device)
     test_folders = _iter_test_folders(dataset_test_root)
-    leaf_lookup = _build_leaf_lookup(full_dataset, compare_level)
+    compare_lookup = _build_compare_lookup(full_dataset, compare_level)
 
     out_dir = exp_dir / "test_train_embedding_compare"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -284,7 +280,7 @@ def main():
 
     rows = []
     for folder_name, paths in test_folders.items():
-        expected_leaf_label, expected_label = _infer_expected_labels(folder_name, leaf_lookup)
+        expected_label = _infer_expected_label(folder_name, compare_lookup)
         expected_id = label_map.get(expected_label) if expected_label is not None else None
 
         folder_feats, model_preds = _collect_folder_embeddings(model, preprocessor, paths, device)
@@ -351,7 +347,6 @@ def main():
         rows.append(
             {
                 "folder": folder_name,
-                "expected_leaf_label": expected_leaf_label or "",
                 "expected_label": expected_label or "",
                 "model_top1_label": model_top1_label,
                 "model_top1_count": model_top1_count,
@@ -385,7 +380,6 @@ def main():
             file,
             fieldnames=[
                 "folder",
-                "expected_leaf_label",
                 "expected_label",
                 "model_top1_label",
                 "model_top1_count",

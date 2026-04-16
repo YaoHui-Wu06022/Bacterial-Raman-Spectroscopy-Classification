@@ -275,6 +275,7 @@ def run_training(config_obj=None, overrides=None):
         config=config)
 
     head_names = full_dataset.head_names
+    business_head_names = full_dataset.level_names
     head_name_to_idx = full_dataset.head_name_to_idx
     # 解析当前训练层级
     current_train_level, _ = resolve_level_order(full_dataset, current_train_level)
@@ -787,7 +788,7 @@ def run_training(config_obj=None, overrides=None):
     save_hierarchy_meta(
         config,
         full_dataset,
-        head_names,
+        business_head_names,
         current_train_level,
         level_models,
         parent_models,

@@ -103,25 +103,22 @@ def resolve_level_order(dataset, target_level, config):
     target_level = resolve_head_level_name(
         dataset,
         target_level,
-        getattr(config, "eval_level", None)
-        or getattr(config, "current_train_level", None)
-        or "leaf",
     )
-    if target_level not in dataset.head_names:
+    if target_level not in dataset.level_names:
         raise ValueError(
-            f"Unknown eval_level: {target_level}. Available: {dataset.head_names}"
+            f"Unknown eval_level: {target_level}. Available: {dataset.level_names}"
         )
-    stop_idx = dataset.head_names.index(target_level) + 1
-    level_order = list(dataset.head_names[:stop_idx])
+    stop_idx = dataset.level_names.index(target_level) + 1
+    level_order = list(dataset.level_names[:stop_idx])
     return target_level, level_order
 
 
 def _effective_label_name(dataset, idx, target_level):
-    """返回样本在指定层级上的名称；缺失时回退到 leaf。"""
+    """返回样本在指定业务层上的名称。"""
     if hasattr(dataset, "_resolve_level_name"):
         target_level = dataset._resolve_level_name(target_level)
     hier = dataset.hier_names[idx]
-    return hier.get(target_level) or hier.get("leaf")
+    return hier.get(target_level)
 
 
 def _pred_id_to_name(dataset, level_name, pred_id):

@@ -5,7 +5,7 @@ from raman.trainer import TrainOverrides, run_training
 
 # 手动覆盖
 # 适合在 Colab 里快速单独训练某个层级/父类
-CURRENT_TRAIN_LEVEL = "level_1"  # 例如 "level_2"
+CURRENT_TRAIN_LEVEL = "level_1"  # 例如 "level_2"，不允许设置为 "leaf"
 TRAIN_ONLY_PARENT_NAME = None  # 例如 "dachang"
 TRAIN_ONLY_PARENT = None  # 例如 2（可选，优先级高于名称）
 OVERRIDE_DECAY_START_RATIO = None  # None 表示直接使用 config.decay_start_ratio

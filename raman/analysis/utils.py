@@ -428,19 +428,14 @@ def merge_scores_by_group(layer_scores, groups):
     return merged
 
 
-def _fill_missing_with_leaf(hier, head_names, missing_tag):
-    leaf = hier.get("leaf", [])
+def _fill_missing_labels(hier, level_names, missing_tag):
     out = {}
-    for name in head_names:
+    for name in level_names:
         vals = list(hier.get(name, []))
-        if name == "leaf":
-            out[name] = vals
-            continue
         filled = []
-        for i, v in enumerate(vals):
+        for v in vals:
             if v is None or v == missing_tag:
-                fill = leaf[i] if i < len(leaf) else v
-                filled.append(fill)
+                filled.append(missing_tag)
             else:
                 filled.append(v)
         out[name] = filled
@@ -473,7 +468,7 @@ def collect_embeddings(
             x = x.to(device)
 
             if inherit_missing:
-                hier_filled = _fill_missing_with_leaf(hier, dataset.head_names, missing_tag)
+                hier_filled = _fill_missing_labels(hier, level_names, missing_tag)
             else:
                 hier_filled = None
                 hier_labels = dataset.encode_hierarchy(hier, device="cpu")
@@ -533,7 +528,7 @@ def collect_embeddings_train_test(
         for x, _, hier in train_loader:
             x = x.to(device)
             if inherit_missing:
-                hier_filled = _fill_missing_with_leaf(hier, dataset.head_names, missing_tag)
+                hier_filled = _fill_missing_labels(hier, level_names, missing_tag)
             else:
                 hier_filled = None
                 hier_labels = dataset.encode_hierarchy(hier, device="cpu")
@@ -560,7 +555,7 @@ def collect_embeddings_train_test(
         for x, _, hier in test_loader:
             x = x.to(device)
             if inherit_missing:
-                hier_filled = _fill_missing_with_leaf(hier, dataset.head_names, missing_tag)
+                hier_filled = _fill_missing_labels(hier, level_names, missing_tag)
             else:
                 hier_filled = None
                 hier_labels = dataset.encode_hierarchy(hier, device="cpu")

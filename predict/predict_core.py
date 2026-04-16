@@ -93,6 +93,12 @@ def load_predictor(exp_dir, device, predict_level=None):
 
     exp_dir = resolve_path(exp_dir)
     config = load_experiment(exp_dir)
+    if not predict_level:
+        raise ValueError("predict_level 必须显式提供，且只能是业务层级。")
+    if not isinstance(predict_level, str) or not predict_level.startswith("level_"):
+        raise ValueError(
+            f"predict_level 只能是形如 level_n 的业务层级，当前为：{predict_level}"
+        )
 
     meta = _load_hierarchy_meta(exp_dir)
     if meta is None:
@@ -108,15 +114,11 @@ def load_predictor(exp_dir, device, predict_level=None):
 
         # 兼容新格式：class_names.json 可能是 {level: [names]}
         if isinstance(class_names, dict):
-            level = (
-                predict_level
-                or getattr(config, "predict_level", None)
-                or getattr(config, "current_train_level", None)
-                or "leaf"
-            )
-            if level not in class_names and class_names:
-                # 回退到最后一个层级
-                level = list(class_names.keys())[-1]
+            level = str(predict_level)
+            if level not in class_names:
+                raise ValueError(
+                    f"Unknown predict_level: {level}. Available: {list(class_names.keys())}"
+                )
             class_names = class_names.get(level, [])
 
         num_classes = len(class_names)
@@ -151,12 +153,6 @@ def load_predictor(exp_dir, device, predict_level=None):
     parent_models = meta.get("parent_models", {})
     level_models_meta = meta.get("level_models", {})
 
-    if predict_level is None:
-        predict_level = (
-            getattr(config, "predict_level", None)
-            or meta.get("predict_level")
-            or (head_names[-1] if head_names else "leaf")
-        )
     if predict_level not in head_names:
         raise ValueError(
             f"Unknown predict_level: {predict_level}. Available: {head_names}"

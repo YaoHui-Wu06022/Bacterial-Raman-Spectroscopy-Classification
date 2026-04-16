@@ -69,17 +69,8 @@ def _load_hierarchy_meta(exp_dir):
 
 
 def resolve_analysis_level(dataset, level_name, config):
-    """解析分析层级，None 时回退到当前训练层级。"""
-    if level_name is None:
-        level_name = (
-            getattr(config, "current_train_level", None)
-            or "leaf"
-        )
-    if level_name not in dataset.head_names:
-        raise ValueError(
-            f"Unknown analysis level: {level_name}. Available: {dataset.head_names}"
-        )
-    return level_name
+    """解析分析层级；必须显式提供业务层级。"""
+    return dataset._resolve_level_name(level_name, field_name="analysis_level")
 
 
 class LabelMapDataset(Dataset):
@@ -267,8 +258,6 @@ def _effective_label_names(dataset, level_name, missing_tag="__missing__"):
     seen = set()
     for hier in dataset.hier_names:
         name = hier.get(level_name)
-        if name is None or name == missing_tag:
-            name = hier.get("leaf")
         if name is None:
             name = missing_tag
         if name not in seen:
@@ -281,11 +270,8 @@ def _batch_effective_label_ids(hier, level_name, name_to_idx, missing_tag="__mis
     if hier is None:
         return None
     level_vals = hier.get(level_name, [])
-    leaf_vals = hier.get("leaf", [])
     ids = []
-    for i, v in enumerate(level_vals):
-        if v is None or v == missing_tag:
-            v = leaf_vals[i] if i < len(leaf_vals) else v
+    for v in level_vals:
         if v is None:
             v = missing_tag
         ids.append(name_to_idx.get(v, -1))
@@ -1129,8 +1115,8 @@ def run_aggregate_analysis(
 
                             leaf_to_parent_idx = {}
                             leaf_to_parent_level_id = {}
-                            for hier in full_dataset.hier_names:
-                                leaf_name = hier.get("leaf")
+                            for sample_idx, hier in enumerate(full_dataset.hier_names):
+                                leaf_name = full_dataset.get_leaf_key(sample_idx)
                                 parent_name = hier.get(parent_level)
                                 gp_name = hier.get(grand_parent)
                                 if leaf_name is None or parent_name is None or gp_name is None:

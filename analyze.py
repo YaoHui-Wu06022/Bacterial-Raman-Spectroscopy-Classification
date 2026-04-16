@@ -4,7 +4,7 @@ from raman.analysis import AnalysisOverrides, HeatmapConfig, run_analysis_pipeli
 # 手动配置
 EXP_DIR = ""  # 训练输出目录（含模型与层级元数据）
 ANALYSIS_MODE = "single"  # single / aggregate
-ANALYSIS_LEVEL = "level_1"  # 分析层级（None 时用当前训练层级）
+ANALYSIS_LEVEL = "level_1"  # 分析层级，必须显式设置为业务层（如 level_1）
 PARENT_IDX = None  # single: None / 指定 id / "all"；aggregate: 通常用 "all"
 USE_TRAIN_AUG = False  # 是否使用训练增强来构建分析数据
 FALLBACK_TO_SINGLE = True  # 聚合模式下没有 parent 子模型时，是否退化为单模型分析
