@@ -19,11 +19,11 @@ from raman.training.eval import (
     mask_logits_by_parent,
 )
 from raman.training.losses import (
+    AlignLoss,
     FocalLoss,
     SupConLoss,
     build_class_weights,
     get_linear_weight,
-    hierarchical_center_loss,
 )
 from raman.training.session import (
     create_model_logger,
@@ -370,19 +370,22 @@ def run_training(config_obj=None, overrides=None):
             mapped[valid] = label_map_np[labels_for_weights[valid]]
             labels_for_weights = mapped
 
-        weights = build_class_weights(labels_for_weights, num_classes)
-        class_weights = torch.tensor(weights, dtype=torch.float32).to(device)
+        base_class_weights = torch.tensor(
+            build_class_weights(labels_for_weights, num_classes),
+            dtype=torch.float32,
+            device=device,
+        )
 
         # 主分类损失使用 Focal Loss，并忽略无效标签
         criterion = FocalLoss(
             gamma=config.gamma,
-            weight=class_weights,
+            weight=base_class_weights,  # 初始化，后续替换为ema_class_weights
             ignore_index=-1,
         )
 
         # 动态权重相关
         ema_class_ce = torch.ones(num_classes, device=device)
-        ema_momentum = 0.9
+        ema_alpha = 0.9
         lambda_diff = 0.3
         drw_start_epoch = 10
 
@@ -393,7 +396,7 @@ def run_training(config_obj=None, overrides=None):
                 level_labels = hier_labels.get(level_name)
                 if level_labels is None:
                     return zero_loss(feat)
-                return hierarchical_center_loss(
+                return AlignLoss(
                     feat,
                     level_labels,
                 )
@@ -466,9 +469,9 @@ def run_training(config_obj=None, overrides=None):
                 if config.use_drw and epoch >= drw_start_epoch:
                     raw_diff = ema_class_ce / (ema_class_ce.mean() + 1e-12)
                     diff_factor = 1.0 + lambda_diff * (raw_diff - 1.0)
-                    dynamic_weights = class_weights * diff_factor
-                    dynamic_weights = dynamic_weights / (dynamic_weights.mean() + 1e-12)
-                    criterion.weight = dynamic_weights
+                    ema_class_weights = base_class_weights * diff_factor
+                    ema_class_weights = ema_class_weights / (ema_class_weights.mean() + 1e-12)
+                    criterion.weight = ema_class_weights
 
                 running_loss, running_correct, running_total = 0, 0, 0
                 running_align_loss = 0.0
@@ -539,24 +542,24 @@ def run_training(config_obj=None, overrides=None):
                     if valid.any():
                         logits_valid = logits_masked[valid]
                         y_valid = y_level[valid]
-                        loss_each = criterion(logits_valid, y_valid)
+                        loss_cls_each = criterion(logits_valid, y_valid)
 
                         if config.use_severity_weight:
                             with torch.no_grad():
                                 prob = torch.softmax(logits_valid, dim=1)
                                 severity_w = _compute_severity_weights(prob, y_valid)
 
-                            loss_primary = (loss_each * severity_w).mean()
+                            loss_cls = (loss_cls_each * severity_w).mean()
                         else:
-                            loss_primary = loss_each.mean()
+                            loss_cls = loss_cls_each.mean()
                     else:
-                        loss_primary = torch.tensor(0.0, device=device)
+                        loss_cls = torch.tensor(0.0, device=device)
 
                     # ---------- 可选损失 ----------
                     loss_align = align_loss_fn(feat, hier_labels)
                     loss_supcon = supcon_loss_fn(feat, hier_labels)
 
-                    loss_total = loss_primary + align_w * loss_align + supcon_w * loss_supcon
+                    loss_total = loss_cls + align_w * loss_align + supcon_w * loss_supcon
 
                     loss_total.backward()
                     optimizer.step()
@@ -564,7 +567,7 @@ def run_training(config_obj=None, overrides=None):
                     running_align_loss += loss_align.item()
                     running_supcon_loss += loss_supcon.item()
 
-                    running_loss += loss_primary.item()
+                    running_loss += loss_cls.item()
                     if valid.any():
                         running_correct += (logits_valid.argmax(1) == y_valid).sum().item()
                         running_total += valid.sum().item()
@@ -584,8 +587,8 @@ def run_training(config_obj=None, overrides=None):
                                 if mask.any():
                                     mean_ce = ce_each[mask].mean()
                                     ema_class_ce[g] = (
-                                        ema_momentum * ema_class_ce[g]
-                                        + (1.0 - ema_momentum) * mean_ce
+                                        ema_alpha * ema_class_ce[g]
+                                        + (1.0 - ema_alpha) * mean_ce
                                     )
 
                 train_loss = running_loss / len(train_loader)
@@ -624,7 +627,7 @@ def run_training(config_obj=None, overrides=None):
                 # 更新学习率
                 scheduler.step()
                 if epoch % 10 == 0:
-                    model_log(f"  base_w     = {class_weights.detach().cpu().numpy()}")
+                    model_log(f"  base_w     = {base_class_weights.detach().cpu().numpy()}")
                     if config.use_drw:
                         model_log(f"  ema_class_ce= {ema_class_ce.detach().cpu().numpy()}")
                         model_log(f"  final_w    = {criterion.weight.detach().cpu().numpy()}")

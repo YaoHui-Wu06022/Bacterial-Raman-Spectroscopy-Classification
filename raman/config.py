@@ -91,7 +91,7 @@ class Config:
     # Focal loss 强度
     gamma = 0.8  # 控制“压容易样本”的力度
     use_severity_weight = True  # 是否启用严重程度感知重加权
-    use_drw = True  # 是否启用动态类权重（EMA / DRW）
+    use_drw = True  # 是否启用动态类权重
     # SG 预处理窗口参数
     win_smooth = 15
     win1 = 15

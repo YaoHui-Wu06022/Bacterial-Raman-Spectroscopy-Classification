@@ -1442,56 +1442,66 @@ if score >= best_score:
 
 ### 6.5 训练损失
 
-训练时的总损失可以概括为两层结构：
-
-总损失层：
+训练时的总损失由三部分组成：
 
 ```math
-L_{\text{total}}(t)=L_{\text{primary}}(t)+\lambda_{\text{align}}(t)L_{\text{align}}+\lambda_{\text{supcon}}(t)L_{\text{supcon}}
-```
-
-主损失层：
-
-```math
-\ell_i^{\text{cls}}(t)=\operatorname{Focal}\!\bigl(logits_i,\; y_i;\; w_{\text{dyn}}(t)\bigr)\\
-L_{\text{primary}}(t)=\frac{1}{N}\sum_i s_i\,\ell_i^{\text{cls}}(t)
+L_{\text{total}}(t)=L_{\text{cls}}(t)+\lambda_{\text{align}}(t)L_{\text{align}}+\lambda_{\text{supcon}}(t)L_{\text{supcon}}
 ```
 
 其中：
 
-- `L_align`：层级的类内紧凑约束
+- `L_cls(t)`：当前 batch 的主分类损失
+- `L_align`：当前层 embedding 的类内紧凑约束
 - `L_supcon`：监督式对比损失
-- $w_{\text{dyn}}(t)$：按 epoch 动态变化的类别权重
-- $s_i$：样本级错误严重程度权重
 
 ```python
-loss_each = criterion(logits_valid, y_valid)
+loss_cls_each = criterion(logits_valid, y_valid)
 
 if config.use_severity_weight:
     with torch.no_grad():
         prob = torch.softmax(logits_valid, dim=1)
         severity_w = _compute_severity_weights(prob, y_valid)
-    loss_primary = (loss_each * severity_w).mean()
+    loss_cls = (loss_cls_each * severity_w).mean()
 else:
-    loss_primary = loss_each.mean()
+    loss_cls = loss_cls_each.mean()
 
 loss_align = align_loss_fn(feat, hier_labels)
 loss_supcon = supcon_loss_fn(feat, hier_labels)
 
-loss_total = loss_primary + align_w * loss_align + supcon_w * loss_supcon
+loss_total = loss_cls + align_w * loss_align + supcon_w * loss_supcon
 ```
 
-`criterion(...)` 内部已经包含 `FocalLoss + class_weights (+ DRW 动态权重)`
+#### 主分类损失
 
-`severity weight` 是在逐样本主损失上再次做样本级重加权
+由 `criterion(...)` 计算逐样本分类损失
 
-`align` 和 `supcon` 是在外层额外相加的 embedding 约束项
+```math
+L_{cls\_each}^{(i)}(t) = \ell_{\mathrm{focal}}\left(logits_i, y_i; w_{y_i}(t)\right)
+```
 
-#### Focal Loss
+- $logits_i$ 是第 $i$ 个样本的分类输出
+- $y_i$ 是真实类别
+- $w_{y_i}(t)$ 是第 $i$ 个样本所属类别在当前 epoch 使用的类别权重
+
+如果启用了 `severity weight`，则主分类损失写为：
+
+```math
+L_{\mathrm{cls}}(t)=\frac{1}{N}\sum_{i=1}^{N} s_i\,L_{\mathrm{cls\_each}}^{(i)}(t)
+```
+
+若未启用 `severity weight`，则退化为普通均值：
+
+```math
+L_{\mathrm{cls}}(t)=\frac{1}{N}\sum_{i=1}^{N}L_{\text{cls-each}}^{(i)}(t)
+```
+
+其中 $s_i$ 是第 $i$ 个样本的错误严重程度权重
+
+##### Focal Loss
 
 在光谱层级分类任务中，不同样本难度差异较大，容易样本会主导梯度，导致模型忽略难样本
 
-Focal Loss 在交叉熵损失的基础上增加一个可调节因子，抑制易样本梯度，放大难样本梯度，从而让训练更关注难样本
+Focal Loss 在交叉熵损失基础上增加调制因子，抑制易样本、强调难样本，从而把更多训练预算分配给当前还没学好的样本
 
 `CrossEntropy Loss`
 
@@ -1509,94 +1519,132 @@ FL(p_t) = - \alpha_t (1 - p_t)^\gamma \log(p_t)
 
 - $p_t$：模型对真实类别的预测概率
 - $\gamma$：控制对易样本的抑制程度
-- $\alpha_t$：类别权重，当前实现中对应 `weight`
-
-当前实现对应：
+- $\alpha_t$：类别权重
 
 ```python
 criterion = FocalLoss(
-    gamma=config.gamma,               # 0.8
-    weight=dynamic_weights,           # class_weights 经过 DRW / EMA 调整后的结果
+    gamma=config.gamma,
+    weight=base_class_weights,  # 初始化，后续替换为ema_class_weights
     ignore_index=-1,
 )
 ```
 
-`FocalLoss.forward()` 的实现是先算逐样本交叉熵，再乘 focal 因子
+`FocalLoss.forward()` 的实现是先基于未加权交叉熵计算 $p_t$ 和 focal 因子，再用当前 epoch 的类别权重 $\alpha_t$ 对逐样本损失做重加权
 
 ```python
-ce_loss = F.cross_entropy(
-    logits,
-    targets,
-    weight=self.weight,
-    reduction="none",
-    ignore_index=self.ignore_index,
-)
-pt = torch.exp(-ce_loss)
-return ((1 - pt) ** self.gamma) * ce_loss
+def forward(self, logits, targets):
+    ce_loss = nn.functional.cross_entropy(
+        logits,
+        targets,
+        weight=None,  # 不带权重
+        reduction="none",
+        ignore_index=self.ignore_index,
+    )
+
+    pt = torch.exp(-ce_loss)
+    focal_factor = (1 - pt) ** self.gamma
+
+    if self.weight is not None:
+        alpha_t = self.weight[targets]
+        loss = alpha_t * focal_factor * ce_loss
+    else:
+        loss = focal_factor * ce_loss
+
+    return loss
 ```
 
+`FocalLoss` 返回的是逐样本 loss 向量，后续才能继续叠加 `severity weight`
 
+##### base_class_weights
 
-#### class_weights
+在进入动态重加权之前，训练器会先根据当前训练层的标签分布构造基础类别权重 `base_class_weights`
 
-在进入动态重加权之前，训练器会先根据当前训练层的标签分布构造基础类别权重 `class_weights`
-
-当前实现不是简单的反频率，而是使用对数平滑：
+当前使用对数平滑：
 
 1. 统计当前训练层每个类别的样本数
 2. 对计数做下界保护，避免出现 0
-3. 按下式计算基础权重：
+3. 按下式计算基础权重
 
-   $$
+   ```math
    \text{weight}_g = \frac{1}{\log(\text{count}_g + 1.5)}
-   $$
+   ```
 
-4. 再归一化到平均值为 1：
+4. 再归一化到平均值为 1
 
-   $$
+   ```math
    \text{weight}_g \leftarrow \frac{\text{weight}_g}{\frac{1}{C} \sum_{i=1}^{C} \text{weight}_i}
-   $$
+   ```
 
-这样做的目的，是在照顾少数类的同时避免极端长尾下权重过大，导致训练振荡
+```python
+counts = np.bincount(level_labels[valid], minlength=num_classes)
+counts = np.maximum(counts, 1)
+base_class_weights = 1.0 / np.log(counts + 1.5)
+base_class_weights = base_class_weights / base_class_weights.mean()
+```
 
-可以把它理解成“静态类别不平衡校正”
+在照顾少数类的同时避免极端长尾下权重过大，导致训练振荡
 
-#### DRW / EMA class weight
+##### ema_class_weights
 
 在训练过程中，类别难度并不是固定的
 
-某些类别虽然样本数不算最少，但可能持续更难学
+某些类别虽然样本数不一定最少，但可能持续更难学，因此仅靠静态权重不够
 
-当前实现会对每个类别维护一条基于 CrossEntropy 的 EMA 难度轨迹，并据此动态调整类别权重
+当前实现会对每个类别维护一条基于 CrossEntropy 的 EMA 难度轨迹，并据此动态调整类别权重：
+
+```python
+ema_class_ce = torch.ones(num_classes, device=device)
+ema_alpha = 0.9
+lambda_diff = 0.3
+drw_start_epoch = 10
+```
+
+逻辑可以概括为：
 
 1. 对每个类别统计当前 batch 内的平均 `CrossEntropy`
+
 2. 用 EMA 平滑历史难度：
 
-   $$
+   ```math
    \text{EMA}_g(t) = \alpha \cdot \text{EMA}_g(t-1) + (1-\alpha) \cdot \text{CE}_g^{\text{batch}}
-   $$
+   ```
+
+   ```python
+   ce_each = F.cross_entropy(logits_valid, y_valid, reduction="none")
+   for g in range(num_classes):
+       mask = (y_valid == g)
+       if mask.any():
+           mean_ce = ce_each[mask].mean()
+           ema_class_ce[g] = (
+               ema_alpha * ema_class_ce[g]
+               + (1.0 - ema_alpha) * mean_ce
+           )
+   ```
 
 3. 计算相对难度：
 
-   $$
+   ```math
    \text{raw\_diff}_g = \frac{\text{EMA}_g(t)}{\frac{1}{C} \sum_{i=1}^{C} \text{EMA}_i(t)}
-   $$
+   ```
 
 4. 用相对难度修正基础类别权重：
 
-   $$
-   \text{weight}_g = \text{class\_weight}_g \cdot \Big(1 + \lambda (\text{raw\_diff}_g - 1)\Big)
-   $$
+   ```math
+   \mathrm{ema\_class\_weight}_g=\mathrm{base\_class\_weight}_g \cdot \Bigl(1+\lambda\cdot (\mathrm{raw\_diff}_g-1)\Bigr)
+   ```
 
 5. 再归一化到平均值为 1
 
-当前代码里的关键超参数是：
+```python
+if config.use_drw and epoch >= drw_start_epoch:
+    raw_diff = ema_class_ce / (ema_class_ce.mean() + 1e-12)
+    diff_factor = 1.0 + lambda_diff * (raw_diff - 1.0)
+    ema_class_weights = base_class_weights * diff_factor
+    ema_class_weights = ema_class_weights / (ema_class_weights.mean() + 1e-12)
+    criterion.weight = ema_class_weights
+```
 
-- `drw_start_epoch = 10`
-- `ema_momentum = 0.9`
-- `lambda_diff = 0.3`
-
-#### severity weight
+##### severity weight
 
 除了类别层面的重加权，当前训练器还会在样本层面再做一次“错误严重程度”加权
 
@@ -1632,15 +1680,56 @@ return ((1 - pt) ** self.gamma) * ce_loss
 - 三分类使用 `0.85`
 - 四类及以上使用 `0.80`
 
-因此这部分更准确地说，是一种“按预测错误严重程度调节主损失”的策略：
+降低“几乎分对”的样本对梯度预算的占用，提高“高置信度错判”样本的学习强度
 
-- 降低“几乎分对”的样本对梯度预算的占用
-- 提高“高置信度错判”样本的学习强度
-- 与 `FocalLoss` 形成互补：`FocalLoss` 更关注概率难度，`severity weight` 更关注错误排序结构
+与 `FocalLoss` 形成互补：`FocalLoss` 更关注概率难度，`severity weight` 更关注错误排序结构
+
+#### Align Loss
+
+当前代码中的 `AlignLoss` 更接近一种 batch 内经验中心约束
+
+1. 在当前 batch 中取出某一类别的全部有效样本 embedding
+2. 用这些样本的均值作为该类别在当前 batch 内的经验中心
+3. 计算该类别样本到这个经验中心的平方距离
+4. 对当前 batch 内所有有效类别的类内方差做平均
+
+如果当前 batch 内类别 (g) 的样本集合记为 \($S_g$\)，则经验中心为：
+
+```math
+c_g^{(\text{batch})}
+=
+\frac{1}{|S_g|}
+\sum_{i \in S_g} x_i
+```
+
+单个类别的类内紧凑项为：
+
+```math
+L_g^{(\text{align})}
+=
+\frac{1}{|S_g|}
+\sum_{i \in S_g}
+\|x_i - c_g^{(\text{batch})}\|_2^2
+```
+
+对有效样本做平均：
+
+```math
+L_{\text{align}}
+=
+\frac{1}{|G_{\text{valid}}|}
+\sum_{g \in G_{\text{valid}}}
+L_g^{(\text{align})}
+```
+
+其中：
+
+- `G_valid` 表示当前 batch 中样本数大于 1 的有效类别集合
+- 如果当前 batch 没有任何可用类别，当前实现直接返回 `0`
 
 #### SupCon Loss
 
-当前实现里的 `SupCon Loss` 是单视角监督式对比损失，不是双视图对比学习
+当前实现的 `SupCon Loss` 是单视角监督式对比损失，不是双视图对比学习
 
 `SupCon` 是直接在当前 batch 的 `feat` 上做同类拉近、异类推远
 
@@ -1651,144 +1740,53 @@ return ((1 - pt) ** self.gamma) * ce_loss
 - 不同类样本远离
 - 允许同一类别内部存在多个簇，因此它不强制类内单中心
 
-公式与实现过程为：
+可以拆成 4 步：
 
-1. 对 embedding 做 L2 归一化：
+1. 对 embedding 做 L2 归一化
 
-   $$
-   z_i = \frac{feat_i}{||feat_i||_2}
-   $$
+   ```math
+   z_i = \frac{\mathrm{feat}_i}{\|\mathrm{feat}_i\|_2}
+   ```
 
-2. 计算两两相似度矩阵：
+2. 计算温度缩放后的两两相似度
 
-   $$
-   sim(i,j) = \frac{z_i \cdot z_j}{\tau}
-   $$
+   ```math
+   s_{ij} = \frac{z_i^\top z_j}{\tau}
+   ```
 
-3. 只把“同类且不是自己”的样本当作正样本对
-4. 做数值稳定化
-5. 计算每个 anchor 相对于所有候选样本的 log-prob
-6. 对每个 anchor 平均其全部正样本
+3. 只把“同类且不是自己”的样本当作正样本：
 
-写成公式即：
+   ```math
+   P(i)=\{\,j \mid j\neq i,\; y_j = y_i\,\}
+   ```
 
-$$
-\log p_{ij} = sim(i,j) - \log\sum_{k \neq i} e^{sim(i,k)}
-$$
+4. 对全部候选样本做对数概率，并对正样本平均：
 
-$$
-L_i = - \frac{1}{|P(i)|} \sum_{p \in P(i)} \log p_{ip}
-$$
-
-$$
-L_{\text{supcon}} = \frac{1}{B} \sum_i L_i
-$$
-
-- 当前 batch 来自普通随机 `shuffle`，没有真正启用专门为对比学习设计的 batch sampler
-- 因此 `SupCon` 的有效性依赖于 batch 内是否自然出现足够多的同类样本对
-
-#### Center Loss
-
-当前代码中的 `hierarchical_center_loss` 更接近一种 batch 内经验中心约束，做法是：
-
-1. 在当前 batch 中取出某一类别的全部有效样本 embedding
-2. 用这些样本的均值作为该类别在当前 batch 内的经验中心
-3. 计算该类别样本到这个经验中心的平方距离
-4. 对当前 batch 内所有有效类别的类内方差做平均
-
-如果记当前 batch 内类别 $g$ 的样本集合为 $S_g$，则经验中心可写为：
-
-$$
-c_g^{(\text{batch})} = \frac{1}{|S_g|}\sum_{i \in S_g} x_i
-$$
-
-对应的类内紧凑约束更接近：
-
-$$
-L_{\text{align}} =
-\frac{1}{|G_{\text{valid}}|}
-\sum_{g \in G_{\text{valid}}}
-\left(
-\frac{1}{|S_g|}
-\sum_{i \in S_g}
-||x_i - c_g^{(\text{batch})}||_2^2
-\right)
-$$
-
-在本项目中的实际使用方式是：
-
-- 实现上对应的是 `hierarchical_center_loss`
-- 当前训练某一层模型时，只对当前层级施加这一项约束
-
-| 特性              | SupCon Loss                         | Center / Align Loss      |
-| ----------------- | ----------------------------------- | ------------------------------------- |
-| 类内约束          | 同类靠近（允许多簇）                | 让 batch 内同类更紧凑                 |
-| 类间约束          | 间接推远不同类                      | 不直接约束                            |
-| 对 batch 大小敏感 | 高（依赖足够正样本对）              | 中等（依赖 batch 内同类样本数）       |
-| 中心定义          | 不显式引入类中心                    | 使用 batch 内经验中心                 |
-| 使用场景          | 表征学习、相对距离整理、多模态更友好 | 分类增强、类内紧凑化                  |
-
-| Loss                     | 约束目标                 | 作用对象                         |
-| ------------------------ | ------------------------ | -------------------------------- |
-| FocalLoss                | 分类概率与样本难度       | 样本层面                         |
-| class_weights            | 静态类别不平衡校正       | 类别层面                         |
-| DRW / EMA                | 动态类别难度校正         | 类别层面                         |
-| severity weight          | 错误严重程度重加权       | 样本层面                         |
-| SupCon Loss              | 类内靠近、类间分离       | embedding 层面，相对距离约束     |
-| Center / Align Loss      | 当前层类内紧凑           | embedding 层面，batch 内方差约束 |
-
-### 6.6 辅助损失调度原理
-
-`align` 和 `supcon` 这两个辅助损失并不是从 epoch 1 就全权打开，而是按时间过程逐步介入
-
-当前训练中的 epoch 权重更接近下面的分段逻辑：
-
-$$
-\lambda_{\text{align}}(t)=
-\text{LinearRamp}(t;\text{align\_start},\text{align\_end},0,\lambda_{\text{align}}^{\max})
-\times d(t)
-$$
-
-$$
-\lambda_{\text{supcon}}(t)=
-\text{LinearRamp}(t;\text{supcon\_start},\text{supcon\_end},0,\lambda_{\text{supcon}}^{\max})
-\times d(t)
-$$
+   ```math
+   L_i
+   =
+   -\frac{1}{|P(i)|}
+   \sum_{p\in P(i)}
+   \left[
+   \mathrm{sim}(i,p)
+   -
+   \log\sum_{k\neq i}\exp(\mathrm{sim}(i,k))
+   \right]\\
+   L_{\text{supcon}}
+   =
+   \frac{1}{|A_{\text{valid}}|}
+   \sum_{i\in A_{\text{valid}}} L_i
+   ```
+   
 
 其中：
 
-- `align_start = 20`
-- `align_end = 50`
-- `supcon_start = 30`
-- `supcon_end = 50`
-- `decay_start_ratio = 0.7`
+- `A_valid` 表示当前 batch 中至少有一个正样本对的 anchor 集合
+- 如果整个 batch 没有任何正样本对，当前实现直接返回 `0`
+- 当前 batch 来自普通随机 `shuffle`，没有专门为对比学习设计的 batch sampler
+- 因此 `SupCon` 的有效性依赖于 batch 内是否自然出现足够多的同类样本对
 
-后期衰减因子 $d(t)$ 的逻辑是：
-
-- 当 `t <= decay_start_ratio * epochs` 时，`d(t)=1`
-- 当 `t > decay_start_ratio * epochs` 时，开始线性下降
-- 当前实现给它设置了下界，因此最终不会降到 `0`，而是至少保留 `20%` 权重
-
-如果把训练分阶段理解，可以近似看成：
-
-1. 前期：
-   - 主要由 `L_primary` 学分类边界
-   - `align` 和 `supcon` 权重接近 0 或仍在启动
-2. 中期：
-   - 主分类损失继续工作
-   - `align` 与 `supcon` 逐步进入稳定权重区间
-   - embedding 的几何结构开始被更强地整理
-3. 后期：
-   - 辅助损失共同衰减
-   - 让优化重点重新回到分类边界细调，而不是持续强拉 embedding
-
-这样设计的考虑是：
-
-- 前期先把“分对”这件事学稳
-- 中期再加强特征空间结构约束
-- 后期避免辅助损失持续过强，妨碍最终分类头收敛
-
-### 6.7 训练损失之间的分工
+### 6.6 训练损失之间的分工
 
 从训练行为的角度看，当前项目不是简单把多个 loss 堆在一起，而是在四个层面共同作用于同一次反向传播：
 

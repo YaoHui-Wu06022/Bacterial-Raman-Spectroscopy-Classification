@@ -15,9 +15,9 @@ def build_class_weights(level_labels, num_classes):
 
     counts = np.bincount(level_labels[valid], minlength=num_classes)
     counts = np.maximum(counts, 1)
-    weights = 1.0 / np.log(counts + 1.5)
-    weights = weights / weights.mean()
-    return weights.astype(np.float32)
+    base_class_weights = 1.0 / np.log(counts + 1.5)
+    base_class_weights = base_class_weights / base_class_weights.mean()
+    return base_class_weights.astype(np.float32)
 
 
 def get_linear_weight(epoch, start, end, w_min, w_max):
@@ -50,21 +50,30 @@ class FocalLoss(nn.Module):
         ce_loss = nn.functional.cross_entropy(
             logits,
             targets,
-            weight=self.weight,
+            weight=None,
             reduction="none",
             ignore_index=self.ignore_index,
         )
         if self.ignore_index is not None:
             valid = targets != self.ignore_index
             if not valid.any():
-                return torch.tensor(0.0, device=logits.device)
+                return torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
+            targets = targets[valid]
             ce_loss = ce_loss[valid]
 
         pt = torch.exp(-ce_loss)
-        return ((1 - pt) ** self.gamma) * ce_loss
+        focal_factor = (1 - pt) ** self.gamma
+
+        if self.weight is not None:
+            alpha_t = self.weight[targets]
+            loss = alpha_t * focal_factor * ce_loss
+        else:
+            loss = focal_factor * ce_loss
+
+        return loss
 
 
-def hierarchical_center_loss(feat, labels):
+def AlignLoss(feat, labels):
     """
     仅按当前训练层标签计算 batch 内类内紧凑损失。
     """
