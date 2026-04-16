@@ -85,11 +85,7 @@ class Config:
     # SE 模块
     se_use = True
     reduction = 8
-    # backbone_activation:
-    # - "relu": 标准 ReLU
-    # - "leaky_relu": 保留少量负响应
-    # - "silu": 更平滑，常用于小模型或希望保留弱负响应时
-    backbone_activation = "leaky_relu"
+    # 激活函数设置
     backbone_activation_negative_slope = 0.05
 
     # Focal loss 强度
@@ -108,7 +104,7 @@ class Config:
     backbone_type = "cnn"
     # cnn_block_type:
     # - "resnext": 当前默认配置
-    # - "resnet": 与 ResNeXt 共用同一套 bottleneck 骨架，但中间卷积改成普通卷积
+    # - "resnet": 共用同一套 bottleneck 骨架，但中间卷积改成普通卷积
     cnn_block_type = "resnext"
     # ResNeXt 参数
     cardinality = 4
@@ -120,39 +116,31 @@ class Config:
 
     # encoder_type: "transformer" | "lstm" | "none"
     encoder_type = "transformer"
-    # 常用消融组合：
-    # - 仅 CNN: backbone_type="cnn", encoder_type="none"
-    # - 仅 LSTM: backbone_type="identity", encoder_type="lstm"
-    # - 仅 Transformer: backbone_type="identity", encoder_type="transformer"
-    # - CNN + LSTM: backbone_type="cnn", encoder_type="lstm"
-    # - CNN + Transformer: backbone_type="cnn", encoder_type="transformer"
+    # transformer
     transformer_nhead = 6
     transformer_dim = 192
     transformer_ffn_dim = 384
     transformer_layers = 1
     transformer_dropout = 0.2
+    # lstm
     lstm_hidden = 192
     lstm_layers = 1
     lstm_dropout = 0.2
     lstm_bidirectional = False
 
-    # 池化与分类头
-    att_pool_dropout = 0.2
-    # pooling_type:
+    # 池化
     # - "attn": 注意力池化
     # - "stat": 统计池化(mean+std)
     pooling_type = "stat"
-    # cosine_head:
+    # 分类头
     # - True : 余弦分类头
     # - False: 线性分类头
     cosine_head = True
     cosine_scale = 25
 
-    stem_kernel_size = 15
-    # stem_multiscale:
-    # - True : 多尺度 stem
-    # - False: 单尺度 stem
-    stem_multiscale = True
+    # stem_kernel_sizes:
+    # - (15,)      : 自动退化为单尺度 stem
+    # - (3, 7, 15) : 多尺度 stem
     stem_kernel_sizes = (3, 7, 15)
 
     # 训练相关

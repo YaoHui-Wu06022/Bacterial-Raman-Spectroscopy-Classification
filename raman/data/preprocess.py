@@ -109,8 +109,7 @@ def aug_noise_gaussian(
     slope_rel_max=0.015,
 ):
     """
-    强度相关高斯噪声。
-
+    强度相关高斯噪声
     噪声标准差形式为：
         sigma = a + b * |x|
     """
@@ -152,7 +151,7 @@ def aug_strong_baseline(x, amp_min=0.05, amp_max=0.15, n_knots_min=3, n_knots_ma
     x = np.asarray(x, dtype=np.float32)
     amp = _robust_amp(x)
     length = len(x)
-
+    # 随机标记点
     n_knots = np.random.randint(n_knots_min, n_knots_max + 1)
     xs = np.linspace(0, length - 1, n_knots, dtype=np.float32)
     ys = np.random.uniform(-1.0, 1.0, n_knots).astype(np.float32)
@@ -170,12 +169,12 @@ def aug_axis_warp(x, config):
     idx = np.arange(n, dtype=np.float32)
     center = (n - 1) / 2.0
     idx_norm = idx - center
-
+    # 控制整体的轻微拉伸/压缩或一阶漂移
     alpha = np.random.uniform(-config.axis_warp_alpha, config.axis_warp_alpha)
     warp_linear = alpha * idx_norm
-
+    # 控制沿谱轴缓慢变化的非线性弯曲
     beta = np.random.uniform(-config.axis_warp_beta, config.axis_warp_beta)
-    phase = np.random.uniform(0, 2 * np.pi)
+    phase = np.random.uniform(0, 2 * np.pi) # 随机相位
     warp_nonlinear = beta * np.sin(2 * np.pi * idx / n + phase)
 
     idx_warped = idx + warp_linear + warp_nonlinear
