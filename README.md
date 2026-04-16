@@ -658,7 +658,7 @@ $c_k$只和$X$有关，$X$是根据窗口大小和阶数写死的，所以 $c_k$
 
 ### 5.1 总体结构
 
-当前模型定义在 `raman/model.py`，整体结构可以写成：
+当前模型定义在 `raman/model.py`，整体可概括为：
 
 ```text
 输入 [B, C, L]
@@ -670,152 +670,237 @@ $c_k$只和$X$有关，$X$是根据窗口大小和阶数写死的，所以 $c_k$
 
 其中：
 
-- `B`：batch size
-- `C`：输入通道数，由 `smooth_use`、`raw_use`、`d1_use` 决定
-- `L`：离线统一后的光谱长度
+- `B` 表示 batch size
+- `C` 表示输入通道数，由输入构造配置决定
+- `L` 表示离线统一后的光谱长度
 
-这套结构的设计目标是围绕拉曼光谱的特点，把局部峰形建模、跨峰关系建模和最终判别头拆开，便于做消融实验
+这套结构将局部峰形提取、跨波段关系建模和最终分类解耦，便于围绕 backbone、序列编码器、池化方式和分类头进行消融与替换
 
 ### 5.2 Backbone
 
 前端特征提取器由 `backbone_type` 控制：
 
-- `cnn`：使用 `RamanClassifier1D` 内部的 1D CNN 主干
-- `identity`：跳过 CNN，仅做平均下采样和 `1x1` 通道投影
+- `cnn`：使用 1D CNN 主干提取局部峰形特征
+- `identity`：跳过 CNN，仅做平均下采样和 `1×1` 通道投影
 
-采用默认 `in_channels=2`
+当前主线配置为例说明 `cnn` 主干，其整体流程为：
 
-1. stem 输出 `64` 通道，并先做一次 `AvgPool1d(kernel_size=2)`  
+```
+输入 [B, C, L]
+→ stem branches
+→ concat
+→ AvgPool1d(/2)
+→ layer1
+→ AvgPool1d(/2) + layer2
+→ AvgPool1d(/2) + layer3
+→ AvgPool1d(/2) + layer4
+→ 1×1 Conv projection
+```
+
+```python
+def _forward_feature_extractor(self, x):
+    if self.cnn_backbone_on:
+        x = torch.cat([branch(x) for branch in self.stem_branches], dim=1)
+        x = self.stem_pool(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        return self.proj(x)
+
+    x = self.identity_pool(x)
+    return self.input_proj(x)
+```
+
+对应的通道变化为：
+
+1. stem 输出 `64` 通道，并先做一次 `AvgPool1d(kernel_size=2)`
 2. `layer1`：`64 -> 64`
 3. `layer2`：先池化再进入残差块，`64 -> 128`
 4. `layer3`：先池化再进入残差块，`128 -> 256`
 5. `layer4`：先池化再进入残差块，`256 -> 384`
-6. 最后用 `1x1 Conv` 投影到统一的 `transformer_dim=192`
+6. 最后通过 `1×1 Conv` 投影到统一的 `proj_dim`（当前主线常用 `192`）
 
-CNN 主干逐步扩大通道数，并通过四次时序压缩逐渐增大感受野
+CNN 主干并不在残差块内部用 stride 做降采样，而是把长度压缩显式放在 stem 之后以及 layer 开始之前
+
+把“尺度压缩”和“卷积特征变换”解耦
+
+主干网络在这个过程中压缩4次，降为 $L/16$ 
 
 #### 5.2.1 多尺度 stem
 
-stem 由 `stem_multiscale` 控制：
+由 `stem_kernel_sizes` 控制分支数与卷积核尺度
 
-- `False`：单尺度 stem，结构为 `Conv1d + BN + Activation + AvgPool1d`
-- `True`：多尺度 stem，默认开启
+- 当只给定一个 kernel size 时，stem 退化为单分支卷积
+- 当给定多个 kernel size 时，stem 由多分支并联组成
 
-三条分支并联后，在通道维拼接成总计 `64` 个通道，再统一做一次平均池化  
+模型会先根据分支数把总通道数 `64` 分配给各分支，再为每个分支构建一个独立的 `Conv1d + BN + Activation` 模块
 
-这相当于在最前端同时观察三种局部尺度：
+在通道维拼接后再统一做一次平均池化
 
-- 小卷积核更擅长捕捉尖锐峰、窄峰和局部突变
-- 中等卷积核更适合提取相邻峰之间的组合关系
-- 大卷积核更容易感知宽峰、缓变背景和峰包络
+允许模型在输入端同时观察不同尺度的局部模式：
 
-对于拉曼光谱，这比单一卷积核更自然，因为不同化学峰的宽度和局部形态本来就不一致
+- 小卷积核更容易捕捉尖峰、窄峰和局部突变
+- 较大卷积核更适合感知宽峰、缓变背景和峰包络
+
+对于拉曼光谱，这比固定单一尺度更符合不同峰宽与局部形态并存的特点
 
 #### 5.2.2 残差 bottleneck 块
 
 CNN 主干的基本单元是 `ResidualBottleneck1D`
 
-每个 block 都由五部分组成：
+每个 block 包含：
 
 1. `1x1 Conv` 降维  
-2. `3x3 Conv` 做主卷积变换  
+2. `3×1 Conv1d` 主卷积变换
 3. `1x1 Conv` 升维  
-4. `SEBlock1D` 做通道重标定  
+4. `SEBlock1D` 通道重标定
 5. residual shortcut 与输出激活
 
-一个 block 的数据流:
-$$
-x \rightarrow \underbrace{1\times1}_{reduce} \rightarrow \underbrace{3\times1}_{conv/group} \rightarrow \underbrace{1\times1}_{expand} \rightarrow SE \rightarrow +\;shortcut \rightarrow activation
-$$
-如果输入通道数和输出通道数不同，shortcut 会自动走 `1x1 Conv + BN` 投影
+可写为：
 
-`conv_reduce`：调整通道数（降维），把原始特征压缩成一个更紧凑的表示
+```math
+x \rightarrow \mathrm{Conv1d}(k=1) \rightarrow \mathrm{Conv1d}(k=3) \rightarrow \mathrm{Conv1d}(k=1) \rightarrow \mathrm{SE} \rightarrow +\;\mathrm{shortcut} \rightarrow \phi
+```
 
-`conv_group`：ResNet为单个卷积核，Resnext为`cardinality`个卷积核，负责提取局部模式
+若输入输出通道数不同，shortcut 会自动使用 `1×1 Conv + BN` 做投影；否则直接使用恒等映射
 
-`conv_expand`：调整通道数（升维），恢复通道数
-$$
-y = \phi(SE(F(x)) + x)
-$$
+```python
+self.conv_reduce = make_conv_block(
+    in_channels,
+    mid_channels,
+    kernel_size=1,
+    make_activation=make_activation,
+    padding=0,
+)
+self.conv_mid = make_conv_block(
+    mid_channels,
+    mid_channels,
+    kernel_size=3,
+    make_activation=make_activation,
+    groups=groups,
+)
+self.conv_expand = make_conv_block(
+    mid_channels,
+    out_channels,
+    kernel_size=1,
+    padding=0,
+)
+```
+
+整体输出形式为：
+
+```math
+y=\phi(\mathrm{SE}(F(x))+\mathrm{shortcut}(x))
+```
+
+```python
+identity = self.shortcut(x)
+out = self.conv_reduce(x)
+out = self.conv_mid(out)
+out = self.conv_expand(out)
+out = self.se(out)
+return self.out_act(out + identity)
+```
 
 #### 5.2.3 mid_channels
 
+中间 bottleneck 宽度由 `resolve_mid_channels()` 根据 block 类型决定
+
+```python
+if block_type == "resnext":
+    mid_channels = int(out_channels * (base_width / 64.0)) * cardinality
+    return max(mid_channels, int(cardinality))
+if block_type == "resnet":
+    return max(int(out_channels // bottleneck_ratio), 1)
+```
+
 **ResNet 模式**
-$$
+
+```math
 \text{mid\_channels} = \max \left(\left\lfloor \frac{\text{out\_channels}}{\text{bottleneck\_ratio}} \right\rfloor, 1\right)
-$$
+```
 
-当前默认 `resnet_bottleneck_ratio=4`
 
-所以如果某个 stage 的输出通道是 `128`，那么中间 bottleneck 宽度就是 `32`
 
-它的优点是结构直观、参数含义清楚，也更容易和经典 ResNet 论文中的 bottleneck 结构对应起来
+默认 `resnet_bottleneck_ratio=4`，因此若某一 stage 的输出通道为 `128`，则其中间宽度为 `32`
 
 **ResNeXt 模式**
-$$
+
+```math
 \text{mid\_channels} =
 \max\left(
 \underbrace{\text{out\_channels} \cdot \frac{\text{base\_width}}{64}}_{\text{每组的宽度}} \times \underbrace{\text{cardinality}}_{\text{组数}},
 \text{cardinality}
 \right)
-$$
+```
 
-cardinality（最重要）：卷积多分支，分组
+- cardinality（最重要）：卷积多分支，分组
 
-base_width：控制每个分支内部有多粗
+- base_width：控制每个分支内部有多粗
 
-当前默认：
-
-- `cardinality = 4`
-- `base_width = 4`
-
-随后中间这层 `3x3 Conv1d` 会按 `groups=4` 分组计算，而不是全部通道一起进行卷积
+默认主线用 `cardinality=4`、`base_width=4`，中间 `3x1 Conv1d` 会分组计算，而不是全部通道一起进行卷积
 
 结构一样，但每个 group 独立学习，权重完全不同
-$$
-F(x) = \sum_{i=1}^{G} T_i(x_i)
-$$
-ResNeXt 不是简单“把卷积做大”，而是把中间特征拆成多个并行子空间，再在 block 输出端重新融合
 
-默认主线选 ResNeXt是因为对于拉曼光谱这种峰结构复杂、局部模式很多但每种模式本身又不一定很宽的信号，这种“分组表达 + 统一汇合”的方式往往比纯 ResNet 更有效
+这意味着 block 会先在多个子空间内提取局部模式，再在输出端统一融合
+
+```math
+F(x) = \sum_{i=1}^{G} T_i(x_i)
+```
+
+对峰形模式较多、局部结构复杂的拉曼光谱，这种分组表达通常比单一路径卷积更灵活
 
 #### 5.2.4 SE 模块
 
-每个 bottleneck 后面都可以接 `SEBlock1D`，由 `se_use` 控制，当前默认开启
+每个 bottleneck 后面都可以接 `SEBlock1D`，由 `se_use` 控制
 
-1. 先对当前 block 输出做全局平均池化  
-2. 通过两层全连接网络得到每个通道的缩放权重  
-3. 再把这些权重乘回原始特征图
+当前实现中，SE 的过程为：
 
-SE（Squeeze-and-Excitation）模块本质是在通道维度做注意力（channel attention）
+1. 对特征图做全局平均池化，得到通道描述向量
+2. 通过两层全连接层生成通道权重
+3. 将权重乘回原特征图，实现通道重标定
 
-- 自动学习“哪些通道更重要”
-- 对重要通道加权放大，对不重要的抑制
-- 是一种轻量级、可插拔的特征重标定机制
+设输入特征为：
 
-$$
+```math
 X \in \mathbb{R}^{B \times C \times L}
-$$
-
-SE Block 一般分成两步：
-
-1. Squeeze（压缩）
-2. Excitation（激励 / 生成权重）
+```
 
 对每个通道，在长度维上做全局平均池化：
-$$
-z_{b,c} = \frac{1}{L} \sum_{i=1}^{L} X_{b,c,i}
-$$
+
+```math
+z_{b,c}=\frac{1}{L}\sum_{i=1}^{L}X_{b,c,i}
+```
+
 压缩成一个标量，作为这个通道的全局描述，也就是判断这个通道整体响应强不强
 
+```python
+self.pool = nn.AdaptiveAvgPool1d(1)
+scale = self.pool(x).view(batch_size, channels)
+```
+
 得到的通道描述向量输入一个小型 MLP，输出每个通道的权重(0-1)
-$$
+
+```math
 s = \sigma\left(W_2 \, \delta(W_1 z)\right)
-$$
+```
+
+```python
+self.fc = nn.Sequential(
+    nn.Linear(channels, hidden_channels),
+    make_activation(inplace=False),
+    nn.Linear(hidden_channels, channels),
+    nn.Sigmoid(),
+)
+```
+
 通常中间会先降维再升维
-$$
+
+```math
 \mathbb{R}^{C} \rightarrow \mathbb{R}^{C/r} \rightarrow \mathbb{R}^{C}
-$$
+```
+
 主要有两个原因：
 
 1. 减少参数量
@@ -827,13 +912,24 @@ $$
 $$
 \widetilde{X}_{b,c,i} = s_{b,c}  \odot X_{b,c,i}
 $$
+```python
+scale = scale.unsqueeze(-1).expand(batch_size, channels, length)
+return x * scale
+```
+
 相当于对通道做抑制或增强操作
 
 ### 5.3 Encoder
 
 前端 backbone 输出的是 `[B, C, L]` 形式的时序特征
 
-通过特征投影转成 `[B, L, C]`，再交给序列编码器
+通过特征投影后，模型会先将其变换为 `[B, L, C]`，再交给序列编码器处理
+
+```python
+features = self._forward_feature_extractor(x)
+features = features.permute(0, 2, 1)
+features = self._forward_sequence_encoder(features)
+```
 
 `encoder_type` 支持三种模式：
 
@@ -841,7 +937,7 @@ $$
 - `lstm`
 - `none`
 
-这一层的作用不是重新做全部局部峰提取，而是在 backbone 已经提炼出局部响应之后，继续建模不同波段之间的上下文关系
+在 backbone 已经提炼出局部响应之后，继续建模不同波段之间的上下文关系
 
 对拉曼光谱来说，可以理解为：
 
@@ -850,41 +946,54 @@ $$
 
 #### transformer
 
-当前实现使用的是一层轻量级 `TransformerEncoder`，输入维度来自前端 backbone 的投影输出
-
-默认配置是：
-
-- `transformer_dim = 192`
-- `transformer_nhead = 6`
-- `transformer_ffn_dim = 384`
-- `transformer_layers = 1`
-- `transformer_dropout = 0.2`
-- `activation = "gelu"`
-- `norm_first = True`
-- `batch_first = True`
+```python
+self.pos_encoder = PositionalEncoding1D(d_model=self.proj_dim)
+encoder_layer = nn.TransformerEncoderLayer(
+    d_model=self.proj_dim,
+    nhead=self.config.transformer_nhead,
+    dim_feedforward=self.config.transformer_ffn_dim,
+    dropout=self.config.transformer_dropout,
+    batch_first=True,
+    activation="gelu",
+    norm_first=True,
+)
+self.transformer = nn.TransformerEncoder(
+    encoder_layer,
+    num_layers=self.config.transformer_layers,
+)
+```
 
 在进入 Transformer 之前，模型会先加上一层一维正余弦位置编码 `PositionalEncoding1D`
 
 当前使用的是标准正余弦位置编码，最大支持长度为 `1000`
 
-对位置 `pos` 和通道维度 `2i / 2i+1`，编码形式为：
-$$
-PE(pos, 2i) = \sin \left(pos \cdot 10000^{-2i / d_{\text{model}}}\right)
-$$
+```python
+pe = torch.zeros(max_len, d_model)
+position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
+div_term = torch.exp(
+    torch.arange(0, d_model, 2, dtype=torch.float32)
+    * (-math.log(10000.0) / d_model)
+)
+pe[:, 0::2] = torch.sin(position * div_term)
+pe[:, 1::2] = torch.cos(position * div_term)
+self.register_buffer("pe", pe.unsqueeze(0))
+```
 
-$$
+对位置 `pos` 和通道维度 `2i / 2i+1`，编码形式为：
+```math
+PE(pos, 2i) = \sin \left(pos \cdot 10000^{-2i / d_{\text{model}}}\right)\\
 PE(pos, 2i+1) = \cos \left(pos \cdot 10000^{-2i / d_{\text{model}}}\right)
-$$
+```
 
 前向时直接把位置编码和序列特征相加：
 
-$$
+```math
 X_{\text{pos}} = X + PE
-$$
+```
 
-对于拉曼光谱，同样的局部形状如果出现在不同波数位置，含义可能完全不同，所以位置信息不能丢
+对于拉曼光谱，同样的局部形状如果出现在不同波数位置，含义可能完全不同，因此位置信息不能丢
 
-当前使用的是 PyTorch 的 `nn.TransformerEncoderLayer` 再外包一层 `nn.TransformerEncoder`
+利用 PyTorch 的 `nn.TransformerEncoderLayer` 再外包一层 `nn.TransformerEncoder`
 
 单层结构可以概括成两部分：
 
@@ -893,17 +1002,17 @@ $$
 
 自注意力的核心形式是：
 
-$$
+```math
 \text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V
-$$
+```
 
 在多头机制下，输入会被投影到多个子空间分别做注意力，然后再拼接回来
 
-FFN 则是作用在每个位置上的两层 MLP，它不负责跨位置交互，而是对每个位置已经融合好的上下文特征再做非线性变换
+FFN 则作用在每个位置上，对已经融合上下文的信息再做非线性变换
 
-当前实现还启用了 `norm_first=True`，也就是先做 LayerNorm，再进入注意力和 FFN 子层
+启用了 `norm_first=True`，也就是先做 LayerNorm，再进入注意力和 FFN 子层
 
-Post-LayerNorm是原文设计
+**Post-LayerNorm**
 
 ```
 x
@@ -917,28 +1026,14 @@ x
      y
 ```
 
-Attention block：
-$$
-x_1 = \mathrm{LayerNorm}(x+\mathrm{Attention}(x))
-$$
-FFN block：
-$$
+对应可写为：
+
+```math
+x_1 = \mathrm{LayerNorm}(x+\mathrm{Attention}(x))\\
 x_2 = \mathrm{LayerNorm}(x_1+\mathrm{FFN}(x_1))
-$$
-可以这么理解
-$$
-y = \mathrm{LN}(x+F(x))\quad z= x+F(x)
-$$
-损失对输入的梯度：
-$$
-\frac{\partial L}{\partial x}=\frac{\partial L}{\partial y} \cdot \frac{\partial y}{\partial x} = \frac{\partial L}{\partial y} \cdot \frac{\partial \mathrm{LN}}{\partial z}(I
-+\frac{\partial F}{\partial x})
-$$
-问题在于LN在在残差连接之后，${\partial \mathrm{LN}}/{\partial z}$梯度值近似为$1/\sqrt d_k$，使得残差传播的恒等路径梯度不再是1，每层都要缩放一次
+```
 
-所以梯度随网络深度呈指数衰减，导致低层（靠近输入的层）梯度几乎消失，梯度消失会导致Adam等优化器的更新变得不稳定
-
-Pre-LayerNorm 把 LayerNorm 移到子层前面
+**Pre-LayerNorm**
 
 ```
 x
@@ -952,23 +1047,13 @@ x
  └── y
 ```
 
-Attention block：
-$$
-x_1 =x+\mathrm{Attention}( \mathrm{LayerNorm}(x))
-$$
-FFN block：
-$$
+对应可写为：
+```math
+x_1 =x+\mathrm{Attention}( \mathrm{LayerNorm}(x))\\
 x_2 = x_1+\mathrm{FFN}(\mathrm{LayerNorm}(x_1))
-$$
-最关键的在于这样使得残差路径变成恒等映射
-$$
-y = x+F(\mathrm{LN}(x))\quad u = \mathrm{LN}(x)
-$$
-损失对输入的梯度：
-$$
-\frac{\partial L}{\partial x}=\frac{\partial L}{\partial y} \cdot \frac{\partial y}{\partial x} = \frac{\partial L}{\partial y}(I+\frac{\partial F}{\partial u}\cdot \frac{\partial u}{\partial x})
-$$
-梯度中始终存在恒等梯度通路，梯度更稳定，深层 Transformer 更容易训练
+```
+
+在工程上，Pre-LayerNorm 的主要优点是残差路径更直接，训练通常更稳定，尤其在层数增加或训练条件不够理想时更明显
 
 #### lstm
 
@@ -976,27 +1061,33 @@ $$
 
 它和 Transformer 不同，不是靠自注意力一次性看全局，而是按序列顺序逐步更新隐藏状态，因此更接近经典时序建模方式
 
-当前实现支持的 LSTM 配置包括：
-
-- `lstm_hidden`
-- `lstm_layers`
-- `lstm_dropout`
-- `lstm_bidirectional`
+```python
+self.lstm = nn.LSTM(
+    input_size=self.proj_dim,
+    hidden_size=self.lstm_hidden,
+    num_layers=self.lstm_layers,
+    dropout=self.lstm_dropout if self.lstm_layers > 1 else 0.0,
+    bidirectional=self.lstm_bidirectional,
+    batch_first=True,
+)
+```
 
 输入维度固定为前端投影后的 `proj_dim`，也就是当前默认的 `192`
 
 如果打开双向 LSTM，那么最终序列维度会变成：
-$$
+```math
 \text{seq\_dim} = 2 \times \text{lstm\_hidden}
-$$
+```
 
-否则就是：
+否则就是:
 
-$$
+```math
 \text{seq\_dim} = \text{lstm\_hidden}
-$$
+```
 
-LSTM 的核心是通过门控机制控制信息的保留、遗忘和输出，从而缓解普通 RNN 在长序列上容易出现的梯度消失问题。它包含三类门：
+LSTM 的核心是通过门控机制控制信息的保留、遗忘和输出，从而缓解普通 RNN 在长序列上容易出现的梯度消失问题
+
+它包含三类门：
 
 - 输入门（input gate）
 - 遗忘门（forget gate）
@@ -1004,29 +1095,14 @@ LSTM 的核心是通过门控机制控制信息的保留、遗忘和输出，从
 
 对时刻 `t`，常见写法可以表示为：
 
-$$
-f_t = \sigma(W_f [h_{t-1}, x_t] + b_f)
-$$
-
-$$
-i_t = \sigma(W_i [h_{t-1}, x_t] + b_i)
-$$
-
-$$
-\tilde{c}_t = \tanh(W_c [h_{t-1}, x_t] + b_c)
-$$
-
-$$
-c_t = f_t \odot c_{t-1} + i_t \odot \tilde{c}_t
-$$
-
-$$
-o_t = \sigma(W_o [h_{t-1}, x_t] + b_o)
-$$
-
-$$
+```math
+f_t = \sigma(W_f [h_{t-1}, x_t] + b_f)\\
+i_t = \sigma(W_i [h_{t-1}, x_t] + b_i)\\
+\tilde{c}_t = \tanh(W_c [h_{t-1}, x_t] + b_c)\\
+c_t = f_t \odot c_{t-1} + i_t \odot \tilde{c}_t\\
+o_t = \sigma(W_o [h_{t-1}, x_t] + b_o) \\
 h_t = o_t \odot \tanh(c_t)
-$$
+```
 
 直觉上：
 
@@ -1034,7 +1110,7 @@ $$
 - 输入门决定新信息写入多少
 - 输出门决定当前时刻暴露多少隐藏状态
 
-如果把 Transformer 理解成“显式建模任意两个位置之间的关系”，那么 LSTM 更像“沿着波数轴逐步积累上下文信息
+如果把 Transformer 理解成“显式建模任意两个位置之间的关系”，那么 LSTM 更像“沿着波数轴逐步积累上下文信息”
 
 但它的局限也很明确：
 
@@ -1044,52 +1120,94 @@ $$
 
 因此，在本项目里 LSTM 更适合作为一个可对照的序列编码器基线
 
+#### none
+
+当 `encoder_type="none"` 时，模型会跳过序列编码器，直接把 backbone 投影后的序列特征送入后续 pooling
+
+这相当于保留前端局部峰形提取能力，但不额外引入 Transformer 或 LSTM 去建模跨位置上下文关系
+
+此时 `_forward_sequence_encoder()` 会直接返回输入本身
+
 ### 5.4 Pooling
 
-encoder输出：
-$$
+encoder 输出的是序列特征：
+```math
 X \in \mathbb{R}^{B \times L \times C}
-$$
-还需要把整条光谱压缩成一个固定长度的 embedding
+```
 
-怎么把 L 个位置的信息，合成一个向量，这就是 Pooling 的任务
+需要把整条光谱压缩成一个固定长度的 embedding
 
 `pooling_type` 支持：
 
 - `attn`：注意力池化
-  $$
+  
+  ```math
   \alpha_t = \frac{e^{score_t}}{\sum_j e^{score_j}}\\
   z = \sum_{t=1}^{L} \alpha_t x_t
-  $$
-  模型自己学：哪些位置更重要
+  ```
 
-  但容易过拟合，且对数据量敏感
+  模型会先为每个位置学习一个打分，再在长度维上做 softmax，最后对序列特征加权求和
 
+  使用一个小型 MLP 对每个位置的特征打分
+  
+  ```python
+  self.att_pool = nn.Sequential(
+      nn.Linear(self.seq_dim, self.seq_dim // 2),
+      nn.GELU(),
+      nn.Dropout(att_pool_dropout),
+      nn.Linear(self.seq_dim // 2, 1),
+  )
+  attn = torch.softmax(self.att_pool(x), dim=1)
+  feat = (x * attn).sum(dim=1)
+  ```
+  
+  更依赖数据规模与正则化设置，在样本较少时更容易过拟合
+  
 - `stat`：统计池化
-  $$
+  
+  模型不会显式学习位置权重，而是直接对序列维做统计汇聚
+  
+  使用均值与标准差拼接
+  
+  ```math
   \mu = \frac{1}{L} \sum_{t=1}^{L} x_t\\
   \sigma = \sqrt{\frac{1}{L} \sum_{t=1}^{L}(x_t - \mu)^2}\\
   z = [\mu, \sigma]
-  $$
-  适合：类别差异是“整体分布”；噪声较多
+  ```
+  
+  这种方式不需要额外学习位置打分，因此更稳定，也更不容易因为样本量有限而过拟合
 
 ### 5.5 Classifier
 
 分类头由 `cosine_head` 控制：
 
+```python
+if self.cosine_head:
+    self.head = CosineClassifier(
+        self.feat_dim,
+        self.num_classes,
+        scale=self.cosine_scale,
+    )
+else:
+    self.head = nn.Linear(self.feat_dim, self.num_classes)
+```
+
 - `True`：`CosineClassifier`
 
-  先做 L2 归一化
-  $$
+  输入特征和类别权重都会先做 L2 归一化
+  ```math
   \hat{x} = \frac{x}{\|x\|_2}, \qquad \hat{w}_k = \frac{w_k}{\|w_k\|_2}
-  $$
-  归一化后内积就是余弦相似度
-  $$
-  z_k = s \cdot \cos(\theta_k)
-  $$
-  不看类别权重向量长度，只看类别中心方向
+  ```
 
-- `False`：普通 `Linear`
+  归一化后内积就对应余弦相似度，因此第 $k$ 类的 logit 可写为
+
+  ```math
+  z_k = s \cdot \cos(\theta_k)
+  ```
+
+  不再利用类别权重向量的模长，而主要根据特征与类别原型方向是否一致来做判别
+
+- `False`：`Linear`
   $$
   z = Wx + b
   $$
@@ -1097,6 +1215,8 @@ $$
 
   1. 特征和类别权重的方向是否一致
   2. 特征向量本身的模长大小
+  
+  普通 `Linear` 的表达更自由，但分类边界也更容易同时受特征方向与范数共同影响
 
 ## 6. 训练
 
