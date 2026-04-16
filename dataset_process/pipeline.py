@@ -323,39 +323,37 @@ def pca_reconstruct_and_error(spectra, n_components=0.95, center=True):
     if spectra.ndim != 2 or spectra.shape[0] < 2:
         return spectra, 0, np.zeros((spectra.shape[0],), dtype=np.float32)
 
+    n_samples = spectra.shape[0]
     mean = spectra.mean(axis=0, keepdims=True) if center else 0.0
-    spectra_centered = spectra - mean
+    Xc = spectra - mean
 
-    u_matrix, singular_values, vt_matrix = np.linalg.svd(
-        spectra_centered, full_matrices=False
-    )
-    if singular_values.size == 0:
+    U, S, Vt = np.linalg.svd(Xc, full_matrices=False)
+
+    if S.size == 0:
         return spectra, 0, np.zeros((spectra.shape[0],), dtype=np.float32)
 
-    variance = (singular_values ** 2) / max(spectra_centered.shape[0] - 1, 1)
-    total_var = variance.sum()
+    # 每个主成分对应的方差
+    var = (S ** 2) / max(n_samples - 1, 1)
+    total_var = float(var.sum())
     if total_var <= 0:
-        return spectra, 0, np.zeros((spectra.shape[0],), dtype=np.float32)
+        return spectra.copy(), 0, np.zeros((n_samples,), dtype=np.float32)
 
     if isinstance(n_components, float) and 0 < n_components <= 1:
-        ratio_cum = np.cumsum(variance) / total_var
-        components = int(np.searchsorted(ratio_cum, n_components) + 1)
+        cum_ratio = np.cumsum(var) / total_var
+        k = int(np.searchsorted(cum_ratio, n_components) + 1)
     else:
-        try:
-            components = int(n_components)
-        except Exception:
-            components = 1
+        k = int(n_components)
 
-    components = max(1, min(components, vt_matrix.shape[0]))
-    spectra_rec = (u_matrix[:, :components] * singular_values[:components]) @ vt_matrix[
-        :components, :
-    ]
+    k = max(1, min(k, Vt.shape[0]))
+
+    # X_hat = T_k P_k^T + mean
+    # 其中 T_k = U[:, :k] * S[:k]
+    X_hat = (U[:, :k] * S[:k]) @ Vt[:k, :]
     if center:
-        spectra_rec = spectra_rec + mean
+        X_hat = X_hat + mean
 
-    errors = np.mean((spectra - spectra_rec) ** 2, axis=1)
-    return spectra_rec, components, errors
-
+    errors = np.mean((spectra - X_hat) ** 2, axis=1).astype(np.float32)
+    return X_hat, k, errors
 
 def log_removed_samples(label, filenames, errors, threshold, log_path):
     """把 PCA 剔除掉的异常样本写入日志，方便后续追溯。"""
@@ -369,7 +367,6 @@ def log_removed_samples(label, filenames, errors, threshold, log_path):
         for fname, err in zip(filenames, errors):
             file.write(f"  {fname}\t{float(err):.6f}\n")
 
-
 def preprocess_group_samples(
     samples,
     bad_bands,
@@ -381,15 +378,14 @@ def preprocess_group_samples(
 ):
     """对一个分组内的多条光谱做统一清洗，并按需执行 PCA 异常值过滤。"""
     cfg = resolve_pipeline_config(pipeline_config)
-    wn_ref = cfg.build_wn_ref()
+
     if min_samples is None:
         min_samples = int(cfg.min_samples_per_class)
     if apply_pca is None:
         apply_pca = bool(cfg.pca_enabled)
 
-    spectra = []
-    wn_list = []
-    filenames = []
+    wn_ref = cfg.build_wn_ref()
+    spectra, wn_list, filenames = [], [], []
 
     for fname, wn, sp in samples:
         if wn.size == 0 or sp.size == 0:
@@ -428,46 +424,41 @@ def preprocess_group_samples(
         return None, stats
 
     spectra_arr = np.vstack(spectra)
+
     if apply_pca and spectra_arr.shape[0] > 1:
-        _, pca_components, errors = pca_reconstruct_and_error(
+        _, k, errors = pca_reconstruct_and_error(
             spectra_arr,
             n_components=cfg.pca_components,
             center=cfg.pca_center,
         )
-        if pca_components > 0:
-            ratio = max(0.0, min(float(cfg.pca_outlier_ratio), 1.0))
+
+        stats["pca_components"] = k
+
+        if k > 0:
+            ratio = float(np.clip(cfg.pca_outlier_ratio, 0.0, 1.0))
             if ratio <= 0.0:
-                keep_mask = np.ones(errors.shape, dtype=bool)
+                keep_mask = np.ones(len(errors), dtype=bool)
                 threshold = float("inf")
             else:
                 threshold = float(np.quantile(errors, 1.0 - ratio))
                 keep_mask = errors <= threshold
 
-            removed = int((~keep_mask).sum())
-            stats["removed"] = removed
-            stats["pca_components"] = pca_components
+            removed_mask = ~keep_mask
+            stats["removed"] = int(removed_mask.sum())
             stats["threshold"] = threshold
 
-            if removed > 0:
-                removed_mask = ~keep_mask
-                removed_files = [
-                    name for name, is_removed in zip(filenames, removed_mask) if is_removed
-                ]
-                removed_errors = errors[removed_mask]
-                if log_path is not None:
-                    log_removed_samples(
-                        label_display,
-                        removed_files,
-                        removed_errors,
-                        threshold,
-                        log_path,
-                    )
+            if stats["removed"] > 0 and log_path is not None:
+                log_removed_samples(
+                    label_display,
+                    [f for f, rm in zip(filenames, removed_mask) if rm],
+                    errors[removed_mask],
+                    threshold,
+                    log_path,
+                )
 
-                spectra_arr = spectra_arr[keep_mask]
-                filenames = [
-                    name for name, is_kept in zip(filenames, keep_mask) if is_kept
-                ]
-                wn_list = [wn for wn, is_kept in zip(wn_list, keep_mask) if is_kept]
+            spectra_arr = spectra_arr[keep_mask]
+            filenames = [f for f, keep in zip(filenames, keep_mask) if keep]
+            wn_list = [wn for wn, keep in zip(wn_list, keep_mask) if keep]
 
     stats["kept"] = len(filenames)
     if len(filenames) < min_samples:

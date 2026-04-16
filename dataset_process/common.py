@@ -64,7 +64,7 @@ def asls_baseline(spectrum, lam=1e5, p=0.01, niter=10, valid_mask=None):
     """使用 AsLS 估计基线，可选择跳过坏波段对应位置。"""
     length = len(spectrum)
     # 构造二阶差分矩阵
-    diff = sparse.diags([1, -2, 1], [0, -1, -2], shape=(length, length - 2))
+    D = sparse.diags([1, -2, 1], [0, 1, 2], shape=(length - 2, length))
     weights = np.ones(length)
 
     if valid_mask is not None:
@@ -73,7 +73,7 @@ def asls_baseline(spectrum, lam=1e5, p=0.01, niter=10, valid_mask=None):
 
     for _ in range(niter):
         matrix_w = sparse.diags(weights, 0)
-        matrix_z = (matrix_w + lam * diff @ diff.T).tocsc() # W + λD^T D
+        matrix_z = (matrix_w + lam * (D.T @ D)).tocsc() # W + λD^T D
         baseline = spsolve(matrix_z, weights * spectrum)    # 解 z
         weights = np.where(spectrum > baseline, p, 1 - p)
         if valid_mask is not None:
