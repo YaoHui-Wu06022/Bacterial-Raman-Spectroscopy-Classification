@@ -48,11 +48,9 @@ class TrainOverrides:
     current_train_level: str | None = None
     train_only_parent_name: str | None = None
     train_only_parent: int | None = None
-    override_decay_start_ratio: float | None = None
     override_align_loss_weight: float | None = None
     override_supcon_tau: float | None = None
     override_supcon_loss_weight: float | None = None
-    override_timestamp: str | None = None
     override_output_dir: str | None = None
 
 
@@ -73,11 +71,6 @@ def apply_train_overrides(config, overrides=None):
         config.supcon_tau = float(overrides.override_supcon_tau)
     if overrides.override_supcon_loss_weight is not None:
         config.supcon_loss_weight = float(overrides.override_supcon_loss_weight)
-    if overrides.override_decay_start_ratio is not None:
-        config.decay_start_ratio = float(overrides.override_decay_start_ratio)
-
-    if overrides.override_timestamp is not None:
-        config.timestamp = str(overrides.override_timestamp)
     if overrides.override_output_dir is not None:
         config.output_dir = str(overrides.override_output_dir)
     return config
@@ -338,7 +331,6 @@ def run_training(config_obj=None, overrides=None):
         model_log_path, model_log, model_log_file = create_model_logger(
             runtime_dirs["logs"],
             model_tag,
-            config.timestamp,
             log,
         )
         if len(train_indices) == 0:

@@ -1224,12 +1224,20 @@ else:
 
 训练统一从根目录的 `train.py` 进入
 
-训练入口需要显式设置：
+训练入口里当前可显式设置的主要内容包括：
 
-- `DATASET_NAME`
 - `CURRENT_TRAIN_LEVEL`
-- 是否只训练某个父类分支
-- 若干手动覆盖项（如时间戳、输出目录、SupCon 权重等）
+- `TRAIN_ONLY_PARENT_NAME`
+- `TRAIN_ONLY_PARENT`
+- 若干覆盖项，例如：
+  - `OVERRIDE_DECAY_START_RATIO`
+  - `OVERRIDE_ALIGN_LOSS_WEIGHT`
+  - `OVERRIDE_SUPCON_TAU`
+  - `OVERRIDE_SUPCON_LOSS_WEIGHT`
+  - `OVERRIDE_TIMESTAMP`
+  - `OVERRIDE_OUTPUT_DIR`
+
+
 
 运行时会自动生成实验目录：
 

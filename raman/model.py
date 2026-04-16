@@ -23,6 +23,7 @@ def make_conv_block(
     groups=1,
     inplace=True,
 ):
+    # 统一的 Conv1d + BN (+ Activation) 组装函数，避免 backbone 里重复写样板代码。
     if padding is None:
         padding = kernel_size // 2
     layers = [
@@ -68,6 +69,7 @@ class SEBlock1D(nn.Module):
         if not self.se_use:
             return x
 
+        # 保存当前 batch 的通道权重，供后续分析模块读取。
         batch_size, channels, length = x.size()
         scale = self.pool(x).view(batch_size, channels)
         scale = self.fc(scale)
@@ -159,6 +161,7 @@ class ResidualBottleneck1D(nn.Module):
         self.out_act = make_activation(inplace=True)
 
     def forward(self, x):
+        # bottleneck 主支路 + shortcut 残差支路。
         identity = self.shortcut(x)
         out = self.conv_reduce(x)
         out = self.conv_mid(out)
@@ -193,6 +196,7 @@ class CosineClassifier(nn.Module):
         nn.init.xavier_uniform_(self.weight)
 
     def forward(self, x):
+        # 余弦头只比较方向相似度，不让特征模长直接主导分类分数。
         x = F.normalize(x, p=2, dim=1)
         weight = F.normalize(self.weight, p=2, dim=1)
         return self.scale * torch.matmul(x, weight.t())
@@ -219,6 +223,7 @@ class RamanClassifier1D(nn.Module):
         return getattr(self.config, name, default)
 
     def _parse_core_config(self):
+        # 先把结构性配置解析成布尔开关和缓存字段，后面子模块构建只依赖这些状态。
         self.backbone_type = str(self._cfg("backbone_type", "cnn")).lower()
         if self.backbone_type not in ("cnn", "identity"):
             raise ValueError(f"Unknown backbone_type: {self.backbone_type}")
@@ -272,6 +277,7 @@ class RamanClassifier1D(nn.Module):
             if pool_kernel == 1
             else nn.AvgPool1d(kernel_size=pool_kernel, stride=pool_kernel)
         )
+        # identity 路径不做 CNN 提特征，只做下采样后投影到统一序列维度。
         self.input_proj = nn.Sequential(
             nn.Conv1d(self.in_channels, self.proj_dim, kernel_size=1, bias=False),
             nn.BatchNorm1d(self.proj_dim),
@@ -285,6 +291,7 @@ class RamanClassifier1D(nn.Module):
         if isinstance(kernel_sizes, int):
             kernel_sizes = (kernel_sizes,)
         kernel_sizes = [int(k) for k in kernel_sizes]
+        # 单尺度和多尺度共用同一套逻辑；只传一个 kernel 时自然退化为单分支 stem。
         self.stem_branches = nn.ModuleList(
             [
                 make_conv_block(
@@ -345,6 +352,7 @@ class RamanClassifier1D(nn.Module):
         self.seq_dim = self.proj_dim
 
         if self.transformer_on:
+            # Transformer 接收 [B, L, C] 序列表示，在谱峰之间建上下文关系。
             self.pos_encoder = PositionalEncoding1D(d_model=self.proj_dim)
             encoder_layer = nn.TransformerEncoderLayer(
                 d_model=self.proj_dim,
@@ -365,6 +373,7 @@ class RamanClassifier1D(nn.Module):
         self.pos_encoder = None
         self.transformer = None
         if self.lstm_on:
+            # LSTM 路径保留顺序建模能力，但不引入自注意力。
             self.lstm_hidden = int(self._cfg("lstm_hidden", self.proj_dim))
             self.lstm_layers = int(self._cfg("lstm_layers", 1))
             self.lstm_dropout = float(self._cfg("lstm_dropout", 0.0))
@@ -387,6 +396,7 @@ class RamanClassifier1D(nn.Module):
             raise ValueError(f"Unknown pooling_type: {self.pooling_type}")
 
         if self.pooling_type == "attn":
+            # 注意力池化学习“哪些波段位置更值得汇聚到最终表征”。
             att_pool_dropout = 0.2
             self.att_pool = nn.Sequential(
                 nn.Linear(self.seq_dim, self.seq_dim // 2),
@@ -397,6 +407,7 @@ class RamanClassifier1D(nn.Module):
             self.feat_dim = self.seq_dim
         else:
             self.att_pool = None
+            # 统计池化保留全局均值和波动强度两部分信息。
             self.feat_dim = self.seq_dim * 2
 
     def _build_classifier_head(self):
@@ -442,6 +453,7 @@ class RamanClassifier1D(nn.Module):
         return torch.cat([mean, std], dim=1)
 
     def forward(self, x, return_feat=False):
+        # 数据流：局部特征提取 -> 序列建模 -> 池化聚合 -> 分类头。
         features = self._forward_feature_extractor(x)
         features = features.permute(0, 2, 1)
         features = self._forward_sequence_encoder(features)

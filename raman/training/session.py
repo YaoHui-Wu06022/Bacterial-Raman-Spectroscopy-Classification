@@ -63,14 +63,13 @@ def prepare_training_runtime(config):
     dirs = prepare_output_dirs(config=config)
     dump_config_to_yaml(config, os.path.join(config.output_dir, "config.yaml"))
 
-    run_tag = _sanitize_log_name(config.timestamp)
     log_file = open(
-        os.path.join(dirs["logs"], f"run_{run_tag}.log"),
+        os.path.join(dirs["logs"], "run.log"),
         "w",
         buffering=1,
     )
     config_log_file = open(
-        os.path.join(dirs["logs"], f"config_{run_tag}.txt"),
+        os.path.join(dirs["logs"], "config.txt"),
         "w",
         buffering=1,
     )
@@ -83,7 +82,6 @@ def prepare_training_runtime(config):
         config_log_file.write(msg + "\n")
 
     config_log("===== Run Meta =====")
-    config_log(f"Experiment timestamp: {config.timestamp}")
     config_log(f"Output dir: {config.output_dir}")
     config_log("=====================\n")
     config_log("===== Full Config Dump =====")
@@ -102,11 +100,10 @@ def prepare_training_runtime(config):
     return dirs, log, config_log, log_file, config_log_file
 
 
-def create_model_logger(logs_dir, model_tag, run_tag, shared_log):
+def create_model_logger(logs_dir, model_tag, shared_log):
     """为单个模型创建独立日志，并同步写入总日志。"""
     safe_tag = _sanitize_log_name(model_tag)
-    safe_run_tag = _sanitize_log_name(run_tag)
-    log_path = os.path.join(logs_dir, f"{safe_tag}_{safe_run_tag}.log")
+    log_path = os.path.join(logs_dir, f"{safe_tag}.log")
     log_file = open(log_path, "w", buffering=1, encoding="utf-8")
 
     def model_log(msg):
