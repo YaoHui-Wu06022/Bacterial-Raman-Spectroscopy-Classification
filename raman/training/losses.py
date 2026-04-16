@@ -40,12 +40,11 @@ class FocalLoss(nn.Module):
     在交叉熵基础上降低易分类样本的权重，突出难样本。
     """
 
-    def __init__(self, gamma, weight=None, ignore_index=-1, label_smoothing=0.0):
+    def __init__(self, gamma, weight=None, ignore_index=-1):
         super().__init__()
         self.gamma = gamma
         self.weight = weight
         self.ignore_index = ignore_index
-        self.label_smoothing = float(label_smoothing)
 
     def forward(self, logits, targets):
         ce_loss = nn.functional.cross_entropy(
@@ -53,7 +52,6 @@ class FocalLoss(nn.Module):
             targets,
             weight=self.weight,
             reduction="none",
-            label_smoothing=self.label_smoothing,
             ignore_index=self.ignore_index,
         )
         if self.ignore_index is not None:

@@ -206,9 +206,7 @@ class RamanClassifier1D(nn.Module):
     def __init__(self, num_classes, config):
         super().__init__()
         if isinstance(num_classes, (dict, list, tuple)):
-            raise ValueError(
-                "Multi-head classifier is removed; pass a single int num_classes."
-            )
+            raise ValueError("num_classes must be a single int.")
 
         self.config = config
         self.num_classes = int(num_classes)

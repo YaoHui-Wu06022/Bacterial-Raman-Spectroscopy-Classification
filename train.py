@@ -5,10 +5,9 @@ from raman.trainer import TrainOverrides, run_training
 
 # 手动覆盖
 # 适合在 Colab 里快速单独训练某个层级/父类
-CURRENT_TRAIN_LEVEL = "level_1"  # 例如 "level_2"，不允许设置为 "leaf"
-TRAIN_ONLY_PARENT_NAME = None  # 例如 "dachang"
-TRAIN_ONLY_PARENT = None  # 例如 2（可选，优先级高于名称）
-
+CURRENT_TRAIN_LEVEL = "level_1"
+TRAIN_ONLY_PARENT_NAME = None
+TRAIN_ONLY_PARENT = None
 # 可选：覆盖损失参数（单独训练时可能不同）
 OVERRIDE_ALIGN_LOSS_WEIGHT = None
 OVERRIDE_SUPCON_TAU = None

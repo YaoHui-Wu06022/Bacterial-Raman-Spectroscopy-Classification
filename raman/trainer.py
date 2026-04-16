@@ -378,7 +378,6 @@ def run_training(config_obj=None, overrides=None):
             gamma=config.gamma,
             weight=class_weights,
             ignore_index=-1,
-            label_smoothing=config.label_smoothing
         )
 
         # 动态权重相关
@@ -423,12 +422,12 @@ def run_training(config_obj=None, overrides=None):
         group_backbone = []
 
         def is_stem_param(param_name):
-            return param_name.startswith(("conv1", "bn1", "stem_branches"))
+            return param_name.startswith("stem_branches")
 
         for name, p in model.named_parameters():
             if is_stem_param(name):
                 group_conv.append(p)
-            elif name.startswith("head") or name.startswith("heads") or name.startswith("center_head"):
+            elif name.startswith("head"):
                 group_head.append(p)
             else:
                 group_backbone.append(p)
@@ -437,7 +436,7 @@ def run_training(config_obj=None, overrides=None):
             {"params": group_conv, "lr": config.learning_rate*0.6},
             {"params": group_backbone, "lr": config.learning_rate},
             {"params": group_head, "lr": config.learning_rate*1.2},
-        ], weight_decay=5e-4)
+        ], weight_decay=1e-4)
 
         scheduler = optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=config.scheduler_Tmax, eta_min=config.scheduler_eta_min

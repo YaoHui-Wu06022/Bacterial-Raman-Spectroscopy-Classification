@@ -1224,46 +1224,35 @@ else:
 
 训练统一从根目录的 `train.py` 进入
 
-训练入口里当前可显式设置的主要内容包括：
+当前入口层可显式修改的主要内容包括：
 
-- `CURRENT_TRAIN_LEVEL`
+- `CURRENT_TRAIN_LEVEL`  必须显式提供
 - `TRAIN_ONLY_PARENT_NAME`
-- `TRAIN_ONLY_PARENT`
-- 若干覆盖项，例如：
-  - `OVERRIDE_DECAY_START_RATIO`
-  - `OVERRIDE_ALIGN_LOSS_WEIGHT`
-  - `OVERRIDE_SUPCON_TAU`
-  - `OVERRIDE_SUPCON_LOSS_WEIGHT`
-  - `OVERRIDE_TIMESTAMP`
-  - `OVERRIDE_OUTPUT_DIR`
+- `TRAIN_ONLY_PARENT`  索引优先级高于名称
+- `OVERRIDE_ALIGN_LOSS_WEIGHT`
+- `OVERRIDE_SUPCON_TAU`
+- `OVERRIDE_SUPCON_LOSS_WEIGHT`
+- `OVERRIDE_OUTPUT_DIR`
 
+若没有显式指定 `output_dir`，运行时会自动生成实验目录
 
-
-运行时会自动生成实验目录：
-
-```text
-output/<数据集名>/<时间戳>/
 ```
-
-例如：
-
-```text
-output/细菌/20260330_153000/
+output/<数据集名>/<时间戳>/
 ```
 
 实验目录内会保存：
 
 - `config.yaml`
-- `logs/config_<timestamp>.txt`
-- `logs/run_<timestamp>.log`
-- `logs/<model_tag>_<timestamp>.log`
+- `logs/config.txt`
+- `logs/run.log`
+- `logs/<model_tag>.log`
 - `train_files.json`
 - `test_files.json`
 - `class_names.json`
 - `hierarchy_meta.json`
 - 各层级或各父类对应的模型权重
 
-其中 `hierarchy_meta.json` 记录了：
+`hierarchy_meta.json` 是后续预测、评估和分析都会复用的关键元数据文件，主要记录
 
 - 层级顺序
 - 每层类别名
@@ -1271,46 +1260,22 @@ output/细菌/20260330_153000/
 - 本次训练得到的全局模型和各 parent 子模型文件名
 - 哪些父类因为只有一个子类而被直接记录为“确定映射”
 
-后续预测、评估和分析都会复用这些元数据
-
-当前训练运行时准备逻辑主要在 `raman/training/session.py`
-
-它会负责：
-
-- 设置随机种子和 cuDNN 可复现开关
-- 创建输出目录与日志目录
-- 把本次配置完整落盘到 `config.yaml`
-- 同时写一份更适合人工复查的 `config_<timestamp>.txt`
-
-日志层面现在分成两层：
-
-- `run_<timestamp>.log`：整次训练的总日志
-- `<model_tag>_<timestamp>.log`：具体某个模型的单独日志
-
-这样做的好处是：
-
-- 同一个实验目录里继续训练下一层时，不会覆盖之前的日志
-- 回看某个 parent 子模型时，可以直接打开它自己的日志，而不必在总日志里手动定位
-
 ### 6.2 层级训练逻辑
 
 训练入口里设置的是 `CURRENT_TRAIN_LEVEL`
 
-- 数据集层级始终由 `dataset_train/` 目录树自动扫描得到
+- 数据集完整层级始终由 `dataset_train/` 的目录树自动扫描得到
 - `CURRENT_TRAIN_LEVEL` 只表示“这次训练实际要训练的那一层”
 
 当 `train_per_parent=True` 时，训练行为是：
 
 - 顶层没有父层，因此训练全局模型
-- 对更细层级，如果某层有父层，就按父类拆成多个子模型分别训练
-- 如果某个父类下只有一个子类，则不训练该 parent 子模型，只在元数据中记录这条确定关系
-
-当前训练器并不是“自动从顶层一路往下跑完所有层级”，而是：
-
-- 每次只训练一个 `CURRENT_TRAIN_LEVEL`
-- 如果这一层启用了 `train_per_parent=True`，则在该层内部按父类拆成多个任务
+- 若当前层存在父层，则按父类拆成多个子任务
+- 若某个父类下只有一个子类，则不训练该 parent 子模型，只在层级元数据中记录这条确定关系
 
 如果当前实验目录缺少上一级模型或单子类记录，训练开始时会打印提示，提醒先训练哪一级
+
+若给定 `TRAIN_ONLY_PARENT`，则直接按父类索引限制训练范围
 
 ### 6.3 训练/验证切分
 
@@ -1318,9 +1283,10 @@ output/细菌/20260330_153000/
 
 切分逻辑位于 `raman/training/split.py`：
 
-1. 优先检查实验目录里是否已有 `train_files.json` 和 `test_files.json`
-2. 如果已有，则直接复用旧切分
-3. 如果没有，则按 `split_level` 分组后再做比例切分
+1. 根据 `split_level`、`train_split` 和 `seed` 生成一份切分
+2. 再检查当前实验目录中是否已经存在 `train_files.json` 和 `test_files.json`
+3. 若存在，则直接复用已有切分
+4. 若不存在，则把新生成的切分写入实验目录
 
 默认配置：
 
@@ -1328,17 +1294,15 @@ output/细菌/20260330_153000/
 - `train_split = 0.8`
 - `seed = 42`
 
-按 `leaf` 分组再切分的目的是尽量避免同一来源分组的样本同时落入训练集和验证集，从而减少信息泄漏
-
-切分一旦生成并写入实验目录，后续继续训练同一实验目录下的更细层级时，会优先复用原来的 `train_files.json / test_files.json`
+切分文件在实验目录中生成，后续继续在同一实验目录下训练更细层级时，会优先复用同一套 `train_files.json / test_files.json`，主要目的是：
 
 - 顶层模型和子模型尽量使用同一套训练/验证划分基准
 - 多次补训练时，验证结果具有可比较性
 - 不会因为每次重切分而造成实验波动
 
-### 6.4 当前训练优化机制
+### 6.4 训练优化
 
-当前训练的“优化”并不是只指优化器，而是四类同时生效的机制：
+主要涵盖四类机制：
 
 1. 参数更新侧：`Adam + weight_decay + CosineAnnealingLR`
 2. 结构分区侧：不同模块使用不同学习率
@@ -1347,24 +1311,36 @@ output/细菌/20260330_153000/
 
 #### 参数更新侧
 
-当前训练器使用：
-
-- `Adam`
-- `weight_decay = 5e-4`
-- `CosineAnnealingLR`
-
-默认主学习率为：
-
-```text
-learning_rate = 4e-4
-```
+默认主学习率 `learning_rate = 4e-4`
 
 学习率调度参数为：
 
 - `scheduler_Tmax = epochs`
 - `scheduler_eta_min = 1e-5`
 
-也就是说，主学习率会沿余弦曲线从 `4e-4` 逐步退火到 `1e-5`，训练前期更新更积极，后期更偏向细调和收敛。
+学习率受到两层作用：
+
+- `Adam` 负责根据梯度及其历史统计更新参数 $\theta_t$
+- `CosineAnnealingLR` 控制全局学习率 $ \eta_t$ 沿余弦曲线逐步退火
+
+```math
+\theta_{t+1}=\theta_t-\eta_t \cdot \frac{\hat m_t}{\sqrt{\hat v_t}+\epsilon}\\
+\eta_t=\eta_{\min}+\frac{1}{2}\left(\eta_{\max}-\eta_{\min}\right)\left(1+\cos\left(\frac{\pi t}{T_{\max}}\right)\right)
+```
+
+```python
+optimizer = optim.Adam(
+    param_groups,
+    weight_decay=1e-4,
+)
+scheduler = optim.lr_scheduler.CosineAnnealingLR(
+    optimizer,
+    T_max=config.scheduler_Tmax,
+    eta_min=config.scheduler_eta_min,
+)
+```
+
+调度器直接作用在带分组学习率的 optimizer 上
 
 #### 分组学习率
 
@@ -1380,8 +1356,6 @@ learning_rate = 4e-4
 - backbone 主体保持标准学习率，承担主要表征学习
 - 分类头学习率略高，便于更快贴合当前层级的类别边界
 
-当前训练器对多尺度 stem 的参数分组也已经对齐，`stem_branches.*` 会与单尺度 stem 一样进入低学习率组。
-
 #### DataLoader 设置
 
 当前 DataLoader 相关默认配置来自 `config.py`：
@@ -1392,9 +1366,9 @@ learning_rate = 4e-4
 - `loader_persistent_workers = True`
 - `loader_prefetch_factor = 2`
 
-训练集 `DataLoader` 当前使用的是普通 `shuffle=True`，并没有额外引入自定义分层 batch sampler
+训练集 `DataLoader` 当前使用的是普通 `shuffle=True`
 
-因此这部分配置当前主要影响的是训练效率，而不是损失定义本身：
+这部分配置当前主要影响的是训练效率
 
 - 每个 epoch 的吞吐速度
 - CPU 预取是否能跟上 GPU
@@ -1405,97 +1379,137 @@ learning_rate = 4e-4
 
 #### Early Stop
 
-当前早停评分不是单纯看验证集准确率，也不是看最低 `TestLoss`，而是：
+当前对模型的得分评价依赖准确度和回召率
 
-$$
+```math
 \text{score} = w_{f1} \cdot \text{MacroF1} + w_{acc} \cdot \text{Accuracy}
-$$
+```
 
 默认权重为：
 
 - `early_stop_w_f1 = 0.6`
 - `early_stop_w_acc = 0.4`
 
-这意味着模型保存更偏向宏平均 F1，而不是只偏向头部类别占优时更容易好看的 Accuracy。
+`Accuracy` 表示整体分类准确率，即所有样本中被正确分类的比例
 
-对当前这种类间不平衡、不同类别难度差异又较大的拉曼任务来说，这比“只看 Accuracy 保存 best model”更稳妥，因为：
+```math
+\text{Accuracy} = \frac{\sum_i \mathbf{1}(\hat{y}_i = y_i)}{N}
+```
 
-- Accuracy 更容易被头部类主导
-- Macro F1 更能反映尾部类和难类是否真正学到
-- 两者加权后，可以避免模型选择过度偏向单一指标
+反映的是整体正确率，因此更容易受到头部类别样本数的影响
 
-还需要特别注意一条容易混淆的实现细节：
+`MacroF1` 表示先分别计算每个类别的 F1，再在类别维度做简单平均
+
+先定义精确率和召回率
+
+```math
+P_c = \frac{TP_c}{TP_c + FP_c} \qquad  R_c = \frac{TP_c}{TP_c + FN_c}
+```
+
+- $TP_c$ 表示第 $c$ 类的真正例数
+- $FP_c$ 表示被错误预测为第 $c$ 类的样本数
+- $FN_c$ 表示真实为第 $c$ 类但未被预测正确的样本数
+
+则该类的 F1 为
+
+```math
+F1_c = \frac{2 P_c R_c}{P_c + R_c}
+```
+
+最终的宏平均 F1
+
+```math
+\text{MacroF1} = \frac{1}{C} \sum_{c=1}^{C} F1_c
+```
+
+对当前这种类间不平衡、不同类别难度差异又较大的拉曼任务来说，Macro F1 更能反映尾部类和难类是否真正学到
+
+```python
+score = (
+    config.early_stop_w_f1 * macro_f1
+    + config.early_stop_w_acc * test_acc
+)
+if score >= best_score:
+    best_score = score
+    torch.save(model.state_dict(), best_model_path)
+```
+
+另外：
 
 - 训练日志中的 `TrainLoss(cls)` 是主分类损失的 batch 平均
 - `AlignLossW` 和 `SupConLossW` 是已经乘过当前 epoch 权重后的辅助损失
 - 验证日志里的 `TestLoss` 来自验证阶段单独计算的 `CrossEntropyLoss`
 
-因此：
+### 6.5 训练损失
 
-- `TestLoss` 不是训练时反向传播所用的总损失
-- best model 也不是按最低 `TestLoss` 保存
-- 当前真正用于 model selection 的是上面的综合 `score`
-
-### 6.5 当前训练总损失
-
-如果按真实实现来写，当前训练总损失更接近下面两层结构：
+训练时的总损失可以概括为两层结构：
 
 总损失层：
 
-$$
+```math
 L_{\text{total}}(t)=L_{\text{primary}}(t)+\lambda_{\text{align}}(t)L_{\text{align}}+\lambda_{\text{supcon}}(t)L_{\text{supcon}}
-$$
+```
 
 主损失层：
 
-$$
-L_{\text{primary}}(t)=\frac{1}{N}\sum_i \Big( s_i \cdot \text{Focal}(logits_i,y_i;w_{\text{dyn}}(t)) \Big)
-$$
+```math
+\ell_i^{\text{cls}}(t)=\operatorname{Focal}\!\bigl(logits_i,\; y_i;\; w_{\text{dyn}}(t)\bigr)\\
+L_{\text{primary}}(t)=\frac{1}{N}\sum_i s_i\,\ell_i^{\text{cls}}(t)
+```
 
 其中：
 
-- `L_align`：当前层级的类内紧凑约束，对应 `hierarchical_center_loss`
+- `L_align`：层级的类内紧凑约束
 - `L_supcon`：监督式对比损失
 - $w_{\text{dyn}}(t)$：按 epoch 动态变化的类别权重
 - $s_i$：样本级错误严重程度权重
 
-当前代码里的 `L_primary` 并不是“单一 FocalLoss”，而是：
+```python
+loss_each = criterion(logits_valid, y_valid)
 
-- `FocalLoss`
-- `class_weights`
-- `DRW / EMA dynamic weight`
-- `severity weight`
+if config.use_severity_weight:
+    with torch.no_grad():
+        prob = torch.softmax(logits_valid, dim=1)
+        severity_w = _compute_severity_weights(prob, y_valid)
+    loss_primary = (loss_each * severity_w).mean()
+else:
+    loss_primary = loss_each.mean()
 
-共同叠加后的主分类损失
+loss_align = align_loss_fn(feat, hier_labels)
+loss_supcon = supcon_loss_fn(feat, hier_labels)
 
-从这个角度看，当前训练的主损失已经同时覆盖了四个层面：
+loss_total = loss_primary + align_w * loss_align + supcon_w * loss_supcon
+```
 
-- 概率层：让真实类概率变高
-- 类别层：避免少数类被头部类淹没
-- 样本层：突出高置信错判等更危险错误
-- embedding 层：通过 `align` 和 `supcon` 继续整理特征空间
+`criterion(...)` 内部已经包含 `FocalLoss + class_weights (+ DRW 动态权重)`
+
+`severity weight` 是在逐样本主损失上再次做样本级重加权
+
+`align` 和 `supcon` 是在外层额外相加的 embedding 约束项
 
 #### Focal Loss
 
-在光谱层级分类任务中，不同样本难度差异较大，容易样本会主导梯度，导致模型忽略难样本。
+在光谱层级分类任务中，不同样本难度差异较大，容易样本会主导梯度，导致模型忽略难样本
 
-Focal Loss 在 CrossEntropy 的基础上增加一个可调节因子，抑制易样本梯度，放大难样本梯度，从而让训练更关注难样本。
+Focal Loss 在交叉熵损失的基础上增加一个可调节因子，抑制易样本梯度，放大难样本梯度，从而让训练更关注难样本
 
-`CrossEntropy Loss`：
+`CrossEntropy Loss`
 
-$$
+```math
 CE(p_t) = - \log(p_t)
-$$
+```
 
-`Focal Loss`：
+`Focal Loss`
 
-$$
+```math
 FL(p_t) = - \alpha_t (1 - p_t)^\gamma \log(p_t)
-$$
+```
+
+其中
 
 - $p_t$：模型对真实类别的预测概率
 - $\gamma$：控制对易样本的抑制程度
-- $\alpha_t$：类别权重，当前实现中可由静态 `class_weights` 和动态 `DRW / EMA` 共同决定
+- $\alpha_t$：类别权重，当前实现中对应 `weight`
 
 当前实现对应：
 
@@ -1504,20 +1518,24 @@ criterion = FocalLoss(
     gamma=config.gamma,               # 0.8
     weight=dynamic_weights,           # class_weights 经过 DRW / EMA 调整后的结果
     ignore_index=-1,
-    label_smoothing=config.label_smoothing
 )
 ```
 
-这里还有两个实现细节值得说明：
+`FocalLoss.forward()` 的实现是先算逐样本交叉熵，再乘 focal 因子
 
-- 当前 `gamma = 0.8`，属于偏温和的设置，不是极端强调 hard sample
-- 当前项目并不是把所有“困难样本压力”都压在 Focal 上，而是让它和 `severity weight`、`DRW` 分工
+```python
+ce_loss = F.cross_entropy(
+    logits,
+    targets,
+    weight=self.weight,
+    reduction="none",
+    ignore_index=self.ignore_index,
+)
+pt = torch.exp(-ce_loss)
+return ((1 - pt) ** self.gamma) * ce_loss
+```
 
-也就是说：
 
-- `FocalLoss` 主要处理“这个样本本身难不难”
-- `DRW / EMA` 主要处理“这个类别是不是持续更难学”
-- `severity weight` 主要处理“这次错误是不是特别危险”
 
 #### class_weights
 
