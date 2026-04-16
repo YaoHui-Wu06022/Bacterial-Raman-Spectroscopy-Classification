@@ -1788,15 +1788,16 @@ L_g^{(\text{align})}
 
 ### 6.6 训练损失之间的分工
 
-从训练行为的角度看，当前项目不是简单把多个 loss 堆在一起，而是在四个层面共同作用于同一次反向传播：
+从代码实现看，当前训练不是简单把多个 loss 机械相加，而是在 4 个层面共同作用于同一次反向传播：
 
 1. 概率层：
    - `FocalLoss`
+   - 直接作用在 `logits_valid` 与 `y_valid` 上
    - 负责把真实类概率推高，把分类边界学出来
 
 2. 类别层：
-   - `class_weights`
-   - `DRW / EMA`
+   - `base_class_weights`
+   - `ema_class_weights`
    - 负责决定“哪些类别不该在训练中被淹没”
 
 3. 样本层：
@@ -1804,31 +1805,26 @@ L_g^{(\text{align})}
    - 负责决定“哪些具体错误更危险、更值得放大梯度”
 
 4. embedding 层：
-   - `SupCon Loss`
-   - `Center / Align Loss`
+   - `SupConLoss`
+   - `AlignLoss`
    - 负责整理分类头之前的特征空间几何结构
 
-因此它们不是重复堆料，而是分工不同：
+因此它们的分工是：
 
 - `FocalLoss` 解决“分错”和“难样本”
-- `class_weights + DRW` 解决“哪些类不该被训练过程淹没”
+- `base_class_weights + ema_class_weights` 解决“哪些类在当前训练阶段更需要额外关注”
 - `severity weight` 解决“哪些错误更危险、更值得纠正”
-- `SupCon` 解决“相对距离结构”
-- `Center / Align` 解决“当前层类内紧凑性”
+- `SupConLoss` 解决“类间分离与类内相对距离结构”
+- `AlignLoss` 解决“当前 batch 内的类内紧凑性”
 
-如果把它们对应回总损失：
-
-- `L_primary` 负责主判别目标
-- `L_primary` 内部已经包含类别层和样本层的重加权
-- `L_align` 与 `L_supcon` 负责 embedding 几何约束
-
-所以当前训练设计的闭环可以概括为：
+当前训练闭环可以概括为：
 
 - 用 `FocalLoss` 学分类边界
-- 用 `class_weights + DRW` 修正类别不平衡
-- 用 `severity weight` 提高高置信错判的学习强度
-- 用 `SupCon` 拉开 embedding 的相对结构
-- 用 `Center / Align` 收紧当前层的类内分布
+- 用 `base_class_weights` 做静态类别平衡
+- 用 `ema_class_weights` 在训练中后期按类别难度动态修正权重
+- 用 `severity weight` 提高高置信错判样本的学习强度
+- 用 `SupConLoss` 拉开 embedding 的相对结构
+- 用 `AlignLoss` 收紧当前层的类内分布
 
 ## 7. 评估
 
