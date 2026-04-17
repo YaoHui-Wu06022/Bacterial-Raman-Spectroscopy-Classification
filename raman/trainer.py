@@ -198,6 +198,7 @@ def _compute_severity_weights(prob, targets):
     """
     num_classes = prob.size(1)
     severity_w = torch.ones(prob.size(0), dtype=prob.dtype, device=prob.device)
+    # 二分类直接返回
     if num_classes <= 2:
         return severity_w
 
@@ -208,24 +209,26 @@ def _compute_severity_weights(prob, targets):
     rank = torch.full_like(topk_idx[:, 0], fill_value=topk + 1)
     for k in range(topk):
         rank[topk_idx[:, k] == targets] = k + 1
-
+    # 三分类
     if num_classes == 3:
         if topk >= 2:
-            severity_w[rank == 2] = 0.90
+            severity_w[rank == 2] = 0.95
+        severity_w[rank >= 3] = 1.10
 
-        high_conf_wrong = (~is_top1) & (topk_val[:, 0] > 0.85)
-        severity_w[high_conf_wrong & (rank == 2)] = 1.10
-        severity_w[high_conf_wrong & (rank >= 3)] = 1.45
+        high_conf_wrong = (~is_top1) & (topk_val[:, 0] > 0.88)
+        severity_w[high_conf_wrong & (rank == 2)] = 1.05
+        severity_w[high_conf_wrong & (rank >= 3)] = 1.25
         return severity_w
 
     if topk >= 2:
-        severity_w[rank == 2] = 0.85
+        severity_w[rank == 2] = 0.90
     if topk >= 3:
-        severity_w[rank == 3] = 0.95
+        severity_w[rank == 3] = 1.00
+    severity_w[rank >= 4] = 1.10
 
-    high_conf_wrong = (~is_top1) & (topk_val[:, 0] > 0.80)
-    severity_w[high_conf_wrong & (rank == 2)] = 1.20
-    severity_w[high_conf_wrong & (rank >= 3)] = 1.80
+    high_conf_wrong = (~is_top1) & (topk_val[:, 0] > 0.85)
+    severity_w[high_conf_wrong & (rank == 2)] = 1.10
+    severity_w[high_conf_wrong & (rank >= 3)] = 1.35
     return severity_w
 
 
@@ -586,10 +589,7 @@ def run_training(config_obj=None, overrides=None):
                                 mask = (y_valid == g)
                                 if mask.any():
                                     mean_ce = ce_each[mask].mean()
-                                    ema_class_ce[g] = (
-                                        ema_alpha * ema_class_ce[g]
-                                        + (1.0 - ema_alpha) * mean_ce
-                                    )
+                                    ema_class_ce[g] = ema_alpha * ema_class_ce[g] + (1.0 - ema_alpha) * mean_ce
 
                 train_loss = running_loss / len(train_loader)
                 train_align_loss = align_w * running_align_loss / max(len(train_loader), 1)

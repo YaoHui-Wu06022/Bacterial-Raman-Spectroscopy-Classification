@@ -73,34 +73,34 @@ class FocalLoss(nn.Module):
         return loss
 
 
-def AlignLoss(feat, labels):
+def AlignLoss(feat, y):
     """
     仅按当前训练层标签计算 batch 内类内紧凑损失。
     """
-    valid = labels >= 0
-    if not valid.any():
+    valid_mask = y >= 0
+    if not valid_mask.any():
         return torch.tensor(0.0, device=feat.device)
 
-    labels = labels[valid]
-    feat_valid = feat[valid]
+    y_valid = y[valid_mask]
+    feat_valid = feat[valid_mask]
 
-    loss = 0.0
-    count = 0
-    for class_id in labels.unique():
-        feat_class = feat_valid[labels == class_id]
-        if feat_class.size(0) <= 1:
+    align_loss = 0.0
+    valid_group_count = 0
+    for g in y_valid.unique():
+        feat_g = feat_valid[y_valid == g]
+        if feat_g.size(0) <= 1:
             continue
 
-        center = feat_class.mean(dim=0, keepdim=True)
-        diff = feat_class - center
-        radial = (diff * diff).sum(dim=1)
-        loss += radial.mean()
-        count += 1
+        center_g = feat_g.mean(dim=0, keepdim=True)
+        diff_g = feat_g - center_g
+        radial_g = (diff_g * diff_g).sum(dim=1)
+        align_loss += radial_g.mean()
+        valid_group_count += 1
 
-    if count == 0:
+    if valid_group_count == 0:
         return torch.tensor(0.0, device=feat.device)
 
-    return loss / count
+    return align_loss / valid_group_count
 
 
 class SupConLoss(nn.Module):
@@ -115,11 +115,11 @@ class SupConLoss(nn.Module):
         super().__init__()
         self.tau = float(temperature)
 
-    def forward(self, feat, labels):
+    def forward(self, feat, y):
         """
         参数：
         - `feat`: `[B, D]` 的 embedding
-        - `labels`: `[B]` 的监督标签
+        - `y`: `[B]` 的监督标签
         """
         device = feat.device
         batch_size = feat.size(0)
@@ -128,24 +128,25 @@ class SupConLoss(nn.Module):
             return torch.tensor(0.0, device=device)
 
         z = F.normalize(feat, p=2, dim=1)
-        logits = torch.matmul(z, z.t()) / self.tau
+        sim = torch.matmul(z, z.t()) / self.tau
 
-        logits_mask = torch.ones_like(logits, dtype=torch.bool)
-        logits_mask.fill_diagonal_(False)
+        off_diag_mask = torch.ones_like(sim, dtype=torch.bool)
+        off_diag_mask.fill_diagonal_(False)
 
-        labels = labels.view(-1, 1)
-        pos_mask = (labels == labels.t()) & logits_mask
+        y = y.view(-1, 1)
+        pos_mask = (y == y.t()) & off_diag_mask # 标出正样本位置
         if not pos_mask.any():
             return torch.tensor(0.0, device=device)
-
-        logits = logits - logits.max(dim=1, keepdim=True).values.detach()
-        exp_logits = torch.exp(logits) * logits_mask.float()
-        log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-12)
+        # 减去最大值是为了数值稳定性
+        sim = sim - sim.max(dim=1, keepdim=True).values.detach()
+        exp_sim = torch.exp(sim) * off_diag_mask.float()
+        
+        log_q = sim - torch.log(exp_sim.sum(dim=1, keepdim=True) + 1e-12)
 
         pos_count = pos_mask.sum(dim=1)
-        valid = pos_count > 0
-        mean_log_prob_pos = (
-            (log_prob * pos_mask.float()).sum(dim=1) / (pos_count + 1e-12)
+        valid_anchor = pos_count > 0
+        mean_log_q_pos = (
+            (log_q * pos_mask.float()).sum(dim=1) / (pos_count + 1e-12)
         )
 
-        return -mean_log_prob_pos[valid].mean()
+        return -mean_log_q_pos[valid_anchor].mean()

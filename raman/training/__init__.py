@@ -9,11 +9,11 @@ from .eval import (
     mask_logits_by_parent,
 )
 from .losses import (
+    AlignLoss,
     FocalLoss,
     SupConLoss,
     build_class_weights,
     get_linear_weight,
-    hierarchical_center_loss,
 )
 from .session import (
     prepare_output_dirs,
@@ -35,6 +35,7 @@ from .split import (
 )
 
 __all__ = [
+    "AlignLoss",
     "FocalLoss",
     "SupConLoss",
     "apply_train_filter",
@@ -44,7 +45,6 @@ __all__ = [
     "evaluate_file_level",
     "evaluate_file_level_local",
     "get_linear_weight",
-    "hierarchical_center_loss",
     "load_split_files",
     "log_split_summary",
     "mask_logits_by_parent",

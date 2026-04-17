@@ -17,10 +17,9 @@ from raman.training import load_split_files
 
 
 # 手动设置实验目录
-EXP_DIR = ""
+EXP_DIR = "output/细菌/20260417_073717_6分类"
 COMPARE_LEVEL = "level_1"  # 必须显式设置为业务层
 TOP_K = 3
-
 
 def _load_hierarchy_meta(exp_dir: Path) -> dict:
     meta_path = exp_dir / "hierarchy_meta.json"
@@ -114,37 +113,85 @@ def _format_topk(items: list[dict]) -> str:
     return json.dumps(items, ensure_ascii=False)
 
 
-def _plot_folder_summary(
+def _get_wavenumber_axis(config, length: int) -> np.ndarray:
+    if hasattr(config, "cut_min") and hasattr(config, "cut_max"):
+        return np.linspace(float(config.cut_min), float(config.cut_max), length, dtype=np.float32)
+    return np.arange(length, dtype=np.float32)
+
+
+def _plot_spectrum_comparison(
     save_path: Path,
     folder_name: str,
     expected_label: str | None,
-    model_items: list[dict],
-    neighbor_items: list[dict],
-    centroid_top1_label: str,
+    test_signals: np.ndarray,
+    wavenumbers: np.ndarray,
+    expected_mean_signal: np.ndarray | None,
 ):
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+    fig, ax = plt.subplots(figsize=(10, 5.5))
 
-    def plot_bar(ax, title, items):
-        labels = [item["label"] for item in items]
-        values = [item["count"] for item in items]
-        ax.bar(range(len(labels)), values, color="#4C78A8")
-        ax.set_title(title)
-        ax.set_xticks(range(len(labels)))
-        ax.set_xticklabels(labels, rotation=25, ha="right")
-        ax.grid(axis="y", alpha=0.25)
-        for i, item in enumerate(items):
-            ax.text(i, values[i], f'{item["count"]}\n{item["ratio"]:.2f}', ha="center", va="bottom", fontsize=9)
+    for signal in test_signals:
+        ax.plot(wavenumbers, signal, color="#9ECAE1", alpha=0.45, linewidth=1.0)
 
-    plot_bar(axes[0], "Model Vote Top-K", model_items)
-    plot_bar(axes[1], "Embedding Neighbor Vote Top-K", neighbor_items)
+    test_mean = test_signals.mean(axis=0)
+    ax.plot(wavenumbers, test_mean, color="#1F77B4", linewidth=2.0, label="Test Mean")
 
-    model_top1 = model_items[0]["label"] if model_items else ""
-    neighbor_top1 = neighbor_items[0]["label"] if neighbor_items else ""
-    fig.suptitle(
-        f"{folder_name} | expected={expected_label or 'None'} | "
-        f"model_top1={model_top1} | neighbor_top1={neighbor_top1} | centroid_top1={centroid_top1_label}",
-        fontsize=13,
-    )
+    if expected_mean_signal is not None:
+        ax.plot(
+            wavenumbers,
+            expected_mean_signal,
+            color="#E45756",
+            linewidth=2.4,
+            label=f"Train Mean ({expected_label})",
+        )
+
+    ax.set_title(f"Spectrum Shape Compare | {folder_name}")
+    ax.set_xlabel("Wavenumber")
+    ax.set_ylabel("Normalized Intensity")
+    ax.grid(alpha=0.25)
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close(fig)
+
+
+def _plot_vote_distribution(
+    save_path: Path,
+    folder_name: str,
+    expected_label: str | None,
+    items: list[dict],
+    vote_type: str,
+):
+    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+    labels = [item["label"] for item in items]
+    values = [item["count"] for item in items]
+    ax.bar(range(len(labels)), values, color="#4C78A8")
+    ax.set_title(f"{folder_name} | expected={expected_label or 'None'} | {vote_type}")
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=25, ha="right")
+    ax.grid(axis="y", alpha=0.25)
+    for i, item in enumerate(items):
+        ax.text(i, values[i], f'{item["count"]}\n{item["ratio"]:.2f}', ha="center", va="bottom", fontsize=9)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close(fig)
+
+
+def _plot_centroid_similarity(
+    save_path: Path,
+    folder_name: str,
+    expected_label: str | None,
+    items: list[dict],
+):
+    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+    labels = [item["label"] for item in items]
+    values = [item["score"] for item in items]
+    ax.bar(range(len(labels)), values, color="#F28E2B")
+    ax.set_title(f"{folder_name} | expected={expected_label or 'None'} | Centroid Similarity")
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=25, ha="right")
+    ax.grid(axis="y", alpha=0.25)
+    for i, item in enumerate(items):
+        ax.text(i, values[i], f'{item["score"]:.3f}', ha="center", va="bottom", fontsize=9)
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
     plt.close(fig)
@@ -161,7 +208,6 @@ def _build_train_embedding_bank(
     level_idx = dataset.head_name_to_idx[compare_level]
     feats_list = []
     labels_list = []
-    paths_list = []
 
     with torch.no_grad():
         for start in range(0, len(train_indices), batch_size):
@@ -176,14 +222,35 @@ def _build_train_embedding_bank(
 
             feats_list.append(feat)
             labels_list.append(dataset.level_labels[valid_indices, level_idx].astype(np.int64))
-            paths_list.extend(dataset.samples[valid_indices].tolist())
 
     if not feats_list:
         raise RuntimeError("No training embeddings were collected.")
 
     train_feats = torch.cat(feats_list, dim=0)
     train_labels = np.concatenate(labels_list, axis=0)
-    return train_feats, train_labels, paths_list
+    return train_feats, train_labels
+
+
+def _build_train_mean_signal_bank(
+    dataset: RamanDataset,
+    compare_level: str,
+    train_indices: np.ndarray,
+) -> dict[int, np.ndarray]:
+    level_idx = dataset.head_name_to_idx[compare_level]
+    signal_bank: dict[int, list[np.ndarray]] = {}
+
+    for idx in train_indices:
+        idx = int(idx)
+        class_id = int(dataset.level_labels[idx, level_idx])
+        if class_id < 0:
+            continue
+        signal = dataset[idx][0][0].detach().cpu().numpy().astype(np.float32, copy=False)
+        signal_bank.setdefault(class_id, []).append(signal)
+
+    mean_bank = {}
+    for class_id, signals in signal_bank.items():
+        mean_bank[class_id] = np.mean(np.stack(signals, axis=0), axis=0)
+    return mean_bank
 
 
 def _build_class_centroids(train_feats: torch.Tensor, train_labels: np.ndarray, num_classes: int) -> torch.Tensor:
@@ -212,6 +279,7 @@ def _collect_folder_embeddings(
 ):
     feats = []
     preds = []
+    signals = []
 
     with torch.no_grad():
         for path in paths:
@@ -220,9 +288,11 @@ def _collect_folder_embeddings(
             probs = torch.softmax(logits, dim=1)[0]
             preds.append(int(torch.argmax(probs).item()))
             feats.append(_l2_normalize_rows(feat)[0].cpu())
+            signals.append(x[0, 0].detach().cpu().numpy().astype(np.float32, copy=False))
 
     folder_feats = torch.stack(feats, dim=0)
-    return folder_feats, preds
+    folder_signals = np.stack(signals, axis=0)
+    return folder_feats, preds, folder_signals
 
 
 def main():
@@ -260,12 +330,17 @@ def main():
     else:
         train_indices, _ = split
 
-    train_feats, train_labels, _ = _build_train_embedding_bank(
+    train_feats, train_labels = _build_train_embedding_bank(
         full_dataset,
         model,
         compare_level,
         train_indices,
         device,
+    )
+    train_mean_signal_bank = _build_train_mean_signal_bank(
+        full_dataset,
+        compare_level,
+        train_indices,
     )
     class_centroids = _build_class_centroids(train_feats, train_labels, num_classes)
     train_feats_t = train_feats.t().contiguous()
@@ -273,17 +348,21 @@ def main():
     preprocessor = InputPreprocessor(config, device)
     test_folders = _iter_test_folders(dataset_test_root)
     compare_lookup = _build_compare_lookup(full_dataset, compare_level)
+    signal_length = next(iter(train_mean_signal_bank.values())).shape[0]
+    wavenumbers = _get_wavenumber_axis(config, signal_length)
 
-    out_dir = exp_dir / "test_train_embedding_compare"
+    out_dir = exp_dir / "embedding_compare"
     out_dir.mkdir(parents=True, exist_ok=True)
     summary_path = out_dir / "summary.csv"
 
     rows = []
     for folder_name, paths in test_folders.items():
+        folder_out_dir = out_dir / folder_name
+        folder_out_dir.mkdir(parents=True, exist_ok=True)
         expected_label = _infer_expected_label(folder_name, compare_lookup)
         expected_id = label_map.get(expected_label) if expected_label is not None else None
 
-        folder_feats, model_preds = _collect_folder_embeddings(model, preprocessor, paths, device)
+        folder_feats, model_preds, folder_signals = _collect_folder_embeddings(model, preprocessor, paths, device)
         similarity = torch.matmul(folder_feats, train_feats_t)
         nearest_indices = torch.argmax(similarity, dim=1).cpu().numpy()
         neighbor_preds = train_labels[nearest_indices].astype(np.int64)
@@ -334,14 +413,35 @@ def main():
         neighbor_top1_label = neighbor_items[0]["label"] if neighbor_items else ""
         neighbor_top1_count = neighbor_items[0]["count"] if neighbor_items else 0
         neighbor_top1_ratio = neighbor_items[0]["ratio"] if neighbor_items else 0.0
+        expected_mean_signal = None if expected_id is None else train_mean_signal_bank.get(int(expected_id))
 
-        _plot_folder_summary(
-            out_dir / f"{folder_name}.png",
+        _plot_spectrum_comparison(
+            folder_out_dir / "spectra.png",
+            folder_name,
+            expected_label,
+            folder_signals,
+            wavenumbers,
+            expected_mean_signal,
+        )
+        _plot_vote_distribution(
+            folder_out_dir / "model_vote.png",
             folder_name,
             expected_label,
             model_items,
+            "Model Vote",
+        )
+        _plot_vote_distribution(
+            folder_out_dir / "neighbor_vote.png",
+            folder_name,
+            expected_label,
             neighbor_items,
-            centroid_top1_label,
+            "Embedding Neighbor Vote",
+        )
+        _plot_centroid_similarity(
+            folder_out_dir / "centroid_similarity.png",
+            folder_name,
+            expected_label,
+            centroid_items,
         )
 
         rows.append(
@@ -368,6 +468,10 @@ def main():
                     if expected_centroid_cos is None or nearest_wrong_centroid_cos is None
                     else f"{(expected_centroid_cos - nearest_wrong_centroid_cos):.6f}"
                 ),
+                "spectrum_plot": f"{folder_name}/spectra.png",
+                "model_vote_plot": f"{folder_name}/model_vote.png",
+                "neighbor_vote_plot": f"{folder_name}/neighbor_vote.png",
+                "centroid_similarity_plot": f"{folder_name}/centroid_similarity.png",
                 "model_topk": _format_topk(model_items),
                 "neighbor_topk": _format_topk(neighbor_items),
                 "centroid_topk": json.dumps(centroid_items, ensure_ascii=False),
@@ -397,6 +501,10 @@ def main():
                 "nearest_wrong_centroid_label",
                 "nearest_wrong_centroid_cos",
                 "centroid_margin_expected_minus_wrong",
+                "spectrum_plot",
+                "model_vote_plot",
+                "neighbor_vote_plot",
+                "centroid_similarity_plot",
                 "model_topk",
                 "neighbor_topk",
                 "centroid_topk",

@@ -94,6 +94,8 @@ def split_by_lowest_level_ratio(
     for i in range(len(dataset)):
         if "/" in str(lowest_level):
             key = dataset.get_split_key(i, lowest_level)
+        elif lowest_level == "leaf":
+            key = dataset.get_leaf_key(i)
         else:
             key = dataset.get_level_key(i, lowest_level)
         if key is None:

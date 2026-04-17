@@ -42,11 +42,10 @@
 ```text
 拉曼光谱分类/
 ├─ train.py                          # 顶层训练入口，只负责传入当前训练层级和手动覆盖项
-├─ evaluate_test_set.py              # 测试集评估入口
+├─ evaluate.py                       # 测试集评估入口
 ├─ pca_svm_baseline.py               # PCA+SVM 基线入口
 ├─ analyze.py                        # 统一分析入口（single / aggregate）
-├─ compare_test_train_means.py       # 外部测试集 embedding 近邻诊断
-├─ pack_raman.py                     # 打包 raman 库，便于上传到 Colab
+├─ Independent_test.py               # 外部测试集 embedding 近邻诊断
 ├─ raman/
 │  ├─ config.py                      # 训练配置定义：输入通道、模型结构、损失、增强、优化器参数
 │  ├─ config_io.py                   # config.yaml 读写、实验目录重载
@@ -90,7 +89,7 @@
 
 仓库采用“顶层薄入口 + 包内实现”的组织方式：
 
-- 顶层 `train.py / evaluate_test_set.py / analyze.py` 只负责当前实验要改的参数
+- 顶层 `train.py / evaluate.py / analyze.py` 只负责当前实验要改的参数
 - 实现细节放在 `raman/` 和 `dataset_process/` 里
 - Colab、本地脚本和后续自动化都能复用同一套包内逻辑，无需复制大段 notebook 代码
 
@@ -1410,6 +1409,17 @@ P_c = \frac{TP_c}{TP_c + FP_c} \qquad  R_c = \frac{TP_c}{TP_c + FN_c}
 - $FP_c$ 表示被错误预测为第 $c$ 类的样本数
 - $FN_c$ 表示真实为第 $c$ 类但未被预测正确的样本数
 
+```
+                           Predicted
+                     ┌────────────┬────────────┐
+                     │ Positive   │ Negative   │
+┌────────────────────┼────────────┼────────────┤
+│ Actual Positive    │ TP         │ FN         │
+├────────────────────┼────────────┼────────────┤
+│ Actual Negative    │ FP         │ TN         │
+└────────────────────┴────────────┴────────────┘
+```
+
 则该类的 F1 为
 
 ```math
@@ -1566,13 +1576,13 @@ def forward(self, logits, targets):
 3. 按下式计算基础权重
 
    ```math
-   \text{weight}_g = \frac{1}{\log(\text{count}_g + 1.5)}
+   \text{base\_class\_weight}_g = \frac{1}{\log(\text{count}_g + 1.5)}
    ```
 
 4. 再归一化到平均值为 1
 
    ```math
-   \text{weight}_g \leftarrow \frac{\text{weight}_g}{\frac{1}{C} \sum_{i=1}^{C} \text{weight}_i}
+   \text{base\_class\_weight}_g \leftarrow \frac{\text{base\_class\_weight}_g}{\frac{1}{C} \sum_{i=1}^{C} \text{base\_class\_weight}_i}
    ```
 
 ```python
@@ -1615,12 +1625,9 @@ drw_start_epoch = 10
        mask = (y_valid == g)
        if mask.any():
            mean_ce = ce_each[mask].mean()
-           ema_class_ce[g] = (
-               ema_alpha * ema_class_ce[g]
-               + (1.0 - ema_alpha) * mean_ce
-           )
+           ema_class_ce[g] = ema_alpha * ema_class_ce[g] + (1.0 - ema_alpha) * mean_ce
    ```
-
+   
 3. 计算相对难度：
 
    ```math
@@ -1648,10 +1655,8 @@ if config.use_drw and epoch >= drw_start_epoch:
 
 除了类别层面的重加权，当前训练器还会在样本层面再做一次“错误严重程度”加权
 
-核心思路是：
-
-- 如果模型虽然没把真实类排到第一，但已经排到 top-2 或 top-3，说明它并不是完全错离谱
-- 如果模型以很高置信度把样本分错，说明这是一种更危险的错误，应当放大该样本在主损失中的贡献
+- 如果模型没把真实类排到第一，但已经排到第二第三，说明它并不是完全错离谱
+- 如果模型以很高置信度把样本分错，应当放大该样本在主损失中的贡献
 
 当前实现里，会对每个有效样本：
 
@@ -1662,57 +1667,52 @@ if config.use_drw and epoch >= drw_start_epoch:
 
 当前规则按类别数自适应：
 
-- 二分类：
-  - 不额外使用 `severity weight`
-  - 权重固定为 `1.0`
+- 二分类：不额外使用 `severity weight`，权重为1
+
 - 三分类：
-  - 若真实类别排在 top-2，样本权重为 `0.90`
-  - 若高置信度错判且真实类别排在 top-2，权重升到 `1.10`
-  - 若高置信度错判且真实类别落到 rank-3，权重升到 `1.45`
+  - 真实类排第二，样本权重为 `0.95`，如果高置信度错判则升到 `1.05`
+  - 真实类排第三，样本权重为 `1.10`，如果高置信度错判则升到 `1.25`
 - 四类及以上：
-  - 若真实类别排在 top-2，样本权重为 `0.85`
-  - 若真实类别排在 top-3，样本权重为 `0.95`
-  - 若高置信度错判且真实类别排在 top-2，权重升到 `1.20`
-  - 若高置信度错判且真实类别排在 rank-3 或更后，权重升到 `1.80`
+  - 真实类排第二，样本权重为 `0.90`，如果高置信度错判则升到 `1.1`
+  - 真实类排第三，样本权重为 `1.00`，如果高置信度错判则升到 `1.35`
+  - 真实类排第四及以后，样本权重为 `1.10`
 
 其中高置信度阈值也按类别数调整：
 
-- 三分类使用 `0.85`
-- 四类及以上使用 `0.80`
-
-降低“几乎分对”的样本对梯度预算的占用，提高“高置信度错判”样本的学习强度
+- 三分类使用 `0.88`
+- 四类及以上使用 `0.85`
 
 与 `FocalLoss` 形成互补：`FocalLoss` 更关注概率难度，`severity weight` 更关注错误排序结构
 
 #### Align Loss
 
-当前代码中的 `AlignLoss` 更接近一种 batch 内经验中心约束
+实现的 `AlignLoss` 更接近一种 batch 内经验中心约束
 
 1. 在当前 batch 中取出某一类别的全部有效样本 embedding
 2. 用这些样本的均值作为该类别在当前 batch 内的经验中心
 3. 计算该类别样本到这个经验中心的平方距离
 4. 对当前 batch 内所有有效类别的类内方差做平均
 
-如果当前 batch 内类别 (g) 的样本集合记为 \($S_g$\)，则经验中心为：
+设当前 batch 中类别 g 的样本索引集合为
 
 ```math
-c_g^{(\text{batch})}
-=
-\frac{1}{|S_g|}
-\sum_{i \in S_g} x_i
+S(g)=\{\, i \mid y_i = g \,\}
 ```
 
-单个类别的类内紧凑项为：
+则该类别在当前 batch 内的经验中心为
 
 ```math
-L_g^{(\text{align})}
-=
-\frac{1}{|S_g|}
-\sum_{i \in S_g}
-\|x_i - c_g^{(\text{batch})}\|_2^2
+\mathrm{center}_g^{(\text{batch})}= \frac{1}{|S_g|}
+\sum_{i \in S_g}  \mathrm{feat}_i
 ```
 
-对有效样本做平均：
+对应的类内紧凑项为
+
+```math
+L_g^{(\text{align})}=\frac{1}{|S_g|}\sum_{i \in S_g}\|\mathrm{feat}_i - \mathrm{center}_g^{(\text{batch})}\|_2^2
+```
+
+对当前 batch 内所有有效类别取平均
 
 ```math
 L_{\text{align}}
@@ -1724,12 +1724,12 @@ L_g^{(\text{align})}
 
 其中：
 
-- `G_valid` 表示当前 batch 中样本数大于 1 的有效类别集合
+- $G_{valid}$ 表示当前 batch 中样本数大于 1 的有效类别集合
 - 如果当前 batch 没有任何可用类别，当前实现直接返回 `0`
 
 #### SupCon Loss
 
-当前实现的 `SupCon Loss` 是单视角监督式对比损失，不是双视图对比学习
+实现的 `SupCon Loss` 是单视角监督式对比损失，不是双视图对比学习
 
 `SupCon` 是直接在当前 batch 的 `feat` 上做同类拉近、异类推远
 
@@ -1740,7 +1740,7 @@ L_g^{(\text{align})}
 - 不同类样本远离
 - 允许同一类别内部存在多个簇，因此它不强制类内单中心
 
-可以拆成 4 步：
+可以拆成 5 步：
 
 1. 对 embedding 做 L2 归一化
 
@@ -1751,37 +1751,44 @@ L_g^{(\text{align})}
 2. 计算温度缩放后的两两相似度
 
    ```math
-   s_{ij} = \frac{z_i^\top z_j}{\tau}
+   \mathrm{sim}(i,j) = \frac{z_i^\top z_j}{\tau}
    ```
 
-3. 只把“同类且不是自己”的样本当作正样本：
+3. 定义样本 $i$ 的正样本集合：
 
    ```math
    P(i)=\{\,j \mid j\neq i,\; y_j = y_i\,\}
    ```
 
-4. 对全部候选样本做对数概率，并对正样本平均：
+4. 对正样本的对数概率取平均，得到单个 anchor 的损失：
 
    ```math
-   L_i
-   =
+   L_i=
    -\frac{1}{|P(i)|}
    \sum_{p\in P(i)}
-   \left[
-   \mathrm{sim}(i,p)
-   -
-   \log\sum_{k\neq i}\exp(\mathrm{sim}(i,k))
-   \right]\\
+   \log
+   \frac{\exp(\mathrm{sim}(i,p))}
+   {\sum_{k\neq i}\exp(\mathrm{sim}(i,k))}
+    = -\frac{1}{|P(i)|}
+   \sum_{p\in P(i)} \left( \mathrm{sim}(i,p) - \log \sum_{k\neq i}\exp(\mathrm{sim}(i,k))\right)
+   ```
+
+   > 负样本在 $k\neq i$ 这里体现，如果某个异类样本和 anchor i 的相似度很高，会把分母拉大，正样本对应的概率就会被压低，最终损失变大
+   >
+   > 分子显式拉近正样本，分母通过和“所有其他样本”竞争，隐式压低异类相似度
+
+5. 最后，对所有有效 anchor 求平均
+
+   ```math
    L_{\text{supcon}}
    =
-   \frac{1}{|A_{\text{valid}}|}
-   \sum_{i\in A_{\text{valid}}} L_i
+   \frac{1}{|I_{\text{valid}}|}
+   \sum_{i\in I_{\text{valid}}} L_i
    ```
-   
 
 其中：
 
-- `A_valid` 表示当前 batch 中至少有一个正样本对的 anchor 集合
+- $I_{valid}$ 表示当前 batch 中至少有一个正样本对的 anchor 集合
 - 如果整个 batch 没有任何正样本对，当前实现直接返回 `0`
 - 当前 batch 来自普通随机 `shuffle`，没有专门为对比学习设计的 batch sampler
 - 因此 `SupCon` 的有效性依赖于 batch 内是否自然出现足够多的同类样本对
@@ -1832,7 +1839,7 @@ L_g^{(\text{align})}
 
 深度模型评估入口在仓库根目录：
 
-- `evaluate_test_set.py`
+- `evaluate.py`
 
 通常只需要手动设置这几个参数：
 
@@ -1842,9 +1849,9 @@ L_g^{(\text{align})}
 - `EVAL_ONLY_LEVEL`
 - `EVAL_ONLY_PARENT`
 
-评估器评估的是训练期已经保存下来的 `test_files.json` 对应样本，不是 `dataset_test/` 外部独立测试集评估入口
+评估默认针对训练阶段保存下来的 test split，即实验目录中的 `test_files.json` 对应样本
 
-如果实验目录里缺少 `train_files.json / test_files.json`，评估器会按训练配置里的 `split_level`、`train_split` 和 `seed` 重新构造 test split，再继续评估
+如果实验目录里缺少 `train_files.json / test_files.json`，评估器会按训练配置中的 `split_level`、`train_split` 和 `seed` 重新构造 test split，再继续评估
 
 ### 7.2 评估流程
 
@@ -1909,7 +1916,7 @@ L_g^{(\text{align})}
 
 ### 7.4 评估输出
 
-`evaluate_test_set.py` 会在实验目录内生成：
+`evaluate.py` 会在实验目录内生成：
 
 ```text
 <EXP_DIR>/<EVAL_LEVEL>_test_result/
@@ -2165,7 +2172,7 @@ $$
 
 除了 `analyze.py` 这条训练后解释主线，仓库根目录还提供了：
 
-- `compare_test_train_means.py`
+- `Independent_test.py`
 
 这个脚本不是训练期解释工具，而是独立测试集诊断脚本
 
@@ -2184,7 +2191,7 @@ $$
 最终输出目录通常为：
 
 ```text
-<EXP_DIR>/test_train_embedding_compare/
+<EXP_DIR>/embedding_compare/
 ```
 
 其中通常包含：
