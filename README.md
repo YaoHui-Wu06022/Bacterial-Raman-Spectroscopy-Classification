@@ -57,7 +57,10 @@
 │  │  └─ preprocess.py               # 在线预处理与增强：标准化、smooth/d1/raw 通道构建、训练增强
 │  ├─ analysis/
 │  │  ├─ core.py                     # 单模型/聚合分析调度：加载实验、选择目标模型、组织输出目录
-│  │  └─ utils.py                    # IG、Layer Grad-CAM、embedding 提取与可视化等底层实现
+│  │  ├─ ig.py                       # Integrated Gradients：输入通道重要性与类别波段重要性
+│  │  ├─ gradcam.py                  # Layer Grad-CAM：层级/分组重要性分析
+│  │  ├─ se.py                       # SE 模块缩放统计摘要
+│  │  └─ utils.py                    # embedding 提取与可视化等其余分析工具
 │  ├─ eval/
 │  │  ├─ experiment.py               # 实验目录解析、配置加载、层级名校验
 │  │  ├─ report.py                   # classification report、混淆矩阵、文本结果输出
@@ -1486,7 +1489,7 @@ loss_total = loss_cls + align_w * loss_align + supcon_w * loss_supcon
 由 `criterion(...)` 计算逐样本分类损失
 
 ```math
-L_{cls\_each}^{(i)}(t) = \ell_{\mathrm{focal}}\left(logits_i, y_i; w_{y_i}(t)\right)
+L_{\mathrm{cls\_each}}^{(i)}(t) = \ell_{\mathrm{focal}}\left(logits_i, y_i; w_{y_i}(t)\right)
 ```
 
 - $logits_i$ 是第 $i$ 个样本的分类输出
@@ -1696,7 +1699,7 @@ if config.use_drw and epoch >= drw_start_epoch:
 设当前 batch 中类别 g 的样本索引集合为
 
 ```math
-S(g)=\{\, i \mid y_i = g \,\}
+S_g=\{\, i \mid y_i = g \,\}
 ```
 
 则该类别在当前 batch 内的经验中心为
@@ -2009,6 +2012,97 @@ y_pred = svm.predict(x_test_pca)
 - `confusion_matrix.png`：基线模型的混淆矩阵热图
 - `pca_scatter.png`：训练集在 PCA 前两维上的散点图，适合快速观察类间可分性和不同类别的重叠程度
 
+这条基线更接近“标准化后的静态光谱特征 + 传统分类器”的能力上限，而不是层级级联模型的直接替代物
+
+### 7.6 独立测试集
+
+根目录下`Independent_test.py` 面向 `dataset_test/` 的独立测试集做评估
+
+从文件夹级别判断外部测试样本与训练分布之间的接近程度
+
+对每个测试文件夹，从“模型预测”、“embedding 最近邻投票”、“类别质心相似度”三个角度交叉分析当前测试文件夹更像哪一类
+
+在分析测试文件夹之前，脚本会先用训练集建立一个对照用的 embedding bank
+
+1. 读取当前实验目录对应的训练切分 `train_indices`
+
+2. 用训练好的模型提取训练样本在 `COMPARE_LEVEL` 下的特征
+
+3. 对特征做 L2 归一化
+
+   ```python
+   _, feat = model(xs, return_feat=True)
+   feat = _l2_normalize_rows(feat).cpu()
+   ```
+
+4. 保存训练 embedding 及其类别标签
+
+   ```python
+   center = train_feats[mask].mean(dim=0, keepdim=True)
+   centroids[class_id] = _l2_normalize_rows(center)[0]
+   ```
+
+   把训练集中每个类别在特征空间中的“代表方向”提取出来
+
+**模型投票（Model Vote）**
+
+统计该文件夹中每条光谱被模型预测成各类别的次数，并形成投票分布
+
+反映的是：模型直接把这个文件夹中的样本整体看成哪一类
+
+**embedding 最近邻投票**
+
+看测试样本在 embedding 空间中最接近哪些训练样本
+
+先计算测试 embedding 与训练 embedding bank 的相似度矩阵
+
+```python
+similarity = torch.matmul(folder_feats, train_feats_t)
+nearest_indices = torch.argmax(similarity, dim=1).cpu().numpy()
+neighbor_preds = train_labels[nearest_indices].astype(np.int64)
+```
+
+由于训练 embedding 已经做过 L2 归一化，这里的点积就是余弦相似度
+
+对每个测试样本找到相似度最高的训练样本，把该训练样本的类别当作最近邻类别
+
+反映的是：只看特征空间中的最近邻结构，这个测试文件夹更像训练集中的哪一类
+
+**类别质心相似度**
+
+对一个测试文件夹内部所有样本的 embedding 求均值，再做 L2 归一化，得到该文件夹的平均特征中心
+
+再去与各类别质心计算余弦相似度
+
+反映的是：从整个文件夹的平均特征来看，它整体更接近训练集中的哪个类别原型
+
+输出目录为：
+
+```text
+<EXP_DIR>/embedding_compare/
+```
+
+其中每个测试文件夹会单独保存：
+
+- `spectra.png`：测试谱形与期望训练均值谱的对照图
+- `model_vote.png`：模型预测投票分布
+- `neighbor_vote.png`：embedding 最近邻投票分布
+- `centroid_similarity.png`：文件夹平均 embedding 与各类别质心的相似度条形图
+
+可能的结果：
+
+1. 模型投票错，但最近邻和质心接近期望类
+
+   说明分类头可能更容易受边界细节影响，而 embedding 本身仍较接近期望类
+
+2. 模型投票、最近邻投票和质心相似度都偏向同一个错误类
+
+   该文件夹整体在特征空间里已经更像另一个类别，可能是分布偏移或标签问题
+
+3. 均值谱明显偏离期望类训练均值谱
+
+   不仅是分类边界问题，还可能存在数据采集条件差异、预处理不一致或样本本身差异
+
 ## 8. 分析
 
 ### 8.1 模式
@@ -2125,9 +2219,11 @@ ig = (x - b) * avg_grad
 
 IG 的原始输出张量形状为 `[B, C, L]`
 
+先通过 `compute_ig_batches(...)` 统一计算原始 IG，再分别调用做不同层面的汇总
+
 #### 输入通道重要性
 
-在 batch 维和长度维上对归因绝对值取平均，得到每个输入通道的平均贡献
+对于输入通道重要性，代码先对形状为 `[B, C, L]` 的 IG 张量在 batch 维和长度维上取绝对值平均，得到每个输入通道的平均归因强度；再在通道维上归一化，得到相对贡献占比
 $$
 I_c
 =
@@ -2205,7 +2301,7 @@ compute_class_band_importance_ig(...)
 - 模型决策更依赖前段局部峰形提取，还是后段高层表征
 - CNN、Transformer、LSTM 等不同模块中，哪些部分对当前输出更关键
 
-和经典二维视觉任务里“在最后一层卷积上生成空间热图”的 Grad-CAM 不同，这里的重点不在于恢复空间位置热图，而在于把每一层的激活与梯度压缩成一个层级重要性分数，再比较不同层之间的相对贡献
+Layer Grad-CAM 并不恢复输入位置上的热图，而是把每层的激活与梯度进一步压缩成单个重要性分数，用于比较不同层或不同 stage 的相对贡献
 
 如果某一层既有较强激活，又对目标类别的输出具有较高梯度敏感性，那么这层对当前决策通常更重要
 
@@ -2248,7 +2344,7 @@ compute_class_band_importance_ig(...)
       self.gradients[name] = g.detach()
   ```
 
-### 8.5 SE block
+### 8.5 SE 性能分析
 
 如果模型启用了 `SEBlock1D`，当前分析流程还会额外输出一组 SE 模块的缩放统计，用来观察网络是否真的在做明显的通道重标定
 
@@ -2280,92 +2376,3 @@ s^{(m)}_{b,c}
 
 - `std` 很小，且 `min / max` 都接近同一水平, 说明它对各通道几乎一视同仁，通道选择作用较弱
 - `std` 较大，且 `min / max` 差距明显，说明它确实在做更强的通道重标定，不同通道被赋予了明显不同的权重
-
-### 8.6 独立测试集
-
-根目录下`Independent_test.py` 面向 `dataset_test/` 的独立测试集做分析
-
-从文件夹级别判断外部测试样本与训练分布之间的接近程度
-
-对每个测试文件夹，从“模型预测”、“embedding 最近邻投票”、“类别质心相似度”三个角度交叉分析当前测试文件夹更像哪一类
-
-在分析测试文件夹之前，脚本会先用训练集建立一个对照用的 embedding bank
-
-1. 读取当前实验目录对应的训练切分 `train_indices`
-
-2. 用训练好的模型提取训练样本在 `COMPARE_LEVEL` 下的特征
-
-3. 对特征做 L2 归一化
-
-   ```python
-   _, feat = model(xs, return_feat=True)
-   feat = _l2_normalize_rows(feat).cpu()
-   ```
-
-4. 保存训练 embedding 及其类别标签
-
-   ```python
-   center = train_feats[mask].mean(dim=0, keepdim=True)
-   centroids[class_id] = _l2_normalize_rows(center)[0]
-   ```
-
-   把训练集中每个类别在特征空间中的“代表方向”提取出来
-
-**模型投票（Model Vote）**
-
-统计该文件夹中每条光谱被模型预测成各类别的次数，并形成投票分布
-
-反映的是：模型直接把这个文件夹中的样本整体看成哪一类
-
-**embedding 最近邻投票**
-
-看测试样本在 embedding 空间中最接近哪些训练样本
-
-先计算测试 embedding 与训练 embedding bank 的相似度矩阵
-
-```python
-similarity = torch.matmul(folder_feats, train_feats_t)
-nearest_indices = torch.argmax(similarity, dim=1).cpu().numpy()
-neighbor_preds = train_labels[nearest_indices].astype(np.int64)
-```
-
-由于训练 embedding 已经做过 L2 归一化，这里的点积就是余弦相似度
-
-对每个测试样本找到相似度最高的训练样本，把该训练样本的类别当作最近邻类别
-
-反映的是：只看特征空间中的最近邻结构，这个测试文件夹更像训练集中的哪一类
-
-**类别质心相似度**
-
-对一个测试文件夹内部所有样本的 embedding 求均值，再做 L2 归一化，得到该文件夹的平均特征中心
-
-再去与各类别质心计算余弦相似度
-
-反映的是：从整个文件夹的平均特征来看，它整体更接近训练集中的哪个类别原型
-
-输出目录为：
-
-```text
-<EXP_DIR>/embedding_compare/
-```
-
-其中每个测试文件夹会单独保存：
-
-- `spectra.png`：测试谱形与期望训练均值谱的对照图
-- `model_vote.png`：模型预测投票分布
-- `neighbor_vote.png`：embedding 最近邻投票分布
-- `centroid_similarity.png`：文件夹平均 embedding 与各类别质心的相似度条形图
-
-可能的结果：
-
-1. 模型投票错，但最近邻和质心接近期望类
-
-   说明分类头可能更容易受边界细节影响，而 embedding 本身仍较接近期望类
-
-2. 模型投票、最近邻投票和质心相似度都偏向同一个错误类
-
-   该文件夹整体在特征空间里已经更像另一个类别，可能是分布偏移或标签问题
-
-3. 均值谱明显偏离期望类训练均值谱
-
-   不仅是分类边界问题，还可能存在数据采集条件差异、预处理不一致或样本本身差异
