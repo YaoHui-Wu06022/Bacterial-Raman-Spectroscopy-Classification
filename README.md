@@ -61,7 +61,7 @@
 │  ├─ eval/
 │  │  ├─ experiment.py               # 实验目录解析、配置加载、层级名校验
 │  │  ├─ report.py                   # classification report、混淆矩阵、文本结果输出
-│  │  ├─ test_set_evaluator.py       # 测试集评估实现
+│  │  ├─ evaluator.py                # 测试集评估实现
 │  │  └─ baseline.py                 # PCA+SVM 基线实现
 │  └─ training/
 │     ├─ split.py                    # 训练/验证切分、训练范围解析、父类过滤
@@ -1841,7 +1841,7 @@ L_g^{(\text{align})}
 
 - `evaluate.py`
 
-通常只需要手动设置这几个参数：
+需要手动设置这几个参数：
 
 - `EXP_DIR`
 - `EVAL_LEVEL`
@@ -1850,6 +1850,8 @@ L_g^{(\text{align})}
 - `EVAL_ONLY_PARENT`
 
 评估默认针对训练阶段保存下来的 test split，即实验目录中的 `test_files.json` 对应样本
+
+保证评估时使用的类别空间、层级关系、模型组织方式和训练阶段保持一致，避免因为重新扫描目录或重新构造标签映射而引入额外偏差
 
 如果实验目录里缺少 `train_files.json / test_files.json`，评估器会按训练配置中的 `split_level`、`train_split` 和 `seed` 重新构造 test split，再继续评估
 
@@ -1864,11 +1866,6 @@ L_g^{(\text{align})}
 5. 对每个测试样本逐层向下预测，直到目标层级
 6. 把预测结果映射到当前评估的展示类别空间
 7. 汇总准确率、Macro F1、Macro Recall、分类报告和混淆矩阵
-
-这里有两个实现细节很重要：
-
-- 评估器优先复用 `hierarchy_meta.json` 里记录的模型路径和父子关系
-- 如果某一层是按父类拆开的子模型，评估时会先得到上一层父类预测，再决定进入哪个 parent 子模型
 
 对于按父类拆开的层，级联逻辑是：
 
@@ -1897,22 +1894,11 @@ L_g^{(\text{align})}
 - 指标更严格，也更“纯”
 - 更适合单独看“这一层本身到底分得怎么样”
 
-开启继承后，报告里的类别顺序可能会出现“保留父类”和“下钻到子类”混合的显示类名
+更接近“目标层本身的纯分类能力”，而不是整条级联链路的兼容输出能力
+
+开启继承后，报告里的类别顺序会出现“保留父类”和“子类”混合的显示类名
 
 这是评估器为了兼容未下钻分支而构建的展示空间，不等同于简单读取某一层的全部原始类名
-
-`EVAL_ONLY_PARENT`：这个开关用于把评估范围限制到某个父类分支下
-
-打开以后，评估器会：
-
-- 只保留该 parent 对应的子模型
-- 只统计这个父类内部允许出现的类别
-- 自动过滤掉不属于这个 parent 的测试样本
-
-这在两种场景下尤其有用：
-
-- 检查某个父类内部的细分类效果
-- 诊断“顶层分对了以后，子层到底分得怎么样”
 
 ### 7.4 评估输出
 
@@ -1924,34 +1910,22 @@ L_g^{(\text{align})}
 
 主要文件和用途如下：
 
-- `test_eval_results.csv`
-  - 逐样本结果表
-  - 保存样本路径、真实标签和预测标签
-  - 当前保存的是映射后的整型标签，适合后续再做二次统计或错误样本回查
+- `test_eval_results.csv`：逐样本结果表，适合后续再做二次统计或错误样本回查
 - `classification_report.txt`
-  - 统一格式的分类报告
-  - 包含每类的 `precision / recall / f1-score / support`
-  - 同时包含 `accuracy`、`macro avg` 和 `weighted avg`
-- `confusion_matrix_raw.csv`
-  - 原始混淆矩阵计数表
-  - 适合导出到表格工具里进一步分析
-- `confusion_matrix.png`
-  - 混淆矩阵热图
-  - 当前图中是按行归一化的百分比，并同时标出原始计数
+  
+  统一格式的分类报告，包含每类的 `precision / recall / f1-score / support`
+  
+  同时包含 `accuracy`、`macro avg` 和 `weighted avg`
+- `confusion_matrix_raw.csv`：原始混淆矩阵计数表
+- `confusion_matrix.png`：混淆矩阵热图，图中输出按行归一化的百分比，并同时标出原始计数
 
-评估器在终端主摘要里会明确打印：
-
-- `Accuracy`
-- `Macro F1-score`
-- `Macro Recall`
-
-其中更推荐优先看：
+在终端会明确打印：
 
 - `Accuracy`：整体判对率
 - `Macro F1-score`：类别均衡视角下的综合分类表现
-- `Macro Recall`：各类召回是否均衡，是否有某些类被系统性漏判
+- `Macro Recall`：各类召回是否均衡
 
-而 `classification_report.txt` 里的 `weighted avg` 更适合辅助判断头部类是否明显拉高了整体表现
+`classification_report.txt` 里的 `weighted avg` 更适合辅助判断头部类是否明显拉高了整体表现
 
 ### 7.5 PCA + SVM 基线
 
@@ -1959,20 +1933,51 @@ L_g^{(\text{align})}
 
 - `pca_svm_baseline.py`
 
-实际实现位于：
-
-- `raman/eval/baseline.py`
-
-它和深度模型评估共用同一份训练/测试切分，因此可以做相对公平的对比。
-
-当前流程很直接：
+它和深度模型评估共用同一份训练/测试切分，因此可以做相对公平的对比
 
 1. 从 `dataset_train/` 中按训练时的 split 提取 train/test 样本
-2. 选择第一个输入通道，或把全部通道展平
-3. `StandardScaler`
-4. `PCA`
-5. `SVM`
+2. 选择第一个输入通道，或把全部通道展平为静态特征向量
+3. 对输入做 `StandardScaler`
+4. 做 `PCA`
+5. 用 `SVM` 训练并测试
 6. 输出准确率、分类报告、混淆矩阵和 PCA 散点图
+
+拉曼光谱本身是高维连续向量，不同波段的数值尺度和波动范围可能并不一致，先做 `StandardScaler`，把各维特征标准化到相近尺度
+
+```python
+scaler = StandardScaler()
+x_train_std = scaler.fit_transform(x_train)
+x_test_std = scaler.transform(x_test)
+```
+
+PCA 的作用是把原始高维光谱投影到若干主成分方向上，用更低维的表示保留数据中的主要变化趋势
+
+PCA 会学习一组主方向$P_k$，并把样本映射到低维空间：
+
+```math
+T_k = X P_k
+```
+
+```python
+pca = PCA(n_components=context.pca_n_components, random_state=context.random_state)
+x_train_pca = pca.fit_transform(x_train_std)
+x_test_pca = pca.transform(x_test_std)
+```
+
+SVM 则作为经典的判别模型，基本思想是在特征空间中寻找一个分类间隔尽可能大的决策边界
+
+```math
+\min_{w,b}\frac{1}{2}\|w\|_2^2
+\quad
+\text{s.t.}\quad
+y_i(w^\top x_i+b)\ge 1
+```
+
+```python
+clf = SVC(...)
+clf.fit(X_train_pca, y_train)
+y_pred = clf.predict(X_test_pca)
+```
 
 输出目录为：
 
@@ -1980,16 +1985,11 @@ L_g^{(\text{align})}
 <EXP_DIR>/<LEVEL>_baseline_test_result/
 ```
 
-其中最常用的结果文件是：
+最常用的结果文件有
 
-- `metrics.txt`
-  - 记录 Accuracy、PCA 保留维数、解释方差比例和分类报告
-- `confusion_matrix.png`
-  - 基线模型的混淆矩阵热图
-- `pca_scatter.png`
-  - 训练集在 PCA 前两维上的散点图，适合快速观察可分性
-
-这一小节的意义不是替代深度模型，而是给当前实验一个低复杂度、可解释、可复现的传统基线参照
+- `metrics.txt`：记录 Accuracy、PCA 保留维数、解释方差比例和分类报告
+- `confusion_matrix.png`：基线模型的混淆矩阵热图
+- `pca_scatter.png`：训练集在 PCA 前两维上的散点图，适合快速观察类间可分性和不同类别的重叠程度
 
 ## 8. 分析
 
