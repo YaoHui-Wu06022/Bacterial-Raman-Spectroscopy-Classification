@@ -16,9 +16,9 @@ from raman.model import RamanClassifier1D
 from raman.training import load_split_files
 
 
-# 手动设置实验目录
-EXP_DIR = "output/细菌/20260417_073717_6分类"
-COMPARE_LEVEL = "level_1"  # 必须显式设置为业务层
+# 手动设置实验目录与分析层级
+EXP_DIR = ""
+COMPARE_LEVEL = "level_1"
 TOP_K = 3
 
 def _load_hierarchy_meta(exp_dir: Path) -> dict:
@@ -47,6 +47,7 @@ def _normalize_suffix(folder_name: str) -> str:
 
 
 def _build_compare_lookup(dataset: RamanDataset, compare_level: str) -> list[tuple[str, str]]:
+    """建立 leaf 名称到目标业务层标签的映射，用于推断测试文件夹的理论正确类别。"""
     seen = set()
     entries = []
     for idx, hier in enumerate(dataset.hier_names):
@@ -62,6 +63,7 @@ def _build_compare_lookup(dataset: RamanDataset, compare_level: str) -> list[tup
 
 
 def _infer_expected_label(folder_name: str, compare_lookup: list[tuple[str, str]]) -> str | None:
+    """根据测试文件夹名后缀，反推该文件夹在 compare_level 上的理论正确类别。"""
     suffix = _normalize_suffix(folder_name)
     for leaf_name, compare_label in compare_lookup:
         if suffix.endswith(leaf_name):
@@ -205,6 +207,7 @@ def _build_train_embedding_bank(
     device: torch.device,
     batch_size: int = 64,
 ):
+    """收集训练集 embedding 及对应标签，作为最近邻分析的训练特征库。"""
     level_idx = dataset.head_name_to_idx[compare_level]
     feats_list = []
     labels_list = []
@@ -236,6 +239,7 @@ def _build_train_mean_signal_bank(
     compare_level: str,
     train_indices: np.ndarray,
 ) -> dict[int, np.ndarray]:
+    """按类别统计训练集平均谱形，供测试谱形对照图使用。"""
     level_idx = dataset.head_name_to_idx[compare_level]
     signal_bank: dict[int, list[np.ndarray]] = {}
 
@@ -254,6 +258,7 @@ def _build_train_mean_signal_bank(
 
 
 def _build_class_centroids(train_feats: torch.Tensor, train_labels: np.ndarray, num_classes: int) -> torch.Tensor:
+    """把训练 embedding 按类别求中心，并做 L2 归一化，供 centroid 相似度分析。"""
     feat_dim = train_feats.size(1)
     centroids = torch.zeros((num_classes, feat_dim), dtype=torch.float32)
     valid_mask = torch.zeros(num_classes, dtype=torch.bool)
@@ -277,6 +282,7 @@ def _collect_folder_embeddings(
     paths: list[Path],
     device: torch.device,
 ):
+    """提取单个测试文件夹下所有光谱的 embedding、预测类别和主通道谱形。"""
     feats = []
     preds = []
     signals = []
@@ -296,18 +302,31 @@ def _collect_folder_embeddings(
 
 
 def main():
+    # ---------------- 读取实验、数据集与类别元数据 ----------------
     exp_dir_str, config = load_experiment_with_train_dataset(EXP_DIR)
     exp_dir = Path(exp_dir_str)
+
+    # 训练集根目录来自实验配置；独立测试集默认约定放在同级的 dataset_test 下。
     dataset_train_root = Path(config.dataset_root)
     dataset_test_root = dataset_train_root.parent / "dataset_test"
 
+    # 先构建训练数据集对象，并解析这次要诊断的业务层级。
+    # 后面的 expected_label、投票统计和 centroid 对比都统一落到 compare_level 上。
     device = torch.device("cuda" if getattr(config, "use_gpu", False) and torch.cuda.is_available() else "cpu")
     full_dataset = RamanDataset(dataset_train_root, augment=False, config=config)
     compare_level = resolve_head_level_name(full_dataset, COMPARE_LEVEL)
     level_idx = full_dataset.head_name_to_idx[compare_level]
+
+    # 这几份映射分别服务于：
+    # - inv_label_map：把类别 id 还原成类别名，方便出图和汇总
+    # - label_map：把 expected_label 反查成类别 id
+    # - num_classes：构建模型和类别中心时需要总类别数
     inv_label_map = full_dataset.inv_label_maps_by_level[level_idx]
     label_map = full_dataset.label_maps_by_level[level_idx]
     num_classes = full_dataset.num_classes_by_level[compare_level]
+
+    # 再读一遍训练时保存的层级元数据，确认当前 dataset_train 的类别顺序
+    # 和实验训练时看到的一致，避免模型和数据目录不是同一版。
     meta = _load_hierarchy_meta(exp_dir)
     train_class_names = meta.get("class_names_by_level", {}).get(compare_level)
     if train_class_names:
@@ -324,12 +343,19 @@ def main():
     model.load_state_dict(state)
     model.eval()
 
+    # ---------------- 确定训练划分，并基于训练集建立对照库 ----------------
+    # 如果实验目录里已经保存了 train/test 切分，就优先复用训练划分，
+    # 这样最近邻库、类别中心和平均谱形都和当时训练时看到的训练集保持一致。
     split = load_split_files(full_dataset, str(exp_dir))
     if split is None:
         train_indices = np.arange(len(full_dataset), dtype=np.int64)
     else:
         train_indices, _ = split
 
+    # 这三个训练侧“对照库”分别服务于三种诊断视角：
+    # 1. train_feats / train_labels：最近邻投票，看测试 embedding 更贴近哪些训练样本
+    # 2. train_mean_signal_bank：谱形对照图，看测试谱形是否偏离理论正确类均值
+    # 3. class_centroids：类别中心相似度，看整个测试文件夹整体更像哪一类
     train_feats, train_labels = _build_train_embedding_bank(
         full_dataset,
         model,
@@ -355,18 +381,32 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     summary_path = out_dir / "summary.csv"
 
+    # ---------------- 逐个测试文件夹做三类诊断 ----------------
+    # 1. 谱形对照：测试谱形 vs 理论正确类别训练均值
+    # 2. 邻域判断：模型投票 / embedding 最近邻投票
+    # 3. 中心判断：测试文件夹中心与各类 centroid 的相似度
     rows = []
     for folder_name, paths in test_folders.items():
         folder_out_dir = out_dir / folder_name
         folder_out_dir.mkdir(parents=True, exist_ok=True)
+
+        # 先根据测试文件夹名去反推“理论正确类”。
+        # 这个 expected_label 不是模型预测，而是把文件夹名和训练集 leaf 名对应起来后，
+        # 再映射回 compare_level 上的类别。
         expected_label = _infer_expected_label(folder_name, compare_lookup)
         expected_id = label_map.get(expected_label) if expected_label is not None else None
 
+        # 提取该测试文件夹下每条光谱的 embedding、模型 top1 预测以及主通道谱形。
         folder_feats, model_preds, folder_signals = _collect_folder_embeddings(model, preprocessor, paths, device)
+
+        # 最近邻分析：直接看每条测试谱在训练 embedding 库里最靠近哪条训练谱。
+        # 如果这里稳定指向错误类，通常说明问题更偏 embedding 空间本身，而不是分类头。
         similarity = torch.matmul(folder_feats, train_feats_t)
         nearest_indices = torch.argmax(similarity, dim=1).cpu().numpy()
         neighbor_preds = train_labels[nearest_indices].astype(np.int64)
 
+        # 模型投票与最近邻投票都按“整个测试文件夹”汇总，
+        # 这样更容易观察这批独立测试谱整体偏向哪个类别。
         model_counter = Counter(int(pred) for pred in model_preds)
         neighbor_counter = Counter(int(pred) for pred in neighbor_preds.tolist())
         n_test = len(paths)
@@ -374,6 +414,8 @@ def main():
         model_items = _topk_counter(model_counter, inv_label_map, n_test, TOP_K)
         neighbor_items = _topk_counter(neighbor_counter, inv_label_map, n_test, TOP_K)
 
+        # centroid 分析：把整个测试文件夹的 embedding 先求一个中心，
+        # 再和各类别训练中心做余弦相似度，适合看“这批样本整体最像谁”。
         folder_centroid = _l2_normalize_rows(folder_feats.mean(dim=0, keepdim=True))[0]
         centroid_scores = torch.matmul(class_centroids, folder_centroid)
         centroid_topk_idx = torch.argsort(centroid_scores, descending=True)[:TOP_K].cpu().numpy().tolist()
@@ -415,6 +457,11 @@ def main():
         neighbor_top1_ratio = neighbor_items[0]["ratio"] if neighbor_items else 0.0
         expected_mean_signal = None if expected_id is None else train_mean_signal_bank.get(int(expected_id))
 
+        # 输出四张图：
+        # 1. spectra.png：测试谱形与理论正确类训练均值的对照
+        # 2. model_vote.png：模型 top1 投票分布
+        # 3. neighbor_vote.png：embedding 最近邻投票分布
+        # 4. centroid_similarity.png：测试文件夹中心与各类别中心的相似度
         _plot_spectrum_comparison(
             folder_out_dir / "spectra.png",
             folder_name,
@@ -444,6 +491,11 @@ def main():
             centroid_items,
         )
 
+        # 汇总为一行，便于后续在表格里快速定位是哪一种分析视角出了问题
+        # 常见的解读方式是：
+        # - model 错、neighbor 对：更像分类头决策边界有问题
+        # - model 和 neighbor 都错到同一类：更像 embedding 已经偏到错误类
+        # - centroid 与 expected 的 margin 很小：说明这批样本整体上和错误类距离也很近
         rows.append(
             {
                 "folder": folder_name,
@@ -479,6 +531,9 @@ def main():
             }
         )
 
+    # ---------------- 输出总表，方便统一浏览所有测试文件夹 ----------------
+    # summary.csv 相当于总索引：
+    # 一行对应一个测试文件夹，既保留关键数值，也保留图像相对路径，方便集中排查。
     with open(summary_path, "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(
             file,
