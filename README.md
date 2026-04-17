@@ -2240,17 +2240,17 @@ channel_importance = ig.abs().mean(dim=(0, 2))
 channel_importance = channel_importance / (channel_importance.sum() + 1e-8)
 ```
 
-得到不同输入通道对目标输出的相对贡献占比
+该结果更适合比较不同输入表示在整体判别中的相对重要性
 
 #### 类别波段重要性
 
-在通道维取绝对值平均，得到 `[B, L]` 级别的波段归因
+先沿通道维对归因绝对值取平均，得到形状为 `[B, L]` 的单样本波段归因：
 
 ```python
 ig_band = ig.abs().mean(dim=1)
 ```
 
-对第 $i$ 个样本，在波段 $\ell$ 处的单样本波段归因可写为
+对应公式为：
 
 ```math
 a_i(\ell)
