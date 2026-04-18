@@ -1,15 +1,11 @@
 import os
-import json
-from dataclasses import dataclass
-from pathlib import Path
-
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset, Dataset
 
-from raman.config_io import load_experiment
-from raman.data import RamanDataset, resolve_dataset_stage
-from raman.model import RamanClassifier1D
+from raman.data import RamanDataset
+from raman.eval.experiment import load_experiment_with_dataset, load_hierarchy_meta
+from raman.eval.runtime import build_experiment_runtime
 from raman.training import (
     build_label_map_np,
     split_by_lowest_level_ratio,
@@ -36,42 +32,6 @@ from .gradcam import (
 )
 from .embedding import collect_embeddings_train_test, plot_embedding_hierarchical
 from .se import log_seblock_summary
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-def _resolve_project_path(path):
-    """将相对路径解析到项目根目录，绝对路径保持不变。"""
-    if path is None:
-        return path
-    path = Path(path)
-    if path.is_absolute():
-        return os.fspath(path)
-    return os.fspath((PROJECT_ROOT / path).resolve())
-
-def _load_hierarchy_meta(exp_dir):
-    """读取层级训练元数据，解析 parent 模型映射。"""
-    meta_path = os.path.join(exp_dir, "hierarchy_meta.json")
-    if not os.path.exists(meta_path):
-        return None
-
-    with open(meta_path, "r", encoding="utf-8") as f:
-        meta = json.load(f)
-
-    parent_models_raw = meta.get("parent_models", {})
-    parent_models = {}
-    for level, mapping in parent_models_raw.items():
-        parent_models[level] = {}
-        for k, v in mapping.items():
-            entry = dict(v)
-            entry["child_ids"] = [int(c) for c in entry.get("child_ids", [])]
-            parent_models[level][int(k)] = entry
-
-    meta["parent_models"] = parent_models
-    meta["level_models"] = meta.get("level_models", {})
-    return meta
-
-def resolve_analysis_level(dataset, level_name, config):
-    """解析分析层级；必须显式提供业务层级。"""
-    return dataset._resolve_level_name(level_name, field_name="analysis_level")
 
 class LabelMapDataset(Dataset):
     # 将某一层级的标签映射为局部索引（用于父类内子模型分析）
@@ -102,7 +62,7 @@ class HeatmapConfig:
     topk_per_class: int = 5        # 每类 top-k 波段导出
 
 class AnalysisOverrides:
-    """统一收拢分析入口的覆盖项。"""
+    """统一收拢分析入口的覆盖项"""
 
     exp_dir: str | None = None
     mode: str = "single"
@@ -116,7 +76,7 @@ def _ensure_heatmap_cfg(cfg):
     return cfg if cfg is not None else HeatmapConfig()
 
 def _normalize_parent_idx(parent_idx):
-    """统一 parent_idx 输入格式（None/int/'all'）。"""
+    """统一 parent_idx 输入格式（None/int/'all'）"""
     if parent_idx is None:
         return None
     if isinstance(parent_idx, str):
@@ -139,7 +99,7 @@ def _build_analysis_tasks(
     parent_models,
     parent_idx_setting,
 ):
-    """解析需要分析的模型任务（单模型或按 parent 拆分）。"""
+    """解析需要分析的模型任务（单模型或按 parent 拆分）"""
     parent_idx_setting = _normalize_parent_idx(parent_idx_setting)
     parent_entries = parent_models.get(analysis_level, {})
     tasks = []
@@ -252,7 +212,7 @@ def _build_task_loaders(
     base_train_dataset,
     base_test_dataset,
 ):
-    """按 parent 过滤样本并构建 DataLoader。"""
+    """按 parent 过滤样本并构建 DataLoader"""
     parent_idx = task["parent_idx"]
     child_ids = task["child_ids"]
     inherit_missing = getattr(config, "inherit_missing_levels", False)
@@ -321,9 +281,12 @@ def run_aggregate_analysis(
     test_idx_all,
     base_train_dataset,
     base_test_dataset,
+    runtime=None,
+    device=None,
+    meta=None,
     heatmap_cfg=None,
 ):
-    """跨 parent 聚合分析：用样本数加权合并结果。"""
+    """跨 parent 聚合分析：用样本数加权合并结果"""
     heatmap_cfg = _ensure_heatmap_cfg(heatmap_cfg)
     inherit_missing = getattr(config, "inherit_missing_levels", False)
     missing_tag = getattr(full_dataset, "MISSING_TAG", "__missing__")
@@ -356,8 +319,6 @@ def run_aggregate_analysis(
     channel_names = [f"{config.norm_method}"]
     if config.smooth_use:
         channel_names.append("smooth")
-    if getattr(config, "raw_use", False):
-        channel_names.append("raw")
     if config.d1_use:
         channel_names.append("d1")
 
@@ -371,8 +332,18 @@ def run_aggregate_analysis(
     mean_total = None
     mean_counts = np.zeros(global_num_classes, dtype=np.int64)
 
-    use_cuda = (config.use_gpu and torch.cuda.is_available())
-    device = torch.device("cuda" if use_cuda else "cpu")
+    if device is None:
+        use_cuda = (config.use_gpu and torch.cuda.is_available())
+        device = torch.device("cuda" if use_cuda else "cpu")
+    if runtime is None:
+        runtime = build_experiment_runtime(
+            exp_dir,
+            device,
+            config=config,
+            meta=(meta or load_hierarchy_meta(exp_dir) or {}),
+        )
+    if not runtime.parent_to_children:
+        runtime.parent_to_children = full_dataset.parent_to_children
     log(f"Using device: {device} (config.use_gpu={config.use_gpu}, cuda_available={torch.cuda.is_available()})")
 
     for task in tasks:
@@ -394,13 +365,12 @@ def run_aggregate_analysis(
             log(f"Skip parent {parent_idx}: no samples after filtering.")
             continue
 
-        model = RamanClassifier1D(
-            num_classes=task["num_classes"],
-            config=config
-        ).to(device)
-        state = torch.load(task["model_path"], map_location=device)
-        model.load_state_dict(state)
-        model.eval()
+        model = runtime.get_parent_model(
+            analysis_level,
+            parent_idx,
+            child_ids=task["child_ids"],
+            model_path=task["model_path"],
+        )
 
         # warmup forward
         sample_x, _, _ = next(iter(train_loader))
@@ -505,12 +475,9 @@ def run_aggregate_analysis(
         }
 
         if single_child_map:
-            meta = _load_hierarchy_meta(exp_dir) or {}
-            level_models = meta.get("level_models", {})
-            parent_model_name = level_models.get(parent_level, f"{parent_level}_model.pt")
-            parent_model_path = os.path.join(exp_dir, parent_model_name)
+            parent_model_path = runtime.build_level_model_paths([parent_level]).get(parent_level)
 
-            if os.path.exists(parent_model_path):
+            if parent_model_path and os.path.exists(parent_model_path):
                 parent_head_index = full_dataset.head_name_to_idx[parent_level]
                 num_parent_classes = full_dataset.num_classes_by_level[parent_level]
 
@@ -530,13 +497,10 @@ def run_aggregate_analysis(
                     parent_train_loader if heatmap_cfg.use_train_loader else parent_test_loader
                 )
 
-                parent_model = RamanClassifier1D(
+                parent_model = runtime.get_level_model(
+                    parent_level,
                     num_classes=num_parent_classes,
-                    config=config
-                ).to(device)
-                state = torch.load(parent_model_path, map_location=device)
-                parent_model.load_state_dict(state)
-                parent_model.eval()
+                )
 
                 parent_importance, parent_counts = compute_class_band_importance_ig(
                     parent_model,
@@ -612,8 +576,10 @@ def run_aggregate_analysis(
                 if parent_level is None:
                     log("Parent level not found; cannot inherit band importance.")
                 else:
-                    meta = _load_hierarchy_meta(exp_dir) or {}
-                    parent_models = meta.get("parent_models", {}).get(parent_level, {})
+                    parent_models = runtime.ensure_parent_models(
+                        parent_level,
+                        full_dataset.parent_to_children,
+                    )
                     if not parent_models:
                         log(f"No parent models for {parent_level}; cannot inherit band importance.")
                     else:
@@ -667,13 +633,12 @@ def run_aggregate_analysis(
                                     parent_train_loader if heatmap_cfg.use_train_loader else parent_test_loader
                                 )
 
-                                parent_model = RamanClassifier1D(
-                                    num_classes=len(child_ids),
-                                    config=config
-                                ).to(device)
-                                state = torch.load(model_path, map_location=device)
-                                parent_model.load_state_dict(state)
-                                parent_model.eval()
+                                parent_model = runtime.get_parent_model(
+                                    parent_level,
+                                    int(p_idx),
+                                    child_ids=child_ids,
+                                    model_path=model_path,
+                                )
 
                                 parent_importance, _ = compute_class_band_importance_ig(
                                     parent_model,
@@ -777,9 +742,11 @@ def run_single_analysis(
     test_idx_all,
     base_train_dataset,
     base_test_dataset,
+    runtime=None,
+    device=None,
     heatmap_cfg=None,
 ):
-    """单模型分析：Grad-CAM / IG / embedding / 波段热图。"""
+    """单模型分析：Grad-CAM / IG / embedding / 波段热图"""
     heatmap_cfg = _ensure_heatmap_cfg(heatmap_cfg)
     parent_idx = task["parent_idx"]
     num_classes = task["num_classes"]
@@ -819,21 +786,30 @@ def run_single_analysis(
     )
 
     # ---------------- 模型 ----------------
-    use_cuda = (config.use_gpu and torch.cuda.is_available())
-    device = torch.device("cuda" if use_cuda else "cpu")
+    if device is None:
+        use_cuda = (config.use_gpu and torch.cuda.is_available())
+        device = torch.device("cuda" if use_cuda else "cpu")
+    if runtime is None:
+        runtime = build_experiment_runtime(exp_dir, device, config=config)
+    if not runtime.parent_to_children:
+        runtime.parent_to_children = full_dataset.parent_to_children
     log(
         f"Using device: {device} (config.use_gpu={config.use_gpu}, "
         f"cuda_available={torch.cuda.is_available()})"
     )
 
-    model = RamanClassifier1D(
-        num_classes=num_classes,
-        config=config
-    ).to(device)
-
-    state = torch.load(model_path, map_location=device)
-    model.load_state_dict(state)
-    model.eval()
+    if parent_idx is None:
+        model = runtime.load_single_level_model(
+            analysis_level,
+            num_classes=num_classes,
+        )
+    else:
+        model = runtime.get_parent_model(
+            analysis_level,
+            parent_idx,
+            child_ids=task["child_ids"],
+            model_path=model_path,
+        )
 
     # ------------------------------------------------------------
     # 执行一次前向传播：
@@ -850,8 +826,6 @@ def run_single_analysis(
     channel_names = [f"{config.norm_method}"]
     if config.smooth_use:
         channel_names.append("smooth")
-    if getattr(config, "raw_use", False):
-        channel_names.append("raw")
     if config.d1_use:
         channel_names.append("d1")
 
@@ -859,6 +833,7 @@ def run_single_analysis(
 
     # 波段热图使用哪一侧数据，这里也同步决定通道重要性的统计样本
     heatmap_loader = train_loader if heatmap_cfg.use_train_loader else test_loader
+    inherit_missing = getattr(config, "inherit_missing_levels", False)
 
     if inherit_missing:
         missing_tag = getattr(full_dataset, "MISSING_TAG", "__missing__")
@@ -936,7 +911,6 @@ def run_single_analysis(
         if top_level not in embed_levels:
             embed_levels.append(top_level)
 
-    inherit_missing = getattr(config, "inherit_missing_levels", False)
     if inherit_missing:
         feats, hier_labels, label_names = collect_embeddings_train_test(
             model,
@@ -1021,34 +995,33 @@ def build_analysis_context(
     parent_idx,
     inherit_missing_levels=False,
 ):
-    """构建通用上下文（数据集 / 划分 / 任务列表）。"""
-    exp_dir = _resolve_project_path(exp_dir)
-    config = load_experiment(exp_dir)
-
-    dataset_root = os.fspath(
-        resolve_dataset_stage(
-            _resolve_project_path(config.dataset_root),
-            stage="train",
-            project_root=os.fspath(PROJECT_ROOT),
-            must_exist=True,
-        )
-    )
-    config.dataset_root = dataset_root
+    """构建通用上下文（数据集 / 划分 / 任务列表）"""
+    exp_dir, config = load_experiment_with_dataset(exp_dir)
 
     config.inherit_missing_levels = bool(inherit_missing_levels)
 
     full_dataset = RamanDataset(
-        dataset_root,
+        config.dataset_root,
         augment=False,
         config=config
     )
 
-    analysis_level = resolve_analysis_level(full_dataset, analysis_level, config)
+    analysis_level = full_dataset._resolve_level_name(
+        analysis_level,
+        field_name="analysis_level",
+    )
     head_index = full_dataset.head_name_to_idx[analysis_level]
 
-    meta = _load_hierarchy_meta(exp_dir) or {}
-    level_models = meta.get("level_models", {})
-    parent_models = meta.get("parent_models", {})
+    meta = load_hierarchy_meta(exp_dir) or {}
+    device = torch.device(
+        "cuda" if (config.use_gpu and torch.cuda.is_available()) else "cpu"
+    )
+    runtime = build_experiment_runtime(exp_dir, device, config=config, meta=meta)
+    if not runtime.parent_to_children:
+        runtime.parent_to_children = full_dataset.parent_to_children
+    runtime.ensure_parent_models(analysis_level, runtime.parent_to_children)
+    level_models = runtime.build_level_model_paths([analysis_level])
+    parent_models = runtime.parent_models
 
     tasks, auto_all = _build_analysis_tasks(
         exp_dir,
@@ -1075,12 +1048,12 @@ def build_analysis_context(
     test_idx_all = np.array(sorted(test_idx))
 
     base_train_dataset = RamanDataset(
-        dataset_root,
+        config.dataset_root,
         augment=False,
         config=config
     )
     base_test_dataset = RamanDataset(
-        dataset_root,
+        config.dataset_root,
         augment=False,
         config=config
     )
@@ -1097,38 +1070,16 @@ def build_analysis_context(
         "base_train_dataset": base_train_dataset,
         "base_test_dataset": base_test_dataset,
         "auto_all": auto_all,
+        "meta": meta,
+        "device": device,
+        "runtime": runtime,
     }
 
-def _run_single_tasks(ctx, heatmap_cfg=None):
-    """执行单模型分析任务列表。"""
-    if ctx["auto_all"]:
-        print(
-            f"No global model for {ctx['analysis_level']}; "
-            f"running per-parent analysis for {len(ctx['tasks'])} parents."
-        )
-    elif len(ctx["tasks"]) > 1:
-        print(f"Running per-parent analysis for {len(ctx['tasks'])} parents.")
-
-    for task in ctx["tasks"]:
-        run_single_analysis(
-            ctx["exp_dir"],
-            ctx["config"],
-            ctx["full_dataset"],
-            ctx["analysis_level"],
-            ctx["head_index"],
-            task,
-            ctx["train_idx_all"],
-            ctx["test_idx_all"],
-            ctx["base_train_dataset"],
-            ctx["base_test_dataset"],
-            heatmap_cfg=heatmap_cfg,
-        )
-
 def run_analysis_pipeline(overrides=None, heatmap_cfg=None):
-    """统一分析入口：按 mode 切换单模型或聚合分析。"""
+    """统一分析入口：按 mode 切换单模型或聚合分析"""
     overrides = overrides or AnalysisOverrides()
     if not overrides.exp_dir:
-        raise ValueError("analyze 需要显式传入 exp_dir。")
+        raise ValueError("analyze 需要显式传入 exp_dir")
 
     mode = str(overrides.mode).lower()
     if mode not in ("single", "aggregate"):
@@ -1142,14 +1093,60 @@ def run_analysis_pipeline(overrides=None, heatmap_cfg=None):
     )
 
     if mode == "single":
-        _run_single_tasks(ctx, heatmap_cfg=heatmap_cfg)
+        if ctx["auto_all"]:
+            print(
+                f"No global model for {ctx['analysis_level']}; "
+                f"running per-parent analysis for {len(ctx['tasks'])} parents."
+            )
+        elif len(ctx["tasks"]) > 1:
+            print(f"Running per-parent analysis for {len(ctx['tasks'])} parents.")
+
+        for task in ctx["tasks"]:
+            run_single_analysis(
+                ctx["exp_dir"],
+                ctx["config"],
+                ctx["full_dataset"],
+                ctx["analysis_level"],
+                ctx["head_index"],
+                task,
+                ctx["train_idx_all"],
+                ctx["test_idx_all"],
+                ctx["base_train_dataset"],
+                ctx["base_test_dataset"],
+                runtime=ctx["runtime"],
+                device=ctx["device"],
+                heatmap_cfg=heatmap_cfg,
+            )
         return
 
     parent_tasks = [t for t in ctx["tasks"] if t["parent_idx"] is not None]
     if not parent_tasks:
         if overrides.fallback_to_single:
             print("Aggregate fallback: no parent models found; running single-model analysis.")
-            _run_single_tasks(ctx, heatmap_cfg=heatmap_cfg)
+            if ctx["auto_all"]:
+                print(
+                    f"No global model for {ctx['analysis_level']}; "
+                    f"running per-parent analysis for {len(ctx['tasks'])} parents."
+                )
+            elif len(ctx["tasks"]) > 1:
+                print(f"Running per-parent analysis for {len(ctx['tasks'])} parents.")
+
+            for task in ctx["tasks"]:
+                run_single_analysis(
+                    ctx["exp_dir"],
+                    ctx["config"],
+                    ctx["full_dataset"],
+                    ctx["analysis_level"],
+                    ctx["head_index"],
+                    task,
+                    ctx["train_idx_all"],
+                    ctx["test_idx_all"],
+                    ctx["base_train_dataset"],
+                    ctx["base_test_dataset"],
+                    runtime=ctx["runtime"],
+                    device=ctx["device"],
+                    heatmap_cfg=heatmap_cfg,
+                )
         else:
             print("Aggregate analysis skipped: no parent models found.")
         return
@@ -1165,5 +1162,8 @@ def run_analysis_pipeline(overrides=None, heatmap_cfg=None):
         ctx["test_idx_all"],
         ctx["base_train_dataset"],
         ctx["base_test_dataset"],
+        runtime=ctx["runtime"],
+        device=ctx["device"],
+        meta=ctx["meta"],
         heatmap_cfg=heatmap_cfg,
     )

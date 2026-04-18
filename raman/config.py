@@ -68,15 +68,12 @@ class Config:
 
     # 输入通道
     smooth_use = True  # 是否使用 smooth 作为额外通道
-    raw_use = False  # 是否保留 raw 增强后、未标准化的输入通道
     d1_use = False  # 是否使用一阶导作为额外通道
 
     @property
     def in_channels(self):
         channels = 1
         if self.smooth_use:
-            channels += 1
-        if self.raw_use:
             channels += 1
         if self.d1_use:
             channels += 1

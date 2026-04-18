@@ -8,19 +8,19 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
 
 def _ensure_dir(d):
-    """保存结果前确保目录存在。"""
+    """保存结果前确保目录存在"""
     if d is None:
         return
     os.makedirs(d, exist_ok=True)
 
 def _to_numpy(x):
-    """将张量或数组统一转成 numpy，便于绘图和保存。"""
+    """将张量或数组统一转成 numpy，便于绘图和保存"""
     if isinstance(x, torch.Tensor):
         return x.detach().cpu().numpy()
     return np.asarray(x)
 
 def _needs_cudnn_rnn_guard(model):
-    """评估态下若模型含 RNN 系列模块，则临时关闭 cuDNN 以避免反传限制。"""
+    """评估态下若模型含 RNN 系列模块，则临时关闭 cuDNN 以避免反传限制"""
     if model.training:
         return False
     if not torch.backends.cudnn.enabled:
@@ -31,7 +31,7 @@ def _needs_cudnn_rnn_guard(model):
     return False
 
 def _select_logits(pred, head_name=None):
-    """兼容多种前向返回格式，只抽取当前分析所需的 logits。"""
+    """兼容多种前向返回格式，只抽取当前分析所需的 logits"""
     if isinstance(pred, dict):
         if head_name is None:
             head_name = list(pred.keys())[-1]
@@ -42,8 +42,8 @@ def _select_logits(pred, head_name=None):
 
 def _compute_baseline_mean_spectrum(loader, device, num_batches=10):
     """
-    用前 num_batches 个批次的平均光谱作为积分起点，更接近真实数据分布。
-    返回形状为 [1, C, L] 的张量，与输入 x 保持相同通道数和长度。
+    用前 num_batches 个批次的平均光谱作为积分起点，更接近真实数据分布
+    返回形状为 [1, C, L] 的张量，与输入 x 保持相同通道数和长度
     """
     means = []
     it = iter(loader)
@@ -70,7 +70,7 @@ def compute_input_channel_importance_IG(
     head_index=None,
 ):
     """
-    输出“输入通道重要性”，即对每个输入通道的归因值做平均。
+    输出“输入通道重要性”，即对每个输入通道的归因值做平均
     - num_batches:
         取前 num_batches 个批次做平均，比只看单个批次稳定得多
     """
@@ -102,7 +102,7 @@ def compute_input_channel_importance_IG(
     return channel_importance
 
 def _effective_label_names(dataset, level_name, missing_tag="__missing__"):
-    """按数据集中实际出现顺序收集某一层的有效类别名。"""
+    """按数据集中实际出现顺序收集某一层的有效类别名"""
     if hasattr(dataset, "_resolve_level_name"):
         level_name = dataset._resolve_level_name(level_name)
     names = []
@@ -117,7 +117,7 @@ def _effective_label_names(dataset, level_name, missing_tag="__missing__"):
     return names
 
 def _batch_effective_label_ids(hier, level_name, name_to_idx, missing_tag="__missing__"):
-    """把当前批次的层级名映射成连续类别 id，缺失项映射为 -1。"""
+    """把当前批次的层级名映射成连续类别 id，缺失项映射为 -1"""
     if hier is None:
         return None
     level_vals = hier.get(level_name, [])
@@ -143,8 +143,8 @@ def compute_ig_batches(
     missing_tag="__missing__",
 ):
     """
-    统一计算一轮 IG，返回每个批次的原始归因结果。
-    后续可以基于这些结果分别汇总通道重要性和类别波段重要性。
+    统一计算一轮 IG，返回每个批次的原始归因结果
+    后续可以基于这些结果分别汇总通道重要性和类别波段重要性
     """
     model.eval()
     disable_cudnn = _needs_cudnn_rnn_guard(model)
@@ -231,7 +231,7 @@ def compute_ig_batches(
     return ig_batches
 
 def compute_channel_importance_from_ig(ig_batches):
-    """根据原始 IG 批次结果汇总输入通道重要性。"""
+    """根据原始 IG 批次结果汇总输入通道重要性"""
     total_channel = None
     total_weight = 0
 
@@ -257,7 +257,7 @@ def compute_channel_importance_from_ig(ig_batches):
     return channel_importance.astype(np.float32, copy=False)
 
 def compute_band_importance_from_ig(ig_batches, num_classes, max_per_class=None):
-    """根据原始 IG 批次结果汇总每个类别的波段重要性。"""
+    """根据原始 IG 批次结果汇总每个类别的波段重要性"""
     band_total = None
     band_counts = np.zeros(num_classes, dtype=np.int64)
 
@@ -302,7 +302,7 @@ def compute_class_band_importance_ig(
     label_name_to_idx=None,
     missing_tag="__missing__",
 ):
-    """计算每个类别在波数轴上的平均 IG 重要性。"""
+    """计算每个类别在波数轴上的平均 IG 重要性"""
     ig_batches = compute_ig_batches(
         model,
         loader,
@@ -333,7 +333,7 @@ def compute_class_mean_spectrum(
     label_name_to_idx=None,
     missing_tag="__missing__",
 ):
-    """统计每个类别的平均光谱，默认只使用第 0 个输入通道。"""
+    """统计每个类别的平均光谱，默认只使用第 0 个输入通道"""
     sums = None
     counts = np.zeros(num_classes, dtype=np.int64)
 
@@ -433,7 +433,7 @@ def _estimate_gap_indices(wavenumbers, gap_factor=1.5):
     return gap_idx.tolist()
 
 def build_wavenumber_axis(length, config):
-    """构建波数坐标轴（根据 config.cut_min / delta）。"""
+    """构建波数坐标轴（根据 config.cut_min / delta）"""
     bad_bands = _get_bad_bands(config)
     if hasattr(config, "cut_min") and hasattr(config, "cut_max"):
         if hasattr(config, "target_points"):
@@ -462,7 +462,7 @@ def plot_band_importance_heatmap(
     mean_spectra=None,
     bad_bands=None,
 ):
-    """按类别绘制热图：曲线表示平均光谱，曲线下填充颜色表示波段重要性。"""
+    """按类别绘制热图：曲线表示平均光谱，曲线下填充颜色表示波段重要性"""
     data = importance.copy()
     if row_norm == "max":
         denom = np.max(data, axis=1, keepdims=True)
@@ -581,7 +581,7 @@ def plot_band_importance_heatmap(
 def save_topk_bands_csv(
     importance, class_names, wavenumbers, top_k, save_path, row_norm="max"
 ):
-    """把每个类别最重要的前 k 个波段导出到 CSV。"""
+    """把每个类别最重要的前 k 个波段导出到 CSV"""
     data = importance.copy()
     if row_norm == "max":
         denom = np.max(data, axis=1, keepdims=True)
@@ -610,7 +610,7 @@ def save_topk_bands_csv(
                 )
 
 def _plot_channel_importance(importance, channel_names, save_path):
-    """绘制聚合模式下的输入通道重要性柱状图。"""
+    """绘制聚合模式下的输入通道重要性柱状图"""
     if isinstance(importance, torch.Tensor):
         importance = importance.detach().cpu().numpy()
     else:

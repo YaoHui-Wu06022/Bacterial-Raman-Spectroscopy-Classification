@@ -61,7 +61,7 @@ def collect_analyzable_layers(model):
 class LayerGradCAMAnalyzer:
     """
     通过 forward / backward hook 收集中间层的激活与梯度，
-    再用 mean(|A * G|) 计算每一层的重要性。
+    再用 mean(|A * G|) 计算每一层的重要性
     """
 
     def __init__(self, model, device):
@@ -115,7 +115,7 @@ class LayerGradCAMAnalyzer:
 
     def run(self, loader, save_dir=None, num_batches=3, head_name=None, head_index=None):
         """
-        从前 num_batches 个 batch 计算平均 layer importance（更稳定）。
+        从前 num_batches 个 batch 计算平均 layer importance（更稳定）
         """
         _ensure_dir(save_dir)
 
@@ -212,7 +212,7 @@ def merge_scores_by_group(layer_scores, groups):
 
 
 def _plot_layer_importance(scores, save_path):
-    """聚合模式下的层级重要性柱状图。"""
+    """聚合模式下的层级重要性柱状图"""
     names = list(scores.keys())
     vals = list(scores.values())
     plt.figure(figsize=(10, 5))

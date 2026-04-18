@@ -6,14 +6,14 @@ import numpy as np
 
 def _norm_relpath(path):
     """
-    统一路径分隔符，便于跨平台保存和重载切分文件。
+    统一路径分隔符，便于跨平台保存和重载切分文件
     """
     return os.path.normpath(path).replace("\\", "/")
 
 
 def save_split_files(dataset, train_idx, test_idx, out_dir):
     """
-    将 train/test 切分保存为相对 `dataset.root_dir` 的文件路径列表。
+    将 train/test 切分保存为相对 `dataset.root_dir` 的文件路径列表
     """
     os.makedirs(out_dir, exist_ok=True)
     root = dataset.root_dir
@@ -33,9 +33,9 @@ def save_split_files(dataset, train_idx, test_idx, out_dir):
 
 def load_split_files(dataset, split_dir):
     """
-    从实验目录加载已有切分，并映射回当前数据集中的样本索引。
+    从实验目录加载已有切分，并映射回当前数据集中的样本索引
 
-    若切分文件不存在，返回 `None`。
+    若切分文件不存在，返回 `None`
     """
     train_path = os.path.join(split_dir, "train_files.json")
     test_path = os.path.join(split_dir, "test_files.json")
@@ -82,7 +82,7 @@ def split_by_lowest_level_ratio(
     min_train_samples=1,
 ):
     """
-    按指定层级分组后做样本切分，尽量避免同组样本泄漏到不同集合。
+    按指定层级分组后做样本切分，尽量避免同组样本泄漏到不同集合
 
     返回：
     - `train_indices`
@@ -125,7 +125,7 @@ def split_by_lowest_level_ratio(
 
 def resolve_level_order(dataset, target_level):
     """
-    解析目标训练层级，并返回从顶层到该层的顺序列表。
+    解析目标训练层级，并返回从顶层到该层的顺序列表
     """
     target_level = dataset._resolve_level_name(
         target_level,
@@ -137,7 +137,7 @@ def resolve_level_order(dataset, target_level):
 
 def resolve_train_split(full_dataset, config):
     """
-    生成或复用训练/验证切分。
+    生成或复用训练/验证切分
     """
     split_level = config.split_level or "leaf"
     train_idx, test_idx = split_by_lowest_level_ratio(
@@ -158,7 +158,7 @@ def resolve_train_split(full_dataset, config):
 
 def _normalize_filter_values(value):
     """
-    把过滤值统一整理成列表形式，便于后续统一处理。
+    把过滤值统一整理成列表形式，便于后续统一处理
     """
     if value is None:
         return None
@@ -169,7 +169,7 @@ def _normalize_filter_values(value):
 
 def _resolve_parent_idx_by_name(dataset, parent_level_idx, parent_name):
     """
-    按父类名称解析其在指定父层中的类别索引。
+    按父类名称解析其在指定父层中的类别索引
     """
     if parent_name is None:
         return None
@@ -179,7 +179,7 @@ def _resolve_parent_idx_by_name(dataset, parent_level_idx, parent_name):
 
 def resolve_train_scope(full_dataset, config, current_train_level, head_name_to_idx):
     """
-    解析本次训练的父类范围。
+    解析本次训练的父类范围
     """
     only_parent = getattr(config, "train_only_parent", None)
     only_parent_name = getattr(config, "train_only_parent_name", None)
@@ -187,7 +187,7 @@ def resolve_train_scope(full_dataset, config, current_train_level, head_name_to_
         parent_level = full_dataset.get_parent_level(current_train_level)
         if parent_level is None:
             raise ValueError(
-                f"{current_train_level} 没有父层，不能使用 train_only_parent_name。"
+                f"{current_train_level} 没有父层，不能使用 train_only_parent_name"
             )
 
         parent_level_idx = head_name_to_idx[parent_level]
@@ -215,7 +215,7 @@ def resolve_train_scope(full_dataset, config, current_train_level, head_name_to_
 
 def apply_train_filter(full_dataset, train_idx, test_idx, config, head_name_to_idx):
     """
-    在切分完成后，按指定层级和取值过滤样本。
+    在切分完成后，按指定层级和取值过滤样本
     """
     filter_level = getattr(config, "train_filter_level", None)
     filter_value = getattr(config, "train_filter_value", None)
@@ -244,7 +244,7 @@ def apply_train_filter(full_dataset, train_idx, test_idx, config, head_name_to_i
         desired_ids.add(int(label_idx))
 
     if not desired_ids:
-        raise ValueError("没有解析出有效的 train_filter_value，请检查配置。")
+        raise ValueError("没有解析出有效的 train_filter_value，请检查配置")
 
     labels_filter = full_dataset.level_labels[:, filter_level_idx]
     mask = np.isin(labels_filter, list(desired_ids))
@@ -260,7 +260,7 @@ def apply_train_filter(full_dataset, train_idx, test_idx, config, head_name_to_i
 
 def log_split_summary(full_dataset, train_idx, test_idx, stats_level, head_name_to_idx):
     """
-    输出当前训练层级对应的 train/test 样本分布摘要。
+    输出当前训练层级对应的 train/test 样本分布摘要
     """
     stats_level_idx = head_name_to_idx[stats_level]
     labels = full_dataset.level_labels[:, stats_level_idx]
@@ -287,14 +287,14 @@ def log_split_summary(full_dataset, train_idx, test_idx, stats_level, head_name_
 
 def resolve_levels_to_train(current_train_level):
     """
-    当前训练入口一次只训练一个层级。
+    当前训练入口一次只训练一个层级
     """
     return [current_train_level]
 
 
 def build_label_map_np(child_ids, num_classes):
     """
-    把全局类别索引映射成父类内子模型使用的局部类别索引。
+    把全局类别索引映射成父类内子模型使用的局部类别索引
     """
     mapping = np.full(num_classes, -1, dtype=np.int64)
     for local_idx, global_idx in enumerate(child_ids):

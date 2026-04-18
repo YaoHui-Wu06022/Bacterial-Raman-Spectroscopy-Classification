@@ -4,7 +4,7 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class DatasetProfile:
-    """描述一个数据集在离线预处理阶段需要的固定目录和坏波段配置。"""
+    """描述一个数据集在离线预处理阶段需要的固定目录和坏波段配置"""
     profile_id: str
     dataset_name: str
     count_root: str

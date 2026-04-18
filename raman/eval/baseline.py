@@ -1,17 +1,16 @@
-# -*- coding: utf-8 -*-
-
 import os
 from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.decomposition import PCA
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
+from .common import compute_classification_metrics
 from .experiment import (
-    load_experiment_with_train_dataset,
+    load_experiment_with_dataset,
     resolve_head_level_name,
 )
 from .report import (
@@ -26,7 +25,7 @@ from raman.training import load_split_files
 
 @dataclass
 class BaselineContext:
-    """收拢一次 PCA+SVM 基线评估所需的运行上下文。"""
+    """收拢一次 PCA+SVM 基线评估所需的运行上下文"""
 
     exp_dir: str
     config: object
@@ -42,7 +41,7 @@ class BaselineContext:
 
 @dataclass
 class BaselineOverrides:
-    """统一收拢基线评估的覆盖项。"""
+    """统一收拢基线评估的覆盖项"""
 
     exp_dir: str | None = None
     level: str | None = None
@@ -55,12 +54,12 @@ class BaselineOverrides:
 
 
 def configure_baseline(overrides=None):
-    """按覆盖项构建 PCA+SVM 基线评估上下文。"""
+    """按覆盖项构建 PCA+SVM 基线评估上下文"""
     overrides = overrides or BaselineOverrides()
     if not overrides.exp_dir:
-        raise ValueError("pca_svm_baseline 需要显式传入 exp_dir。")
+        raise ValueError("pca_svm_baseline 需要显式传入 exp_dir")
 
-    exp_dir, config = load_experiment_with_train_dataset(overrides.exp_dir)
+    exp_dir, config = load_experiment_with_dataset(overrides.exp_dir)
     return BaselineContext(
         exp_dir=exp_dir,
         config=config,
@@ -76,7 +75,7 @@ def configure_baseline(overrides=None):
 
 
 def extract_features(dataset, indices, level_idx, use_all_channels):
-    """按索引提取特征和标签，并跳过无效标签样本。"""
+    """按索引提取特征和标签，并跳过无效标签样本"""
     x_list = []
     y_list = []
     skipped = 0
@@ -93,57 +92,13 @@ def extract_features(dataset, indices, level_idx, use_all_channels):
         y_list.append(y)
 
     if not x_list:
-        raise RuntimeError("筛选后没有有效样本。")
+        raise RuntimeError("筛选后没有有效样本")
 
     return np.stack(x_list, axis=0), np.array(y_list, dtype=np.int64), skipped
 
 
-def plot_pca_scatter(x_train_pca, y_train, class_names, out_path):
-    """保存训练集在 PCA 前两维上的散点图。"""
-    if x_train_pca.shape[1] < 2:
-        print("[Warn] PCA 维数小于 2，跳过散点图。")
-        return
-
-    plt.figure(figsize=(8, 6))
-    for cls_idx, cls_name in enumerate(class_names):
-        train_mask = y_train == cls_idx
-        if not train_mask.any():
-            continue
-        plt.scatter(
-            x_train_pca[train_mask, 0],
-            x_train_pca[train_mask, 1],
-            s=12,
-            alpha=0.6,
-            label=cls_name,
-        )
-    plt.xlabel("PC1")
-    plt.ylabel("PC2")
-    plt.title("PCA scatter (train only)")
-    plt.legend(fontsize=7, ncol=2)
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=300)
-    plt.close()
-
-
-def build_result_dir(exp_dir, level_name):
-    """在实验目录内部生成基线测试结果目录。"""
-    return os.path.join(exp_dir, f"{level_name}_baseline_test_result")
-
-
-def save_metrics(out_path, acc, x_train_pca, pca, report_text):
-    """保存指标文本。"""
-    content = (
-        f"Accuracy: {acc * 100:.4f}%\n"
-        f"PCA components: {x_train_pca.shape[1]}\n"
-        "Explained variance ratio:\n"
-        f"{np.array2string(pca.explained_variance_ratio_, precision=4)}\n\n"
-        f"{report_text}"
-    )
-    write_text(out_path, content)
-
-
 def evaluate_test_set(context):
-    """使用训练阶段切分结果运行 PCA+SVM 基线评估。"""
+    """使用训练阶段切分结果运行 PCA+SVM 基线评估"""
     config = context.config
     dataset = RamanDataset(context.dataset_root, augment=False, config=config)
 
@@ -154,7 +109,7 @@ def evaluate_test_set(context):
     level_idx = dataset.head_name_to_idx[level]
     class_names = dataset.class_names_by_level[level_idx]
 
-    result_dir = build_result_dir(context.exp_dir, level)
+    result_dir = os.path.join(context.exp_dir, f"{level}_baseline_test_result")
     os.makedirs(result_dir, exist_ok=True)
 
     out_metrics = os.path.join(result_dir, "metrics.txt")
@@ -195,7 +150,12 @@ def evaluate_test_set(context):
     svm.fit(x_train_pca, y_train)
     y_pred = svm.predict(x_test_pca)
 
-    acc = accuracy_score(y_test, y_pred)
+    metrics = compute_classification_metrics(
+        y_test,
+        y_pred,
+        labels=range(len(class_names)),
+    )
+    acc = metrics["accuracy"]
     print(f"\n[Baseline] 测试集 Accuracy: {acc * 100:.4f}%")
 
     report_dict = classification_report(
@@ -209,16 +169,44 @@ def evaluate_test_set(context):
     report_text = format_classification_report_text(report_dict, class_names, acc)
     cm = confusion_matrix(y_test, y_pred, labels=list(range(len(class_names))))
 
-    save_metrics(out_metrics, acc, x_train_pca, pca, report_text)
+    metrics_text = (
+        f"Accuracy: {acc * 100:.4f}%\n"
+        f"PCA components: {x_train_pca.shape[1]}\n"
+        "Explained variance ratio:\n"
+        f"{np.array2string(pca.explained_variance_ratio_, precision=4)}\n\n"
+        f"{report_text}"
+    )
+    write_text(out_metrics, metrics_text)
     save_confusion_matrix_csv(cm, class_names, out_cm_raw)
     save_confusion_matrix_figure(cm, class_names, out_cm_png)
-    plot_pca_scatter(x_train_pca, y_train, class_names, out_pca_png)
+    if x_train_pca.shape[1] < 2:
+        print("[Warn] PCA 维数小于 2，跳过散点图")
+    else:
+        plt.figure(figsize=(8, 6))
+        for cls_idx, cls_name in enumerate(class_names):
+            train_mask = y_train == cls_idx
+            if not train_mask.any():
+                continue
+            plt.scatter(
+                x_train_pca[train_mask, 0],
+                x_train_pca[train_mask, 1],
+                s=12,
+                alpha=0.6,
+                label=cls_name,
+            )
+        plt.xlabel("PC1")
+        plt.ylabel("PC2")
+        plt.title("PCA scatter (train only)")
+        plt.legend(fontsize=7, ncol=2)
+        plt.tight_layout()
+        plt.savefig(out_pca_png, dpi=300)
+        plt.close()
 
     print("All BASELINE TEST results saved to:", result_dir)
     return result_dir
 
 
 def run_pca_svm_baseline(overrides=None):
-    """先应用覆盖项，再执行 PCA+SVM 基线评估。"""
+    """先应用覆盖项，再执行 PCA+SVM 基线评估"""
     context = configure_baseline(overrides)
     return evaluate_test_set(context)

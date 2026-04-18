@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 import csv
-import json
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,32 +10,19 @@ import torch
 import torch.nn.functional as F
 
 from raman.data import InputPreprocessor, RamanDataset
-from raman.eval.experiment import load_experiment_with_train_dataset, resolve_head_level_name
-from raman.model import RamanClassifier1D
+from raman.eval.experiment import (
+    load_experiment_with_dataset,
+    load_hierarchy_meta,
+    resolve_head_level_name,
+)
+from raman.eval.runtime import build_experiment_runtime
 from raman.training import load_split_files
 
 
 # 手动设置实验目录与分析层级
-EXP_DIR = ""
+EXP_DIR = "output/细菌/20260417_072350_93%"
 COMPARE_LEVEL = "level_1"
 TOP_K = 3
-
-def _load_hierarchy_meta(exp_dir: Path) -> dict:
-    meta_path = exp_dir / "hierarchy_meta.json"
-    if not meta_path.exists():
-        return {}
-    with open(meta_path, "r", encoding="utf-8") as file:
-        return json.load(file)
-
-
-def _resolve_model_path(exp_dir: Path, compare_level: str) -> Path:
-    meta = _load_hierarchy_meta(exp_dir)
-    level_models = meta.get("level_models", {})
-    model_name = level_models.get(compare_level, f"{compare_level}_model.pt")
-    model_path = exp_dir / model_name
-    if not model_path.exists():
-        raise FileNotFoundError(f"Missing model for {compare_level}: {model_path}")
-    return model_path
 
 
 def _normalize_suffix(folder_name: str) -> str:
@@ -47,7 +33,7 @@ def _normalize_suffix(folder_name: str) -> str:
 
 
 def _build_compare_lookup(dataset: RamanDataset, compare_level: str) -> list[tuple[str, str]]:
-    """建立 leaf 名称到目标业务层标签的映射，用于推断测试文件夹的理论正确类别。"""
+    """建立 leaf 名称到目标业务层标签的映射，用于推断测试文件夹的理论正确类别"""
     seen = set()
     entries = []
     for idx, hier in enumerate(dataset.hier_names):
@@ -63,7 +49,7 @@ def _build_compare_lookup(dataset: RamanDataset, compare_level: str) -> list[tup
 
 
 def _infer_expected_label(folder_name: str, compare_lookup: list[tuple[str, str]]) -> str | None:
-    """根据测试文件夹名后缀，反推该文件夹在 compare_level 上的理论正确类别。"""
+    """根据测试文件夹名后缀，反推该文件夹在 compare_level 上的理论正确类别"""
     suffix = _normalize_suffix(folder_name)
     for leaf_name, compare_label in compare_lookup:
         if suffix.endswith(leaf_name):
@@ -95,24 +81,6 @@ def _topk_counter(counter: Counter, inv_label_map: dict[int, str], total: int, t
             }
         )
     return items
-
-
-def _counter_ratio(counter: Counter, label_id: int | None, total: int) -> float:
-    if label_id is None or total == 0:
-        return 0.0
-    return float(counter.get(int(label_id), 0) / total)
-
-
-def _nearest_wrong_neighbor(counter: Counter, expected_id: int | None, inv_label_map: dict[int, str]) -> tuple[str, float]:
-    total = sum(counter.values())
-    for label_id, count in counter.most_common():
-        if expected_id is None or int(label_id) != int(expected_id):
-            return inv_label_map[int(label_id)], float(count / total) if total else 0.0
-    return "", 0.0
-
-
-def _format_topk(items: list[dict]) -> str:
-    return json.dumps(items, ensure_ascii=False)
 
 
 def _get_wavenumber_axis(config, length: int) -> np.ndarray:
@@ -201,13 +169,13 @@ def _plot_centroid_similarity(
 
 def _build_train_embedding_bank(
     dataset: RamanDataset,
-    model: RamanClassifier1D,
+    model: torch.nn.Module,
     compare_level: str,
     train_indices: np.ndarray,
     device: torch.device,
     batch_size: int = 64,
 ):
-    """收集训练集 embedding 及对应标签，作为最近邻分析的训练特征库。"""
+    """收集训练集 embedding 及对应标签，作为最近邻分析的训练特征库"""
     level_idx = dataset.head_name_to_idx[compare_level]
     feats_list = []
     labels_list = []
@@ -239,7 +207,7 @@ def _build_train_mean_signal_bank(
     compare_level: str,
     train_indices: np.ndarray,
 ) -> dict[int, np.ndarray]:
-    """按类别统计训练集平均谱形，供测试谱形对照图使用。"""
+    """按类别统计训练集平均谱形，供测试谱形对照图使用"""
     level_idx = dataset.head_name_to_idx[compare_level]
     signal_bank: dict[int, list[np.ndarray]] = {}
 
@@ -258,7 +226,7 @@ def _build_train_mean_signal_bank(
 
 
 def _build_class_centroids(train_feats: torch.Tensor, train_labels: np.ndarray, num_classes: int) -> torch.Tensor:
-    """把训练 embedding 按类别求中心，并做 L2 归一化，供 centroid 相似度分析。"""
+    """把训练 embedding 按类别求中心，并做 L2 归一化，供 centroid 相似度分析"""
     feat_dim = train_feats.size(1)
     centroids = torch.zeros((num_classes, feat_dim), dtype=torch.float32)
     valid_mask = torch.zeros(num_classes, dtype=torch.bool)
@@ -277,12 +245,12 @@ def _build_class_centroids(train_feats: torch.Tensor, train_labels: np.ndarray, 
 
 
 def _collect_folder_embeddings(
-    model: RamanClassifier1D,
+    model: torch.nn.Module,
     preprocessor: InputPreprocessor,
     paths: list[Path],
     device: torch.device,
 ):
-    """提取单个测试文件夹下所有光谱的 embedding、预测类别和主通道谱形。"""
+    """提取单个测试文件夹下所有光谱的 embedding、预测类别和主通道谱形"""
     feats = []
     preds = []
     signals = []
@@ -303,21 +271,20 @@ def _collect_folder_embeddings(
 
 def main():
     # ---------------- 读取实验、数据集与类别元数据 ----------------
-    exp_dir_str, config = load_experiment_with_train_dataset(EXP_DIR)
+    exp_dir_str, config = load_experiment_with_dataset(EXP_DIR)
     exp_dir = Path(exp_dir_str)
 
-    # 训练集根目录来自实验配置；独立测试集默认约定放在同级的 dataset_test 下。
+    # 训练集根目录来自实验配置；独立测试集默认约定放在同级的 dataset_test 下
     dataset_train_root = Path(config.dataset_root)
     dataset_test_root = dataset_train_root.parent / "dataset_test"
 
-    # 先构建训练数据集对象，并解析这次要诊断的业务层级。
-    # 后面的 expected_label、投票统计和 centroid 对比都统一落到 compare_level 上。
+    # 构建训练数据集对象
+    # expected_label、投票统计和 centroid 对比都统一落到 compare_level 上
     device = torch.device("cuda" if getattr(config, "use_gpu", False) and torch.cuda.is_available() else "cpu")
     full_dataset = RamanDataset(dataset_train_root, augment=False, config=config)
     compare_level = resolve_head_level_name(full_dataset, COMPARE_LEVEL)
     level_idx = full_dataset.head_name_to_idx[compare_level]
 
-    # 这几份映射分别服务于：
     # - inv_label_map：把类别 id 还原成类别名，方便出图和汇总
     # - label_map：把 expected_label 反查成类别 id
     # - num_classes：构建模型和类别中心时需要总类别数
@@ -325,27 +292,23 @@ def main():
     label_map = full_dataset.label_maps_by_level[level_idx]
     num_classes = full_dataset.num_classes_by_level[compare_level]
 
-    # 再读一遍训练时保存的层级元数据，确认当前 dataset_train 的类别顺序
-    # 和实验训练时看到的一致，避免模型和数据目录不是同一版。
-    meta = _load_hierarchy_meta(exp_dir)
+    # 读取训练时保存的层级元数据，确认当前 dataset_train 的类别顺序
+    meta = load_hierarchy_meta(exp_dir) or {}
     train_class_names = meta.get("class_names_by_level", {}).get(compare_level)
+    # 匹配数据集目录
     if train_class_names:
         current_class_names = full_dataset.class_names_by_level[level_idx]
         if list(train_class_names) != list(current_class_names):
             raise ValueError(
                 f"{compare_level} 的实验类别顺序与当前 dataset_train 不一致，"
-                "请确认当前数据目录与实验目录来自同一版数据。"
+                "请确认当前数据目录与实验目录来自同一版数据"
             )
 
-    model_path = _resolve_model_path(exp_dir, compare_level)
-    model = RamanClassifier1D(num_classes=num_classes, config=config).to(device)
-    state = torch.load(model_path, map_location=device)
-    model.load_state_dict(state)
-    model.eval()
+    runtime = build_experiment_runtime(str(exp_dir), device, config=config, meta=meta)
+    model = runtime.load_single_level_model(compare_level, num_classes=num_classes)
 
-    # ---------------- 确定训练划分，并基于训练集建立对照库 ----------------
-    # 如果实验目录里已经保存了 train/test 切分，就优先复用训练划分，
-    # 这样最近邻库、类别中心和平均谱形都和当时训练时看到的训练集保持一致。
+    # 如果实验目录里已经保存了 train/test 切分，就优先复用训练划分
+    # 这样最近邻库、类别中心和平均谱形都和当时训练时看到的训练集保持一致
     split = load_split_files(full_dataset, str(exp_dir))
     if split is None:
         train_indices = np.arange(len(full_dataset), dtype=np.int64)
@@ -390,23 +353,20 @@ def main():
         folder_out_dir = out_dir / folder_name
         folder_out_dir.mkdir(parents=True, exist_ok=True)
 
-        # 先根据测试文件夹名去反推“理论正确类”。
-        # 这个 expected_label 不是模型预测，而是把文件夹名和训练集 leaf 名对应起来后，
-        # 再映射回 compare_level 上的类别。
+        # 根据测试文件夹名反推“理论正确类”
         expected_label = _infer_expected_label(folder_name, compare_lookup)
         expected_id = label_map.get(expected_label) if expected_label is not None else None
 
-        # 提取该测试文件夹下每条光谱的 embedding、模型 top1 预测以及主通道谱形。
+        # 提取该测试文件夹下每条光谱的 embedding、模型 top1 预测以及主通道谱形
         folder_feats, model_preds, folder_signals = _collect_folder_embeddings(model, preprocessor, paths, device)
 
-        # 最近邻分析：直接看每条测试谱在训练 embedding 库里最靠近哪条训练谱。
-        # 如果这里稳定指向错误类，通常说明问题更偏 embedding 空间本身，而不是分类头。
+        # 最近邻分析：直接看每条测试谱在训练 embedding 库里最靠近哪条训练谱
+        # 如果这里稳定指向错误类，通常说明问题更偏 embedding 空间本身，而不是分类头
         similarity = torch.matmul(folder_feats, train_feats_t)
         nearest_indices = torch.argmax(similarity, dim=1).cpu().numpy()
         neighbor_preds = train_labels[nearest_indices].astype(np.int64)
 
-        # 模型投票与最近邻投票都按“整个测试文件夹”汇总，
-        # 这样更容易观察这批独立测试谱整体偏向哪个类别。
+        # 模型投票与最近邻投票都按“整个测试文件夹”汇总
         model_counter = Counter(int(pred) for pred in model_preds)
         neighbor_counter = Counter(int(pred) for pred in neighbor_preds.tolist())
         n_test = len(paths)
@@ -414,8 +374,8 @@ def main():
         model_items = _topk_counter(model_counter, inv_label_map, n_test, TOP_K)
         neighbor_items = _topk_counter(neighbor_counter, inv_label_map, n_test, TOP_K)
 
-        # centroid 分析：把整个测试文件夹的 embedding 先求一个中心，
-        # 再和各类别训练中心做余弦相似度，适合看“这批样本整体最像谁”。
+        # centroid 分析：把整个测试文件夹的 embedding 先求一个中心
+        # 再和各类别训练中心做余弦相似度，适合看“这批样本整体最像谁”
         folder_centroid = _l2_normalize_rows(folder_feats.mean(dim=0, keepdim=True))[0]
         centroid_scores = torch.matmul(class_centroids, folder_centroid)
         centroid_topk_idx = torch.argsort(centroid_scores, descending=True)[:TOP_K].cpu().numpy().tolist()
@@ -426,34 +386,9 @@ def main():
             }
             for class_id in centroid_topk_idx
         ]
-        centroid_top1_id = int(centroid_topk_idx[0])
-        centroid_top1_label = inv_label_map[centroid_top1_id]
-        centroid_top1_cos = float(centroid_scores[centroid_top1_id].item())
-        expected_centroid_cos = float(centroid_scores[int(expected_id)].item()) if expected_id is not None else None
-
-        nearest_wrong_centroid_label = ""
-        nearest_wrong_centroid_cos = None
-        if expected_id is None:
-            nearest_wrong_centroid_label = centroid_top1_label
-            nearest_wrong_centroid_cos = centroid_top1_cos
-        else:
-            for class_id in centroid_topk_idx:
-                if int(class_id) != int(expected_id):
-                    nearest_wrong_centroid_label = inv_label_map[int(class_id)]
-                    nearest_wrong_centroid_cos = float(centroid_scores[int(class_id)].item())
-                    break
-
-        nearest_wrong_neighbor_label, nearest_wrong_neighbor_ratio = _nearest_wrong_neighbor(
-            neighbor_counter,
-            expected_id,
-            inv_label_map,
-        )
-
         model_top1_label = model_items[0]["label"] if model_items else ""
-        model_top1_count = model_items[0]["count"] if model_items else 0
         model_top1_ratio = model_items[0]["ratio"] if model_items else 0.0
         neighbor_top1_label = neighbor_items[0]["label"] if neighbor_items else ""
-        neighbor_top1_count = neighbor_items[0]["count"] if neighbor_items else 0
         neighbor_top1_ratio = neighbor_items[0]["ratio"] if neighbor_items else 0.0
         expected_mean_signal = None if expected_id is None else train_mean_signal_bank.get(int(expected_id))
 
@@ -501,39 +436,15 @@ def main():
                 "folder": folder_name,
                 "expected_label": expected_label or "",
                 "model_top1_label": model_top1_label,
-                "model_top1_count": model_top1_count,
                 "model_top1_ratio": f"{model_top1_ratio:.6f}",
                 "neighbor_top1_label": neighbor_top1_label,
-                "neighbor_top1_count": neighbor_top1_count,
                 "neighbor_top1_ratio": f"{neighbor_top1_ratio:.6f}",
-                "expected_model_ratio": f"{_counter_ratio(model_counter, expected_id, n_test):.6f}",
-                "expected_neighbor_ratio": f"{_counter_ratio(neighbor_counter, expected_id, n_test):.6f}",
-                "nearest_wrong_neighbor_label": nearest_wrong_neighbor_label,
-                "nearest_wrong_neighbor_ratio": f"{nearest_wrong_neighbor_ratio:.6f}",
-                "centroid_top1_label": centroid_top1_label,
-                "centroid_top1_cos": f"{centroid_top1_cos:.6f}",
-                "expected_centroid_cos": "" if expected_centroid_cos is None else f"{expected_centroid_cos:.6f}",
-                "nearest_wrong_centroid_label": nearest_wrong_centroid_label,
-                "nearest_wrong_centroid_cos": "" if nearest_wrong_centroid_cos is None else f"{nearest_wrong_centroid_cos:.6f}",
-                "centroid_margin_expected_minus_wrong": (
-                    ""
-                    if expected_centroid_cos is None or nearest_wrong_centroid_cos is None
-                    else f"{(expected_centroid_cos - nearest_wrong_centroid_cos):.6f}"
-                ),
-                "spectrum_plot": f"{folder_name}/spectra.png",
-                "model_vote_plot": f"{folder_name}/model_vote.png",
-                "neighbor_vote_plot": f"{folder_name}/neighbor_vote.png",
-                "centroid_similarity_plot": f"{folder_name}/centroid_similarity.png",
-                "model_topk": _format_topk(model_items),
-                "neighbor_topk": _format_topk(neighbor_items),
-                "centroid_topk": json.dumps(centroid_items, ensure_ascii=False),
-                "n_test_spectra": n_test,
             }
         )
 
     # ---------------- 输出总表，方便统一浏览所有测试文件夹 ----------------
     # summary.csv 相当于总索引：
-    # 一行对应一个测试文件夹，既保留关键数值，也保留图像相对路径，方便集中排查。
+    # 一行对应一个测试文件夹，既保留关键数值，也保留图像相对路径，方便集中排查
     with open(summary_path, "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(
             file,
@@ -541,29 +452,9 @@ def main():
                 "folder",
                 "expected_label",
                 "model_top1_label",
-                "model_top1_count",
                 "model_top1_ratio",
                 "neighbor_top1_label",
-                "neighbor_top1_count",
                 "neighbor_top1_ratio",
-                "expected_model_ratio",
-                "expected_neighbor_ratio",
-                "nearest_wrong_neighbor_label",
-                "nearest_wrong_neighbor_ratio",
-                "centroid_top1_label",
-                "centroid_top1_cos",
-                "expected_centroid_cos",
-                "nearest_wrong_centroid_label",
-                "nearest_wrong_centroid_cos",
-                "centroid_margin_expected_minus_wrong",
-                "spectrum_plot",
-                "model_vote_plot",
-                "neighbor_vote_plot",
-                "centroid_similarity_plot",
-                "model_topk",
-                "neighbor_topk",
-                "centroid_topk",
-                "n_test_spectra",
             ],
         )
         writer.writeheader()

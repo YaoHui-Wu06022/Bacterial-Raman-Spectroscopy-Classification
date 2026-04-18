@@ -1,4 +1,4 @@
-"""PCA+SVM 基线评估入口。"""
+"""PCA+SVM 基线评估入口"""
 
 from raman.eval import BaselineOverrides, run_pca_svm_baseline
 

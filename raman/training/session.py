@@ -11,7 +11,7 @@ from raman.config_io import dump_config_to_yaml
 
 
 def _sanitize_log_name(name):
-    """将日志名裁剪到适合文件名的形式。"""
+    """将日志名裁剪到适合文件名的形式"""
     text = str(name).strip()
     if not text:
         return "unnamed"
@@ -20,10 +20,10 @@ def _sanitize_log_name(name):
 
 def set_seed(seed, deterministic=True):
     """
-    统一设置 Python、NumPy 和 PyTorch 的随机种子。
+    统一设置 Python、NumPy 和 PyTorch 的随机种子
 
     当 `deterministic=True` 时，同时关闭 cuDNN 的自动 benchmark，
-    优先保证训练过程可复现。
+    优先保证训练过程可复现
     """
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
@@ -38,7 +38,7 @@ def set_seed(seed, deterministic=True):
 
 def prepare_output_dirs(config):
     """
-    创建训练输出目录及其日志子目录。
+    创建训练输出目录及其日志子目录
     """
     base = config.output_dir
     dirs = {
@@ -52,7 +52,7 @@ def prepare_output_dirs(config):
 
 def prepare_training_runtime(config):
     """
-    准备实验目录、日志文件和配置快照。
+    准备实验目录、日志文件和配置快照
     """
     if config.timestamp is None:
         config.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -101,7 +101,7 @@ def prepare_training_runtime(config):
 
 
 def create_model_logger(logs_dir, model_tag, shared_log):
-    """为单个模型创建独立日志，并同步写入总日志。"""
+    """为单个模型创建独立日志，并同步写入总日志"""
     safe_tag = _sanitize_log_name(model_tag)
     log_path = os.path.join(logs_dir, f"{safe_tag}.log")
     log_file = open(log_path, "w", buffering=1, encoding="utf-8")
@@ -122,7 +122,7 @@ def save_hierarchy_meta(
     parent_models,
 ):
     """
-    保存层级类别名、父子关系和训练得到的模型索引信息。
+    保存层级类别名、父子关系和训练得到的模型索引信息
     """
     class_names_path = os.path.join(config.output_dir, "class_names.json")
     class_names_by_level = {

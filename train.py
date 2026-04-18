@@ -1,4 +1,4 @@
-"""Raman 层级分类训练入口。"""
+"""Raman 层级分类训练入口"""
 
 from raman.config import config
 from raman.trainer import TrainOverrides, run_training

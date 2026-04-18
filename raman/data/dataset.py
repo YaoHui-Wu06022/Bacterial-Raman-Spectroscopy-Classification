@@ -16,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 class RamanDataset(Dataset):
     """
-    层级自适应 Raman 数据集。
+    层级自适应 Raman 数据集
 
     目录结构示例：
         root / ... / ... / *.arc_data
@@ -42,18 +42,18 @@ class RamanDataset(Dataset):
         assert config is not None, "RamanDataset 必须显式传入 config"
         self.config = config
 
-        # 样本级基础状态：这是数据集真正长期持有的内容。
+        # 样本级基础状态：这是数据集真正长期持有的内容
         self.samples = []          # 每个样本对应的 .arc_data 文件路径
         self.level_labels = []     # 每个样本在各层上的整数标签，最后一列始终是 leaf
         self.hier_names = []       # 每个样本的业务层级名称字典，如 {level_1: ..., level_2: ...}
 
-        # 层级级基础状态：业务层请优先使用 level_names；head_names 仅保留给内部 split/编码。
+        # 层级级基础状态：业务层请优先使用 level_names；head_names 仅保留给内部 split/编码
         self.head_names = []           # 内部层级顺序，如 [level_1, ..., leaf]
         self.head_name_to_idx = {}     # 层级名 -> 列索引，便于从 level_labels 中定位某一层
         self.label_maps_by_level = []  # 每层的名称 -> 整数标签映射，leaf 仍作为最后一层保留
         self.parent_to_children = {}   # 仅业务层的父类 id -> 子类 id 列表，用于层级训练和级联推理
 
-        # SG kernel 预生成：避免 __getitem__ 每次重复创建平滑/一阶导卷积核。
+        # SG kernel 预生成：避免 __getitem__ 每次重复创建平滑/一阶导卷积核
         self.sg_smooth, self.sg_d1 = build_sg_kernels(self.config, device="cpu")
 
         # 扫描数据
@@ -97,7 +97,7 @@ class RamanDataset(Dataset):
 
     @property
     def inv_label_maps_by_level(self):
-        # 各层 label_maps 的反向视图：标签 id -> 层级名称。
+        # 各层 label_maps 的反向视图：标签 id -> 层级名称
         return [
             {idx: name for name, idx in label_map.items()}
             for label_map in self.label_maps_by_level
@@ -105,12 +105,12 @@ class RamanDataset(Dataset):
 
     @property
     def class_names_by_level(self):
-        # 各层类别名列表，顺序与对应的整数标签保持一致。
+        # 各层类别名列表，顺序与对应的整数标签保持一致
         return [list(label_map.keys()) for label_map in self.label_maps_by_level]
 
     @property
     def num_classes_by_level(self):
-        # 各层类别数，键使用层级名而不是层级索引。
+        # 各层类别数，键使用层级名而不是层级索引
         return {
             level_name: len(self.label_maps_by_level[idx])
             for idx, level_name in enumerate(self.head_names)
@@ -118,7 +118,7 @@ class RamanDataset(Dataset):
 
     @property
     def parent_level_name(self):
-        # 每个业务层对应的上一层名称；顶层没有父层，因此为 None。
+        # 每个业务层对应的上一层名称；顶层没有父层，因此为 None
         return {
             level_name: (None if idx == 0 else self.level_names[idx - 1])
             for idx, level_name in enumerate(self.level_names)
@@ -214,14 +214,14 @@ class RamanDataset(Dataset):
         path = self.samples[idx]  # 路径
         labels = self.level_labels[idx]  # 多层标签
         hier = self.hier_names[idx]  # 层级
-        # DataLoader 默认的 collate 不能直接处理 dict 中的 None 值。
+        # DataLoader 默认的 collate 不能直接处理 dict 中的 None 值
         if isinstance(hier, dict):
             hier = {
                 k: (v if v is not None else self.MISSING_TAG)
                 for k, v in hier.items()
             }
 
-        # 与 InputPreprocessor 复用同一套输入构建逻辑，避免训练/评估分支漂移。
+        # 与 InputPreprocessor 复用同一套输入构建逻辑，避免训练/评估分支漂移
         raw_intensity = load_arc_intensity(path)
         X = build_model_input(
             raw_intensity,
@@ -259,7 +259,7 @@ class RamanDataset(Dataset):
 
     def get_split_key(self, idx, split_mode):
         """
-        根据 split_mode 构造分组键。
+        根据 split_mode 构造分组键
 
         示例：
             split_mode = "level_2/leaf"
@@ -276,7 +276,7 @@ class RamanDataset(Dataset):
 
     def encode_hierarchy(self, hier_list, device=None):
         """
-        将层级名称结构编码成各层的整数标签张量。
+        将层级名称结构编码成各层的整数标签张量
 
         输入允许两种形式：
             - DataLoader 默认 collate 后得到的 dict[str, list]
@@ -311,7 +311,7 @@ class RamanDataset(Dataset):
             else:
                 raise TypeError(
                     "encode_hierarchy 只接受 DataLoader collate 后的 "
-                    "dict[str, list]，或由 __getitem__ 返回的 dict 列表/数组。"
+                    "dict[str, list]，或由 __getitem__ 返回的 dict 列表/数组"
                 )
 
         # --------------------------------------------------

@@ -5,7 +5,7 @@ import seaborn as sns
 
 
 def format_classification_report_text(report_dict, class_names, acc):
-    """将 classification_report 的字典结果整理成统一文本。"""
+    """将 classification_report 的字典结果整理成统一文本"""
 
     def _fmt_line(name, p, r, f1, support):
         return (
@@ -54,7 +54,7 @@ def format_classification_report_text(report_dict, class_names, acc):
 
 
 def build_confusion_annotation(cm):
-    """计算归一化混淆矩阵和用于热图展示的标注文本。"""
+    """计算归一化混淆矩阵和用于热图展示的标注文本"""
     denom = cm.sum(axis=1, keepdims=True).astype(np.float32)
     denom[denom == 0] = 1.0
     cm_norm = cm.astype(np.float32) / denom
@@ -73,12 +73,12 @@ def build_confusion_annotation(cm):
 
 
 def save_confusion_matrix_csv(cm, class_names, out_path):
-    """保存原始混淆矩阵表格。"""
+    """保存原始混淆矩阵表格"""
     pd.DataFrame(cm, index=class_names, columns=class_names).to_csv(out_path)
 
 
 def save_confusion_matrix_figure(cm, class_names, out_path, show=False):
-    """保存带百分比和计数标注的混淆矩阵热图。"""
+    """保存带百分比和计数标注的混淆矩阵热图"""
     cm_norm, annot = build_confusion_annotation(cm)
 
     plt.figure(figsize=(7, 6))
@@ -100,6 +100,6 @@ def save_confusion_matrix_figure(cm, class_names, out_path, show=False):
 
 
 def write_text(out_path, content):
-    """按 UTF-8 写文本文件。"""
+    """按 UTF-8 写文本文件"""
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(content)

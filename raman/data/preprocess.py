@@ -27,7 +27,7 @@ def SNV(x):
 
 
 def L2Normalize(x, eps=1e-8):
-    """对单条光谱做 L2 标准化。"""
+    """对单条光谱做 L2 标准化"""
     if isinstance(x, torch.Tensor):
         norm = torch.sqrt(torch.sum(x**2)).clamp_min(eps)
         return x / norm
@@ -38,7 +38,7 @@ def L2Normalize(x, eps=1e-8):
 
 
 def MinMaxNormalize(x, eps=1e-8):
-    """对单条光谱做 Min-Max 归一化。"""
+    """对单条光谱做 Min-Max 归一化"""
     if isinstance(x, torch.Tensor):
         min_v = torch.min(x)
         max_v = torch.max(x)
@@ -53,14 +53,14 @@ def MinMaxNormalize(x, eps=1e-8):
 
 
 def load_arc_intensity(path):
-    """读取单个 .arc_data 文件的强度列。"""
+    """读取单个 .arc_data 文件的强度列"""
     data = np.loadtxt(path, dtype=np.float32)
     data = np.atleast_2d(data)
     return data[:, 1].astype(np.float32, copy=False)
 
 
 def normalize_spectrum(x, norm_method):
-    """按配置指定的方法对单条光谱做标准化。"""
+    """按配置指定的方法对单条光谱做标准化"""
     if norm_method == "snv":
         return SNV(x)
     if norm_method == "l2":
@@ -71,7 +71,7 @@ def normalize_spectrum(x, norm_method):
 
 
 def _robust_amp(x):
-    """用 1% 和 99% 分位数估计稳健振幅。"""
+    """用 1% 和 99% 分位数估计稳健振幅"""
     x = np.asarray(x, dtype=np.float32)
     p1, p99 = np.percentile(x, [1, 99])
     amp = float(p99 - p1)
@@ -79,7 +79,7 @@ def _robust_amp(x):
 
 
 def _random_piecewise_segments(n, min_len=50, max_len=200):
-    """按谱长自动切分若干不重叠区段。"""
+    """按谱长自动切分若干不重叠区段"""
     segments = []
     i = 0
     while i < n:
@@ -92,7 +92,7 @@ def _random_piecewise_segments(n, min_len=50, max_len=200):
 
 
 def aug_piecewise_gain(x, segments, gain_std=0.15):
-    """按分段随机缩放，模拟相对峰高比例变化。"""
+    """按分段随机缩放，模拟相对峰高比例变化"""
     x = np.asarray(x, dtype=np.float32)
     out = x.copy()
     for left, right in segments:
@@ -131,7 +131,7 @@ def aug_weak_baseline(
     freq_min=0.5,
     freq_max=2.0,
 ):
-    """弱 baseline 扰动，模拟残余低频背景。"""
+    """弱 baseline 扰动，模拟残余低频背景"""
     x = np.asarray(x, dtype=np.float32)
     amp = _robust_amp(x)
     length = len(x)
@@ -147,7 +147,7 @@ def aug_weak_baseline(
 
 
 def aug_strong_baseline(x, amp_min=0.05, amp_max=0.15, n_knots_min=3, n_knots_max=6):
-    """强 baseline 扰动，模拟更明显的批次或仪器背景差异。"""
+    """强 baseline 扰动，模拟更明显的批次或仪器背景差异"""
     x = np.asarray(x, dtype=np.float32)
     amp = _robust_amp(x)
     length = len(x)
@@ -162,7 +162,7 @@ def aug_strong_baseline(x, amp_min=0.05, amp_max=0.15, n_knots_min=3, n_knots_ma
 
 
 def aug_axis_warp(x, config):
-    """非刚性波数轴扰动，模拟轻微标定偏差。"""
+    """非刚性波数轴扰动，模拟轻微标定偏差"""
     x = np.asarray(x, dtype=np.float32)
     n = len(x)
 
@@ -184,7 +184,7 @@ def aug_axis_warp(x, config):
 
 
 def aug_shift(x, max_shift=3):
-    """随机平移峰位，模拟轻微坐标偏移。"""
+    """随机平移峰位，模拟轻微坐标偏移"""
     x = np.asarray(x, dtype=np.float32)
     if max_shift <= 0:
         return x
@@ -205,7 +205,7 @@ def aug_shift(x, max_shift=3):
 
 
 def _gauss_kernel1d(sigma, truncate=3.0):
-    """构造一维高斯卷积核。"""
+    """构造一维高斯卷积核"""
     radius = int(truncate * sigma + 0.5)
     radius = max(radius, 1)
     xs = np.arange(-radius, radius + 1, dtype=np.float32)
@@ -215,7 +215,7 @@ def _gauss_kernel1d(sigma, truncate=3.0):
 
 
 def aug_broadening(x, sigma_min=0.4, sigma_max=1.0, truncate=3.0):
-    """用小核高斯卷积模拟峰展宽。"""
+    """用小核高斯卷积模拟峰展宽"""
     x = np.asarray(x, dtype=np.float32)
     sigma = float(np.random.uniform(sigma_min, sigma_max))
     kernel = _gauss_kernel1d(sigma, truncate=truncate)
@@ -231,7 +231,7 @@ def aug_mask_attenuate(
     atten_min=0.0,
     atten_max=0.3,
 ):
-    """局部衰减遮挡，模拟局部污染、局部失真或检测异常。"""
+    """局部衰减遮挡，模拟局部污染、局部失真或检测异常"""
     x = np.asarray(x, dtype=np.float32)
     length = len(x)
     if width_min <= 0 or width_min >= length:
@@ -325,7 +325,7 @@ def augment_raw_spectrum(x, config):
 
 
 def augment_norm_spectrum(x, config):
-    """在标准化后做弱形状扰动。"""
+    """在标准化后做弱形状扰动"""
     is_tensor = isinstance(x, torch.Tensor)
     if is_tensor:
         device = x.device
@@ -368,32 +368,32 @@ def augment_norm_spectrum(x, config):
 
 
 def _validate_sg_params(window_length, polyorder, deriv):
-    """对 SG 参数做基本合法性检查。"""
+    """对 SG 参数做基本合法性检查"""
     if window_length is None:
-        raise ValueError("window_length 不能为空。")
+        raise ValueError("window_length 不能为空")
 
     window_length = int(window_length)
     polyorder = int(polyorder)
     deriv = int(deriv)
 
     if window_length <= 0:
-        raise ValueError(f"window_length 必须大于 0，当前为 {window_length}。")
+        raise ValueError(f"window_length 必须大于 0，当前为 {window_length}")
     if window_length % 2 == 0:
-        raise ValueError(f"window_length 必须是奇数，当前为 {window_length}。")
+        raise ValueError(f"window_length 必须是奇数，当前为 {window_length}")
     if window_length <= polyorder:
         raise ValueError(
-            f"window_length 必须大于 polyorder，当前 window_length={window_length}, polyorder={polyorder}。"
+            f"window_length 必须大于 polyorder，当前 window_length={window_length}, polyorder={polyorder}"
         )
     if deriv < 0 or deriv > polyorder:
         raise ValueError(
-            f"deriv 必须落在 [0, polyorder]，当前 deriv={deriv}, polyorder={polyorder}。"
+            f"deriv 必须落在 [0, polyorder]，当前 deriv={deriv}, polyorder={polyorder}"
         )
 
     return window_length, polyorder, deriv
 
 
 def sg_coeff(window_length, polyorder, deriv):
-    """生成 Savitzky-Golay 卷积核系数。"""
+    """生成 Savitzky-Golay 卷积核系数"""
     window_length, polyorder, deriv = _validate_sg_params(window_length, polyorder, deriv)
 
     half = (window_length - 1) // 2
@@ -405,21 +405,21 @@ def sg_coeff(window_length, polyorder, deriv):
 
     if not np.isfinite(coeff).all():
         raise ValueError(
-            f"sg_coeff 生成了非有限值：window_length={window_length}, polyorder={polyorder}, deriv={deriv}。"
+            f"sg_coeff 生成了非有限值：window_length={window_length}, polyorder={polyorder}, deriv={deriv}"
         )
 
     return coeff
 
 
 def sg_kernel(window_length, polyorder, deriv, device):
-    """将 SG 系数包装成 torch 卷积核。"""
+    """将 SG 系数包装成 torch 卷积核"""
     coeff = sg_coeff(window_length, polyorder, deriv)
     kernel = torch.tensor(coeff, dtype=torch.float32, device=device)
     return kernel.view(1, 1, -1)
 
 
 def build_sg_kernels(config, device):
-    """按当前配置一次性构造 smooth 和 d1 的 SG 卷积核。"""
+    """按当前配置一次性构造 smooth 和 d1 的 SG 卷积核"""
     return (
         sg_kernel(config.win_smooth, 3, 0, device),
         sg_kernel(config.win1, 3, 1, device),
@@ -427,40 +427,35 @@ def build_sg_kernels(config, device):
 
 
 def build_pre_smooth_source(signal, config, sg_smooth):
-    """为 smooth 通道构造“先平滑、后标准化”的输入源。"""
+    """为 smooth 通道构造“先平滑、后标准化”的输入源"""
     smooth = F.conv1d(signal, sg_smooth, padding=config.win_smooth // 2)
     return smooth[0, 0]
 
 
 def build_pre_d1_source(signal, config, sg_smooth, sg_d1):
-    """为 d1 通道构造“先平滑、再求导、后标准化”的输入源。"""
+    """为 d1 通道构造“先平滑、再求导、后标准化”的输入源"""
     smooth = F.conv1d(signal, sg_smooth, padding=config.win_smooth // 2)
     d1 = F.conv1d(smooth, sg_d1, padding=config.win1 // 2)[0, 0]
     return d1 / config.delta
 
 
-def build_input_channels(signal, config, smooth_signal=None, raw_signal=None, d1_signal=None):
-    """将已经准备好的各支路信号堆叠成最终的 [C, L] 输入。"""
+def build_input_channels(signal, config, smooth_signal=None, d1_signal=None):
+    """将已经准备好的各支路信号堆叠成最终的 [C, L] 输入"""
     channels = [signal[0, 0]]
 
     if config.smooth_use:
         if smooth_signal is None:
-            raise ValueError("smooth_use=True 时必须显式传入 smooth_signal。")
+            raise ValueError("smooth_use=True 时必须显式传入 smooth_signal")
         channels.append(smooth_signal[0, 0])
-
-    if getattr(config, "raw_use", False):
-        if raw_signal is None:
-            raise ValueError("raw_use=True 时必须显式传入 raw_signal。")
-        channels.append(raw_signal[0, 0])
 
     if config.d1_use:
         if d1_signal is None:
-            raise ValueError("d1_use=True 时必须显式传入 d1_signal。")
+            raise ValueError("d1_use=True 时必须显式传入 d1_signal")
         channels.append(d1_signal[0, 0])
 
     if len(channels) != config.in_channels:
         raise ValueError(
-            f"通道数不匹配：实际构造了 {len(channels)} 个通道，但 config.in_channels={config.in_channels}。"
+            f"通道数不匹配：实际构造了 {len(channels)} 个通道，但 config.in_channels={config.in_channels}"
         )
 
     return torch.stack(channels, dim=0)
@@ -468,9 +463,9 @@ def build_input_channels(signal, config, smooth_signal=None, raw_signal=None, d1
 
 def build_model_input(raw_intensity, config, sg_smooth, sg_d1, device, augment=False):
     """
-    将一条原始强度光谱转换成模型输入。
+    将一条原始强度光谱转换成模型输入
 
-    当前始终返回单个 [C, L]，不再在这里生成双视图。
+    当前始终返回单个 [C, L]，不再在这里生成双视图
     """
     mother_raw = np.asarray(raw_intensity, dtype=np.float32)
     if augment:
@@ -496,20 +491,18 @@ def build_model_input(raw_intensity, config, sg_smooth, sg_d1, device, augment=F
         d1_x = normalize_spectrum(d1_x, config.norm_method)
         d1_signal = d1_x.view(1, 1, -1)
 
-    raw_signal = mother_tensor if getattr(config, "raw_use", False) else None
     signal = torch.as_tensor(base_x, dtype=torch.float32, device=device).view(1, 1, -1)
 
     return build_input_channels(
         signal,
         config,
         smooth_signal=smooth_signal,
-        raw_signal=raw_signal,
         d1_signal=d1_signal,
     )
 
 
 class InputPreprocessor:
-    """统一 train / eval / predict 的输入构造逻辑。"""
+    """统一 train / eval / predict 的输入构造逻辑"""
 
     def __init__(self, config, device):
         self.config = config
@@ -520,7 +513,7 @@ class InputPreprocessor:
         return self.preprocess_arc(path)
 
     def preprocess_arc(self, path):
-        """对单个 .arc_data 文件做推理侧输入构造。"""
+        """对单个 .arc_data 文件做推理侧输入构造"""
         raw_intensity = load_arc_intensity(path)
         X = build_model_input(
             raw_intensity,

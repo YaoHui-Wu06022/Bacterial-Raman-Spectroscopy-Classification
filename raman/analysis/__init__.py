@@ -1,4 +1,4 @@
-"""训练结果分析入口统一导出层。"""
+"""训练结果分析入口统一导出层"""
 
 from .pipeline import AnalysisOverrides, HeatmapConfig, run_analysis_pipeline
 

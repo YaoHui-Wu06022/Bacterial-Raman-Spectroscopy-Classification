@@ -6,8 +6,8 @@ import torch.nn.functional as F
 
 def build_class_weights(level_labels, num_classes):
     """
-    根据当前训练层的标签分布构造类别权重。
-    这里使用对数平滑，避免极少数类权重过大导致训练不稳定。
+    根据当前训练层的标签分布构造类别权重
+    这里使用对数平滑，避免极少数类权重过大导致训练不稳定
     """
     valid = level_labels >= 0
     if not valid.any():
@@ -22,7 +22,7 @@ def build_class_weights(level_labels, num_classes):
 
 def get_linear_weight(epoch, start, end, w_min, w_max):
     """
-    在指定 epoch 区间内对损失权重做线性拉升。
+    在指定 epoch 区间内对损失权重做线性拉升
     """
     if epoch < start:
         return w_min
@@ -35,9 +35,8 @@ def get_linear_weight(epoch, start, end, w_min, w_max):
 
 class FocalLoss(nn.Module):
     """
-    Focal Loss。
-
-    在交叉熵基础上降低易分类样本的权重，突出难样本。
+    Focal Loss
+    在交叉熵基础上降低易分类样本的权重，突出难样本
     """
 
     def __init__(self, gamma, weight=None, ignore_index=-1):
@@ -65,8 +64,8 @@ class FocalLoss(nn.Module):
         focal_factor = (1 - pt) ** self.gamma
 
         if self.weight is not None:
-            alpha_t = self.weight[targets]
-            loss = alpha_t * focal_factor * ce_loss
+            sample_weight = self.weight[targets]
+            loss = sample_weight * focal_factor * ce_loss
         else:
             loss = focal_factor * ce_loss
 
@@ -75,7 +74,7 @@ class FocalLoss(nn.Module):
 
 def AlignLoss(feat, y):
     """
-    仅按当前训练层标签计算 batch 内类内紧凑损失。
+    仅按当前训练层标签计算 batch 内类内紧凑损失
     """
     valid_mask = y >= 0
     if not valid_mask.any():
@@ -105,10 +104,10 @@ def AlignLoss(feat, y):
 
 class SupConLoss(nn.Module):
     """
-    单视角版本的监督式对比损失。
+    单视角版本的监督式对比损失
 
     目标是让同类样本在 embedding 空间更接近，不同类样本更分离，
-    但不强制每个类别只有一个中心。
+    但不强制每个类别只有一个中心
     """
 
     def __init__(self, temperature=0.1):

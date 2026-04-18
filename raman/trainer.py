@@ -1,4 +1,4 @@
-﻿"""Raman 层级分类训练脚本。"""
+﻿"""Raman 层级分类训练脚本"""
 from copy import deepcopy
 import json
 import os
@@ -12,12 +12,13 @@ import torch.nn.functional as F
 
 from raman.config import config as default_config
 from raman.data import RamanDataset
-from raman.model import RamanClassifier1D
-from raman.training.eval import (
-    evaluate_file_level,
-    evaluate_file_level_local,
+from raman.eval.common import (
+    compute_classification_metrics,
     mask_logits_by_parent,
+    select_level_targets,
+    select_logits,
 )
+from raman.model import RamanClassifier1D
 from raman.training.losses import (
     AlignLoss,
     FocalLoss,
@@ -43,7 +44,7 @@ from raman.training.split import (
 
 @dataclass
 class TrainOverrides:
-    """训练入口覆盖项，供根目录脚本和 Colab 统一复用。"""
+    """训练入口覆盖项，供根目录脚本和 Colab 统一复用"""
 
     current_train_level: str | None = None
     train_only_parent_name: str | None = None
@@ -55,7 +56,7 @@ class TrainOverrides:
 
 
 def apply_train_overrides(config, overrides=None):
-    """把入口层的手动覆盖项写回配置对象。"""
+    """把入口层的手动覆盖项写回配置对象"""
     overrides = overrides or TrainOverrides()
 
     if overrides.current_train_level is not None:
@@ -77,7 +78,7 @@ def apply_train_overrides(config, overrides=None):
 
 
 def _load_existing_hierarchy_meta(exp_dir):
-    """读取已有实验目录中的层级训练元数据。"""
+    """读取已有实验目录中的层级训练元数据"""
     meta_path = os.path.join(exp_dir, "hierarchy_meta.json")
     if not os.path.exists(meta_path):
         return None
@@ -89,7 +90,7 @@ def _load_existing_hierarchy_meta(exp_dir):
 
 
 def _resolve_saved_model_path(exp_dir, model_path):
-    """把层级元数据中的模型路径解析成绝对路径。"""
+    """把层级元数据中的模型路径解析成绝对路径"""
     if not model_path:
         return None
     if os.path.isabs(model_path):
@@ -98,7 +99,7 @@ def _resolve_saved_model_path(exp_dir, model_path):
 
 
 def _is_parent_entry_covered(exp_dir, entry):
-    """判断某个 parent 条目是否足以支持级联。"""
+    """判断某个 parent 条目是否足以支持级联"""
     child_ids = list(entry.get("child_ids", []))
     model_path = entry.get("model_path")
     if model_path:
@@ -108,7 +109,7 @@ def _is_parent_entry_covered(exp_dir, entry):
 
 
 def _build_loader_kwargs(config, device, train=True):
-    """按当前配置构造 DataLoader 参数。"""
+    """按当前配置构造 DataLoader 参数"""
     num_workers = int(
         config.train_loader_num_workers if train else config.eval_loader_num_workers
     )
@@ -126,8 +127,87 @@ def _build_loader_kwargs(config, device, train=True):
     return kwargs
 
 
+def _evaluate_validation_loader(
+    model,
+    loader,
+    device,
+    head_index,
+    head_name=None,
+    label_map_tensor=None,
+    parent_index=None,
+    parent_to_children=None,
+):
+    """训练期验证入口：统一处理层级标签、局部映射与父类遮罩"""
+    model.eval()
+    criterion_eval = torch.nn.CrossEntropyLoss()
+    total_loss, total = 0.0, 0
+    all_targets = []
+    all_preds = []
+    num_classes = None
+
+    with torch.no_grad():
+        for x, y, _ in loader:
+            x = x.to(device)
+            y = y.to(device)
+
+            logits = select_logits(model(x), head_name=head_name)
+            y_level = select_level_targets(y, head_index)
+
+            if label_map_tensor is not None:
+                invalid = y_level < 0
+                y_level = label_map_tensor[y_level.clamp_min(0)]
+                y_level[invalid] = -1
+
+            if parent_index is not None and parent_to_children is not None:
+                if y.ndim != 2:
+                    raise ValueError("parent_index 需要完整的多层标签输入")
+                parent_labels = y[:, parent_index]
+                logits, valid_parent = mask_logits_by_parent(
+                    logits,
+                    parent_labels,
+                    parent_to_children,
+                )
+            else:
+                valid_parent = torch.ones_like(y_level, dtype=torch.bool)
+
+            valid = (y_level >= 0) & valid_parent
+            if not valid.any():
+                continue
+
+            logits = logits[valid]
+            y_valid = y_level[valid]
+
+            if num_classes is None:
+                num_classes = logits.size(1)
+
+            loss = criterion_eval(logits, y_valid)
+            batch_size = y_valid.size(0)
+            total_loss += loss.item() * batch_size
+            total += batch_size
+
+            all_preds.append(logits.argmax(1).detach().cpu().numpy())
+            all_targets.append(y_valid.detach().cpu().numpy())
+
+    if num_classes is None or not all_targets:
+        metrics = {
+            "accuracy": 0.0,
+            "macro_f1": 0.0,
+            "macro_recall": 0.0,
+        }
+        return 0.0, 0.0, metrics
+
+    y_true = np.concatenate(all_targets, axis=0)
+    y_pred = np.concatenate(all_preds, axis=0)
+    metrics = compute_classification_metrics(
+        y_true,
+        y_pred,
+        labels=range(num_classes),
+    )
+    return total_loss / max(total, 1), metrics["accuracy"], metrics
+
+
 def _has_level_coverage(exp_dir, full_dataset, level_name):
-    """判断实验目录里是否已有某一上级层的完整训练结果。"""
+    """判断实验目录里是否已有某一上级层的完整训练结果"""
     meta = _load_existing_hierarchy_meta(exp_dir)
     if meta is not None:
         level_models = meta.get("level_models", {})
@@ -166,7 +246,7 @@ def _has_level_coverage(exp_dir, full_dataset, level_name):
 
 
 def _log_missing_upper_level_hint(full_dataset, current_train_level, train_per_parent, exp_dir, log):
-    """缺少上一级结果时给出非阻断提示。"""
+    """缺少上一级结果时给出非阻断提示"""
     if not train_per_parent:
         return
 
@@ -179,17 +259,17 @@ def _log_missing_upper_level_hint(full_dataset, current_train_level, train_per_p
 
     log(
         f"[Hint] train_per_parent=True，但当前实验目录缺少上一级 "
-        f"{upper_level_name} 的完整模型记录。"
+        f"{upper_level_name} 的完整模型记录"
     )
     log(
         f"[Hint] 若后续需要在同一 EXP_DIR 中继续向下训练、级联预测或测试评估，"
-        f"建议先训练 current_train_level={upper_level_name}。"
+        f"建议先训练 current_train_level={upper_level_name}"
     )
 
 
 def _compute_severity_weights(prob, targets):
     """
-    按当前层类别数自适应计算样本级严重程度权重。
+    按当前层类别数自适应计算样本级严重程度权重
 
     设计原则：
     - 二分类时不再额外做 severity 重加权，避免和 Focal 重复放大
@@ -234,12 +314,12 @@ def _compute_severity_weights(prob, targets):
 
 
 def run_training(config_obj=None, overrides=None):
-    """执行一次完整训练流程。"""
+    """执行一次完整训练流程"""
     config = deepcopy(config_obj or default_config)
     config = apply_train_overrides(config, overrides)
     current_train_level = getattr(config, "current_train_level", None)
     if current_train_level is None:
-        raise ValueError("训练入口必须显式提供 current_train_level。")
+        raise ValueError("训练入口必须显式提供 current_train_level")
     TRAIN_PER_PARENT = config.train_per_parent
     USE_ALIGN_LOSS = getattr(config, "use_align_loss", True)
     USE_SUPCON_LOSS = getattr(config, "use_supcon_loss", True)
@@ -357,6 +437,11 @@ def run_training(config_obj=None, overrides=None):
             test_loader = DataLoader(
                 test_subset,
                 **_build_loader_kwargs(config, device, train=False),
+            )
+        if test_loader is None:
+            raise ValueError(
+                f"{model_tag} 没有可用的验证样本，当前实现要求每个参与训练的 leaf "
+                "在切分后都能为验证集提供样本"
             )
 
         # 单层模型
@@ -596,34 +681,18 @@ def run_training(config_obj=None, overrides=None):
                 train_supcon_loss = supcon_w * running_supcon_loss / max(len(train_loader), 1)
                 train_acc = running_correct / max(running_total, 1)
                 # 验证阶段
-                if test_loader is None:
-                    test_loss = train_loss
-                    test_acc = train_acc
-                    test_metrics = {
-                        "macro_f1": train_acc,
-                        "balanced_acc": train_acc
-                    }
-                else:
-                    if use_parent_mask:
-                        test_loss, test_acc, test_metrics = evaluate_file_level(
-                            model,
-                            test_loader,
-                            device,
-                            head_index=level_idx,
-                            parent_index=parent_level_idx,
-                            parent_to_children=parent_to_children
-                        )
-                    else:
-                        test_loss, test_acc, test_metrics = evaluate_file_level_local(
-                            model,
-                            test_loader,
-                            device,
-                            head_index=level_idx,
-                            label_map_tensor=label_map_tensor
-                        )
-
+                test_loss, test_acc, test_metrics = _evaluate_validation_loader(
+                    model,
+                    test_loader,
+                    device,
+                    head_index=level_idx,
+                    head_name=level_name,
+                    label_map_tensor=None if use_parent_mask else label_map_tensor,
+                    parent_index=parent_level_idx if use_parent_mask else None,
+                    parent_to_children=parent_to_children if use_parent_mask else None,
+                )
                 macro_f1 = test_metrics["macro_f1"]
-                balanced_acc = test_metrics["balanced_acc"]
+                macro_recall = test_metrics["macro_recall"]
                 # 更新学习率
                 scheduler.step()
                 if epoch % 10 == 0:
@@ -639,7 +708,7 @@ def run_training(config_obj=None, overrides=None):
                     f"TrainAcc={train_acc * 100:.2f}%, "
                     f"TestAcc={test_acc * 100:.2f}%, "
                     f"TestMacroF1={macro_f1 * 100:.2f}%, "
-                    f"TestBalAcc={balanced_acc * 100:.2f}%, "
+                    f"TestMacroRecall={macro_recall * 100:.2f}%, "
                     f"LR={optimizer.param_groups[0]['lr']:.2e}, "
                 )
                 # Early Stop 使用的综合评分
@@ -799,8 +868,8 @@ def run_training(config_obj=None, overrides=None):
 
 
 def main():
-    """提示用户改用根目录训练入口。"""
-    raise SystemExit("请使用根目录 train.py，并在入口里显式设置 CURRENT_TRAIN_LEVEL。")
+    """提示用户改用根目录训练入口"""
+    raise SystemExit("请使用根目录 train.py，并在入口里显式设置 CURRENT_TRAIN_LEVEL")
 
 
 if __name__ == "__main__":

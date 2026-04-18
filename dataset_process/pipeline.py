@@ -36,7 +36,7 @@ PCA_OUTLIER_RATIO = 0.03
 
 @dataclass(frozen=True)
 class PipelineConfig:
-    """集中管理离线预处理阶段的固定参数，便于 CLI 统一覆盖。"""
+    """集中管理离线预处理阶段的固定参数，便于 CLI 统一覆盖"""
     cut_min: float = CUT_MIN
     cut_max: float = CUT_MAX
     target_points: int = TARGET_POINTS
@@ -51,18 +51,18 @@ class PipelineConfig:
     pca_outlier_ratio: float = PCA_OUTLIER_RATIO
 
     def build_wn_ref(self):
-        """根据当前裁剪范围和目标点数生成统一插值坐标。"""
+        """根据当前裁剪范围和目标点数生成统一插值坐标"""
         return build_wn_ref(self.cut_min, self.cut_max, self.target_points)
 
 DEFAULT_PIPELINE_CONFIG = PipelineConfig()
 
 def resolve_path(base_dir, path_value):
-    """将相对路径解析到当前数据集根目录下，统一得到绝对路径。"""
+    """将相对路径解析到当前数据集根目录下，统一得到绝对路径"""
     return (Path(base_dir) / path_value).resolve()
 
 
 def iter_arc_dirs(root_dir):
-    """递归遍历目录树，只返回包含 .arc_data 文件的叶子目录。"""
+    """递归遍历目录树，只返回包含 .arc_data 文件的叶子目录"""
     root_dir = os.fspath(root_dir)
     for root, dirs, files in os.walk(root_dir):
         dirs.sort()
@@ -73,7 +73,7 @@ def iter_arc_dirs(root_dir):
 
 
 def get_prefix(name):
-    """统一按 letters_sign 规则提取类别前缀，兼容纯字母和字母后缀 +/-。"""
+    """统一按 letters_sign 规则提取类别前缀，兼容纯字母和字母后缀 +/-"""
     matched = re.match(r"([A-Za-z]+)([+-])?", name)
     if not matched:
         return None
@@ -81,23 +81,23 @@ def get_prefix(name):
 
 
 def is_packed_path(path):
-    """判断一个路径是否是可读取的打包数据文件。"""
+    """判断一个路径是否是可读取的打包数据文件"""
     return os.path.isfile(path) and str(path).lower().endswith(PACK_EXT)
 
 
 def write_arc_data(path, wn, sp, fmt="%.8f"):
-    """把一条光谱写回两列文本格式，供后续训练和人工检查使用。"""
+    """把一条光谱写回两列文本格式，供后续训练和人工检查使用"""
     arr = np.column_stack([wn, sp])
     np.savetxt(path, arr, fmt=[fmt, fmt])
 
 
 def resolve_pipeline_config(pipeline_config=None):
-    """返回离线预处理配置；未传入时使用库内默认配置。"""
+    """返回离线预处理配置；未传入时使用库内默认配置"""
     return pipeline_config or DEFAULT_PIPELINE_CONFIG
 
 
 def _resolve_classify_target_dir(root_process_raw, rel_dir, leaf_name):
-    """根据叶子目录名推断目标类别目录，统一处理顶层和多级目录。"""
+    """根据叶子目录名推断目标类别目录，统一处理顶层和多级目录"""
     rel_parent = rel_dir.parent
     prefix = get_prefix(leaf_name)
     target_cls = prefix if prefix else leaf_name
@@ -107,7 +107,7 @@ def _resolve_classify_target_dir(root_process_raw, rel_dir, leaf_name):
 
 
 def _resolve_group_figure_dir(root_figure, rel_dir):
-    """为一个分组解析均值谱图输出目录，避免多处重复拼接父目录。"""
+    """为一个分组解析均值谱图输出目录，避免多处重复拼接父目录"""
     rel_parent = rel_dir.parent
     if rel_parent in (Path("."), Path("")):
         return root_figure
@@ -115,14 +115,14 @@ def _resolve_group_figure_dir(root_figure, rel_dir):
 
 
 def _save_spectra_files(save_dir, filenames, wn_list, spectra_arr, fmt="%.3f"):
-    """批量写出预处理后的光谱文件，统一文本精度和目录创建行为。"""
+    """批量写出预处理后的光谱文件，统一文本精度和目录创建行为"""
     save_dir.mkdir(parents=True, exist_ok=True)
     for fname, wn_u, sp_u in zip(filenames, wn_list, spectra_arr):
         write_arc_data(save_dir / fname, wn_u, sp_u, fmt=fmt)
 
 
 class PackedArcDataset:
-    """从 dataset_init.npz 中按样本迭代恢复光谱内容。"""
+    """从 dataset_init.npz 中按样本迭代恢复光谱内容"""
 
     def __init__(self, npz_path):
         if not is_packed_path(npz_path):
@@ -155,7 +155,7 @@ class PackedArcDataset:
 
 
 def resolve_init_input(base_dir, profile):
-    """优先解析 dataset_init 目录，其次回退到打包后的 dataset_init.npz。"""
+    """优先解析 dataset_init 目录，其次回退到打包后的 dataset_init.npz"""
     root_init = resolve_path(base_dir, profile.root_init)
     root_init_pack = resolve_path(base_dir, profile.root_init_pack)
 
@@ -170,7 +170,7 @@ def resolve_init_input(base_dir, profile):
 
 
 def iter_init_groups(input_path):
-    """按叶子目录分组迭代原始样本，兼容目录输入和 npz 打包输入。"""
+    """按叶子目录分组迭代原始样本，兼容目录输入和 npz 打包输入"""
     input_path = Path(input_path)
 
     if input_path.is_dir():
@@ -205,7 +205,7 @@ def iter_init_groups(input_path):
 
 
 def pack_dataset_init(input_dir, output_path, verbose=True):
-    """把 dataset_init 下的散落光谱打包成一个 npz，便于迁移和归档。"""
+    """把 dataset_init 下的散落光谱打包成一个 npz，便于迁移和归档"""
     input_dir = Path(input_dir)
     output_path = Path(output_path)
     if not input_dir.is_dir():
@@ -258,7 +258,7 @@ def pack_dataset_init(input_dir, output_path, verbose=True):
 
 
 def unpack_dataset_init(npz_path, output_dir, verbose=True):
-    """把 dataset_init.npz 恢复回目录树，便于重新检查和手工处理。"""
+    """把 dataset_init.npz 恢复回目录树，便于重新检查和手工处理"""
     npz_path = Path(npz_path)
     output_dir = Path(output_dir)
     packed = PackedArcDataset(npz_path)
@@ -276,7 +276,7 @@ def unpack_dataset_init(npz_path, output_dir, verbose=True):
 
 
 def classify_dataset(profile, base_dir):
-    """将 dataset_init 重新归类到 dataset_train_raw，统一使用 letters_sign 前缀规则。"""
+    """将 dataset_init 重新归类到 dataset_train_raw，统一使用 letters_sign 前缀规则"""
     base_dir = Path(base_dir)
     root_process_raw = resolve_path(base_dir, profile.root_process_raw)
     root_process_raw.mkdir(parents=True, exist_ok=True)
@@ -318,7 +318,7 @@ def classify_dataset(profile, base_dir):
 
 
 def pca_reconstruct_and_error(spectra, n_components=0.95, center=True):
-    """用 PCA 重构样本并返回逐样本误差，供训练集异常值过滤使用。"""
+    """用 PCA 重构样本并返回逐样本误差，供训练集异常值过滤使用"""
     spectra = np.asarray(spectra, dtype=np.float32)
     if spectra.ndim != 2 or spectra.shape[0] < 2:
         return spectra, 0, np.zeros((spectra.shape[0],), dtype=np.float32)
@@ -356,7 +356,7 @@ def pca_reconstruct_and_error(spectra, n_components=0.95, center=True):
     return X_hat, k, errors
 
 def log_removed_samples(label, filenames, errors, threshold, log_path):
-    """把 PCA 剔除掉的异常样本写入日志，方便后续追溯。"""
+    """把 PCA 剔除掉的异常样本写入日志，方便后续追溯"""
     if not filenames:
         return
     with open(log_path, "a", encoding="utf-8") as file:
@@ -376,7 +376,7 @@ def preprocess_group_samples(
     apply_pca=None,
     pipeline_config=None,
 ):
-    """对一个分组内的多条光谱做统一清洗，并按需执行 PCA 异常值过滤。"""
+    """对一个分组内的多条光谱做统一清洗，并按需执行 PCA 异常值过滤"""
     cfg = resolve_pipeline_config(pipeline_config)
 
     if min_samples is None:
@@ -474,7 +474,7 @@ def preprocess_group_samples(
 
 
 def preprocess_train_dataset(profile, base_dir, pipeline_config=None):
-    """从 dataset_train_raw 构建 dataset_train，并输出每类均值谱图和异常值日志。"""
+    """从 dataset_train_raw 构建 dataset_train，并输出每类均值谱图和异常值日志"""
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
     root_process_raw = resolve_path(base_dir, profile.root_process_raw)
@@ -552,7 +552,7 @@ def preprocess_train_dataset(profile, base_dir, pipeline_config=None):
 
 
 def preview_init_dataset(profile, base_dir, pipeline_config=None):
-    """基于 dataset_init 生成预览图，不落盘清洗结果，适合先检查原始数据质量。"""
+    """基于 dataset_init 生成预览图，不落盘清洗结果，适合先检查原始数据质量"""
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
     input_path = resolve_init_input(base_dir, profile)
@@ -625,7 +625,7 @@ def preprocess_test_dataset(
     output_dir=None,
     pipeline_config=None,
 ):
-    """从测试原始目录构建 dataset_test，并输出每个文件夹的均值谱图。"""
+    """从测试原始目录构建 dataset_test，并输出每个文件夹的均值谱图"""
     cfg = resolve_pipeline_config(pipeline_config)
     wn_ref = cfg.build_wn_ref()
     base_dir = Path(base_dir)
@@ -718,7 +718,7 @@ def preprocess_test_dataset(
 
 
 def compute_totals(node):
-    """递归回填每个目录节点的总样本数。"""
+    """递归回填每个目录节点的总样本数"""
     total = node.get("__count__", 0)
     for name, child in node.items():
         if name.startswith("__"):
@@ -729,7 +729,7 @@ def compute_totals(node):
 
 
 def build_tree(root_dir):
-    """把目录树转成带计数的嵌套字典，供 count 子命令打印。"""
+    """把目录树转成带计数的嵌套字典，供 count 子命令打印"""
     tree = {}
     for leaf_dir, arc_files in iter_arc_dirs(root_dir):
         rel_dir = Path(leaf_dir).relative_to(root_dir)
@@ -746,7 +746,7 @@ def build_tree(root_dir):
 
 
 def count_dataset(root_dir):
-    """统计一个数据目录下各层文件数，并返回树形结构。"""
+    """统计一个数据目录下各层文件数，并返回树形结构"""
     root_dir = Path(root_dir)
     if not root_dir.is_dir():
         raise FileNotFoundError(f"Missing input dir: {root_dir}")
@@ -757,7 +757,7 @@ def count_dataset(root_dir):
 
 
 def print_tree(node, level=0, name=None):
-    """按缩进样式打印统计树，便于终端查看目录层级分布。"""
+    """按缩进样式打印统计树，便于终端查看目录层级分布"""
     indent = "  " * level
     if name is not None:
         count = node.get("__count__", 0)
@@ -776,7 +776,7 @@ def print_tree(node, level=0, name=None):
 
 
 def print_results(tree, total_files):
-    """统一打印 count 子命令的统计结果摘要。"""
+    """统一打印 count 子命令的统计结果摘要"""
     print("\n================ 数据集统计 ================\n")
     print(f"总文件数: {total_files}\n")
 

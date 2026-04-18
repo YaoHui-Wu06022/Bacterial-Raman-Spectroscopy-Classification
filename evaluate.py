@@ -1,4 +1,4 @@
-"""测试集评估入口。"""
+"""测试集评估入口"""
 
 from raman.eval import EvaluateOverrides, run_evaluate_test_set
 
