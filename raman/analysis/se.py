@@ -9,7 +9,7 @@ def log_seblock_summary(model, log):
             if module.latest_scale is None:
                 log(f"{name}: scale not computed")
                 continue
-
+            # 对最后那个 batch 内的样本维做平均
             s = module.latest_scale.mean(dim=0).detach().cpu().numpy()
             log(
                 f"{name}: "

@@ -62,7 +62,7 @@ class SEBlock1D(nn.Module):
             nn.Linear(channels, hidden_channels),
             make_activation(inplace=False),
             nn.Linear(hidden_channels, channels),
-            nn.Sigmoid(),
+            nn.Sigmoid(), # 限制在(0,1)
         )
 
     def forward(self, x):
@@ -162,12 +162,12 @@ class ResidualBottleneck1D(nn.Module):
 
     def forward(self, x):
         # bottleneck 主支路 + shortcut 残差支路
-        identity = self.shortcut(x)
+        residual = self.shortcut(x)
         out = self.conv_reduce(x)
         out = self.conv_mid(out)
         out = self.conv_expand(out)
         out = self.se(out)
-        return self.out_act(out + identity)
+        return self.out_act(out + residual)
 
 
 class PositionalEncoding1D(nn.Module):
@@ -284,7 +284,7 @@ class RamanClassifier1D(nn.Module):
 
     def _build_cnn_backbone(self):
         self.stem_out_channels = 64
-        self.in_planes = self.stem_out_channels
+        self.in_channels = self.stem_out_channels
         kernel_sizes = self._cfg("stem_kernel_sizes", None) or (15,)
         if isinstance(kernel_sizes, int):
             kernel_sizes = (kernel_sizes,)
@@ -330,16 +330,16 @@ class RamanClassifier1D(nn.Module):
     def _make_layer(self, out_channels, num_blocks):
         layers = [
             ResidualBottleneck1D(
-                in_channels=self.in_planes,
+                in_channels=self.in_channels,
                 out_channels=out_channels,
                 **self.block_kwargs,
             )
         ]
-        self.in_planes = out_channels
+        self.in_channels = out_channels
         for _ in range(1, num_blocks):
             layers.append(
                 ResidualBottleneck1D(
-                    in_channels=self.in_planes,
+                    in_channels=self.in_channels,
                     out_channels=out_channels,
                     **self.block_kwargs,
                 )
@@ -420,7 +420,7 @@ class RamanClassifier1D(nn.Module):
         else:
             self.head = nn.Linear(self.feat_dim, self.num_classes)
 
-    def _forward_feature_extractor(self, x):
+    def _forward_feat_extractor(self, x):
         if self.cnn_backbone_on:
             x = torch.cat([branch(x) for branch in self.stem_branches], dim=1)
             x = self.stem_pool(x)
@@ -442,7 +442,7 @@ class RamanClassifier1D(nn.Module):
             return x
         return x
 
-    def _pool_features(self, x):
+    def _pool_feat(self, x):
         if self.pooling_type == "attn":
             attn = torch.softmax(self.att_pool(x), dim=1)
             return (x * attn).sum(dim=1)
@@ -453,10 +453,10 @@ class RamanClassifier1D(nn.Module):
 
     def forward(self, x, return_feat=False):
         # 数据流：局部特征提取 -> 序列建模 -> 池化聚合 -> 分类头
-        features = self._forward_feature_extractor(x)
-        features = features.permute(0, 2, 1)
-        features = self._forward_sequence_encoder(features)
-        feat = self._pool_features(features)
+        feat = self._forward_feat_extractor(x)
+        feat = feat.permute(0, 2, 1)
+        feat = self._forward_sequence_encoder(feat)
+        feat = self._pool_feat(feat)
         logits = self.head(feat)
         if return_feat:
             return logits, feat

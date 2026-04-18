@@ -670,11 +670,11 @@ def run_training(config_obj=None, overrides=None):
                     if config.use_drw and valid.any():
                         with torch.no_grad():
                             ce_each = F.cross_entropy(logits_valid, y_valid, reduction="none")
-                            for g in range(num_classes):
-                                mask = (y_valid == g)
+                            for c in range(num_classes):
+                                mask = (y_valid == c)
                                 if mask.any():
                                     mean_ce = ce_each[mask].mean()
-                                    ema_class_ce[g] = ema_alpha * ema_class_ce[g] + (1.0 - ema_alpha) * mean_ce
+                                    ema_class_ce[c] = ema_alpha * ema_class_ce[c] + (1.0 - ema_alpha) * mean_ce
 
                 train_loss = running_loss / len(train_loader)
                 train_align_loss = align_w * running_align_loss / max(len(train_loader), 1)
@@ -726,7 +726,7 @@ def run_training(config_obj=None, overrides=None):
                     best_score = score
                     best_epoch = epoch
                     torch.save(model.state_dict(), best_model_path)
-                    model_log("  --> Best model updated! (MacroF1 improved)")
+                    model_log("  --> Best model updated! (EarlyStop score improved)")
                     patience_counter = 0
                 else:
                     patience_counter += 1

@@ -9,11 +9,11 @@ def build_class_weights(level_labels, num_classes):
     根据当前训练层的标签分布构造类别权重
     这里使用对数平滑，避免极少数类权重过大导致训练不稳定
     """
-    valid = level_labels >= 0
-    if not valid.any():
+    valid_mask = level_labels >= 0
+    if not valid_mask.any():
         return np.ones(num_classes, dtype=np.float32)
 
-    counts = np.bincount(level_labels[valid], minlength=num_classes)
+    counts = np.bincount(level_labels[valid_mask], minlength=num_classes)
     counts = np.maximum(counts, 1)
     base_class_weights = 1.0 / np.log(counts + 1.5)
     base_class_weights = base_class_weights / base_class_weights.mean()
@@ -54,11 +54,11 @@ class FocalLoss(nn.Module):
             ignore_index=self.ignore_index,
         )
         if self.ignore_index is not None:
-            valid = targets != self.ignore_index
-            if not valid.any():
+            valid_mask = targets != self.ignore_index
+            if not valid_mask.any():
                 return torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
-            targets = targets[valid]
-            ce_loss = ce_loss[valid]
+            targets = targets[valid_mask]
+            ce_loss = ce_loss[valid_mask]
 
         pt = torch.exp(-ce_loss)
         focal_factor = (1 - pt) ** self.gamma
@@ -71,7 +71,6 @@ class FocalLoss(nn.Module):
 
         return loss
 
-
 def AlignLoss(feat, y):
     """
     仅按当前训练层标签计算 batch 内类内紧凑损失
@@ -83,23 +82,23 @@ def AlignLoss(feat, y):
     y_valid = y[valid_mask]
     feat_valid = feat[valid_mask]
 
-    align_loss = 0.0
+    loss_sum = 0.0
     valid_group_count = 0
-    for g in y_valid.unique():
-        feat_g = feat_valid[y_valid == g]
-        if feat_g.size(0) <= 1:
+    for c in y_valid.unique():
+        feat_c = feat_valid[y_valid == c]
+        if feat_c.size(0) <= 1:
             continue
 
-        center_g = feat_g.mean(dim=0, keepdim=True)
-        diff_g = feat_g - center_g
-        radial_g = (diff_g * diff_g).sum(dim=1)
-        align_loss += radial_g.mean()
+        center_c = feat_c.mean(dim=0, keepdim=True)
+        diff_c = feat_c - center_c
+        radial_c = (diff_c * diff_c).sum(dim=1)
+        loss_sum += radial_c.mean()
         valid_group_count += 1
 
     if valid_group_count == 0:
         return torch.tensor(0.0, device=feat.device)
 
-    return align_loss / valid_group_count
+    return loss_sum / valid_group_count
 
 
 class SupConLoss(nn.Module):
@@ -110,9 +109,9 @@ class SupConLoss(nn.Module):
     但不强制每个类别只有一个中心
     """
 
-    def __init__(self, temperature=0.1):
+    def __init__(self, tau=0.1):
         super().__init__()
-        self.tau = float(temperature)
+        self.tau = float(tau)
 
     def forward(self, feat, y):
         """
