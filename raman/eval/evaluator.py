@@ -416,7 +416,13 @@ def evaluate_test_set(context):
         output_dict=True,
         zero_division=0,
     )
-    report_text = format_classification_report_text(report, classes, acc)
+    report_text = format_classification_report_text(
+        report,
+        classes,
+        acc,
+        macro_f1,
+        macro_recall,
+    )
     write_text(out_report, report_text)
 
     cm = confusion_matrix(all_labels, all_preds, labels=list(range(num_classes)))

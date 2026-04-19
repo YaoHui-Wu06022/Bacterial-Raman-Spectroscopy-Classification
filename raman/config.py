@@ -115,11 +115,11 @@ class Config:
     transformer_nhead = 6
     transformer_dim = 192
     transformer_ffn_dim = 384
-    transformer_layers = 1
+    transformer_layers = 2 # 改为两层有效
     transformer_dropout = 0.2
     # lstm
     lstm_hidden = 192
-    lstm_layers = 1
+    lstm_layers = 2
     lstm_dropout = 0.2
     lstm_bidirectional = False
 

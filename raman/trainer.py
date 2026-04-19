@@ -600,7 +600,7 @@ def run_training(config_obj=None, overrides=None):
                 return zero_loss(feat)
 
         if USE_SUPCON_LOSS:
-            supcon_criterion = SupConLoss(temperature=config.supcon_tau).to(device)
+            supcon_criterion = SupConLoss(tau=config.supcon_tau).to(device)
 
             def supcon_loss_fn(feat, hier_labels):
                 if supcon_level not in hier_labels:

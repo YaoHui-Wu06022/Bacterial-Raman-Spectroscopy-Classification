@@ -4,7 +4,13 @@ import pandas as pd
 import seaborn as sns
 
 
-def format_classification_report_text(report_dict, class_names, acc):
+def format_classification_report_text(
+    report_dict,
+    class_names,
+    acc,
+    macro_f1=None,
+    macro_recall=None,
+):
     """将 classification_report 的字典结果整理成统一文本"""
 
     def _fmt_line(name, p, r, f1, support):
@@ -33,22 +39,21 @@ def format_classification_report_text(report_dict, class_names, acc):
         )
 
     total_support = int(sum(report_dict[name]["support"] for name in class_names))
-    lines.append("")
-    lines.append(
-        f"{'accuracy':<20}{'':>12}{'':>12}{acc * 100:>11.4f}%{total_support:>12d}"
-    )
 
-    for avg_name in ("macro avg", "weighted avg"):
-        row = report_dict[avg_name]
-        lines.append(
-            _fmt_line(
-                avg_name,
-                row["precision"],
-                row["recall"],
-                row["f1-score"],
-                row["support"],
-            )
-        )
+    row = report_dict["macro avg"]
+    if macro_f1 is None:
+        macro_f1 = row["f1-score"]
+    if macro_recall is None:
+        macro_recall = row["recall"]
+    lines.extend(
+        [
+            "",
+            f"{'summary metric':<20}{'value':>12}{'support':>12}",
+            f"{'Accuracy':<20}{acc * 100:>11.4f}%{total_support:>12d}",
+            f"{'Macro F1-score':<20}{macro_f1 * 100:>11.4f}%{total_support:>12d}",
+            f"{'Macro Recall':<20}{macro_recall * 100:>11.4f}%{total_support:>12d}",
+        ]
+    )
 
     return "\n".join(lines)
 

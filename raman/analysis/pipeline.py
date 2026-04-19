@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset, Dataset
@@ -56,6 +57,7 @@ class LabelMapDataset(Dataset):
             labels[self.level_idx] = -1
         return x, labels, hier
 
+@dataclass
 class HeatmapConfig:
     # 波段重要性热图（IG）相关配置
     num_batches: int = 10          # 采样多少个 batch
@@ -65,6 +67,7 @@ class HeatmapConfig:
     use_train_loader: bool = True  # True=训练集，False=测试集
     topk_per_class: int = 5        # 每类 top-k 波段导出
 
+@dataclass
 class AnalysisOverrides:
     """统一收拢分析入口的覆盖项"""
 

@@ -392,6 +392,8 @@ def main():
         model_top1_ratio = model_items[0]["ratio"] if model_items else 0.0
         neighbor_top1_label = neighbor_items[0]["label"] if neighbor_items else ""
         neighbor_top1_ratio = neighbor_items[0]["ratio"] if neighbor_items else 0.0
+        centroid_top1_label = centroid_items[0]["label"] if centroid_items else ""
+        centroid_top1_score = centroid_items[0]["score"] if centroid_items else 0.0
         expected_mean_signal = None if expected_id is None else train_mean_signal_bank.get(int(expected_id))
 
         # 输出四张图：
@@ -441,11 +443,13 @@ def main():
                 "model_top1_ratio": f"{model_top1_ratio:.6f}",
                 "neighbor_top1_label": neighbor_top1_label,
                 "neighbor_top1_ratio": f"{neighbor_top1_ratio:.6f}",
+                "centroid_top1_label": centroid_top1_label,
+                "centroid_top1_score": f"{centroid_top1_score:.6f}",
             }
         )
 
     # ---------------- 输出总表，方便统一浏览所有测试文件夹 ----------------
-    # summary.csv 只保留每个测试文件夹最关键的 expected / model / neighbor 结果
+    # summary.csv 只保留每个测试文件夹最关键的 expected / model / neighbor / centroid 结果
     with open(summary_path, "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(
             file,
@@ -456,6 +460,8 @@ def main():
                 "model_top1_ratio",
                 "neighbor_top1_label",
                 "neighbor_top1_ratio",
+                "centroid_top1_label",
+                "centroid_top1_score",
             ],
         )
         writer.writeheader()
