@@ -1596,7 +1596,7 @@ def forward(self, logits, targets):
 
 `FocalLoss` 返回的是逐样本 loss 向量，后续才能继续叠加 `severity weight`
 
-##### base_class_weights
+##### 类别权重
 
 在进入动态重加权之前，训练器会先根据当前训练层的标签分布构造基础类别权重 `base_class_weights`
 
@@ -1625,7 +1625,7 @@ base_class_weights = base_class_weights / base_class_weights.mean()
 
 在照顾少数类的同时避免极端长尾下权重过大，导致训练振荡
 
-##### ema_class_weights
+##### EMA 动态类别权重
 
 在训练过程中，类别难度并不是固定的
 
@@ -1639,7 +1639,7 @@ base_class_weights = base_class_weights / base_class_weights.mean()
 ema_class_ce = torch.ones(num_classes, device=device)
 ema_alpha = 0.9
 lambda_diff = 0.3
-drw_start_epoch = 10
+ema_start_epoch = 10
 ```
 
 逻辑可以概括为：
@@ -1680,7 +1680,7 @@ drw_start_epoch = 10
 5. 再归一化到平均值为 1
 
 ```python
-if config.use_drw and epoch >= drw_start_epoch:
+if config.use_ema and epoch >= ema_start_epoch:
     raw_diff = ema_class_ce / (ema_class_ce.mean() + 1e-12)
     diff_factor = 1.0 + lambda_diff * (raw_diff - 1.0)
     ema_class_weights = base_class_weights * diff_factor
@@ -1688,7 +1688,7 @@ if config.use_drw and epoch >= drw_start_epoch:
     criterion.weight = ema_class_weights
 ```
 
-##### severity weight
+##### 错误惩罚
 
 除了类别层面的重加权，当前训练器还会在样本层面再做一次“错误严重程度”加权
 

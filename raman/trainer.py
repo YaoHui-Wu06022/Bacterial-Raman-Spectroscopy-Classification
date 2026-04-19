@@ -574,15 +574,15 @@ def run_training(config_obj=None, overrides=None):
         # 主分类损失使用 Focal Loss，并忽略无效标签
         criterion = FocalLoss(
             gamma=config.gamma,
-            weight=base_class_weights,  # 初始化，后续替换为ema_class_weights
+            weight=base_class_weights,  # EMA 动态权重启用后会替换为 ema_class_weights
             ignore_index=-1,
         )
 
-        # 动态权重相关
+        # EMA 动态类别权重相关
         ema_class_ce = torch.ones(num_classes, device=device)
         ema_alpha = 0.9
         lambda_diff = 0.3
-        drw_start_epoch = 10
+        ema_start_epoch = 10
 
         supcon_level = train_dataset._resolve_level_name(level_name)
 
@@ -661,8 +661,8 @@ def run_training(config_obj=None, overrides=None):
             # 训练一个 epoch
             for epoch in range(1, config.epochs + 1):
                 model.train()
-                # 按 epoch 更新动态类别权重
-                if config.use_drw and epoch >= drw_start_epoch:
+                # 延迟启用基于 EMA 类别难度的动态类别权重
+                if config.use_ema and epoch >= ema_start_epoch:
                     raw_diff = ema_class_ce / (ema_class_ce.mean() + 1e-12)
                     diff_factor = 1.0 + lambda_diff * (raw_diff - 1.0)
                     ema_class_weights = base_class_weights * diff_factor
@@ -775,7 +775,7 @@ def run_training(config_obj=None, overrides=None):
                     loader_iter.set_postfix(postfix)
 
                     # ---------- 用 EMA 统计各类别当前训练难度 ----------
-                    if config.use_drw and valid.any():
+                    if config.use_ema and valid.any():
                         with torch.no_grad():
                             ce_each = F.cross_entropy(logits_valid, y_valid, reduction="none")
                             for c in range(num_classes):
@@ -804,10 +804,10 @@ def run_training(config_obj=None, overrides=None):
                 # 更新学习率
                 scheduler.step()
                 if epoch % 10 == 0:
-                    model_log(f"  base_w     = {base_class_weights.detach().cpu().numpy()}")
-                    if config.use_drw:
-                        model_log(f"  ema_class_ce= {ema_class_ce.detach().cpu().numpy()}")
-                        model_log(f"  final_w    = {criterion.weight.detach().cpu().numpy()}")
+                    model_log(f"  base_class_weights = {base_class_weights.detach().cpu().numpy()}")
+                    if config.use_ema:
+                        model_log(f"  ema_class_ce       = {ema_class_ce.detach().cpu().numpy()}")
+                        model_log(f"  ema_class_weights  = {criterion.weight.detach().cpu().numpy()}")
                 model_log(
                     f"[Epoch {epoch}] TrainLoss(cls)={train_loss:.4f}, "
                     f"AlignLossW={train_align_loss:.4f}, "
