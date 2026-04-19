@@ -80,16 +80,28 @@ def resolve_head_level_name(dataset, level_name):
 def resolve_level_model_path(exp_dir, level_name, level_models_meta):
     """解析某一层全局模型文件路径"""
     exp_dir = Path(resolve_project_path(exp_dir))
-    model_name = (level_models_meta or {}).get(level_name, f"{level_name}_model.pt")
+    model_name = (level_models_meta or {}).get(
+        level_name,
+        os.fspath(Path(level_name) / f"{level_name}_model.pt"),
+    )
     model_path = Path(model_name)
     if not model_path.is_absolute():
         model_path = exp_dir / model_path
     return os.fspath(model_path)
 
 
+def resolve_model_sidecar_path(model_path, sidecar_suffix=".se_stats.pt"):
+    """根据模型文件路径推导配套 sidecar 路径"""
+    model_path = Path(model_path)
+    if model_path.suffix == ".pt":
+        return os.fspath(model_path.with_suffix(sidecar_suffix))
+    return os.fspath(Path(f"{model_path}{sidecar_suffix}"))
+
+
 def scan_parent_model_files(exp_dir, level_name, parent_to_children):
     """扫描某一层 parent 子模型文件，并补齐 child_ids"""
     exp_dir = Path(resolve_project_path(exp_dir))
+    level_dir = exp_dir / level_name
     if isinstance(parent_to_children, dict) and level_name in parent_to_children:
         level_mapping = parent_to_children.get(level_name, {})
     else:
@@ -104,13 +116,16 @@ def scan_parent_model_files(exp_dir, level_name, parent_to_children):
     }
 
     pattern = re.compile(rf"^{re.escape(level_name)}_parent_(\d+)_model\.pt$")
-    for name in os.listdir(exp_dir):
+    if not level_dir.exists():
+        return mapping
+
+    for name in os.listdir(level_dir):
         match = pattern.match(name)
         if not match:
             continue
         parent_idx = int(match.group(1))
         entry = mapping.get(parent_idx, {"child_ids": []})
-        entry["model_path"] = name
+        entry["model_path"] = os.fspath(Path(level_name) / name)
         mapping[parent_idx] = entry
 
     return mapping

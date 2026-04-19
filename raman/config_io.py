@@ -57,8 +57,8 @@ def load_experiment(exp_dir):
     current_train_level = getattr(config, "current_train_level", None)
     if current_train_level:
         model_name = f"{current_train_level}_model.pt"
+        config.model_path = os.path.join(exp_dir, current_train_level, model_name)
     else:
-        model_name = "model.pt"
-    config.model_path = os.path.join(exp_dir, model_name)
+        config.model_path = os.path.join(exp_dir, "model.pt")
 
     return config

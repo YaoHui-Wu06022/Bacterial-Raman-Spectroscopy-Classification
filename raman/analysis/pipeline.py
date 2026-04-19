@@ -4,7 +4,11 @@ import torch
 from torch.utils.data import DataLoader, Subset, Dataset
 
 from raman.data import RamanDataset
-from raman.eval.experiment import load_experiment_with_dataset, load_hierarchy_meta
+from raman.eval.experiment import (
+    load_experiment_with_dataset,
+    load_hierarchy_meta,
+    resolve_level_model_path,
+)
 from raman.eval.runtime import build_experiment_runtime
 from raman.training import (
     build_label_map_np,
@@ -106,8 +110,7 @@ def _build_analysis_tasks(
     auto_all = False
 
     if parent_idx_setting is None:
-        model_name = level_models.get(analysis_level, f"{analysis_level}_model.pt")
-        model_path = os.path.join(exp_dir, model_name)
+        model_path = resolve_level_model_path(exp_dir, analysis_level, level_models)
         if os.path.exists(model_path):
             num_classes = full_dataset.num_classes_by_level[analysis_level]
             class_names = full_dataset.class_names_by_level[head_index]
@@ -899,7 +902,7 @@ def run_single_analysis(
 
     # SE 模块分析
     if config.se_use:
-        log_seblock_summary(model, log)
+        log_seblock_summary(runtime, model_path, log)
 
     # Embedding 可视化
     embed_method = str(config.embedding_method).lower()

@@ -12,13 +12,14 @@ import torch.nn.functional as F
 
 from raman.config import config as default_config
 from raman.data import RamanDataset
+from raman.eval.experiment import resolve_model_sidecar_path
 from raman.eval.common import (
     compute_classification_metrics,
     mask_logits_by_parent,
     select_level_targets,
     select_logits,
 )
-from raman.model import RamanClassifier1D
+from raman.model import RamanClassifier1D, SEBlock1D
 from raman.training.losses import (
     AlignLoss,
     FocalLoss,
@@ -98,6 +99,100 @@ def _resolve_saved_model_path(exp_dir, model_path):
     return os.path.join(exp_dir, model_path)
 
 
+def _build_model_artifact_paths(output_dir, level_name, model_tag):
+    """构造按层子目录组织的模型与 sidecar 路径"""
+    level_dir = os.path.join(output_dir, level_name)
+    os.makedirs(level_dir, exist_ok=True)
+    model_path = os.path.join(level_dir, f"{model_tag}_model.pt")
+    se_stats_path = resolve_model_sidecar_path(model_path)
+    return model_path, se_stats_path
+
+
+def _build_relpath(output_dir, path):
+    """将模型绝对路径转成相对实验目录的路径"""
+    return os.path.relpath(path, output_dir)
+
+
+def _init_se_stats_accumulator(model):
+    """为所有启用的 SEBlock 构造累计统计容器"""
+    se_accumulators = {}
+    for name, module in model.named_modules():
+        if not isinstance(module, SEBlock1D) or not module.se_use:
+            continue
+        out_channels = module.fc[-2].out_features
+        se_accumulators[name] = {
+            "sample_count": 0,
+            "channel_sum": torch.zeros(out_channels, dtype=torch.float64),
+            "channel_sq_sum": torch.zeros(out_channels, dtype=torch.float64),
+            "channel_min": torch.full((out_channels,), float("inf"), dtype=torch.float64),
+            "channel_max": torch.full((out_channels,), float("-inf"), dtype=torch.float64),
+        }
+    return se_accumulators
+
+
+def _attach_se_scale_hooks(model, batch_scales):
+    """在验证前向期间缓存每个 SEBlock 的当前 batch scale"""
+    hooks = []
+    if not batch_scales and not any(isinstance(module, SEBlock1D) and module.se_use for _, module in model.named_modules()):
+        return hooks
+
+    for name, module in model.named_modules():
+        if not isinstance(module, SEBlock1D) or not module.se_use:
+            continue
+
+        def hook(_module, inputs, _output, block_name=name):
+            if not inputs:
+                return
+            x = inputs[0]
+            batch_scales[block_name] = _module._compute_scale(x).detach().cpu().to(torch.float64)
+
+        hooks.append(module.register_forward_hook(hook))
+
+    return hooks
+
+
+def _accumulate_se_stats(se_accumulators, batch_scales, valid_mask):
+    """把当前 batch 中有效样本的 scale 合并进累计统计"""
+    if not batch_scales:
+        return
+
+    valid_mask_cpu = valid_mask.detach().cpu()
+    if not valid_mask_cpu.any():
+        return
+
+    for name, scale in batch_scales.items():
+        valid_scale = scale[valid_mask_cpu]
+        if valid_scale.numel() == 0:
+            continue
+        stats = se_accumulators[name]
+        stats["sample_count"] += int(valid_scale.size(0))
+        stats["channel_sum"] += valid_scale.sum(dim=0)
+        stats["channel_sq_sum"] += (valid_scale * valid_scale).sum(dim=0)
+        stats["channel_min"] = torch.minimum(stats["channel_min"], valid_scale.min(dim=0).values)
+        stats["channel_max"] = torch.maximum(stats["channel_max"], valid_scale.max(dim=0).values)
+
+
+def _finalize_se_stats(se_accumulators):
+    """将累计量还原成最终 SE 统计结果"""
+    se_stats = {}
+    for name, stats in se_accumulators.items():
+        sample_count = int(stats["sample_count"])
+        if sample_count <= 0:
+            continue
+        channel_mean = stats["channel_sum"] / sample_count
+        channel_var = stats["channel_sq_sum"] / sample_count - channel_mean * channel_mean
+        channel_var = torch.clamp(channel_var, min=0.0)
+        channel_std = torch.sqrt(channel_var)
+        se_stats[name] = {
+            "sample_count": sample_count,
+            "channel_mean": channel_mean.to(torch.float32),
+            "channel_std": channel_std.to(torch.float32),
+            "channel_min": stats["channel_min"].to(torch.float32),
+            "channel_max": stats["channel_max"].to(torch.float32),
+        }
+    return se_stats
+
+
 def _is_parent_entry_covered(exp_dir, entry):
     """判断某个 parent 条目是否足以支持级联"""
     child_ids = list(entry.get("child_ids", []))
@@ -144,49 +239,58 @@ def _evaluate_validation_loader(
     all_targets = []
     all_preds = []
     num_classes = None
+    se_accumulators = _init_se_stats_accumulator(model)
+    batch_scales = {}
+    se_hooks = _attach_se_scale_hooks(model, batch_scales)
 
-    with torch.no_grad():
-        for x, y, _ in loader:
-            x = x.to(device)
-            y = y.to(device)
+    try:
+        with torch.no_grad():
+            for x, y, _ in loader:
+                x = x.to(device)
+                y = y.to(device)
 
-            logits = select_logits(model(x), head_name=head_name)
-            y_level = select_level_targets(y, head_index)
+                batch_scales.clear()
+                logits = select_logits(model(x), head_name=head_name)
+                y_level = select_level_targets(y, head_index)
 
-            if label_map_tensor is not None:
-                invalid = y_level < 0
-                y_level = label_map_tensor[y_level.clamp_min(0)]
-                y_level[invalid] = -1
+                if label_map_tensor is not None:
+                    invalid = y_level < 0
+                    y_level = label_map_tensor[y_level.clamp_min(0)]
+                    y_level[invalid] = -1
 
-            if parent_index is not None and parent_to_children is not None:
-                if y.ndim != 2:
-                    raise ValueError("parent_index 需要完整的多层标签输入")
-                parent_labels = y[:, parent_index]
-                logits, valid_parent = mask_logits_by_parent(
-                    logits,
-                    parent_labels,
-                    parent_to_children,
-                )
-            else:
-                valid_parent = torch.ones_like(y_level, dtype=torch.bool)
+                if parent_index is not None and parent_to_children is not None:
+                    if y.ndim != 2:
+                        raise ValueError("parent_index 需要完整的多层标签输入")
+                    parent_labels = y[:, parent_index]
+                    logits, valid_parent = mask_logits_by_parent(
+                        logits,
+                        parent_labels,
+                        parent_to_children,
+                    )
+                else:
+                    valid_parent = torch.ones_like(y_level, dtype=torch.bool)
 
-            valid = (y_level >= 0) & valid_parent
-            if not valid.any():
-                continue
+                valid = (y_level >= 0) & valid_parent
+                _accumulate_se_stats(se_accumulators, batch_scales, valid)
+                if not valid.any():
+                    continue
 
-            logits = logits[valid]
-            y_valid = y_level[valid]
+                logits = logits[valid]
+                y_valid = y_level[valid]
 
-            if num_classes is None:
-                num_classes = logits.size(1)
+                if num_classes is None:
+                    num_classes = logits.size(1)
 
-            loss = criterion_eval(logits, y_valid)
-            batch_size = y_valid.size(0)
-            total_loss += loss.item() * batch_size
-            total += batch_size
+                loss = criterion_eval(logits, y_valid)
+                batch_size = y_valid.size(0)
+                total_loss += loss.item() * batch_size
+                total += batch_size
 
-            all_preds.append(logits.argmax(1).detach().cpu().numpy())
-            all_targets.append(y_valid.detach().cpu().numpy())
+                all_preds.append(logits.argmax(1).detach().cpu().numpy())
+                all_targets.append(y_valid.detach().cpu().numpy())
+    finally:
+        for hook in se_hooks:
+            hook.remove()
 
     if num_classes is None or not all_targets:
         metrics = {
@@ -194,7 +298,7 @@ def _evaluate_validation_loader(
             "macro_f1": 0.0,
             "macro_recall": 0.0,
         }
-        return 0.0, 0.0, metrics
+        return 0.0, 0.0, metrics, _finalize_se_stats(se_accumulators)
 
     y_true = np.concatenate(all_targets, axis=0)
     y_pred = np.concatenate(all_preds, axis=0)
@@ -203,7 +307,7 @@ def _evaluate_validation_loader(
         y_pred,
         labels=range(num_classes),
     )
-    return total_loss / max(total, 1), metrics["accuracy"], metrics
+    return total_loss / max(total, 1), metrics["accuracy"], metrics, _finalize_se_stats(se_accumulators)
 
 
 def _has_level_coverage(exp_dir, full_dataset, level_name):
@@ -233,13 +337,16 @@ def _has_level_coverage(exp_dir, full_dataset, level_name):
             if any(_is_parent_entry_covered(exp_dir, entry) for entry in parent_entries.values()):
                 return True
 
-    default_level_model = os.path.join(exp_dir, f"{level_name}_model.pt")
+    default_level_model = os.path.join(exp_dir, level_name, f"{level_name}_model.pt")
     if os.path.exists(default_level_model):
         return True
 
     prefix = f"{level_name}_parent_"
     suffix = "_model.pt"
-    for name in os.listdir(exp_dir):
+    level_dir = os.path.join(exp_dir, level_name)
+    if not os.path.isdir(level_dir):
+        return False
+    for name in os.listdir(level_dir):
         if name.startswith(prefix) and name.endswith(suffix):
             return True
     return False
@@ -538,9 +645,10 @@ def run_training(config_obj=None, overrides=None):
         patience_counter = 0
 
 
-        best_model_path = os.path.join(
+        best_model_path, best_se_stats_path = _build_model_artifact_paths(
             config.output_dir,
-            f"{model_tag}_model.pt"
+            level_name,
+            model_tag,
         )
         # 将全局类别索引映射成当前子模型使用的局部类别索引
         label_map_tensor = None
@@ -681,7 +789,7 @@ def run_training(config_obj=None, overrides=None):
                 train_supcon_loss = supcon_w * running_supcon_loss / max(len(train_loader), 1)
                 train_acc = running_correct / max(running_total, 1)
                 # 验证阶段
-                test_loss, test_acc, test_metrics = _evaluate_validation_loader(
+                test_loss, test_acc, test_metrics, se_stats = _evaluate_validation_loader(
                     model,
                     test_loader,
                     device,
@@ -726,6 +834,8 @@ def run_training(config_obj=None, overrides=None):
                     best_score = score
                     best_epoch = epoch
                     torch.save(model.state_dict(), best_model_path)
+                    if se_stats:
+                        torch.save(se_stats, best_se_stats_path)
                     model_log("  --> Best model updated! (EarlyStop score improved)")
                     patience_counter = 0
                 else:
@@ -749,6 +859,7 @@ def run_training(config_obj=None, overrides=None):
 
         return {
             "best_model_path": best_model_path,
+            "best_se_stats_path": best_se_stats_path,
             "model": None,
             "level_name": level_name,
             "model_log_path": model_log_path,
@@ -776,7 +887,7 @@ def run_training(config_obj=None, overrides=None):
             )
             if result is None:
                 continue
-            level_models[level_name] = os.path.basename(result["best_model_path"])
+            level_models[level_name] = _build_relpath(config.output_dir, result["best_model_path"])
         else:
             # 父类内子类独立模型
             parent_models[level_name] = {}
@@ -843,7 +954,7 @@ def run_training(config_obj=None, overrides=None):
                     continue
 
                 parent_models[level_name][parent_idx] = {
-                    "model_path": os.path.basename(result["best_model_path"]),
+                    "model_path": _build_relpath(config.output_dir, result["best_model_path"]),
                     "child_ids": child_ids,
                     "child_names": child_names
                 }

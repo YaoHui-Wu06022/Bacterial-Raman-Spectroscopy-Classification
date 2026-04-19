@@ -10,6 +10,7 @@ from raman.model import RamanClassifier1D
 
 from .experiment import (
     load_hierarchy_meta,
+    resolve_model_sidecar_path,
     resolve_level_model_path,
     resolve_project_path,
     scan_parent_model_files,
@@ -30,6 +31,7 @@ class ExperimentRuntime:
     parent_to_children: dict[str, dict] = field(default_factory=dict)
     level_model_cache: dict[str, object] = field(default_factory=dict)
     parent_model_cache: dict[tuple[str, int], object] = field(default_factory=dict)
+    se_stats_cache: dict[str, object] = field(default_factory=dict)
 
     def _load_model(self, model_path, num_classes):
         model = RamanClassifier1D(num_classes=num_classes, config=self.config).to(self.device)
@@ -37,6 +39,12 @@ class ExperimentRuntime:
         model.load_state_dict(state)
         model.eval()
         return model
+
+    def _resolve_model_path(self, model_path):
+        full_path = Path(model_path)
+        if not full_path.is_absolute():
+            full_path = Path(self.exp_dir) / full_path
+        return full_path
 
     def build_level_model_paths(self, level_order):
         """为给定层级顺序补齐全局模型路径"""
@@ -122,15 +130,26 @@ class ExperimentRuntime:
                 f"Missing parent model path for level='{level_name}', parent={parent_idx}."
             )
 
-        full_path = Path(model_path)
-        if not full_path.is_absolute():
-            full_path = Path(self.exp_dir) / full_path
+        full_path = self._resolve_model_path(model_path)
         if not full_path.exists():
             raise FileNotFoundError(f"Parent model not found: {full_path}")
 
         model = self._load_model(os.fspath(full_path), len(child_ids))
         self.parent_model_cache[key] = model
         return model
+
+    def load_model_se_stats(self, model_path):
+        """读取与模型并列保存的 SE 统计 sidecar"""
+        full_model_path = self._resolve_model_path(model_path)
+        sidecar_path = resolve_model_sidecar_path(full_model_path)
+        cache_key = os.fspath(sidecar_path)
+        if cache_key in self.se_stats_cache:
+            return self.se_stats_cache[cache_key]
+        if not os.path.exists(sidecar_path):
+            return None
+        se_stats = torch.load(sidecar_path, map_location="cpu")
+        self.se_stats_cache[cache_key] = se_stats
+        return se_stats
 
 
 def build_experiment_runtime(exp_dir, device, config=None, meta=None):
@@ -152,4 +171,5 @@ def build_experiment_runtime(exp_dir, device, config=None, meta=None):
         parent_to_children=deepcopy(meta.get("parent_to_children", {})),
         level_model_cache={},
         parent_model_cache={},
+        se_stats_cache={},
     )

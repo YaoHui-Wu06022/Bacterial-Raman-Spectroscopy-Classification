@@ -53,7 +53,6 @@ class SEBlock1D(nn.Module):
     ):
         super().__init__()
         self.se_use = bool(se_use)
-        self.latest_scale = None
 
         hidden_channels = max(int(channels // reduction), 1)
 
@@ -65,15 +64,17 @@ class SEBlock1D(nn.Module):
             nn.Sigmoid(), # 限制在(0,1)
         )
 
+    def _compute_scale(self, x):
+        batch_size, channels, _ = x.size()
+        scale = self.pool(x).view(batch_size, channels)
+        return self.fc(scale)
+
     def forward(self, x):
         if not self.se_use:
             return x
 
-        # 保存当前 batch 的通道权重，供后续分析模块读取
         batch_size, channels, length = x.size()
-        scale = self.pool(x).view(batch_size, channels)
-        scale = self.fc(scale)
-        self.latest_scale = scale
+        scale = self._compute_scale(x)
         scale = scale.unsqueeze(-1).expand(batch_size, channels, length)
         return x * scale
 
@@ -284,7 +285,6 @@ class RamanClassifier1D(nn.Module):
 
     def _build_cnn_backbone(self):
         self.stem_out_channels = 64
-        self.in_channels = self.stem_out_channels
         kernel_sizes = self._cfg("stem_kernel_sizes", None) or (15,)
         if isinstance(kernel_sizes, int):
             kernel_sizes = (kernel_sizes,)
@@ -306,6 +306,7 @@ class RamanClassifier1D(nn.Module):
         )
         self.stem_pool = nn.AvgPool1d(kernel_size=2)
 
+        self.stage_in_channels = self.stem_out_channels
         self.layer1 = self._make_stage(64, num_blocks=2, pool_first=False)
         self.layer2 = self._make_stage(128, num_blocks=2, pool_first=True)
         self.layer3 = self._make_stage(256, num_blocks=2, pool_first=True)
@@ -330,16 +331,16 @@ class RamanClassifier1D(nn.Module):
     def _make_layer(self, out_channels, num_blocks):
         layers = [
             ResidualBottleneck1D(
-                in_channels=self.in_channels,
+                in_channels=self.stage_in_channels,
                 out_channels=out_channels,
                 **self.block_kwargs,
             )
         ]
-        self.in_channels = out_channels
+        self.stage_in_channels = out_channels
         for _ in range(1, num_blocks):
             layers.append(
                 ResidualBottleneck1D(
-                    in_channels=self.in_channels,
+                    in_channels=self.stage_in_channels,
                     out_channels=out_channels,
                     **self.block_kwargs,
                 )

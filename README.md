@@ -26,7 +26,7 @@
 
 1. 把原始拉曼光谱统一到可训练的标准表示空间
 2. 在该表示空间上学习稳定的层级判别边界
-3. 在预测时按层级逐级细化，并对缺失子模型做兼容回退
+3. 在预测时按层级逐级细化
 4. 用分析工具判断模型到底在看哪些峰段、哪些层、哪些通道
 
 项目当前的技术主线如下：
@@ -60,10 +60,10 @@
 │  │  ├─ ig.py                       # Integrated Gradients：输入通道重要性与类别波段重要性
 │  │  ├─ gradcam.py                  # Layer Grad-CAM：层级/分组重要性分析
 │  │  ├─ embedding.py                # embedding 收集与 train + test 联合可视化
-│  │  └─ se.py                       # SEBlock 缩放统计输出
+│  │  └─ se.py                       # 读取训练期 SE sidecar 并输出 SEBlock 缩放统计
 │  ├─ eval/
 │  │  ├─ experiment.py               # 实验目录、配置、hierarchy meta 与模型路径解析
-│  │  ├─ runtime.py                  # 实验运行时：全局模型 / parent 模型懒加载与缓存
+│  │  ├─ runtime.py                  # 实验运行时：模型懒加载、缓存与 SE sidecar 读取
 │  │  ├─ common.py                   # 共享推理辅助：logits 选择、层级掩码、级联推理、指标计算
 │  │  ├─ evaluator.py                # 测试集评估主流程与结果落盘
 │  │  ├─ baseline.py                 # PCA + SVM 基线实现
@@ -1260,21 +1260,34 @@ output/<数据集名>/<时间戳>/
 
 实验目录内会保存：
 
-- `config.yaml`
-- `logs`
-- `train_files.json`
-- `test_files.json`
-- `class_names.json`
-- `hierarchy_meta.json`
-- 各层级或各父类对应的模型权重
+```
+<EXP_DIR>/
+├─ config.yaml
+├─ hierarchy_meta.json
+├─ class_names.json
+├─ train_files.json
+├─ test_files.json
+├─ logs/
+│  ├─ run.log
+│  ├─ config.txt
+│  └─ <model_tag>.log
+├─ level_1/
+│  ├─ level_1_model.pt
+│  └─ level_1_model.se_stats.pt
+└─ level_2/
+   ├─ level_2_parent_3_model.pt
+   └─ level_2_parent_3_model.se_stats.pt
+```
 
 `hierarchy_meta.json` 是后续预测、评估和分析都会复用的关键元数据文件，记录
 
 - 层级顺序
 - 每层类别名
 - `parent_to_children`
-- 本次训练得到的全局模型和各 parent 子模型文件名
+- 本次训练得到的全局模型和各 parent 子模型的相对路径
 - 哪些父类因为只有一个子类而被直接记录为“确定映射”
+
+`*.se_stats.pt` 是与模型同目录、同前缀保存的 SEBlock 统计 sidecar，仅在启用 SE 且验证阶段产生统计时生成
 
 ### 7.2 层级训练逻辑
 
@@ -2347,13 +2360,15 @@ compute_class_band_importance_ig(...)
 
 ### 9.5 SE 模块缩放统计
 
-如果模型启用了 `SEBlock1D`，当前分析流程还会额外输出一组 SE 模块的缩放统计，用来观察网络是否真的在做明显的通道重标定
+如果模型启用了 `SEBlock1D`，训练期会在验证阶段累计每个 SEBlock 的缩放统计，并在最佳模型更新时保存为与模型同目录、同前缀的 sidecar
 
-1. 遍历模型中的所有模块
-2. 找到 `SEBlock1D`
-3. 读取该模块最近一次前向传播保存的 `latest_scale` `[B, C]`
-4. 先在 batch 维上取平均，得到该模块对各通道的平均缩放系数
-5. 再输出这些通道缩放系数的整体统计量
+统计不保存每个 batch 的完整 scale，而是保存紧凑统计结果
+
+- sample_count
+- channel_mean
+- channel_std
+- channel_min
+- channel_max
 
 计算第$m$个模块的平均通道缩放向量
 

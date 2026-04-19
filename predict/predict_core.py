@@ -1,11 +1,10 @@
-import json
 import os
 
 import torch
 
 from raman.config_io import load_experiment
 from raman.data import InputPreprocessor
-from raman.eval.common import run_cascade_inference, select_logits
+from raman.eval.common import run_cascade_inference
 from raman.eval.experiment import load_hierarchy_meta, resolve_project_path
 from raman.eval.runtime import build_experiment_runtime
 
@@ -21,45 +20,10 @@ def load_predictor(exp_dir, device, predict_level=None):
         )
 
     meta = load_hierarchy_meta(exp_dir)
-    preprocessor = InputPreprocessor(config, device)
-
     if meta is None:
-        class_path = os.path.join(exp_dir, "class_names.json")
-        if not os.path.exists(class_path):
-            raise FileNotFoundError(f"[Predict] class_names.json not found in {exp_dir}.")
+        raise FileNotFoundError(f"[Predict] hierarchy_meta.json not found in {exp_dir}.")
 
-        with open(class_path, "r", encoding="utf-8") as file:
-            class_names = json.load(file)
-
-        if isinstance(class_names, dict):
-            if predict_level not in class_names:
-                raise ValueError(
-                    f"Unknown predict_level: {predict_level}. Available: {list(class_names.keys())}"
-                )
-            class_names = class_names[predict_level]
-
-        compat_meta = {
-            "head_names": [predict_level],
-            "level_models": {predict_level: config.model_path},
-            "class_names_by_level": {predict_level: class_names},
-            "parent_models": {},
-            "parent_to_children": {},
-        }
-        runtime = build_experiment_runtime(exp_dir, device, config=config, meta=compat_meta)
-        model = runtime.load_single_level_model(
-            predict_level,
-            num_classes=len(class_names),
-        )
-
-        return {
-            "mode": "single",
-            "model": model,
-            "class_names": class_names,
-            "device": device,
-            "preprocessor": preprocessor,
-            "config": config,
-            "runtime": runtime,
-        }
+    preprocessor = InputPreprocessor(config, device)
 
     head_names = meta.get("head_names", [])
     if predict_level not in head_names:
@@ -92,15 +56,6 @@ def load_predictor(exp_dir, device, predict_level=None):
 
 def predict_one(path, predictor, top_k=3, parent_mask=None):
     x = predictor["preprocessor"](path)
-
-    if predictor.get("mode") == "single":
-        model = predictor["model"]
-        class_names = predictor["class_names"]
-        with torch.no_grad():
-            logits = select_logits(model(x))
-            probs = torch.softmax(logits, dim=1).cpu().numpy().reshape(-1)
-        idx = probs.argsort()[::-1][:top_k]
-        return [{"label": class_names[i], "prob": float(probs[i])} for i in idx]
 
     runtime = predictor["runtime"]
     class_names_by_level = runtime.class_names_by_level

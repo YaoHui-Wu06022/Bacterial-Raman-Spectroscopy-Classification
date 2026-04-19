@@ -20,7 +20,7 @@ from raman.training import load_split_files
 
 
 # 手动设置实验目录与分析层级
-EXP_DIR = "output/细菌/20260417_072350_93%"
+EXP_DIR = "output/细菌/20260417_073717_6分类"
 COMPARE_LEVEL = "level_1"
 TOP_K = 3
 
@@ -293,7 +293,9 @@ def main():
     num_classes = full_dataset.num_classes_by_level[compare_level]
 
     # 读取训练时保存的层级元数据，确认当前 dataset_train 的类别顺序
-    meta = load_hierarchy_meta(exp_dir) or {}
+    meta = load_hierarchy_meta(exp_dir)
+    if meta is None:
+        raise FileNotFoundError(f"找不到 hierarchy_meta.json：{exp_dir}")
     train_class_names = meta.get("class_names_by_level", {}).get(compare_level)
     # 匹配数据集目录
     if train_class_names:
@@ -443,8 +445,7 @@ def main():
         )
 
     # ---------------- 输出总表，方便统一浏览所有测试文件夹 ----------------
-    # summary.csv 相当于总索引：
-    # 一行对应一个测试文件夹，既保留关键数值，也保留图像相对路径，方便集中排查
+    # summary.csv 只保留每个测试文件夹最关键的 expected / model / neighbor 结果
     with open(summary_path, "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(
             file,
