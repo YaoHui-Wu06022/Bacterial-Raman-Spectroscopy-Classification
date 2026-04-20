@@ -1558,9 +1558,7 @@ CE(p_t) = - \log(p_t)
 FL(p_t; w) = -  w (1 - p_t)^\gamma \log(p_t)
 ```
 
-其中
-
-- $\gamma$：控制对易样本的抑制程度
+$\gamma$：控制对易样本的抑制程度
 
 ```python
 criterion = FocalLoss(
@@ -1570,7 +1568,7 @@ criterion = FocalLoss(
 )
 ```
 
-`FocalLoss.forward()` 的实现是先基于未加权交叉熵计算 $p_t$ 和 focal 因子，再用当前 epoch 的类别权重对逐样本损失做重加权
+`FocalLoss` 是先基于未加权交叉熵计算 $p_t$ 和 focal 因子，再用当前 epoch 的类别权重对逐样本损失做重加权
 
 ```python
 def forward(self, logits, targets):
@@ -1594,7 +1592,7 @@ def forward(self, logits, targets):
     return loss
 ```
 
-`FocalLoss` 返回的是逐样本 loss 向量，后续才能继续叠加 `severity weight`
+返回的是逐样本 loss 向量，后续才能继续叠加 `severity weight`
 
 ##### 类别权重
 
@@ -1719,7 +1717,13 @@ if config.use_ema and epoch >= ema_start_epoch:
 - 三分类使用 `0.88`
 - 四类及以上使用 `0.85`
 
-与 `FocalLoss` 形成互补：`FocalLoss` 更关注概率难度，`severity weight` 更关注错误排序结构
+##### 总结
+
+用 Focal Loss 处理“难样本概率问题”
+
+用 EMA 类别权重处理“持续难学类别问题”
+
+用 severity weight 处理“错误结构严重程度问题”
 
 #### Align Loss
 
@@ -1743,10 +1747,20 @@ S_c=\{\, n \mid y_n = c \,\}
 \sum_{n \in S_c}  x_n
 ```
 
+```python
+center_c = feat_c.mean(dim=0, keepdim=True)
+```
+
 对应的类内紧凑项为
 
 ```math
 L_c^{(\text{align})}=\frac{1}{|S_c|}\sum_{n \in S_c}\|x_c - \mathrm{center}_c^{(\text{batch})}\|_2^2
+```
+
+```python
+diff_c = feat_c - center_c
+radial_c = (diff_c * diff_c).sum(dim=1)
+loss_sum += radial_c.mean()
 ```
 
 对当前 batch 内所有有效类别取平均
@@ -1785,16 +1799,31 @@ L_c^{(\text{align})}
    z_n = \frac{x_n}{\|x_n\|_2}
    ```
 
+   ```python
+   z = F.normalize(feat, p=2, dim=1)
+   ```
+
 2. 计算温度缩放后的两两相似度
 
    ```math
    \mathrm{sim}(n,m) = \frac{z_n^\top z_m}{\tau}
    ```
 
+   ```python
+   sim = torch.matmul(z, z.t()) / self.tau
+   ```
+
 3. 定义正样本集合：
 
    ```math
    P(n)=\{\,m \mid m\neq n,\; y_m = y_n\,\}
+   ```
+
+   ```python
+   off_diag_mask = torch.ones_like(sim, dtype=torch.bool)
+   off_diag_mask.fill_diagonal_(False)
+   y = y.view(-1, 1)
+   pos_mask = (y == y.t()) & off_diag_mask # 标出正样本位置
    ```
 
 4. 对正样本的对数概率取平均，得到单个 anchor 的损失：
@@ -1839,8 +1868,8 @@ L_c^{(\text{align})}
 - `FocalLoss` 解决“分错”和“难样本”
 - `base_class_weights + ema_class_weights` 解决哪些类在当前训练阶段更需要额外关注
 - `severity weight` 解决哪些错误更危险、更值得纠正
-- `SupConLoss` 解决类间分离与类内相对距离结构
 - `AlignLoss` 解决当前 batch 内的类内紧凑性
+- `SupConLoss` 解决类间分离与类内相对距离结构
 
 当前训练闭环可以概括为：
 
@@ -1848,8 +1877,8 @@ L_c^{(\text{align})}
 - 用 `base_class_weights` 做静态类别平衡
 - 用 `ema_class_weights` 在训练中后期按类别难度动态修正权重
 - 用 `severity weight` 提高高置信错判样本的学习强度
-- 用 `SupConLoss` 拉开 embedding 的相对结构
 - 用 `AlignLoss` 收紧当前层的类内分布
+- 用 `SupConLoss` 拉开 embedding 的相对结构
 
 ## 8. 评估
 
