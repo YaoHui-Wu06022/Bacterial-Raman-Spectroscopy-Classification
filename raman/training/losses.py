@@ -46,7 +46,7 @@ class FocalLoss(nn.Module):
         self.ignore_index = ignore_index
 
     def forward(self, logits, targets):
-        ce_loss = nn.functional.cross_entropy(
+        ce_loss = F.cross_entropy(
             logits,
             targets,
             weight=None,
