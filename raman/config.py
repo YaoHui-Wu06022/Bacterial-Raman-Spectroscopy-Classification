@@ -58,6 +58,8 @@ class Config:
     # 输出目录（由 train 在运行期确定，绑定时间戳）
     timestamp = None
     output_dir = None
+    resume_training = True  # 如果输出目录里已有 checkpoint，则从中断处继续训练
+    checkpoint_interval = 20  # 每隔多少个 epoch 保存一次续训 checkpoint
     seed = 42  # 分组随机种子
     deterministic = True  # 是否保持训练可复现（GPU 稳定性优先）
     early_stop_w_f1 = 0.6
@@ -115,7 +117,7 @@ class Config:
     transformer_nhead = 6
     transformer_dim = 192
     transformer_ffn_dim = 384
-    transformer_layers = 2 # 改为两层有效
+    transformer_layers = 2
     transformer_dropout = 0.2
     # lstm
     lstm_hidden = 192

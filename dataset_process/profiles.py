@@ -43,6 +43,12 @@ PROFILES = {
         count_root="dataset_train",
         aliases=("厌氧菌", "anaerobe"),
     ),
+    "reference": DatasetProfile(
+        profile_id="reference",
+        dataset_name="reference",
+        count_root="dataset_train",
+        aliases=("reference",),
+    ),
 }
 
 PROFILE_LOOKUP = {}

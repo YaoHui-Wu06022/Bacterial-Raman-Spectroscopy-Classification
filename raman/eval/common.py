@@ -247,8 +247,12 @@ def run_cascade_inference(
 
         parent_idx = int(parent_pred)
         level_parent_models = runtime.ensure_parent_models(level_name, parent_to_children)
+        has_parent_model = any(
+            entry.get("model_path") is not None
+            for entry in level_parent_models.values()
+        )
 
-        if level_parent_models:
+        if has_parent_model:
             # 优先走 parent 子模型：如果该层训练过 per-parent 子模型，
             # 就在对应父类下使用局部子模型
             entry = level_parent_models.get(parent_idx)

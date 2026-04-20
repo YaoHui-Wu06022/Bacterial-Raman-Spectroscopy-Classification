@@ -103,6 +103,12 @@ def _build_display_classes(dataset, eval_level, parent_models):
     child_inv = dataset.inv_label_maps_by_level[eval_idx]
     children_by_parent = dataset.parent_to_children.get(eval_level, {})
     parent_entries = parent_models.get(eval_level, {})
+    has_parent_model = any(
+        entry.get("model_path") is not None
+        for entry in parent_entries.values()
+    )
+    if not has_parent_model:
+        return list(dataset.class_names_by_level[eval_idx])
 
     classes = []
     for parent_name in parent_names:
@@ -201,6 +207,19 @@ def evaluate_test_set(context):
         runtime.parent_to_children = dataset.parent_to_children
     parent_to_children = runtime.parent_to_children
     runtime.build_level_model_paths(level_order)
+    target_model_path = runtime.level_model_paths.get(eval_level)
+    missing_upper_model = any(
+        not os.path.exists(runtime.level_model_paths.get(level_name, ""))
+        for level_name in level_order
+        if level_name != eval_level
+    )
+    if (
+        target_model_path
+        and os.path.exists(target_model_path)
+        and missing_upper_model
+    ):
+        level_order = [eval_level]
+        runtime.build_level_model_paths(level_order)
 
     for level_name in level_order:
         model_path = runtime.level_model_paths.get(level_name)

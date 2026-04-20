@@ -2,6 +2,7 @@
 from copy import deepcopy
 import json
 import os
+import random
 from dataclasses import dataclass
 import numpy as np
 import torch
@@ -106,6 +107,81 @@ def _build_model_artifact_paths(output_dir, level_name, model_tag):
     model_path = os.path.join(level_dir, f"{model_tag}_model.pt")
     se_stats_path = resolve_model_sidecar_path(model_path)
     return model_path, se_stats_path
+
+
+def _build_checkpoint_path(model_path):
+    """续训 checkpoint 与模型权重放在同一层目录"""
+    suffix = "_model.pt"
+    if model_path.endswith(suffix):
+        return model_path[: -len(suffix)] + "_checkpoint.pt"
+    return model_path + ".checkpoint.pt"
+
+
+def _save_training_checkpoint(
+    checkpoint_path,
+    epoch,
+    model,
+    optimizer,
+    scheduler,
+    best_score,
+    best_epoch,
+    patience_counter,
+    ema_class_ce,
+):
+    """保存可恢复训练状态，不替代最佳模型权重"""
+    checkpoint = {
+        "epoch": int(epoch),
+        "model_state": model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "scheduler_state": scheduler.state_dict(),
+        "best_score": float(best_score),
+        "best_epoch": int(best_epoch),
+        "patience_counter": int(patience_counter),
+        "ema_class_ce": ema_class_ce.detach().cpu(),
+        "torch_rng_state": torch.get_rng_state(),
+        "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        "numpy_rng_state": np.random.get_state(),
+        "python_rng_state": random.getstate(),
+    }
+    torch.save(checkpoint, checkpoint_path)
+
+
+def _restore_training_checkpoint(
+    checkpoint_path,
+    model,
+    optimizer,
+    scheduler,
+    device,
+    model_log,
+):
+    """恢复续训状态，并返回下一轮 epoch 与 early stop 状态"""
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    model.load_state_dict(checkpoint["model_state"])
+    optimizer.load_state_dict(checkpoint["optimizer_state"])
+    scheduler.load_state_dict(checkpoint["scheduler_state"])
+
+    if "torch_rng_state" in checkpoint:
+        torch.set_rng_state(checkpoint["torch_rng_state"].cpu())
+    if torch.cuda.is_available() and checkpoint.get("cuda_rng_state") is not None:
+        torch.cuda.set_rng_state_all(checkpoint["cuda_rng_state"])
+    if "numpy_rng_state" in checkpoint:
+        np.random.set_state(checkpoint["numpy_rng_state"])
+    if "python_rng_state" in checkpoint:
+        random.setstate(checkpoint["python_rng_state"])
+
+    epoch = int(checkpoint.get("epoch", 0))
+    best_score = float(checkpoint.get("best_score", -1e9))
+    best_epoch = int(checkpoint.get("best_epoch", -1))
+    patience_counter = int(checkpoint.get("patience_counter", 0))
+    ema_class_ce = checkpoint.get("ema_class_ce")
+    if ema_class_ce is not None:
+        ema_class_ce = ema_class_ce.to(device=device, dtype=torch.float32)
+
+    model_log(
+        f"[Resume] loaded checkpoint: {checkpoint_path}, "
+        f"last_epoch={epoch}, best_epoch={best_epoch}"
+    )
+    return epoch + 1, best_score, best_epoch, patience_counter, ema_class_ce
 
 
 def _build_relpath(output_dir, path):
@@ -650,6 +726,7 @@ def run_training(config_obj=None, overrides=None):
             level_name,
             model_tag,
         )
+        checkpoint_path = _build_checkpoint_path(best_model_path)
         # 将全局类别索引映射成当前子模型使用的局部类别索引
         label_map_tensor = None
         if label_map_np is not None:
@@ -657,9 +734,43 @@ def run_training(config_obj=None, overrides=None):
 
         model_log(f"[{model_tag}] ==================== MODEL START ====================")
         model_log(f"[{model_tag}] log_path = {model_log_path}")
+        model_log(f"[{model_tag}] checkpoint_path = {checkpoint_path}")
         try:
+            start_epoch = 1
+            if getattr(config, "resume_training", True) and os.path.exists(checkpoint_path):
+                (
+                    start_epoch,
+                    best_score,
+                    best_epoch,
+                    patience_counter,
+                    restored_ema_class_ce,
+                ) = _restore_training_checkpoint(
+                    checkpoint_path,
+                    model,
+                    optimizer,
+                    scheduler,
+                    device,
+                    model_log,
+                )
+                if restored_ema_class_ce is not None:
+                    ema_class_ce = restored_ema_class_ce
+
+            if start_epoch > config.epochs:
+                model_log(
+                    f"[Resume] checkpoint 已完成到 epoch={start_epoch - 1}，"
+                    f"当前 epochs={config.epochs}，跳过训练"
+                )
+                return {
+                    "best_model_path": best_model_path,
+                    "best_se_stats_path": best_se_stats_path,
+                    "checkpoint_path": checkpoint_path,
+                    "model": None,
+                    "level_name": level_name,
+                    "model_log_path": model_log_path,
+                }
+
             # 训练一个 epoch
-            for epoch in range(1, config.epochs + 1):
+            for epoch in range(start_epoch, config.epochs + 1):
                 model.train()
                 # 延迟启用基于 EMA 类别难度的动态类别权重
                 if config.use_ema and epoch >= ema_start_epoch:
@@ -841,6 +952,20 @@ def run_training(config_obj=None, overrides=None):
                 else:
                     patience_counter += 1
 
+                checkpoint_interval = max(1, int(getattr(config, "checkpoint_interval", 10)))
+                should_save_checkpoint = epoch % checkpoint_interval == 0
+                if should_save_checkpoint:
+                    _save_training_checkpoint(
+                        checkpoint_path,
+                        epoch,
+                        model,
+                        optimizer,
+                        scheduler,
+                        best_score,
+                        best_epoch,
+                        patience_counter,
+                        ema_class_ce,
+                    )
                 model_log(f"[{model_tag}] ------------------------------------------------")
 
                 if patience_counter >= config.patience:
@@ -860,6 +985,7 @@ def run_training(config_obj=None, overrides=None):
         return {
             "best_model_path": best_model_path,
             "best_se_stats_path": best_se_stats_path,
+            "checkpoint_path": checkpoint_path,
             "model": None,
             "level_name": level_name,
             "model_log_path": model_log_path,
@@ -883,7 +1009,7 @@ def run_training(config_obj=None, overrides=None):
                 parent_level_idx=parent_level_idx,
                 parent_to_children=parent_to_children,
                 label_map_np=None,
-                use_parent_mask=(parent_level_idx is not None),
+                use_parent_mask=False,
             )
             if result is None:
                 continue
