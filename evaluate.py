@@ -4,7 +4,7 @@ from raman.eval import EvaluateOverrides, run_evaluate_test_set
 
 # 手动覆盖
 EXP_DIR = ""
-EVAL_LEVEL = "level_1"
+EVAL_LEVEL = ""
 INHERIT_MISSING_LEVELS = True
 EVAL_ONLY_LEVEL = None
 EVAL_ONLY_PARENT = None
