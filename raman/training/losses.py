@@ -139,6 +139,11 @@ class SupConLoss(nn.Module):
         sim = sim - sim.max(dim=1, keepdim=True).values.detach()
         exp_sim = torch.exp(sim) * off_diag_mask.float()
         
+        # 计算有效样本数
+        pos_count = pos_mask.sum(dim=1)
+        # 有效类
+        valid_anchor = pos_count > 0
+
         log_q = sim - torch.log(exp_sim.sum(dim=1, keepdim=True) + 1e-12)
 
         pos_count = pos_mask.sum(dim=1)
