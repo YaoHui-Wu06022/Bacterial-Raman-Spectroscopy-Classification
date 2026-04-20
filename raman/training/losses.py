@@ -145,9 +145,7 @@ class SupConLoss(nn.Module):
         valid_anchor = pos_count > 0
 
         log_q = sim - torch.log(exp_sim.sum(dim=1, keepdim=True) + 1e-12)
-
-        pos_count = pos_mask.sum(dim=1)
-        valid_anchor = pos_count > 0
+        # 单个样本的损失
         mean_log_q_pos = (
             (log_q * pos_mask.float()).sum(dim=1) / (pos_count + 1e-12)
         )
