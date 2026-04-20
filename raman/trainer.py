@@ -779,10 +779,10 @@ def run_training(config_obj=None, overrides=None):
                         with torch.no_grad():
                             ce_each = F.cross_entropy(logits_valid, y_valid, reduction="none")
                             for c in range(num_classes):
-                                mask = (y_valid == c)
-                                if mask.any():
-                                    mean_ce = ce_each[mask].mean()
-                                    ema_class_ce[c] = ema_alpha * ema_class_ce[c] + (1.0 - ema_alpha) * mean_ce
+                                class_mask_c = (y_valid == c)
+                                if class_mask_c.any():
+                                    mean_ce_c = ce_each[class_mask_c].mean()
+                                    ema_class_ce[c] = ema_alpha * ema_class_ce[c] + (1.0 - ema_alpha) * mean_ce_c
 
                 train_loss = running_loss / len(train_loader)
                 train_align_loss = align_w * running_align_loss / max(len(train_loader), 1)
