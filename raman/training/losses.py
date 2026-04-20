@@ -74,6 +74,8 @@ class FocalLoss(nn.Module):
 def AlignLoss(feat, y):
     """
     仅按当前训练层标签计算 batch 内类内紧凑损失
+    - `feat`: `[B, D]` 的 embedding
+    - `y`: `[B]` 的监督标签
     """
     valid_mask = y >= 0
     if not valid_mask.any():
@@ -149,5 +151,5 @@ class SupConLoss(nn.Module):
         mean_log_q_pos = (
             (log_q * pos_mask.float()).sum(dim=1) / (pos_count + 1e-12)
         )
-
+        # 整个batch的损失
         return -mean_log_q_pos[valid_anchor].mean()
