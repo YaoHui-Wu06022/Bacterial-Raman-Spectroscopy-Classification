@@ -4,67 +4,19 @@ from matplotlib.patches import Patch
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
 
-EPS = 1e-8
-
-
-def read_arc_data(path):
-    """读取两列文本光谱文件，返回波数和强度数组"""
-    wn, sp = [], []
-    with open(path, "r", encoding="utf-8", errors="ignore") as file:
-        for line in file:
-            parts = line.strip().split()
-            if len(parts) != 2:
-                continue
-            try:
-                wn.append(float(parts[0]))
-                sp.append(float(parts[1]))
-            except Exception:
-                continue
-    return np.array(wn), np.array(sp)
-
-
-def build_wn_ref(cut_min, cut_max, target_points):
-    """生成裁剪后统一插值使用的波数坐标"""
-    return np.linspace(cut_min, cut_max, target_points)
-
-
-def normalize_bad_bands(bad_bands):
-    """规范化坏波段配置，过滤非法项并统一转成浮点区间"""
-    if not bad_bands:
-        return ()
-
-    normalized = []
-    for band in bad_bands:
-        if band is None:
-            continue
-        if not isinstance(band, (tuple, list)) or len(band) != 2:
-            continue
-
-        band_min, band_max = band
-        if band_min is None or band_max is None:
-            continue
-
-        normalized.append((float(band_min), float(band_max)))
-
-    return tuple(normalized)
-
-
-def build_valid_mask(wn, bad_bands):
-    """根据坏波段区间构造有效波段掩码；未配置坏波段时返回 None"""
-    bad_bands = normalize_bad_bands(bad_bands)
-    if not bad_bands:
-        return None
-    valid_mask = np.ones_like(wn, dtype=bool)
-    for band_min, band_max in bad_bands:
-        valid_mask &= ~((wn >= band_min) & (wn <= band_max))
-    return valid_mask
+from raman.data.spectrum import (
+    build_valid_mask,
+    minmax_normalize,
+    normalize_bad_bands,
+    snv,
+)
 
 
 def asls_baseline(spectrum, lam=1e5, p=0.01, niter=10, valid_mask=None):
     """使用 AsLS 估计基线，可选择跳过坏波段对应位置"""
     length = len(spectrum)
     # 构造二阶差分矩阵
-    D = sparse.diags([1, -2, 1], [0, 1, 2], shape=(length - 2, length))
+    diff = sparse.diags([1, -2, 1], [0, 1, 2], shape=(length - 2, length))
     weights = np.ones(length)
 
     if valid_mask is not None:
@@ -73,39 +25,13 @@ def asls_baseline(spectrum, lam=1e5, p=0.01, niter=10, valid_mask=None):
 
     for _ in range(niter):
         matrix_w = sparse.diags(weights, 0)
-        matrix_b = (matrix_w + lam * (D.T @ D)).tocsc() # W + λD^T D
-        baseline = spsolve(matrix_b, weights * spectrum)    # 解 z
+        matrix_b = (matrix_w + lam * (diff.T @ diff)).tocsc()
+        baseline = spsolve(matrix_b, weights * spectrum)
         weights = np.where(spectrum > baseline, p, 1 - p)
         if valid_mask is not None:
             weights[~valid_mask] = 0.0
 
     return baseline
-
-
-def snv(data, eps=EPS):
-    """对单条或多条光谱做 SNV 标准化"""
-    data = np.asarray(data, dtype=np.float32)
-    if data.ndim == 1:
-        mean = data.mean()
-        std = max(data.std(), eps)
-        return (data - mean) / std
-    mean = np.mean(data, axis=1, keepdims=True)
-    std = np.std(data, axis=1, keepdims=True)
-    return (data - mean) / (std + eps)
-
-
-def minmax_normalize(data, eps=EPS):
-    """对单条或多条光谱做 Min-Max 归一化"""
-    data = np.asarray(data, dtype=np.float32)
-    if data.ndim == 1:
-        min_value = np.min(data)
-        max_value = np.max(data)
-        denom = max(max_value - min_value, eps)
-        return (data - min_value) / denom
-    min_value = np.min(data, axis=1, keepdims=True)
-    max_value = np.max(data, axis=1, keepdims=True)
-    denom = np.maximum(max_value - min_value, eps)
-    return (data - min_value) / denom
 
 
 def normalize_for_plot(spectra, method):

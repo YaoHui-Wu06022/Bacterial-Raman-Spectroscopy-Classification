@@ -1,28 +1,29 @@
 import argparse
 from pathlib import Path
 
-from dataset_process.pipeline import (
-    classify_dataset,
+from raman.data.build import (
+    build_test,
+    build_train,
+    classify,
     count_dataset,
-    pack_dataset_init,
-    preview_init_dataset,
-    preprocess_test_dataset,
-    preprocess_train_dataset,
+    pack_init,
+    preview,
     print_results,
-    unpack_dataset_init,
+    unpack_init,
 )
-from dataset_process.profiles import get_dataset_dir, get_profile
+from raman.data.profiles import get_dataset_dir, get_profile
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_DATASET_SUBDIRS = (
-    "dataset_init",
-    "dataset_train_raw",
-    "dataset_train",
-    "dataset_test",
-    "dataset_train_fig",
-    "dataset_test_fig",
-    "dataset_test_raw",
+    "init",
+    "train_raw",
+    "train",
+    "test",
+    "fig_train",
+    "fig_test",
+    "test_raw",
+    "fig_init",
 )
 
 
@@ -34,10 +35,10 @@ def ensure_dataset_layout(profile):
     return dataset_dir
 
 
-def run_pack_init(args):
+def run_pack(args):
     profile = get_profile(args.dataset)
     dataset_dir = ensure_dataset_layout(profile)
-    pack_dataset_init(
+    pack_init(
         dataset_dir / profile.root_init,
         dataset_dir / profile.root_init_pack,
         verbose=not args.quiet,
@@ -47,35 +48,35 @@ def run_pack_init(args):
 def run_classify(args):
     profile = get_profile(args.dataset)
     dataset_dir = ensure_dataset_layout(profile)
-    classify_dataset(profile, dataset_dir)
+    classify(profile, dataset_dir)
 
 
-def run_unpack_init(args):
+def run_unpack(args):
     profile = get_profile(args.dataset)
     dataset_dir = ensure_dataset_layout(profile)
-    unpack_dataset_init(
+    unpack_init(
         dataset_dir / profile.root_init_pack,
         dataset_dir / profile.root_init,
         verbose=not args.quiet,
     )
 
 
-def run_preprocess_train(args):
+def run_train(args):
     profile = get_profile(args.dataset)
     dataset_dir = ensure_dataset_layout(profile)
-    preprocess_train_dataset(profile, dataset_dir)
+    build_train(profile, dataset_dir)
 
 
-def run_preview_init(args):
+def run_preview(args):
     profile = get_profile(args.dataset)
     dataset_dir = ensure_dataset_layout(profile)
-    preview_init_dataset(profile, dataset_dir)
+    preview(profile, dataset_dir)
 
 
-def run_preprocess_test(args):
+def run_test(args):
     profile = get_profile(args.dataset)
     dataset_dir = ensure_dataset_layout(profile)
-    preprocess_test_dataset(profile, dataset_dir)
+    build_test(profile, dataset_dir)
 
 
 def run_count(args):
@@ -87,25 +88,21 @@ def run_count(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="Unified dataset processing entrypoint.")
+    parser = argparse.ArgumentParser(description="Unified data prep entrypoint.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     for command, handler, help_text in (
-        ("pack-init", run_pack_init, "Pack dataset_init into dataset_init.npz"),
-        ("unpack-init", run_unpack_init, "Unpack dataset_init.npz into dataset_init"),
-        ("classify", run_classify, "Classify dataset_init into dataset_train_raw"),
-        (
-            "preview-init",
-            run_preview_init,
-            "Generate per-folder preview figures from dataset_init",
-        ),
-        ("preprocess-train", run_preprocess_train, "Build dataset_train from dataset_train_raw"),
-        ("preprocess-test", run_preprocess_test, "Build dataset_test from dataset_test_raw"),
+        ("pack", run_pack, "Pack init into init.npz"),
+        ("unpack", run_unpack, "Unpack init.npz into init"),
+        ("classify", run_classify, "Classify init into train_raw"),
+        ("preview", run_preview, "Generate per-folder preview figures from init"),
+        ("train", run_train, "Build train from train_raw"),
+        ("test", run_test, "Build test from test_raw"),
         ("count", run_count, "Count arc_data files in a dataset subdir"),
     ):
         sub = subparsers.add_parser(command, help=help_text)
         sub.add_argument("dataset", help="Dataset name, such as 细菌 / 耐药菌 / 厌氧菌")
-        if command in {"pack-init", "unpack-init"}:
+        if command in {"pack", "unpack"}:
             sub.add_argument("--quiet", action="store_true")
         if command == "count":
             sub.add_argument("--subdir", default=None, help="Override counted subdir")

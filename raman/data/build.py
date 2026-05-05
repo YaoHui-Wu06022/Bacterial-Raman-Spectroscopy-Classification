@@ -6,13 +6,16 @@ from pathlib import Path
 
 import numpy as np
 
-from dataset_process.common import (
-    build_wn_ref,
+from raman.data.offline import (
     preprocess_single_spectrum,
-    read_arc_data,
     save_mean_plot,
 )
-from dataset_process.profiles import COMMON_BAD_BANDS
+from raman.data.profiles import COMMON_BAD_BANDS
+from raman.data.spectrum import (
+    build_wn_ref,
+    read_arc_data,
+    write_arc_data,
+)
 
 PACK_EXT = ".npz"
 
@@ -85,12 +88,6 @@ def is_packed_path(path):
     return os.path.isfile(path) and str(path).lower().endswith(PACK_EXT)
 
 
-def write_arc_data(path, wn, sp, fmt="%.8f"):
-    """把一条光谱写回两列文本格式，供后续训练和人工检查使用"""
-    arr = np.column_stack([wn, sp])
-    np.savetxt(path, arr, fmt=[fmt, fmt])
-
-
 def resolve_pipeline_config(pipeline_config=None):
     """返回离线预处理配置；未传入时使用库内默认配置"""
     return pipeline_config or DEFAULT_PIPELINE_CONFIG
@@ -114,6 +111,49 @@ def _resolve_group_figure_dir(root_figure, rel_dir):
     return root_figure / rel_parent
 
 
+def _iter_ancestor_level_keys(rel_dir):
+    """生成非叶子祖先层级 key，用于高层级均值图聚合"""
+    parts = tuple(rel_dir.parts)
+    if len(parts) <= 1:
+        return
+    for level_idx in range(1, len(parts)):
+        yield level_idx, parts[:level_idx]
+
+
+def _safe_plot_name(parts):
+    """把层级路径转换成稳定的图片文件名"""
+    return "__".join(parts)
+
+
+def _save_hierarchy_mean_plots(hierarchy_groups, root_figure, cfg):
+    """输出 train 阶段聚合得到的高层级平均光谱图"""
+    if not hierarchy_groups:
+        return 0
+
+    output_root = root_figure / "_hierarchy_mean"
+    generated = 0
+
+    for (level_idx, parts), payload in sorted(hierarchy_groups.items()):
+        spectra_arr = np.vstack(payload["spectra"])
+        level_dir = output_root / f"level_{level_idx}"
+        level_dir.mkdir(parents=True, exist_ok=True)
+
+        label = "/".join(parts)
+        fig_save_path = level_dir / f"{_safe_plot_name(parts)}.png"
+        save_mean_plot(
+            wn=payload["wn"],
+            spectra=spectra_arr,
+            out_path=fig_save_path,
+            norm_method=cfg.norm_method,
+            bad_bands=COMMON_BAD_BANDS,
+            title=f"{label} (mean +/- std, n={spectra_arr.shape[0]})",
+        )
+        print(f"  Hierarchy mean spectrum saved: {fig_save_path}")
+        generated += 1
+
+    return generated
+
+
 def _save_spectra_files(save_dir, filenames, wn_list, spectra_arr, fmt="%.3f"):
     """批量写出预处理后的光谱文件，统一文本精度和目录创建行为"""
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -122,14 +162,14 @@ def _save_spectra_files(save_dir, filenames, wn_list, spectra_arr, fmt="%.3f"):
 
 
 class PackedArcDataset:
-    """从 dataset_init.npz 中按样本迭代恢复光谱内容"""
+    """从 init.npz 中按样本迭代恢复光谱内容"""
 
     def __init__(self, npz_path):
         if not is_packed_path(npz_path):
             raise FileNotFoundError(f"Missing packed file: {npz_path}")
         data = np.load(npz_path)
         self.root_name = (
-            str(data["root_name"][0]) if "root_name" in data else "dataset_init"
+            str(data["root_name"][0]) if "root_name" in data else "init"
         )
         self.paths = data["paths"].tolist()
         self.offsets = data["offsets"]
@@ -155,7 +195,7 @@ class PackedArcDataset:
 
 
 def resolve_init_input(base_dir, profile):
-    """优先解析 dataset_init 目录，其次回退到打包后的 dataset_init.npz"""
+    """优先解析 init 目录，其次回退到打包后的 init.npz"""
     root_init = resolve_path(base_dir, profile.root_init)
     root_init_pack = resolve_path(base_dir, profile.root_init_pack)
 
@@ -204,8 +244,8 @@ def iter_init_groups(input_path):
         yield group["rel_dir"], group["leaf_name"], group["samples"]
 
 
-def pack_dataset_init(input_dir, output_path, verbose=True):
-    """把 dataset_init 下的散落光谱打包成一个 npz，便于迁移和归档"""
+def pack_init(input_dir, output_path, verbose=True):
+    """把 init 下的散落光谱打包成一个 npz，便于迁移和归档"""
     input_dir = Path(input_dir)
     output_path = Path(output_path)
     if not input_dir.is_dir():
@@ -257,8 +297,8 @@ def pack_dataset_init(input_dir, output_path, verbose=True):
         print(f"[Pack] samples={len(paths)}, points={total}, saved={output_path}")
 
 
-def unpack_dataset_init(npz_path, output_dir, verbose=True):
-    """把 dataset_init.npz 恢复回目录树，便于重新检查和手工处理"""
+def unpack_init(npz_path, output_dir, verbose=True):
+    """把 init.npz 恢复回目录树，便于重新检查和手工处理"""
     npz_path = Path(npz_path)
     output_dir = Path(output_dir)
     packed = PackedArcDataset(npz_path)
@@ -275,8 +315,8 @@ def unpack_dataset_init(npz_path, output_dir, verbose=True):
         print(f"[Unpack] samples={restored}, restored={output_dir}")
 
 
-def classify_dataset(profile, base_dir):
-    """将 dataset_init 重新归类到 dataset_train_raw，统一使用 letters_sign 前缀规则"""
+def classify(profile, base_dir):
+    """将 init 重新归类到 train_raw，统一使用 letters_sign 前缀规则"""
     base_dir = Path(base_dir)
     root_process_raw = resolve_path(base_dir, profile.root_process_raw)
     root_process_raw.mkdir(parents=True, exist_ok=True)
@@ -473,8 +513,8 @@ def preprocess_group_samples(
     }, stats
 
 
-def preprocess_train_dataset(profile, base_dir, pipeline_config=None):
-    """从 dataset_train_raw 构建 dataset_train，并输出每类均值谱图和异常值日志"""
+def build_train(profile, base_dir, pipeline_config=None):
+    """从 train_raw 构建 train，并输出每类均值谱图和异常值日志"""
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
     root_process_raw = resolve_path(base_dir, profile.root_process_raw)
@@ -487,6 +527,7 @@ def preprocess_train_dataset(profile, base_dir, pipeline_config=None):
 
     root_process_clean.mkdir(parents=True, exist_ok=True)
     root_figure.mkdir(parents=True, exist_ok=True)
+    hierarchy_groups = {}
 
     for cls_raw_dir, arc_files in iter_arc_dirs(root_process_raw):
         rel_dir = cls_raw_dir.relative_to(root_process_raw)
@@ -546,13 +587,29 @@ def preprocess_train_dataset(profile, base_dir, pipeline_config=None):
 
         print(f"  Mean spectrum saved: {fig_save_path}")
 
+        for level_idx, parts in _iter_ancestor_level_keys(rel_dir):
+            key = (level_idx, parts)
+            if key not in hierarchy_groups:
+                hierarchy_groups[key] = {
+                    "wn": wn_list[0],
+                    "spectra": [],
+                }
+            hierarchy_groups[key]["spectra"].append(spectra_arr)
+
+    generated_hierarchy_plots = _save_hierarchy_mean_plots(
+        hierarchy_groups,
+        root_figure,
+        cfg,
+    )
+
     print("\nTraining dataset preprocessing finished:")
     print(f"- Clean spectra: {root_process_clean}")
     print(f"- Mean plots: {root_figure}")
+    print(f"- Hierarchy mean plots: {generated_hierarchy_plots}")
 
 
-def preview_init_dataset(profile, base_dir, pipeline_config=None):
-    """基于 dataset_init 生成预览图，不落盘清洗结果，适合先检查原始数据质量"""
+def preview(profile, base_dir, pipeline_config=None):
+    """基于 init 生成预览图，不落盘清洗结果，适合先检查原始数据质量"""
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
     input_path = resolve_init_input(base_dir, profile)
@@ -618,14 +675,14 @@ def preview_init_dataset(profile, base_dir, pipeline_config=None):
     print(f"- Generated={generated}, Skipped={skipped}")
 
 
-def preprocess_test_dataset(
+def build_test(
     profile,
     base_dir,
     input_dir=None,
     output_dir=None,
     pipeline_config=None,
 ):
-    """从测试原始目录构建 dataset_test，并输出每个文件夹的均值谱图"""
+    """从测试原始目录构建 test，并输出每个文件夹的均值谱图"""
     cfg = resolve_pipeline_config(pipeline_config)
     wn_ref = cfg.build_wn_ref()
     base_dir = Path(base_dir)

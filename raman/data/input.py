@@ -4,6 +4,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from raman.data.spectrum import load_arc_intensity
+
 
 EPS = 1e-8
 
@@ -50,13 +52,6 @@ def MinMaxNormalize(x, eps=1e-8):
     max_v = float(np.max(x))
     denom = max(max_v - min_v, eps)
     return (x - min_v) / denom
-
-
-def load_arc_intensity(path):
-    """读取单个 .arc_data 文件的强度列"""
-    data = np.loadtxt(path, dtype=np.float32)
-    data = np.atleast_2d(data)
-    return data[:, 1].astype(np.float32, copy=False)
 
 
 def normalize_spectrum(x, norm_method):

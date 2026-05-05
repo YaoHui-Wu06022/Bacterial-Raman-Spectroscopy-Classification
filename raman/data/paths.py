@@ -1,13 +1,13 @@
 from pathlib import Path
 
 DATASET_BUNDLE_STAGE_MAP = {
-    "train": ("dataset_train",),
-    "test": ("dataset_test",),
-    "raw": ("dataset_train_raw",),
-    "init": ("dataset_init",),
-    "predict_input": ("dataset_test_raw", "dataset_test"),
-    "train_fig": ("dataset_train_fig",),
-    "test_fig": ("dataset_test_fig",),
+    "train": ("train",),
+    "test": ("test",),
+    "raw": ("train_raw",),
+    "init": ("init",),
+    "predict_input": ("test_raw", "test"),
+    "train_fig": ("fig_train",),
+    "test_fig": ("fig_test",),
 }
 
 

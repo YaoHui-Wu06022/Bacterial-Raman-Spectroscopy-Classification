@@ -274,14 +274,14 @@ def main():
     exp_dir_str, config = load_experiment_with_dataset(EXP_DIR)
     exp_dir = Path(exp_dir_str)
 
-    # 训练集根目录来自实验配置；独立测试集默认约定放在同级的 dataset_test 下
-    dataset_train_root = Path(config.dataset_root)
-    dataset_test_root = dataset_train_root.parent / "dataset_test"
+    # 训练集根目录来自实验配置；独立测试集默认约定放在同级的 test 下
+    train_root = Path(config.dataset_root)
+    test_root = train_root.parent / "test"
 
     # 构建训练数据集对象
     # expected_label、投票统计和 centroid 对比都统一落到 compare_level 上
     device = torch.device("cuda" if getattr(config, "use_gpu", False) and torch.cuda.is_available() else "cpu")
-    full_dataset = RamanDataset(dataset_train_root, augment=False, config=config)
+    full_dataset = RamanDataset(train_root, augment=False, config=config)
     compare_level = resolve_head_level_name(full_dataset, COMPARE_LEVEL)
     level_idx = full_dataset.head_name_to_idx[compare_level]
 
@@ -292,7 +292,7 @@ def main():
     label_map = full_dataset.label_maps_by_level[level_idx]
     num_classes = full_dataset.num_classes_by_level[compare_level]
 
-    # 读取训练时保存的层级元数据，确认当前 dataset_train 的类别顺序
+    # 读取训练时保存的层级元数据，确认当前 train 的类别顺序
     meta = load_hierarchy_meta(exp_dir)
     if meta is None:
         raise FileNotFoundError(f"找不到 hierarchy_meta.json：{exp_dir}")
@@ -302,7 +302,7 @@ def main():
         current_class_names = full_dataset.class_names_by_level[level_idx]
         if list(train_class_names) != list(current_class_names):
             raise ValueError(
-                f"{compare_level} 的实验类别顺序与当前 dataset_train 不一致，"
+                f"{compare_level} 的实验类别顺序与当前 train 不一致，"
                 "请确认当前数据目录与实验目录来自同一版数据"
             )
 
@@ -337,7 +337,7 @@ def main():
     train_feats_t = train_feats.t().contiguous()
 
     preprocessor = InputPreprocessor(config, device)
-    test_folders = _iter_test_folders(dataset_test_root)
+    test_folders = _iter_test_folders(test_root)
     compare_lookup = _build_compare_lookup(full_dataset, compare_level)
     signal_length = next(iter(train_mean_signal_bank.values())).shape[0]
     wavenumbers = _get_wavenumber_axis(config, signal_length)

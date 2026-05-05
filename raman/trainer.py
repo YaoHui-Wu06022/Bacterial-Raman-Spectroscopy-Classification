@@ -184,6 +184,14 @@ def _restore_training_checkpoint(
     return epoch + 1, best_score, best_epoch, patience_counter, ema_class_ce
 
 
+def _remove_training_checkpoint(checkpoint_path, model_log):
+    """训练正常结束后删除续训 checkpoint"""
+    if not checkpoint_path or not os.path.exists(checkpoint_path):
+        return
+    os.remove(checkpoint_path)
+    model_log(f"[Checkpoint] removed finished checkpoint: {checkpoint_path}")
+
+
 def _build_relpath(output_dir, path):
     """将模型绝对路径转成相对实验目录的路径"""
     return os.path.relpath(path, output_dir)
@@ -972,6 +980,7 @@ def run_training(config_obj=None, overrides=None):
                     model_log("EarlyStopping Triggered by weighted score!")
                     break
 
+            _remove_training_checkpoint(checkpoint_path, model_log)
             model_log(f"=== Best model epoch: {best_epoch} ===")
         finally:
             model_log_file.close()

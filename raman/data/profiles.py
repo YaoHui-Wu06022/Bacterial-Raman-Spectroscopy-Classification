@@ -8,15 +8,15 @@ class DatasetProfile:
     profile_id: str
     dataset_name: str
     count_root: str
-    root_init: str = "dataset_init"
-    root_init_pack: str = "dataset_init.npz"
-    root_process_raw: str = "dataset_train_raw"
-    root_train_clean: str = "dataset_train"
-    root_test_clean: str = "dataset_test"
-    root_train_fig: str = "dataset_train_fig"
-    root_test_fig: str = "dataset_test_fig"
-    root_test_raw: str = "dataset_test_raw"
-    root_init_fig: str = "dataset_init_fig"
+    root_init: str = "init"
+    root_init_pack: str = "init.npz"
+    root_process_raw: str = "train_raw"
+    root_train_clean: str = "train"
+    root_test_clean: str = "test"
+    root_train_fig: str = "fig_train"
+    root_test_fig: str = "fig_test"
+    root_test_raw: str = "test_raw"
+    root_init_fig: str = "fig_init"
     log_name: str = "log.txt"
     aliases: tuple[str, ...] = ()
 
@@ -28,25 +28,25 @@ PROFILES = {
     "bacteria": DatasetProfile(
         profile_id="bacteria",
         dataset_name="细菌",
-        count_root="dataset_train",
+        count_root="train",
         aliases=("细菌", "bacteria"),
     ),
     "resistance": DatasetProfile(
         profile_id="resistance",
         dataset_name="耐药菌",
-        count_root="dataset_train",
+        count_root="train",
         aliases=("耐药菌", "resistance"),
     ),
     "anaerobe": DatasetProfile(
         profile_id="anaerobe",
         dataset_name="厌氧菌",
-        count_root="dataset_train",
+        count_root="train",
         aliases=("厌氧菌", "anaerobe"),
     ),
     "reference": DatasetProfile(
         profile_id="reference",
         dataset_name="reference",
-        count_root="dataset_train",
+        count_root="train",
         aliases=("reference",),
     ),
 }

@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from dataset_process.pipeline import DEFAULT_PIPELINE_CONFIG
-from dataset_process.profiles import COMMON_BAD_BANDS, get_profile
+from raman.data.build import DEFAULT_PIPELINE_CONFIG
+from raman.data.profiles import COMMON_BAD_BANDS, get_profile
 
 
 class Config:
@@ -27,7 +27,7 @@ class Config:
     decay_start_ratio = 0.7
 
     # 数据集设置
-    # 只需要改这里的数据集名称，预处理设置来源于dataset_process
+    # 只需要改这里的数据集名称，预处理设置来源于 raman.data
     dataset_name = "细菌"
 
     @property

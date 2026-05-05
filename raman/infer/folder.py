@@ -3,12 +3,12 @@
 import os
 import torch
 from tqdm import tqdm
-from predict_core import load_predictor, predict_one
+from raman.infer import load_predictor, predict_one
 import re
 from raman.data import resolve_dataset_stage
 
 # 项目根目录解析（支持子目录运行）
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
 def resolve_path(path):
@@ -33,7 +33,7 @@ def get_cell_number(fname):
 
 
 # Batch prediction for one folder
-def predict_folder(folder_path, output_dir, predictor, top_k=3, parent_mask=None):
+def predict_directory(folder_path, output_dir, predictor, top_k=3, parent_mask=None):
 
     folder_path = resolve_path(folder_path)
     output_dir = resolve_path(output_dir)
@@ -154,6 +154,6 @@ if __name__ == "__main__":
         print(f"Output file  : {out}")
         print("---------------------------------------")
 
-        predict_folder(inp, out, predictor, top_k=TOP_K, parent_mask=MANUAL_PARENT_MASK)
+        predict_directory(inp, out, predictor, top_k=TOP_K, parent_mask=MANUAL_PARENT_MASK)
 
     print("\n===== All folders processed =====\n")

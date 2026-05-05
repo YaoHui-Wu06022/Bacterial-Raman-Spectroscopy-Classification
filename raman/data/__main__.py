@@ -1,4 +1,4 @@
-from dataset_process.cli import main
+from raman.data.cli import main
 
 
 if __name__ == "__main__":

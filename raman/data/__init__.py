@@ -1,13 +1,13 @@
-from .dataset import RamanDataset
+from .loader import RamanDataset
 from .paths import resolve_dataset_stage
-from .preprocess import (
+from .input import (
     InputPreprocessor,
     build_input_channels,
     build_model_input,
     build_sg_kernels,
-    load_arc_intensity,
     normalize_spectrum,
 )
+from .spectrum import load_arc_intensity
 
 __all__ = [
     "InputPreprocessor",

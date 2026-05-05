@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import Dataset
 from collections import defaultdict
 from raman.data.paths import resolve_dataset_stage
-from raman.data.preprocess import (
+from raman.data.input import (
     build_model_input,
     build_sg_kernels,
     load_arc_intensity,

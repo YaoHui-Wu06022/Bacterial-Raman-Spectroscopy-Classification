@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from dataset_process.profiles import get_profile
+from raman.data.profiles import get_profile
 from raman.config_io import dump_config_to_yaml
 
 

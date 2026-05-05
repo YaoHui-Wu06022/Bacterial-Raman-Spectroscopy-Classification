@@ -4,11 +4,11 @@
 import os
 import re
 import torch
-from predict_core import load_predictor, predict_one
+from raman.infer import load_predictor, predict_one
 from raman.data import resolve_dataset_stage
 
 # 项目根目录解析（支持子目录运行）
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
 def resolve_path(path):
