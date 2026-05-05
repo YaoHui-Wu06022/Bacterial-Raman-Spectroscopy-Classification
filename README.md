@@ -113,6 +113,7 @@ python -m dataset_process pack-init 细菌     # 打包init数据集
 python -m dataset_process unpack-init 细菌   # 还原init数据集
 python -m dataset_process classify 细菌      # 扫描init数据集，按文件名前缀规则重组数据集
 python -m dataset_process preview-init 细菌  # 对init每个文件夹做均值谱图输出，方便检查原始数据质量
+python -m dataset_process count 细菌         # 统计数据集
 python -m dataset_process preprocess-train 细菌 # 对训练数据进行清洗流程，并执行PCA清洗
 python -m dataset_process preprocess-test 细菌  # 对测试数据进行一致的清洗
 ```
