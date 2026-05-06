@@ -38,7 +38,7 @@
 ├─ evaluate.py                       # 独立测试集评估入口
 ├─ pca_svm_baseline.py               # PCA + SVM 基线评估入口
 ├─ analyze.py                        # 分析入口，支持 single / aggregate 两种模式
-├─ Independent_test.py               # 独立测试集形态、分类分布与 embedding 近邻诊断
+├─ independent_test.py               # 独立测试集形态、分类分布与 embedding 近邻诊断
 ├─ raman/
 │  ├─ config.py                      # 训练配置定义：输入、模型、损失、增强概率、优化器参数
 │  ├─ config_io.py                   # config.yaml 读写与实验配置回载
@@ -133,10 +133,9 @@
 ```
 python -m raman.data pack 细菌       # 打包init数据集
 python -m raman.data unpack 细菌     # 还原init数据集
-python -m raman.data classify 细菌   # 扫描init数据集，按文件名前缀规则重组数据集
 python -m raman.data preview 细菌    # 对init每个文件夹做均值谱图输出，方便检查原始数据质量
 python -m raman.data count 细菌      # 统计数据集
-python -m raman.data train 细菌      # 对训练数据进行清洗流程，并执行PCA清洗
+python -m raman.data train 细菌      # 先从init重组train_raw，再清洗训练数据并执行PCA清洗
 python -m raman.data test 细菌       # 对测试数据进行一致的清洗
 ```
 
@@ -2093,7 +2092,7 @@ y_pred = svm.predict(x_test_pca)
 
 ### 8.6 独立测试集分析
 
-根目录下`Independent_test.py` 面向 `test/` 的独立测试集做评估
+根目录下`independent_test.py` 面向 `test/` 的独立测试集做评估
 
 从文件夹级别判断外部测试样本与训练分布之间的接近程度
 

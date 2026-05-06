@@ -6,6 +6,7 @@ from tqdm import tqdm
 from raman.infer import load_predictor, predict_one
 import re
 from raman.data import resolve_dataset_stage
+from raman.eval.experiment import load_experiment_with_dataset
 
 # 项目根目录解析（支持子目录运行）
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -110,10 +111,25 @@ def iter_predict_folders(predict_root, one_folder=None):
     )
 
 
+def resolve_predict_root(exp_dir):
+    """从实验配置推断 test 阶段目录"""
+    _, config = load_experiment_with_dataset(exp_dir)
+    train_root = resolve_path(config.dataset_root)
+    dataset_root = os.path.dirname(train_root)
+    return os.fspath(
+        resolve_dataset_stage(
+            dataset_root,
+            stage="test",
+            project_root=BASE_DIR,
+            must_exist=True,
+        )
+    )
+
+
 if __name__ == "__main__":
 
     # 指定实验输出目录（必须包含 config_.yaml + *_model.pt）
-    EXP_DIR = resolve_path("")
+    EXP_DIR = resolve_path("output/厌氧菌/20260506_075855_95.42%")
     # 手动设置预测层级，必须显式设置为业务层
     PREDICT_LEVEL = "level_1"
 
@@ -125,16 +141,8 @@ if __name__ == "__main__":
     # }
     MANUAL_PARENT_MASK = None
 
-    # 待预测数据根目录
-    PREDICT_DATASET = resolve_path("dataset/细菌")
-    PREDICT_ROOT = os.fspath(
-        resolve_dataset_stage(
-            PREDICT_DATASET,
-            stage="test",
-            project_root=BASE_DIR,
-            must_exist=True,
-        )
-    )
+    # 待预测数据目录：从 EXP_DIR/config.yaml 的 dataset_root 自动推断到 test
+    PREDICT_ROOT = resolve_predict_root(EXP_DIR)
 
     TOP_K = 3
     PREDICT_ONE_FOLDER = None

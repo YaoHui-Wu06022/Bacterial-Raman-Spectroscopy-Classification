@@ -1,7 +1,6 @@
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
-import umap.umap_ as umap
 from matplotlib.cm import ScalarMappable
 import torch
 
@@ -129,6 +128,8 @@ def plot_embedding_hierarchical(
             默认 dict 顺序 = 层级顺序（由粗到细）
         """
     # ===== 1. 准备 UMAP embedding =====
+    import umap.umap_ as umap
+
     n_samples = feats.shape[0]
     actual_neighbors = min(n_neighbors, max(2, n_samples - 1))
     reducer = umap.UMAP(
@@ -183,70 +184,92 @@ def plot_embedding_hierarchical(
     sm = ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])  # 兼容 matplotlib 的要求
 
-    # ===== 4. test-only 离群点检测（统计定义） =====
-    outlier_mask = None
-
-    if split is not None:
-        from sklearn.neighbors import NearestNeighbors
-
-        k = min(15, len(emb_2d) - 1)
-        nbrs = NearestNeighbors(n_neighbors=k).fit(emb_2d)
-        neigh_idx = nbrs.kneighbors(return_distance=False)
-
-        outlier_mask = np.zeros(len(emb_2d), dtype=bool)
-
-        for i in range(len(emb_2d)):
-            if split[i] == 1:  # test only
-                train_ratio = np.mean(split[neigh_idx[i]] == 0)
-                if train_ratio < 0.2:
-                    outlier_mask[i] = True
-
-    # ===== 5. marker 池 =====
+    # ===== 4. marker 池 =====
     markers = ["o", "s", "^", "D", "P", "X", "*", "<", ">"]
 
-    # ===== 6. 绘图 =====
-    fig, ax = plt.subplots(figsize=(8, 6))
+    def _scatter_subset(ax, sample_mask, alpha=0.85):
+        """按当前子图的样本 mask 绘制，同一类别映射保持全局一致"""
+        has_points = False
+        for i, c in enumerate(unique_children):
+            if child_labels is not None:
+                idx = sample_mask & (child_labels == c)
+            else:
+                idx = sample_mask
 
-    for i, c in enumerate(unique_children):
-        if child_labels is not None:
-            idx = (child_labels == c)
-        else:
-            idx = np.ones(len(parent_labels), dtype=bool)
+            if not np.any(idx):
+                continue
 
-        alpha = (
-            np.where(split[idx] == 0, 0.85, 0.6) if split is not None else 0.85
-        )
+            has_points = True
+            ax.scatter(
+                emb_2d[idx, 0],
+                emb_2d[idx, 1],
+                c=parent_labels[idx],
+                cmap=cmap,
+                norm=norm,
+                marker=markers[i % len(markers)],
+                s=18,
+                alpha=alpha,
+                edgecolors="none",
+            )
 
-        ax.scatter(
-            emb_2d[idx, 0],
-            emb_2d[idx, 1],
-            c=parent_labels[idx],
-            cmap=cmap,
-            norm=norm,
-            marker=markers[i % len(markers)],
-            s=18,
-            alpha=alpha,
-            edgecolors="none",
-        )
+        if not has_points:
+            ax.text(
+                0.5,
+                0.5,
+                "No samples",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+                color="0.5",
+            )
 
-    # ===== 7. 标题 / 坐标 =====
+    # ===== 5. 标题 / 坐标 =====
     if child_level is None:
         title = f"{method_name}: {parent_level}"
     else:
         title = f"{method_name}: {parent_level} (color) / {child_level} (marker)"
 
-    ax.set_title(title)
-    ax.set_xlabel(f"{method_name}-1")
-    ax.set_ylabel(f"{method_name}-2")
-    plt.tight_layout()
+    x_min, x_max = emb_2d[:, 0].min(), emb_2d[:, 0].max()
+    y_min, y_max = emb_2d[:, 1].min(), emb_2d[:, 1].max()
+    x_pad = max((x_max - x_min) * 0.05, 1e-3)
+    y_pad = max((y_max - y_min) * 0.05, 1e-3)
+    xlim = (x_min - x_pad, x_max + x_pad)
+    ylim = (y_min - y_pad, y_max + y_pad)
 
-    # ===== 8. Colorbar =====
-    cbar = plt.colorbar(
-        sm,
-        ax=ax,
-        fraction=0.046,
-        pad=0.04,
-    )
+    # ===== 6. 绘图 =====
+    if split is not None:
+        fig, axes = plt.subplots(
+            1,
+            2,
+            figsize=(12, 6),
+            sharex=True,
+            sharey=True,
+            constrained_layout=True,
+        )
+        plot_specs = [
+            ("Train", split == 0, 0.85),
+            ("Test", split == 1, 0.85),
+        ]
+        for ax, (split_name, sample_mask, alpha) in zip(axes, plot_specs):
+            _scatter_subset(ax, sample_mask, alpha=alpha)
+            ax.set_title(f"{title} - {split_name}")
+            ax.set_xlabel(f"{method_name}-1")
+            ax.set_xlim(xlim)
+            ax.set_ylim(ylim)
+        axes[0].set_ylabel(f"{method_name}-2")
+        cbar_ax = axes
+    else:
+        fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+        _scatter_subset(ax, np.ones(len(parent_labels), dtype=bool), alpha=0.85)
+        ax.set_title(title)
+        ax.set_xlabel(f"{method_name}-1")
+        ax.set_ylabel(f"{method_name}-2")
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+        cbar_ax = ax
+
+    # ===== 7. Colorbar =====
+    cbar = fig.colorbar(sm, ax=cbar_ax, fraction=0.046, pad=0.04)
     cbar.set_label(parent_level, rotation=90)
     if label_names and parent_level in label_names:
         names = label_names[parent_level]

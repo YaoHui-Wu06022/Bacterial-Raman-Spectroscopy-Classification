@@ -1,12 +1,7 @@
 import argparse
 from pathlib import Path
 
-from raman.data.build import (
-    build_test,
-    build_train,
-    classify,
-    preview,
-)
+from raman.data.build import build_test, build_train, classify, preview
 from raman.data.archive import pack_init, unpack_init
 from raman.data.count import count_dataset, print_results
 from raman.data.profiles import get_dataset_dir, get_profile
@@ -45,13 +40,6 @@ def run_pack(args):
     )
 
 
-def run_classify(args):
-    """执行 init 到 train_raw 的按前缀归类"""
-    profile = get_profile(args.dataset)
-    dataset_dir = ensure_dataset_layout(profile)
-    classify(profile, dataset_dir)
-
-
 def run_unpack(args):
     """执行 init.npz 解包"""
     profile = get_profile(args.dataset)
@@ -64,9 +52,10 @@ def run_unpack(args):
 
 
 def run_train(args):
-    """构建训练集预处理结果"""
+    """先归类 init 到 train_raw，再构建训练集预处理结果"""
     profile = get_profile(args.dataset)
     dataset_dir = ensure_dataset_layout(profile)
+    classify(profile, dataset_dir)
     build_train(profile, dataset_dir)
 
 
@@ -101,9 +90,8 @@ def build_parser():
     for command, handler, help_text in (
         ("pack", run_pack, "Pack init into init.npz"),
         ("unpack", run_unpack, "Unpack init.npz into init"),
-        ("classify", run_classify, "Classify init into train_raw"),
         ("preview", run_preview, "Generate per-folder preview figures from init"),
-        ("train", run_train, "Build train from train_raw"),
+        ("train", run_train, "Classify init into train_raw, then build train"),
         ("test", run_test, "Build test from test_raw"),
         ("count", run_count, "Count arc_data files in a dataset subdir"),
     ):

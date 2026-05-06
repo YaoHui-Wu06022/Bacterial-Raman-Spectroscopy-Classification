@@ -8,19 +8,23 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
+from tqdm import tqdm
 
 from raman.data import InputPreprocessor, RamanDataset
+from raman.eval.common import select_logits
 from raman.eval.experiment import (
     load_experiment_with_dataset,
     load_hierarchy_meta,
     resolve_head_level_name,
 )
 from raman.eval.runtime import build_experiment_runtime
+from raman.infer.folder import iter_predict_folders, resolve_predict_root
+from raman.data.spectrum import build_wavenumber_axis
 from raman.training import load_split_files
 
 
 # 手动设置实验目录与分析层级
-EXP_DIR = "output/细菌/20260417_073717_6分类"
+EXP_DIR = "output/厌氧菌/20260506_075855_95.42%"
 COMPARE_LEVEL = "level_1"
 TOP_K = 3
 
@@ -59,15 +63,12 @@ def _infer_expected_label(folder_name: str, compare_lookup: list[tuple[str, str]
 
 def _iter_test_folders(test_root: Path) -> dict[str, list[Path]]:
     folders = {}
-    for folder in sorted(path for path in test_root.iterdir() if path.is_dir()):
+    for folder in iter_predict_folders(str(test_root)):
+        folder = Path(folder)
         paths = sorted(folder.rglob("*.arc_data"))
         if paths:
             folders[folder.name] = paths
     return folders
-
-
-def _l2_normalize_rows(x: torch.Tensor) -> torch.Tensor:
-    return F.normalize(x, p=2, dim=1)
 
 
 def _topk_counter(counter: Counter, inv_label_map: dict[int, str], total: int, top_k: int) -> list[dict]:
@@ -81,12 +82,6 @@ def _topk_counter(counter: Counter, inv_label_map: dict[int, str], total: int, t
             }
         )
     return items
-
-
-def _get_wavenumber_axis(config, length: int) -> np.ndarray:
-    if hasattr(config, "cut_min") and hasattr(config, "cut_max"):
-        return np.linspace(float(config.cut_min), float(config.cut_max), length, dtype=np.float32)
-    return np.arange(length, dtype=np.float32)
 
 
 def _plot_spectrum_comparison(
@@ -181,7 +176,11 @@ def _build_train_embedding_bank(
     labels_list = []
 
     with torch.no_grad():
-        for start in range(0, len(train_indices), batch_size):
+        for start in tqdm(
+            range(0, len(train_indices), batch_size),
+            desc="Building train embedding bank",
+            unit="batch",
+        ):
             batch_indices = train_indices[start : start + batch_size]
             valid_indices = [int(i) for i in batch_indices if int(dataset.level_labels[int(i), level_idx]) >= 0]
             if not valid_indices:
@@ -189,7 +188,7 @@ def _build_train_embedding_bank(
 
             xs = torch.stack([dataset[int(i)][0] for i in valid_indices], dim=0).to(device)
             _, feat = model(xs, return_feat=True)
-            feat = _l2_normalize_rows(feat).cpu()
+            feat = F.normalize(feat, p=2, dim=1).cpu()
 
             feats_list.append(feat)
             labels_list.append(dataset.level_labels[valid_indices, level_idx].astype(np.int64))
@@ -211,7 +210,7 @@ def _build_train_mean_signal_bank(
     level_idx = dataset.head_name_to_idx[compare_level]
     signal_bank: dict[int, list[np.ndarray]] = {}
 
-    for idx in train_indices:
+    for idx in tqdm(train_indices, desc="Building train mean spectra", unit="sample"):
         idx = int(idx)
         class_id = int(dataset.level_labels[idx, level_idx])
         if class_id < 0:
@@ -236,7 +235,7 @@ def _build_class_centroids(train_feats: torch.Tensor, train_labels: np.ndarray, 
         if not np.any(mask):
             continue
         center = train_feats[mask].mean(dim=0, keepdim=True)
-        centroids[class_id] = _l2_normalize_rows(center)[0]
+        centroids[class_id] = F.normalize(center, p=2, dim=1)[0]
         valid_mask[class_id] = True
 
     if not valid_mask.any():
@@ -256,12 +255,13 @@ def _collect_folder_embeddings(
     signals = []
 
     with torch.no_grad():
-        for path in paths:
+        for path in tqdm(paths, desc="Collecting folder embeddings", unit="spectrum", leave=False):
             x = preprocessor(str(path))
-            logits, feat = model(x.to(device), return_feat=True)
+            pred, feat = model(x.to(device), return_feat=True)
+            logits = select_logits(pred)
             probs = torch.softmax(logits, dim=1)[0]
             preds.append(int(torch.argmax(probs).item()))
-            feats.append(_l2_normalize_rows(feat)[0].cpu())
+            feats.append(F.normalize(feat, p=2, dim=1)[0].cpu())
             signals.append(x[0, 0].detach().cpu().numpy().astype(np.float32, copy=False))
 
     folder_feats = torch.stack(feats, dim=0)
@@ -276,7 +276,7 @@ def main():
 
     # 训练集根目录来自实验配置；独立测试集默认约定放在同级的 test 下
     train_root = Path(config.dataset_root)
-    test_root = train_root.parent / "test"
+    test_root = Path(resolve_predict_root(exp_dir))
 
     # 构建训练数据集对象
     # expected_label、投票统计和 centroid 对比都统一落到 compare_level 上
@@ -338,9 +338,10 @@ def main():
 
     preprocessor = InputPreprocessor(config, device)
     test_folders = _iter_test_folders(test_root)
+    print(f"Found {len(test_folders)} test folders under {test_root}")
     compare_lookup = _build_compare_lookup(full_dataset, compare_level)
     signal_length = next(iter(train_mean_signal_bank.values())).shape[0]
-    wavenumbers = _get_wavenumber_axis(config, signal_length)
+    wavenumbers = build_wavenumber_axis(signal_length, config)
 
     out_dir = exp_dir / "embedding_compare"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -351,7 +352,11 @@ def main():
     # 2. 邻域判断：模型投票 / embedding 最近邻投票
     # 3. 中心判断：测试文件夹中心与各类 centroid 的相似度
     rows = []
-    for folder_name, paths in test_folders.items():
+    for folder_name, paths in tqdm(
+        test_folders.items(),
+        desc="Processing test folders",
+        unit="folder",
+    ):
         folder_out_dir = out_dir / folder_name
         folder_out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -378,7 +383,7 @@ def main():
 
         # centroid 分析：把整个测试文件夹的 embedding 先求一个中心
         # 再和各类别训练中心做余弦相似度，适合看“这批样本整体最像谁”
-        folder_centroid = _l2_normalize_rows(folder_feats.mean(dim=0, keepdim=True))[0]
+        folder_centroid = F.normalize(folder_feats.mean(dim=0, keepdim=True), p=2, dim=1)[0]
         centroid_scores = torch.matmul(class_centroids, folder_centroid)
         centroid_topk_idx = torch.argsort(centroid_scores, descending=True)[:TOP_K].cpu().numpy().tolist()
         centroid_items = [

@@ -409,15 +409,6 @@ def _get_bad_bands(config):
         return _normalize_bad_bands(config.bad_bands)
     return []
 
-def _apply_bad_bands(wn, bad_bands):
-    # 删除坏段对应的波数区间
-    if not bad_bands:
-        return wn
-    mask = np.ones_like(wn, dtype=bool)
-    for b0, b1 in bad_bands:
-        mask &= ~((wn >= b0) & (wn <= b1))
-    return wn[mask]
-
 def _estimate_gap_indices(wavenumbers, gap_factor=1.5):
     # 通过相邻步长突变估计“坏段”缺口位置
     if wavenumbers is None or len(wavenumbers) < 2:
@@ -431,26 +422,6 @@ def _estimate_gap_indices(wavenumbers, gap_factor=1.5):
         return []
     gap_idx = np.where(np.diff(wavenumbers) > step * gap_factor)[0]
     return gap_idx.tolist()
-
-def build_wavenumber_axis(length, config):
-    """构建波数坐标轴（根据 config.cut_min / delta）"""
-    bad_bands = _get_bad_bands(config)
-    if hasattr(config, "cut_min") and hasattr(config, "cut_max"):
-        if hasattr(config, "target_points"):
-            try:
-                target_points = int(config.target_points)
-            except Exception:
-                target_points = None
-            if target_points:
-                # 先按预处理参数生成完整波数轴，再删掉坏段，尽量和实际输入长度严格对齐
-                wn_full = np.linspace(config.cut_min, config.cut_max, target_points)
-                wn_full = _apply_bad_bands(wn_full, bad_bands)
-                if wn_full.shape[0] == length:
-                    return wn_full
-        if hasattr(config, "delta"):
-            return config.cut_min + config.delta * np.arange(length)
-        return np.linspace(config.cut_min, config.cut_max, length)
-    return np.arange(length)
 
 def plot_band_importance_heatmap(
     importance,

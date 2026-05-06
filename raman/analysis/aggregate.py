@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
 
+from raman.data.spectrum import build_wavenumber_axis
 from raman.eval.experiment import load_hierarchy_meta
 from raman.eval.runtime import build_experiment_runtime
 
@@ -17,7 +18,6 @@ from .ig import (
     _effective_label_names,
     _get_bad_bands,
     _plot_channel_importance,
-    build_wavenumber_axis,
     compute_band_importance_from_ig,
     compute_channel_importance_from_ig,
     compute_class_band_importance_ig,

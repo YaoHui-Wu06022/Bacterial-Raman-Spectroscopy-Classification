@@ -69,6 +69,37 @@ def build_valid_mask(wn, bad_bands):
     return valid_mask
 
 
+def get_config_bad_bands(config):
+    """从配置对象中读取坏波段设置"""
+    if hasattr(config, "BAD_BANDS"):
+        return normalize_bad_bands(config.BAD_BANDS)
+    if hasattr(config, "bad_bands"):
+        return normalize_bad_bands(config.bad_bands)
+    return ()
+
+
+def build_wavenumber_axis(length, config):
+    """根据预处理配置构造和模型输入长度对齐的波数轴"""
+    bad_bands = get_config_bad_bands(config)
+    if hasattr(config, "cut_min") and hasattr(config, "cut_max"):
+        if hasattr(config, "target_points"):
+            try:
+                target_points = int(config.target_points)
+            except Exception:
+                target_points = None
+            if target_points:
+                wn_full = np.linspace(config.cut_min, config.cut_max, target_points)
+                keep_mask = build_valid_mask(wn_full, bad_bands)
+                if keep_mask is not None:
+                    wn_full = wn_full[keep_mask]
+                if wn_full.shape[0] == length:
+                    return wn_full
+        if hasattr(config, "delta"):
+            return config.cut_min + config.delta * np.arange(length)
+        return np.linspace(config.cut_min, config.cut_max, length)
+    return np.arange(length)
+
+
 def snv(data, eps=EPS):
     """对单条或多条光谱做 SNV 标准化"""
     data = np.asarray(data, dtype=np.float32)

@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from raman.data.archive import (
+    PackedArcDataset,
     iter_arc_dirs,
     iter_init_groups,
     resolve_init_input,

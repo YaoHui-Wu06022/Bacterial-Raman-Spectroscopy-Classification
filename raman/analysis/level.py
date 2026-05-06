@@ -3,6 +3,7 @@ import os
 import torch
 
 from raman.eval.runtime import build_experiment_runtime
+from raman.data.spectrum import build_wavenumber_axis
 
 from .embedding import collect_embeddings_train_test, plot_embedding_hierarchical
 from .gradcam import (
@@ -14,7 +15,6 @@ from .ig import (
     _effective_label_names,
     _get_bad_bands,
     _plot_channel_importance,
-    build_wavenumber_axis,
     compute_band_importance_from_ig,
     compute_channel_importance_from_ig,
     compute_class_mean_spectrum,
