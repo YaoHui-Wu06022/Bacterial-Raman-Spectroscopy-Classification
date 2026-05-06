@@ -2,6 +2,7 @@ import os
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader, Subset
 
 from raman.eval.experiment import load_hierarchy_meta
 from raman.eval.runtime import build_experiment_runtime
@@ -56,7 +57,7 @@ def run_aggregate_analysis(
         global_class_names = full_dataset.class_names_by_level[head_index]
         global_name_to_idx = None
 
-    # ---------------- 输出目录 ----------------
+    # 输出目录
     analysis_dir = os.path.join(exp_dir, f"{analysis_level}_aggregate_analysis")
     fig_dir = os.path.join(analysis_dir, "figures")
     log_dir = os.path.join(analysis_dir, "logs")
@@ -72,7 +73,7 @@ def run_aggregate_analysis(
 
     log(f"Aggregate analysis for {analysis_level} over {len(tasks)} parents.")
 
-    # ---------------- 模型与统计缓存 ----------------
+    # 模型与聚合统计缓存
     channel_names = [f"{config.norm_method}"]
     if config.smooth_use:
         channel_names.append("smooth")
@@ -129,14 +130,14 @@ def run_aggregate_analysis(
             model_path=task["model_path"],
         )
 
-        # warmup forward
+        # 先前向一次，初始化 Grad-CAM 所需状态
         sample_x, _, _ = next(iter(train_loader))
         sample_x = sample_x.to(device)
         _ = model(sample_x)
 
         heatmap_loader = train_loader if heatmap_cfg.use_train_loader else test_loader
 
-        # ----- IG：先生成原始归因结果，再分别汇总通道/波段重要性 -----
+        # IG 先生成原始归因结果，再分别汇总通道和波段重要性
         band_num_classes = global_num_classes if inherit_missing else task["num_classes"]
         ig_batches = compute_ig_batches(
             model,
@@ -163,7 +164,7 @@ def run_aggregate_analysis(
         else:
             agg_channel += ch_imp * weight
 
-        # ----- layer importance -----
+        # 层级重要性
         analyzable, groups = collect_analyzable_layers(model)
         analyzer = LayerGradCAMAnalyzer(model, device)
         for name, layer in analyzable.items():
@@ -183,7 +184,7 @@ def run_aggregate_analysis(
 
         weight_total += weight
 
-        # ----- mean spectrum -----
+        # 类别平均光谱
         mean_spectra, mean_ct = compute_class_mean_spectrum(
             heatmap_loader,
             device,
@@ -286,11 +287,11 @@ def run_aggregate_analysis(
                     c = int(parent_counts[p_idx])
                     if c <= 0:
                         continue
-                    # -------- band importance：继承 parent --------
+                    # 波段重要性继承 parent
                     band_total[child_idx] += parent_importance[p_idx] * c
                     band_counts[child_idx] += c
 
-                    # -------- mean spectrum：继承 parent --------
+                    # 平均光谱继承 parent
                     mc = int(parent_mean_ct[p_idx])
                     if mc > 0:
                         mean_total[child_idx] += parent_mean_spectra[p_idx] * mc
@@ -325,7 +326,7 @@ def run_aggregate_analysis(
                 mean_total[i] = global_mean[i] * c
                 mean_counts[i] = c
 
-        # Fill missing band importance by inheriting from parent-level per-parent models
+        # 缺失类别从上一级 parent 模型继承波段重要性
         if band_total is not None:
             missing_band = band_counts == 0
             if missing_band.any():
@@ -432,7 +433,7 @@ def run_aggregate_analysis(
         log_file.close()
         return
 
-    # ----- finalize aggregate channel/layer -----
+    # 输出聚合后的通道和层级重要性
     agg_channel = agg_channel / float(weight_total)
     agg_channel = agg_channel / (agg_channel.sum() + 1e-8)
     _plot_channel_importance(
@@ -452,7 +453,7 @@ def run_aggregate_analysis(
     )
     log(f"Saved aggregate layer importance: {os.path.join(fig_dir, 'layer_importance_aggregate.png')}")
 
-    # ----- finalize aggregate band importance -----
+    # 输出聚合后的波段重要性
     valid_counts = np.maximum(band_counts[:, None], 1)
     band_avg = band_total / valid_counts
     mean_avg = mean_total / np.maximum(mean_counts[:, None], 1)

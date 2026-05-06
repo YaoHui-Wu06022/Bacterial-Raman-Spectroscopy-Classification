@@ -13,7 +13,7 @@ from raman.training.session import (
     save_hierarchy_meta,
     set_seed,
 )
-from raman.training.single_model import SingleModelTrainContext, train_single_model
+from raman.training.model_loop import ModelTrainContext, train_model
 from raman.training.split import (
     apply_train_filter,
     build_label_map_np,
@@ -264,7 +264,7 @@ def run_training(config_obj=None, overrides=None):
 
     level_models = {}
     parent_models = {}
-    train_context = SingleModelTrainContext(
+    train_context = ModelTrainContext(
         config=config,
         log=log,
         runtime_dirs=runtime_dirs,
@@ -289,7 +289,7 @@ def run_training(config_obj=None, overrides=None):
         parent_to_children = full_dataset.parent_to_children.get(level_name, {})
         # 顶层或非按父类训练：训练全局单模型
         if (parent_name is None) or (not TRAIN_PER_PARENT):
-            result = train_single_model(
+            result = train_model(
                 train_context,
                 model_tag=level_name,
                 level_name=level_name,
@@ -354,7 +354,7 @@ def run_training(config_obj=None, overrides=None):
                     full_dataset.num_classes_by_level[level_name]
                 )
 
-                result = train_single_model(
+                result = train_model(
                     train_context,
                     model_tag=f"{level_name}_parent_{parent_idx}",
                     level_name=level_name,

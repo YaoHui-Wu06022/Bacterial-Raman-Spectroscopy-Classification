@@ -26,6 +26,7 @@ DEFAULT_DATASET_SUBDIRS = (
 
 
 def ensure_dataset_layout(profile):
+    """确保目标数据集的标准阶段目录存在"""
     dataset_dir = get_dataset_dir(profile, PROJECT_ROOT)
     dataset_dir.mkdir(parents=True, exist_ok=True)
     for name in DEFAULT_DATASET_SUBDIRS:
@@ -34,6 +35,7 @@ def ensure_dataset_layout(profile):
 
 
 def run_pack(args):
+    """执行 init 目录打包"""
     profile = get_profile(args.dataset)
     dataset_dir = ensure_dataset_layout(profile)
     pack_init(
@@ -44,12 +46,14 @@ def run_pack(args):
 
 
 def run_classify(args):
+    """执行 init 到 train_raw 的按前缀归类"""
     profile = get_profile(args.dataset)
     dataset_dir = ensure_dataset_layout(profile)
     classify(profile, dataset_dir)
 
 
 def run_unpack(args):
+    """执行 init.npz 解包"""
     profile = get_profile(args.dataset)
     dataset_dir = ensure_dataset_layout(profile)
     unpack_init(
@@ -60,24 +64,28 @@ def run_unpack(args):
 
 
 def run_train(args):
+    """构建训练集预处理结果"""
     profile = get_profile(args.dataset)
     dataset_dir = ensure_dataset_layout(profile)
     build_train(profile, dataset_dir)
 
 
 def run_preview(args):
+    """从 init 生成预览图"""
     profile = get_profile(args.dataset)
     dataset_dir = ensure_dataset_layout(profile)
     preview(profile, dataset_dir)
 
 
 def run_test(args):
+    """构建测试集预处理结果"""
     profile = get_profile(args.dataset)
     dataset_dir = ensure_dataset_layout(profile)
     build_test(profile, dataset_dir)
 
 
 def run_count(args):
+    """统计某个数据阶段下的光谱文件数量"""
     profile = get_profile(args.dataset)
     dataset_dir = ensure_dataset_layout(profile)
     target_dir = dataset_dir / (args.subdir or profile.count_root)
@@ -86,6 +94,7 @@ def run_count(args):
 
 
 def build_parser():
+    """构造 raman.data 命令行参数解析器"""
     parser = argparse.ArgumentParser(description="Unified data prep entrypoint.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -110,6 +119,7 @@ def build_parser():
 
 
 def main(argv=None):
+    """运行数据处理 CLI"""
     parser = build_parser()
     args = parser.parse_args(argv)
     args.func(args)

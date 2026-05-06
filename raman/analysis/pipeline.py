@@ -14,7 +14,7 @@ from raman.training import (
     load_split_files,
 )
 from .aggregate import run_aggregate_analysis
-from .single import run_single_analysis
+from .level import run_level_analysis
 from .tasks import build_analysis_tasks
 
 
@@ -38,15 +38,6 @@ class AnalysisOverrides:
     parent_idx: int | str | None = None
     inherit_missing_levels: bool = False
     fallback_to_single: bool = True
-
-def _ensure_heatmap_cfg(cfg):
-    # None 时返回默认热图配置，避免外部传空
-    return cfg if cfg is not None else HeatmapConfig()
-
-
-
-
-
 
 def build_analysis_context(
     exp_dir,
@@ -143,7 +134,7 @@ def run_analysis_pipeline(overrides=None, heatmap_cfg=None):
     mode = str(overrides.mode).lower()
     if mode not in ("single", "aggregate"):
         raise ValueError(f"未知分析模式：{overrides.mode}，可选值为：single / aggregate")
-    heatmap_cfg = _ensure_heatmap_cfg(heatmap_cfg)
+    heatmap_cfg = heatmap_cfg if heatmap_cfg is not None else HeatmapConfig()
 
     ctx = build_analysis_context(
         overrides.exp_dir,
@@ -162,7 +153,7 @@ def run_analysis_pipeline(overrides=None, heatmap_cfg=None):
             print(f"Running per-parent analysis for {len(ctx['tasks'])} parents.")
 
         for task in ctx["tasks"]:
-            run_single_analysis(
+            run_level_analysis(
                 ctx["exp_dir"],
                 ctx["config"],
                 ctx["full_dataset"],
@@ -192,7 +183,7 @@ def run_analysis_pipeline(overrides=None, heatmap_cfg=None):
                 print(f"Running per-parent analysis for {len(ctx['tasks'])} parents.")
 
             for task in ctx["tasks"]:
-                run_single_analysis(
+                run_level_analysis(
                     ctx["exp_dir"],
                     ctx["config"],
                     ctx["full_dataset"],

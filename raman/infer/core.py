@@ -10,6 +10,7 @@ from raman.eval.runtime import build_experiment_runtime
 
 
 def load_predictor(exp_dir, device, predict_level=None):
+    """读取实验目录并构建单条光谱预测所需的运行时上下文"""
     exp_dir = os.fspath(resolve_project_path(exp_dir))
     config = load_experiment(exp_dir)
     if not predict_level:
@@ -55,6 +56,7 @@ def load_predictor(exp_dir, device, predict_level=None):
 
 
 def predict_one(path, predictor, top_k=3, parent_mask=None):
+    """对单条光谱执行级联预测并返回 top-k 类别概率"""
     x = predictor["preprocessor"](path)
 
     runtime = predictor["runtime"]

@@ -1,31 +1,12 @@
-import inspect
-
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import umap.umap_ as umap
 from matplotlib.cm import ScalarMappable
-from sklearn.manifold import TSNE
 import torch
 
-def make_tsne_compatible(**kwargs):
-    """
-    根据 sklearn 当前版本自动选择 TSNE 支持的参数
-    - 老版本：n_iter
-    - 新版本：max_iter
-    """
-    sig = inspect.signature(TSNE.__init__)
-    params = sig.parameters
-
-    # 统一处理迭代次数参数
-    if "max_iter" in params and "n_iter" in kwargs:
-        kwargs["max_iter"] = kwargs.pop("n_iter")
-    elif "n_iter" in params and "max_iter" in kwargs:
-        kwargs["n_iter"] = kwargs.pop("max_iter")
-
-    return TSNE(**kwargs)
-
 def _fill_missing_labels(hier, level_names, missing_tag):
+    """把缺失层级标签统一填成可视化用的占位名称"""
     out = {}
     for name in level_names:
         vals = list(hier.get(name, []))
@@ -47,6 +28,7 @@ def collect_embeddings_train_test(
     level_names=None,
     return_label_names=False,
 ):
+    """收集 train/test 的模型 embedding，并保留业务层级标签用于联合可视化"""
     model.eval()
 
     feats_all = []
@@ -64,7 +46,7 @@ def collect_embeddings_train_test(
     missing_tag = getattr(dataset, "MISSING_TAG", "__missing__")
 
     with torch.no_grad():
-        # -------- train --------
+        # 训练集样本标记为 split=0
         for x, _, hier in train_loader:
             x = x.to(device)
             if inherit_missing:
@@ -91,7 +73,7 @@ def collect_embeddings_train_test(
                 else:
                     labels_all[k].append(hier_labels[k].numpy())
 
-        # -------- test --------
+        # 测试集样本标记为 split=1
         for x, _, hier in test_loader:
             x = x.to(device)
             if inherit_missing:
@@ -134,11 +116,8 @@ def plot_embedding_hierarchical(
     feats,
     hier_labels: dict,
     save_path,
-    method="umap",
     n_neighbors=15,
     min_dist=0.1,
-    tsne_perplexity=30,
-    tsne_iter=1000,
     random_state=42,
     label_names=None,
 ):
@@ -149,38 +128,17 @@ def plot_embedding_hierarchical(
             e.g. {"level_1": level1_ids, "level_2": level2_ids}
             默认 dict 顺序 = 层级顺序（由粗到细）
         """
-    # ===== 1. 准备 embedding =====
+    # ===== 1. 准备 UMAP embedding =====
     n_samples = feats.shape[0]
-    method = method.lower()
-
-    if method == "umap":
-        actual_neighbors = min(n_neighbors, max(2, n_samples - 1))
-        reducer = umap.UMAP(
-            n_neighbors=actual_neighbors,
-            min_dist=min_dist,
-            n_components=2,
-            random_state=random_state,
-        )
-        emb_2d = reducer.fit_transform(feats)
-        method_name = "UMAP"
-    elif method == "tsne":
-        if n_samples < 3:
-            raise ValueError("t-SNE requires at least 3 samples.")
-        perplexity = min(tsne_perplexity, max(2, (n_samples - 1) // 3))
-        perplexity = min(perplexity, n_samples - 1)
-
-        reducer = make_tsne_compatible(
-            n_components=2,
-            perplexity=perplexity,
-            learning_rate="auto",
-            init="pca",
-            n_iter=tsne_iter,
-            random_state=random_state,
-        )
-        emb_2d = reducer.fit_transform(feats)
-        method_name = "t-SNE"
-    else:
-        raise ValueError(f"Unknown embedding method: {method}")
+    actual_neighbors = min(n_neighbors, max(2, n_samples - 1))
+    reducer = umap.UMAP(
+        n_neighbors=actual_neighbors,
+        min_dist=min_dist,
+        n_components=2,
+        random_state=random_state,
+    )
+    emb_2d = reducer.fit_transform(feats)
+    method_name = "UMAP"
 
     # ===== 2. 解析层级 =====
     levels = [k for k in hier_labels.keys() if k != "split"]

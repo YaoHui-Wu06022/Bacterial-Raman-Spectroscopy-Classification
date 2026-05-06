@@ -105,10 +105,6 @@ class ExperimentRuntime:
         self.level_model_cache[level_name] = model
         return model
 
-    def load_single_level_model(self, level_name, num_classes=None):
-        """给单层分析/诊断场景提供统一入口"""
-        return self.get_level_model(level_name, num_classes=num_classes)
-
     def prepare_cascade_step(
         self,
         level_name,
@@ -118,6 +114,7 @@ class ExperimentRuntime:
         level_class_names,
         parent_to_children,
     ):
+        """为级联推理选择当前层的模型路径或单子类直通策略"""
         if parent_pred is None:
             return {
                 "mode": "global",

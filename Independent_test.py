@@ -307,7 +307,7 @@ def main():
             )
 
     runtime = build_experiment_runtime(str(exp_dir), device, config=config, meta=meta)
-    model = runtime.load_single_level_model(compare_level, num_classes=num_classes)
+    model = runtime.get_level_model(compare_level, num_classes=num_classes)
 
     # 如果实验目录里已经保存了 train/test 切分，就优先复用训练划分
     # 这样最近邻库、类别中心和平均谱形都和当时训练时看到的训练集保持一致

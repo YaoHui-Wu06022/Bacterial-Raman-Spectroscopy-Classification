@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
+import os
 
 from raman.eval.common import mask_logits_by_parent
 from raman.model import RamanClassifier1D
@@ -91,7 +92,9 @@ def _compute_severity_weights(prob, targets):
     return severity_w
 
 @dataclass
-class SingleModelTrainContext:
+class ModelTrainContext:
+    """单模型训练所需的共享上下文，避免训练入口传递过长参数列表"""
+
     config: object
     log: object
     runtime_dirs: dict
@@ -107,7 +110,7 @@ class SingleModelTrainContext:
     decay_start_ratio: float
     zero_loss: object
 
-def train_single_model(
+def train_model(
     ctx,
     model_tag,
     level_name,
@@ -120,7 +123,7 @@ def train_single_model(
     label_map_np=None,
     use_parent_mask=False,
 ):
-    # 单层（或父类子模型）训练入口
+    """训练一个全局层模型或一个 parent 内子模型"""
     config = ctx.config
     log = ctx.log
     runtime_dirs = ctx.runtime_dirs
@@ -149,9 +152,6 @@ def train_single_model(
     train_subset = Subset(train_dataset, train_indices)
     test_subset = Subset(test_dataset, test_indices) if len(test_indices) > 0 else None
 
-    # --------------------------------------------------------
-    # 数据加载器
-    # --------------------------------------------------------
     train_loader = DataLoader(
         train_subset,
         **_build_loader_kwargs(config, device, train=True),
@@ -169,7 +169,6 @@ def train_single_model(
             "在切分后都能为验证集提供样本"
         )
 
-    # 单层模型
     model = RamanClassifier1D(
         num_classes=num_classes,
         config=config
@@ -189,14 +188,14 @@ def train_single_model(
         device=device,
     )
 
-    # 主分类损失使用 Focal Loss，并忽略无效标签
+    # 主分类损失使用 Focal Loss，EMA 启用后会替换类别权重
     criterion = FocalLoss(
         gamma=config.gamma,
         weight=base_class_weights,  # EMA 动态权重启用后会替换为 ema_class_weights
         ignore_index=-1,
     )
 
-    # EMA 动态类别权重相关
+    # EMA 只统计类别难度，权重延迟启用
     train_state = TrainingState(ema_class_ce=torch.ones(num_classes, device=device))
     ema_alpha = 0.9
     lambda_diff = 0.3
@@ -232,16 +231,13 @@ def train_single_model(
         def supcon_loss_fn(feat, hier_labels):
             return zero_loss(feat)
 
-    # 按模块分组学习率：输入 stem 用更小学习率
+    # 输入 stem 用较小学习率，分类头用较大学习率
     group_conv = []
     group_head = []
     group_backbone = []
 
-    def is_stem_param(param_name):
-        return param_name.startswith("stem_branches")
-
     for name, p in model.named_parameters():
-        if is_stem_param(name):
+        if name.startswith("stem_branches"):
             group_conv.append(p)
         elif name.startswith("head"):
             group_head.append(p)
@@ -267,7 +263,7 @@ def train_single_model(
     train_state.model_path = best_model_path
     train_state.se_stats_path = best_se_stats_path
     train_state.checkpoint_path = checkpoint_path
-    # 将全局类别索引映射成当前子模型使用的局部类别索引
+    # parent 子模型需要把全局类别索引映射到局部输出索引
     label_map_tensor = None
     if label_map_np is not None:
         label_map_tensor = torch.tensor(label_map_np, dtype=torch.long, device=device)
@@ -309,10 +305,9 @@ def train_single_model(
                 "model_log_path": model_log_path,
             }
 
-        # 训练一个 epoch
         for epoch in range(start_epoch, config.epochs + 1):
             model.train()
-            # 延迟启用基于 EMA 类别难度的动态类别权重
+            # 到达起始轮后，用 EMA 类别 CE 调整静态类别权重
             if config.use_ema and epoch >= ema_start_epoch:
                 raw_diff = train_state.ema_class_ce / (train_state.ema_class_ce.mean() + 1e-12)
                 diff_factor = 1.0 + lambda_diff * (raw_diff - 1.0)
@@ -324,21 +319,19 @@ def train_single_model(
             running_align_loss = 0.0
             running_supcon_loss = 0.0
 
-            # 对齐损失权重线性启用
+            # 辅助损失先线性启用，再在后期共同衰减
             align_w = get_linear_weight(epoch,
                                        start=config.align_start,
                                        end=config.align_end,
                                        w_min=0.0,
                                        w_max=ALIGN_LOSS_WEIGHT
             )
-            # SupCon 损失权重线性启用
             supcon_w = get_linear_weight(epoch,
                                         start=config.supcon_start,
                                         end=config.supcon_end,
                                         w_min=0.0,
                                         w_max=SUPCON_LOSS_WEIGHT,
             )
-            # 对齐损失和 SupCon 损失在训练后期一起衰减
             decay_start = int(decay_start_ratio * config.epochs)
             decay_ratio = 1.0
             if epoch > decay_start:
@@ -346,7 +339,6 @@ def train_single_model(
                 decay_ratio = max(decay_ratio, 0.2)
             align_w = align_w * decay_ratio
             supcon_w = supcon_w * decay_ratio
-            # 训练一个 epoch
             loader_iter = tqdm(train_loader, desc=f"Epoch {epoch}/{config.epochs}")
 
             for _, (x, y, _) in enumerate(loader_iter):
@@ -356,10 +348,8 @@ def train_single_model(
 
                 optimizer.zero_grad()
 
-                # ---------- 前向传播 ----------
                 logits, feat = model(x, return_feat=True)
 
-                # ---------- 标签准备 ----------
                 if y.ndim == 2:
                     hier_labels = {name: y[:, idx] for idx, name in enumerate(head_names)}
                     y_level = y[:, level_idx]
@@ -374,7 +364,7 @@ def train_single_model(
                     y_level = label_map_tensor[y_level.clamp_min(0)]
                     y_level[invalid] = -1
 
-                # ---------- 遮罩：只在真实父类的子类中训练 ----------
+                # 父类遮罩只允许样本在真实父类的子类集合内竞争
                 if use_parent_mask and parent_labels is not None:
                     logits_masked, valid_parent = mask_logits_by_parent(
                         logits, parent_labels, parent_to_children
@@ -385,7 +375,6 @@ def train_single_model(
 
                 valid = (y_level >= 0) & valid_parent
 
-                # ---------- 主损失 ----------
                 if valid.any():
                     logits_valid = logits_masked[valid]
                     y_valid = y_level[valid]
@@ -402,7 +391,6 @@ def train_single_model(
                 else:
                     loss_cls = torch.tensor(0.0, device=device)
 
-                # ---------- 可选损失 ----------
                 loss_align = align_loss_fn(feat, hier_labels)
                 loss_supcon = supcon_loss_fn(feat, hier_labels)
 
@@ -425,7 +413,7 @@ def train_single_model(
                 }
                 loader_iter.set_postfix(postfix)
 
-                # ---------- 用 EMA 统计各类别当前训练难度 ----------
+                # 用未加权 CE 更新每个类别的 EMA 难度
                 if config.use_ema and valid.any():
                     with torch.no_grad():
                         ce_each = F.cross_entropy(logits_valid, y_valid, reduction="none")
@@ -433,16 +421,15 @@ def train_single_model(
                             class_mask_c = (y_valid == c)
                             if class_mask_c.any():
                                 mean_ce_c = ce_each[class_mask_c].mean()
-                        train_state.ema_class_ce[c] = (
-                            ema_alpha * train_state.ema_class_ce[c]
-                            + (1.0 - ema_alpha) * mean_ce_c
-                        )
+                                train_state.ema_class_ce[c] = (
+                                    ema_alpha * train_state.ema_class_ce[c]
+                                    + (1.0 - ema_alpha) * mean_ce_c
+                                )
 
             train_loss = running_loss / len(train_loader)
             train_align_loss = align_w * running_align_loss / max(len(train_loader), 1)
             train_supcon_loss = supcon_w * running_supcon_loss / max(len(train_loader), 1)
             train_acc = running_correct / max(running_total, 1)
-            # 验证阶段
             test_loss, test_acc, test_metrics, se_stats = evaluate_validation_loader(
                 model,
                 test_loader,
@@ -455,7 +442,6 @@ def train_single_model(
             )
             macro_f1 = test_metrics["macro_f1"]
             macro_recall = test_metrics["macro_recall"]
-            # 更新学习率
             scheduler.step()
             if epoch % 10 == 0:
                 model_log(f"  base_class_weights = {base_class_weights.detach().cpu().numpy()}")
@@ -473,7 +459,7 @@ def train_single_model(
                 f"TestMacroRecall={macro_recall * 100:.2f}%, "
                 f"LR={optimizer.param_groups[0]['lr']:.2e}, "
             )
-            # Early Stop 使用的综合评分
+            # Early Stop 只看宏 F1 与 accuracy 的加权分数
             score = (
                 config.early_stop_w_f1 * macro_f1
                 + config.early_stop_w_acc * test_acc
@@ -483,7 +469,7 @@ def train_single_model(
                 f"{score:.4f} (w_f1={config.early_stop_w_f1}, "
                 f"w_acc={config.early_stop_w_acc})"
             )
-            # 保存当前最优模型
+            # 最优模型和对应 SE 统计一起保存
             if score >= train_state.best_score:
                 train_state.best_score = score
                 train_state.best_epoch = epoch
@@ -521,7 +507,7 @@ def train_single_model(
         model_log_file.close()
 
 
-    # 释放显存
+    # 显式释放当前模型，方便连续训练多个层级或 parent
     del model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()

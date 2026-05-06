@@ -155,12 +155,9 @@ class Config:
     scheduler_Tmax = int(epochs)
     scheduler_eta_min = 1e-5
 
-    # 可视化与嵌入
-    embedding_method = "tsne"  # "umap" | "tsne"
+    # UMAP 可视化
     umap_neighbors = 15
     umap_min_dist = 0.1
-    tsne_perplexity = 30
-    tsne_iter = 1000
 
     # RAW 域增强概率
     p_piecewise_gain = 0.30

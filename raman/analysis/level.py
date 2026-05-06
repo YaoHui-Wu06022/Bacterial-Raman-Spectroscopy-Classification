@@ -7,17 +7,16 @@ from raman.eval.runtime import build_experiment_runtime
 from .embedding import collect_embeddings_train_test, plot_embedding_hierarchical
 from .gradcam import (
     LayerGradCAMAnalyzer,
-    _plot_layer_importance,
     collect_analyzable_layers,
     merge_scores_by_group,
 )
 from .ig import (
+    _effective_label_names,
     _get_bad_bands,
     _plot_channel_importance,
     build_wavenumber_axis,
     compute_band_importance_from_ig,
     compute_channel_importance_from_ig,
-    compute_class_band_importance_ig,
     compute_class_mean_spectrum,
     compute_ig_batches,
     plot_band_importance_heatmap,
@@ -27,7 +26,7 @@ from .se import log_seblock_summary
 from .tasks import build_task_loaders
 
 
-def run_single_analysis(
+def run_level_analysis(
     exp_dir,
     config,
     full_dataset,
@@ -49,7 +48,7 @@ def run_single_analysis(
     model_path = task["model_path"]
     tag = task["tag"]
 
-    # ---------------- 输出目录 ----------------
+    # 输出目录
     analysis_dir = os.path.join(exp_dir, f"{tag}_analysis")
     fig_dir = os.path.join(analysis_dir, "figures")
     log_dir = os.path.join(analysis_dir, "logs")
@@ -80,7 +79,7 @@ def run_single_analysis(
         base_test_dataset,
     )
 
-    # ---------------- 模型 ----------------
+    # 模型加载
     if device is None:
         use_cuda = (config.use_gpu and torch.cuda.is_available())
         device = torch.device("cuda" if use_cuda else "cpu")
@@ -94,7 +93,7 @@ def run_single_analysis(
     )
 
     if parent_idx is None:
-        model = runtime.load_single_level_model(
+        model = runtime.get_level_model(
             analysis_level,
             num_classes=num_classes,
         )
@@ -106,11 +105,7 @@ def run_single_analysis(
             model_path=model_path,
         )
 
-    # ------------------------------------------------------------
-    # 执行一次前向传播：
-    # - 初始化模型内部状态
-    # - 确保后续 Grad-CAM / hook 正常注册与触发
-    # ------------------------------------------------------------
+    # 先前向一次，确保后续 Grad-CAM 和 hook 能拿到稳定状态
     sample_x, _, _ = next(iter(train_loader))
     sample_x = sample_x.to(device)
     _ = model(sample_x)
@@ -169,7 +164,7 @@ def run_single_analysis(
 
     log(f"Input channel importance: {importance}")
 
-    # 多层 Grad-CAM 级联 Layer-wise Importance 分析
+    # 多层 Grad-CAM 层级重要性分析
     log("")
     log("=== Running Multi-layer Grad-CAM Analysis ===")
     analyzable, groups = collect_analyzable_layers(model)
@@ -196,10 +191,7 @@ def run_single_analysis(
     if config.se_use:
         log_seblock_summary(runtime, model_path, log)
 
-    # Embedding 可视化
-    embed_method = str(config.embedding_method).lower()
-    embed_tag = embed_method.replace("-", "").replace("_", "")
-
+    # train/test 联合 UMAP 可视化
     embed_levels = [analysis_level]
     if full_dataset.head_names:
         top_level = full_dataset.head_names[0]
@@ -230,12 +222,9 @@ def run_single_analysis(
     plot_embedding_hierarchical(
         feats,
         hier_labels=hier_labels,
-        save_path=os.path.join(fig_dir, f"{embed_tag}_hier_train_test.png"),
-        method=embed_method,
+        save_path=os.path.join(fig_dir, "umap_hier_train_test.png"),
         n_neighbors=config.umap_neighbors,
         min_dist=config.umap_min_dist,
-        tsne_perplexity=config.tsne_perplexity,
-        tsne_iter=config.tsne_iter,
         label_names=label_names,
     )
 

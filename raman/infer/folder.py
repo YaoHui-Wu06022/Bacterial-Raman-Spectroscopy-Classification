@@ -32,8 +32,8 @@ def get_cell_number(fname):
     return int(1e9)
 
 
-# Batch prediction for one folder
 def predict_directory(folder_path, output_dir, predictor, top_k=3, parent_mask=None):
+    """预测一个文件夹内所有光谱，并写出文件级明细和投票汇总"""
 
     folder_path = resolve_path(folder_path)
     output_dir = resolve_path(output_dir)
@@ -52,17 +52,14 @@ def predict_directory(folder_path, output_dir, predictor, top_k=3, parent_mask=N
         print("No .arc_data files found.")
         return
 
-    # ---------------- file-level buffers ----------------
     summary_counter = {}
     details_lines = []
 
     for fname in tqdm(files, desc="Predicting"):
         fp = os.path.join(folder_path, fname)
 
-        # ===== file-level 预测 =====
         results = predict_one(fp, predictor, top_k=top_k, parent_mask=parent_mask)
 
-        # ===== 统计 file-level =====
         top1 = results[0]
         summary_counter[top1["label"]] = summary_counter.get(
             top1["label"], 0
@@ -81,7 +78,6 @@ def predict_directory(folder_path, output_dir, predictor, top_k=3, parent_mask=N
 
         details_lines.append("\n===============================================\n\n")
 
-    # FILE-LEVEL SUMMARY
     summary_lines = []
     summary_lines.append("===== FILE-LEVEL SUMMARY =====\n\n")
 
@@ -90,7 +86,6 @@ def predict_directory(folder_path, output_dir, predictor, top_k=3, parent_mask=N
 
     summary_lines.append("\n===============================================\n\n")
 
-    # SAVE
     with open(output_file_txt, "w", encoding="utf-8") as f:
         f.writelines(summary_lines)
         f.writelines(details_lines)
@@ -99,6 +94,7 @@ def predict_directory(folder_path, output_dir, predictor, top_k=3, parent_mask=N
 
 
 def iter_predict_folders(predict_root, one_folder=None):
+    """解析本次需要预测的文件夹列表，支持只跑一个子文件夹"""
     if one_folder:
         folder_path = one_folder
         if not os.path.isabs(folder_path):
@@ -114,7 +110,6 @@ def iter_predict_folders(predict_root, one_folder=None):
     )
 
 
-# Main
 if __name__ == "__main__":
 
     # 指定实验输出目录（必须包含 config_.yaml + *_model.pt）
@@ -126,7 +121,7 @@ if __name__ == "__main__":
     # 例如：{"level_1": ["baoman", "dachang"]}
     # 也支持索引：{"level_1": [0, 2]}
     # MANUAL_PARENT_MASK = {
-    #     "level_1":["feike"],
+    #     "level_1":["feike"]
     # }
     MANUAL_PARENT_MASK = None
 

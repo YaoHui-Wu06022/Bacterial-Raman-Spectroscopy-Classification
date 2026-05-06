@@ -191,7 +191,7 @@ def run_cascade_inference(
     allowed_names_by_level=None,
     fallback_to_previous=False,
 ):
-    """??????????????"""
+    """执行从顶层到目标层的共享级联推理"""
     parent_pred = None
     last_result = None
     allowed_names_by_level = allowed_names_by_level or {}

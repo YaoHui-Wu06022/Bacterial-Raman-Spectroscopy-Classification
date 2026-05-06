@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 def build_activation(inplace=True, negative_slope=0.01):
+    """构造全模型统一使用的 LeakyReLU 激活"""
     return nn.LeakyReLU(
         negative_slope=float(negative_slope),
         inplace=inplace,
@@ -23,7 +24,7 @@ def make_conv_block(
     groups=1,
     inplace=True,
 ):
-    # 统一的 Conv1d + BN (+ Activation) 组装函数，避免 backbone 里重复写样板代码
+    """统一构造 Conv1d + BN + 可选激活，减少 backbone 内重复样板"""
     if padding is None:
         padding = kernel_size // 2
     layers = [
@@ -44,6 +45,8 @@ def make_conv_block(
 
 
 class SEBlock1D(nn.Module):
+    """一维 SE 通道重标定模块，只负责当前前向缩放"""
+
     def __init__(
         self,
         channels,
@@ -65,6 +68,7 @@ class SEBlock1D(nn.Module):
         )
 
     def _compute_scale(self, x):
+        """根据当前 batch 的通道全局响应计算缩放系数"""
         batch_size, channels, _ = x.size()
         scale = self.pool(x).view(batch_size, channels)
         return self.fc(scale)
@@ -86,6 +90,7 @@ def resolve_mid_channels(
     base_width=None,
     bottleneck_ratio=None,
 ):
+    """按 ResNet/ResNeXt 配置计算 bottleneck 中间通道数"""
     block_type = str(block_type).lower()
     if block_type == "resnext":
         mid_channels = int(out_channels * (base_width / 64.0)) * cardinality
@@ -96,6 +101,8 @@ def resolve_mid_channels(
 
 
 class ResidualBottleneck1D(nn.Module):
+    """一维残差 bottleneck，支持 ResNet 与 ResNeXt 两种中间卷积分组"""
+
     def __init__(
         self,
         in_channels,
@@ -108,6 +115,7 @@ class ResidualBottleneck1D(nn.Module):
         se_use=True,
         activation_negative_slope=0.01,
     ):
+        """根据输入输出通道和 block 类型创建一个残差瓶颈块"""
         super().__init__()
         self.block_type = str(block_type).lower()
         make_activation = partial(
@@ -162,7 +170,7 @@ class ResidualBottleneck1D(nn.Module):
         self.out_act = make_activation(inplace=True)
 
     def forward(self, x):
-        # bottleneck 主支路 + shortcut 残差支路
+        """执行 bottleneck 主分支和 shortcut 残差融合"""
         residual = self.shortcut(x)
         out = self.conv_reduce(x)
         out = self.conv_mid(out)
@@ -172,6 +180,8 @@ class ResidualBottleneck1D(nn.Module):
 
 
 class PositionalEncoding1D(nn.Module):
+    """给一维序列特征加入固定正余弦位置编码"""
+
     def __init__(self, d_model, max_len=1000):
         super().__init__()
         pe = torch.zeros(max_len, d_model)
@@ -190,6 +200,8 @@ class PositionalEncoding1D(nn.Module):
 
 
 class CosineClassifier(nn.Module):
+    """余弦分类头，用归一化特征和类别向量的方向相似度分类"""
+
     def __init__(self, in_features, out_features, scale=30.0):
         super().__init__()
         self.scale = float(scale)
@@ -197,13 +209,15 @@ class CosineClassifier(nn.Module):
         nn.init.xavier_uniform_(self.weight)
 
     def forward(self, x):
-        # 余弦头只比较方向相似度，不让特征模长直接主导分类分数
+        """输出缩放后的余弦相似度 logits"""
         x = F.normalize(x, p=2, dim=1)
         weight = F.normalize(self.weight, p=2, dim=1)
         return self.scale * torch.matmul(x, weight.t())
 
 
 class RamanClassifier1D(nn.Module):
+    """拉曼一维分类模型，按 backbone、encoder、pooling、head 四段组装"""
+
     def __init__(self, num_classes, config):
         super().__init__()
         if isinstance(num_classes, (dict, list, tuple)):
@@ -222,7 +236,7 @@ class RamanClassifier1D(nn.Module):
         return getattr(self.config, name, default)
 
     def _parse_core_config(self):
-        # 先把结构性配置解析成布尔开关和缓存字段，后面子模块构建只依赖这些状态
+        """把配置解析成后续构建子模块需要的稳定字段"""
         self.backbone_type = str(self._cfg("backbone_type", "cnn")).lower()
         if self.backbone_type not in ("cnn", "identity"):
             raise ValueError(f"Unknown backbone_type: {self.backbone_type}")
@@ -263,12 +277,14 @@ class RamanClassifier1D(nn.Module):
         }
 
     def _build_backbone(self):
+        """按配置选择 CNN backbone 或 identity 投影路径"""
         if self.cnn_backbone_on:
             self._build_cnn_backbone()
             return
         self._build_identity_backbone()
 
     def _build_identity_backbone(self):
+        """构造跳过 CNN 的轻量输入投影路径"""
         pool_kernel = max(1, int(self._cfg("identity_pool_kernel", 16)))
         self.identity_pool_kernel = pool_kernel
         self.identity_pool = (
@@ -276,7 +292,7 @@ class RamanClassifier1D(nn.Module):
             if pool_kernel == 1
             else nn.AvgPool1d(kernel_size=pool_kernel, stride=pool_kernel)
         )
-        # identity 路径不做 CNN 提特征，只做下采样后投影到统一序列维度
+        # identity 路径不做 CNN 提特征，只下采样并投影到统一序列维度
         self.input_proj = nn.Sequential(
             nn.Conv1d(self.in_channels, self.proj_dim, kernel_size=1, bias=False),
             nn.BatchNorm1d(self.proj_dim),
@@ -284,12 +300,13 @@ class RamanClassifier1D(nn.Module):
         )
 
     def _build_cnn_backbone(self):
+        """构造多尺度 stem 和四个残差 stage"""
         self.stem_out_channels = 64
         kernel_sizes = self._cfg("stem_kernel_sizes", None) or (15,)
         if isinstance(kernel_sizes, int):
             kernel_sizes = (kernel_sizes,)
         kernel_sizes = [int(k) for k in kernel_sizes]
-        # 单尺度和多尺度共用同一套逻辑；只传一个 kernel 时自然退化为单分支 stem
+        # 只传一个 kernel 时自然退化为单分支 stem
         self.stem_branches = nn.ModuleList(
             [
                 make_conv_block(
@@ -314,6 +331,7 @@ class RamanClassifier1D(nn.Module):
         self.proj = nn.Conv1d(384, self.proj_dim, kernel_size=1, bias=False)
 
     def _split_channels(self, total_channels, num_branches):
+        """把 stem 总通道尽量均匀分配到多个卷积分支"""
         base = total_channels // num_branches
         remainder = total_channels - base * num_branches
         branch_channels = [base] * num_branches
@@ -322,6 +340,7 @@ class RamanClassifier1D(nn.Module):
         return branch_channels
 
     def _make_stage(self, out_channels, num_blocks, pool_first):
+        """构造一个可选下采样的残差 stage"""
         modules = []
         if pool_first:
             modules.append(nn.AvgPool1d(kernel_size=2))
@@ -329,6 +348,7 @@ class RamanClassifier1D(nn.Module):
         return nn.Sequential(*modules)
 
     def _make_layer(self, out_channels, num_blocks):
+        """堆叠同通道数的残差瓶颈块"""
         layers = [
             ResidualBottleneck1D(
                 in_channels=self.stage_in_channels,
@@ -348,10 +368,11 @@ class RamanClassifier1D(nn.Module):
         return nn.Sequential(*layers)
 
     def _build_sequence_encoder(self):
+        """构造 Transformer、LSTM 或空序列编码器"""
         self.seq_dim = self.proj_dim
 
         if self.transformer_on:
-            # Transformer 接收 [B, L, C] 序列表示，在谱峰之间建上下文关系
+            # Transformer 接收 [B, L, C]，用于建模谱轴位置间上下文
             self.pos_encoder = PositionalEncoding1D(d_model=self.proj_dim)
             encoder_layer = nn.TransformerEncoderLayer(
                 d_model=self.proj_dim,
@@ -372,7 +393,7 @@ class RamanClassifier1D(nn.Module):
         self.pos_encoder = None
         self.transformer = None
         if self.lstm_on:
-            # LSTM 路径保留顺序建模能力，但不引入自注意力
+            # LSTM 保留顺序建模能力，但不引入自注意力
             self.lstm_hidden = int(self._cfg("lstm_hidden", self.proj_dim))
             self.lstm_layers = int(self._cfg("lstm_layers", 1))
             self.lstm_dropout = float(self._cfg("lstm_dropout", 0.0))
@@ -390,12 +411,13 @@ class RamanClassifier1D(nn.Module):
             self.lstm = None
 
     def _build_pooling(self):
+        """构造序列到向量的聚合层，并确定最终特征维度"""
         self.pooling_type = str(self._cfg("pooling_type", "attn")).lower()
         if self.pooling_type not in ("attn", "stat"):
             raise ValueError(f"Unknown pooling_type: {self.pooling_type}")
 
         if self.pooling_type == "attn":
-            # 注意力池化学习“哪些波段位置更值得汇聚到最终表征”
+            # 注意力池化学习哪些谱轴位置更值得汇聚
             att_pool_dropout = 0.2
             self.att_pool = nn.Sequential(
                 nn.Linear(self.seq_dim, self.seq_dim // 2),
@@ -406,10 +428,11 @@ class RamanClassifier1D(nn.Module):
             self.feat_dim = self.seq_dim
         if self.pooling_type == "stat":
             self.att_pool = None
-            # 统计池化保留全局均值和波动强度两部分信息
+            # 统计池化同时保留全局均值和波动强度
             self.feat_dim = self.seq_dim * 2
 
     def _build_classifier_head(self):
+        """按配置构造余弦头或线性分类头"""
         self.cosine_head = bool(self._cfg("cosine_head", False))
         self.cosine_scale = float(self._cfg("cosine_scale", 30.0))
         if self.cosine_head:
@@ -422,6 +445,7 @@ class RamanClassifier1D(nn.Module):
             self.head = nn.Linear(self.feat_dim, self.num_classes)
 
     def _forward_feat_extractor(self, x):
+        """把输入 `[B, C, L]` 转成 backbone 序列特征"""
         if self.cnn_backbone_on:
             x = torch.cat([branch(x) for branch in self.stem_branches], dim=1)
             x = self.stem_pool(x)
@@ -435,6 +459,7 @@ class RamanClassifier1D(nn.Module):
         return self.input_proj(x)
 
     def _forward_sequence_encoder(self, x):
+        """在 `[B, L, C]` 特征上做可选序列建模"""
         if self.transformer_on:
             x = self.pos_encoder(x)
             return self.transformer(x)
@@ -444,6 +469,7 @@ class RamanClassifier1D(nn.Module):
         return x
 
     def _pool_feat(self, x):
+        """把谱轴长度维压缩为样本级 embedding"""
         if self.pooling_type == "attn":
             attn = torch.softmax(self.att_pool(x), dim=1)
             return (x * attn).sum(dim=1)
@@ -453,7 +479,7 @@ class RamanClassifier1D(nn.Module):
             return torch.cat([mean, std], dim=1)
 
     def forward(self, x, return_feat=False):
-        # 数据流：局部特征提取 -> 序列建模 -> 池化聚合 -> 分类头
+        """执行完整数据流：提特征、序列建模、池化、分类"""
         feat = self._forward_feat_extractor(x)
         feat = feat.permute(0, 2, 1)
         feat = self._forward_sequence_encoder(feat)
