@@ -97,7 +97,7 @@ def extract_features(dataset, indices, level_idx, use_all_channels):
     return np.stack(x_list, axis=0), np.array(y_list, dtype=np.int64), skipped
 
 
-def evaluate_test_set(context):
+def _run_baseline_eval(context):
     """使用训练阶段切分结果运行 PCA+SVM 基线评估"""
     config = context.config
     dataset = RamanDataset(context.dataset_root, augment=False, config=config)
@@ -209,4 +209,4 @@ def evaluate_test_set(context):
 def run_pca_svm_baseline(overrides=None):
     """先应用覆盖项，再执行 PCA+SVM 基线评估"""
     context = configure_baseline(overrides)
-    return evaluate_test_set(context)
+    return _run_baseline_eval(context)

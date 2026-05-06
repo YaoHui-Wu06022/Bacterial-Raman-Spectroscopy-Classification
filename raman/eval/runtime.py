@@ -109,6 +109,79 @@ class ExperimentRuntime:
         """给单层分析/诊断场景提供统一入口"""
         return self.get_level_model(level_name, num_classes=num_classes)
 
+    def prepare_cascade_step(
+        self,
+        level_name,
+        parent_pred,
+        *,
+        num_classes,
+        level_class_names,
+        parent_to_children,
+    ):
+        if parent_pred is None:
+            return {
+                "mode": "global",
+                "model": self.get_level_model(level_name, num_classes=num_classes),
+                "class_names": level_class_names,
+                "child_ids": None,
+                "parent_labels": None,
+                "parent_to_children": None,
+            }
+
+        parent_idx = int(parent_pred)
+        level_parent_models = self.ensure_parent_models(level_name, parent_to_children)
+        has_parent_model = any(
+            entry.get("model_path") is not None
+            for entry in level_parent_models.values()
+        )
+
+        if has_parent_model:
+            entry = level_parent_models.get(parent_idx)
+            if entry is None:
+                return None
+
+            child_ids = list(entry.get("child_ids", []))
+            model_path = entry.get("model_path")
+            if not child_ids:
+                return None
+
+            if model_path is None:
+                if len(child_ids) != 1:
+                    return None
+                pred_global = int(child_ids[0])
+                return {
+                    "mode": "direct",
+                    "pred_global": pred_global,
+                    "class_names": [level_class_names[pred_global]],
+                    "child_ids": child_ids,
+                }
+
+            return {
+                "mode": "parent",
+                "model": self.get_parent_model(
+                    level_name,
+                    parent_idx,
+                    child_ids=child_ids,
+                    model_path=model_path,
+                ),
+                "class_names": [
+                    level_class_names[int(child_id)]
+                    for child_id in child_ids
+                ],
+                "child_ids": child_ids,
+                "parent_labels": None,
+                "parent_to_children": None,
+            }
+
+        return {
+            "mode": "global_parent_mask",
+            "model": self.get_level_model(level_name, num_classes=num_classes),
+            "class_names": level_class_names,
+            "child_ids": None,
+            "parent_labels": int(parent_pred),
+            "parent_to_children": parent_to_children.get(level_name),
+        }
+
     def get_parent_model(self, level_name, parent_idx, child_ids=None, model_path=None):
         """懒加载某个 parent 子模型"""
         key = (level_name, int(parent_idx))

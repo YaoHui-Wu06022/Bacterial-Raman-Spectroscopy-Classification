@@ -8,6 +8,29 @@ from raman.data.spectrum import load_arc_intensity
 
 
 EPS = 1e-8
+PIECEWISE_GAIN_STD = 0.12
+NOISE_BASE_REL_MIN = 0.005
+NOISE_BASE_REL_MAX = 0.02
+NOISE_SLOPE_REL_MIN = 0.0
+NOISE_SLOPE_REL_MAX = 0.015
+AXIS_WARP_ALPHA = 0.002
+AXIS_WARP_BETA = 1.0
+BASELINE_LIN_MIN = 0.0
+BASELINE_LIN_MAX = 0.02
+BASELINE_SIN_MIN = 0.0
+BASELINE_SIN_MAX = 0.01
+BASELINE_FREQ_MIN = 0.5
+BASELINE_FREQ_MAX = 2.0
+BASELINE_STRONG_AMP_MIN = 0.05
+BASELINE_STRONG_AMP_MAX = 0.15
+SHIFT_MAX = 3
+BROAD_SIGMA_MIN = 0.6
+BROAD_SIGMA_MAX = 1.2
+BROAD_TRUNCATE = 3.0
+MASK_WIDTH_MIN = 40
+MASK_WIDTH_MAX = 100
+MASK_ATTEN_MIN = 0.1
+MASK_ATTEN_MAX = 0.3
 
 
 def SNV(x):
@@ -156,7 +179,7 @@ def aug_strong_baseline(x, amp_min=0.05, amp_max=0.15, n_knots_min=3, n_knots_ma
     return x + baseline
 
 
-def aug_axis_warp(x, config):
+def aug_axis_warp(x):
     """非刚性波数轴扰动，模拟轻微标定偏差"""
     x = np.asarray(x, dtype=np.float32)
     n = len(x)
@@ -165,10 +188,10 @@ def aug_axis_warp(x, config):
     center = (n - 1) / 2.0
     idx_norm = idx - center
     # 控制整体的轻微拉伸/压缩或一阶漂移
-    alpha = np.random.uniform(-config.axis_warp_alpha, config.axis_warp_alpha)
+    alpha = np.random.uniform(-AXIS_WARP_ALPHA, AXIS_WARP_ALPHA)
     warp_linear = alpha * idx_norm
     # 控制沿谱轴缓慢变化的非线性弯曲
-    beta = np.random.uniform(-config.axis_warp_beta, config.axis_warp_beta)
+    beta = np.random.uniform(-AXIS_WARP_BETA, AXIS_WARP_BETA)
     phase = np.random.uniform(0, 2 * np.pi) # 随机相位
     warp_nonlinear = beta * np.sin(2 * np.pi * idx / n + phase)
 
@@ -270,7 +293,7 @@ def augment_raw_spectrum(x, config):
             lambda z: aug_piecewise_gain(
                 z,
                 segments=segments,
-                gain_std=config.piecewise_gain_std,
+                gain_std=PIECEWISE_GAIN_STD,
             )
         )
 
@@ -278,35 +301,35 @@ def augment_raw_spectrum(x, config):
         pre_ops.append(
             lambda z: aug_noise_gaussian(
                 z,
-                base_rel_min=config.noise_base_rel_min,
-                base_rel_max=config.noise_base_rel_max,
-                slope_rel_min=config.noise_slope_rel_min,
-                slope_rel_max=config.noise_slope_rel_max,
+                base_rel_min=NOISE_BASE_REL_MIN,
+                base_rel_max=NOISE_BASE_REL_MAX,
+                slope_rel_min=NOISE_SLOPE_REL_MIN,
+                slope_rel_max=NOISE_SLOPE_REL_MAX,
             )
         )
 
     if np.random.rand() < config.p_axis:
-        pre_ops.append(lambda z: aug_axis_warp(z, config))
+        pre_ops.append(lambda z: aug_axis_warp(z))
 
     r = np.random.rand()
     if r < config.p_baseline_weak:
         pre_ops.append(
             lambda z: aug_weak_baseline(
                 z,
-                lin_min=config.baseline_lin_min,
-                lin_max=config.baseline_lin_max,
-                sin_min=config.baseline_sin_min,
-                sin_max=config.baseline_sin_max,
-                freq_min=config.baseline_freq_min,
-                freq_max=config.baseline_freq_max,
+                lin_min=BASELINE_LIN_MIN,
+                lin_max=BASELINE_LIN_MAX,
+                sin_min=BASELINE_SIN_MIN,
+                sin_max=BASELINE_SIN_MAX,
+                freq_min=BASELINE_FREQ_MIN,
+                freq_max=BASELINE_FREQ_MAX,
             )
         )
     elif r < config.p_baseline_weak + config.p_baseline_strong:
         pre_ops.append(
             lambda z: aug_strong_baseline(
                 z,
-                amp_min=config.baseline_strong_amp_min,
-                amp_max=config.baseline_strong_amp_max,
+                amp_min=BASELINE_STRONG_AMP_MIN,
+                amp_max=BASELINE_STRONG_AMP_MAX,
             )
         )
 
@@ -330,15 +353,15 @@ def augment_norm_spectrum(x, config):
 
     post_ops = []
     if np.random.rand() < config.p_shift:
-        post_ops.append(lambda z: aug_shift(z, config.shift_max))
+        post_ops.append(lambda z: aug_shift(z, SHIFT_MAX))
 
     if np.random.rand() < config.p_broadening:
         post_ops.append(
             lambda z: aug_broadening(
                 z,
-                config.broad_sigma_min,
-                config.broad_sigma_max,
-                config.broad_truncate,
+                BROAD_SIGMA_MIN,
+                BROAD_SIGMA_MAX,
+                BROAD_TRUNCATE,
             )
         )
 
@@ -346,10 +369,10 @@ def augment_norm_spectrum(x, config):
         post_ops.append(
             lambda z: aug_mask_attenuate(
                 z,
-                width_min=config.mask_width_min,
-                width_max=config.mask_width_max,
-                atten_min=config.mask_atten_min,
-                atten_max=config.mask_atten_max,
+                width_min=MASK_WIDTH_MIN,
+                width_max=MASK_WIDTH_MAX,
+                atten_min=MASK_ATTEN_MIN,
+                atten_max=MASK_ATTEN_MAX,
             )
         )
 

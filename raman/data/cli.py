@@ -5,12 +5,10 @@ from raman.data.build import (
     build_test,
     build_train,
     classify,
-    count_dataset,
-    pack_init,
     preview,
-    print_results,
-    unpack_init,
 )
+from raman.data.archive import pack_init, unpack_init
+from raman.data.count import count_dataset, print_results
 from raman.data.profiles import get_dataset_dir, get_profile
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

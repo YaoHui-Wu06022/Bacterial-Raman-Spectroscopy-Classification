@@ -1,7 +1,6 @@
 import os
 from collections import OrderedDict
 
-import numpy as np
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt

@@ -191,16 +191,7 @@ def run_cascade_inference(
     allowed_names_by_level=None,
     fallback_to_previous=False,
 ):
-    """执行从顶层到目标层的级联推理
-
-    这层只负责共享的推理控制流，不处理结果展示、top-k 格式化或文件输出
-    返回值里保留：
-    - resolved_level：当前真正解析到的层
-    - probs：该层输出的概率
-    - class_names：这些概率对应的类别名顺序
-    - child_ids：如果来自 parent 子模型，则记录局部类别对应的全局 child id
-    - pred_global：当前层 top1 在全局类别空间下的 id
-    """
+    """??????????????"""
     parent_pred = None
     last_result = None
     allowed_names_by_level = allowed_names_by_level or {}
@@ -208,144 +199,65 @@ def run_cascade_inference(
 
     for level_name in level_order:
         level_class_names = class_names_by_level.get(level_name, [])
-        allowed_global = None
-        if level_name in allowed_names_by_level:
-            # 先在全局类别名空间里把“允许类别”解析成索引，
-            # 后面如果走到 parent 子模型，再映射到局部索引空间
-            allowed_global = resolve_allowed_indices(
-                level_class_names,
-                allowed_names_by_level[level_name],
-            )
+        allowed_global = resolve_allowed_indices(
+            level_class_names,
+            allowed_names_by_level.get(level_name),
+        )
+        step = runtime.prepare_cascade_step(
+            level_name,
+            parent_pred,
+            num_classes=num_classes_by_level[level_name],
+            level_class_names=level_class_names,
+            parent_to_children=parent_to_children,
+        )
+        if step is None:
+            return last_result if fallback_to_previous else None
 
-        if parent_pred is None:
-            # 顶层没有父类约束，直接跑该层全局模型
-            model = runtime.get_level_model(
-                level_name,
-                num_classes=num_classes_by_level[level_name],
-            )
-            _, probs, valid = forward_level_with_probs(
-                model,
-                x,
-                allowed_indices=allowed_global,
-            )
-            if valid is not None and not valid.any():
-                return last_result if fallback_to_previous else None
-
-            pred_global = int(probs.argmax(1).item())
+        if step["mode"] == "direct":
+            pred_global = int(step["pred_global"])
             current = {
                 "resolved_level": level_name,
-                "probs": probs,
-                "class_names": level_class_names,
-                "child_ids": None,
+                "probs": torch.ones((1, 1), device=device, dtype=torch.float32),
+                "class_names": step["class_names"],
+                "child_ids": list(step["child_ids"]),
                 "pred_global": pred_global,
             }
-            if level_name == target_level:
-                return current
-            last_result = current
-            parent_pred = pred_global
-            continue
-
-        parent_idx = int(parent_pred)
-        level_parent_models = runtime.ensure_parent_models(level_name, parent_to_children)
-        has_parent_model = any(
-            entry.get("model_path") is not None
-            for entry in level_parent_models.values()
-        )
-
-        if has_parent_model:
-            # 优先走 parent 子模型：如果该层训练过 per-parent 子模型，
-            # 就在对应父类下使用局部子模型
-            entry = level_parent_models.get(parent_idx)
-            if entry is None:
-                return last_result if fallback_to_previous else None
-
-            child_ids = entry.get("child_ids", [])
-            model_path = entry.get("model_path")
-            if not child_ids:
-                return last_result if fallback_to_previous else None
-
-            if model_path is None:
-                # 没有模型文件通常意味着这个父类下只有一个 child，
-                # 直接把唯一 child 当作当前层预测结果
-                if len(child_ids) != 1:
-                    return last_result if fallback_to_previous else None
-
-                pred_global = int(child_ids[0])
-                current = {
-                    "resolved_level": level_name,
-                    "probs": torch.ones((1, 1), device=device, dtype=torch.float32),
-                    "class_names": [level_class_names[pred_global]],
-                    "child_ids": list(child_ids),
-                    "pred_global": pred_global,
-                }
-                if level_name == target_level:
-                    return current
-                last_result = current
-                parent_pred = pred_global
-                continue
-
-            allowed_local = None
-            if allowed_global:
-                # allowed_global 是全局类别索引，这里需要投影到 parent 子模型的局部输出索引
+        else:
+            allowed_indices = allowed_global
+            child_ids = step.get("child_ids")
+            if child_ids is not None and allowed_global:
                 allowed_set = set(allowed_global)
-                allowed_local = [
+                allowed_indices = [
                     local_idx
                     for local_idx, child_id in enumerate(child_ids)
                     if int(child_id) in allowed_set
                 ]
 
-            model = runtime.get_parent_model(
-                level_name,
-                parent_idx,
-                child_ids=child_ids,
-                model_path=model_path,
-            )
+            parent_label_value = step.get("parent_labels")
+            parent_labels = None
+            if parent_label_value is not None:
+                parent_labels = torch.tensor([parent_label_value], device=device)
+
             _, probs, valid = forward_level_with_probs(
-                model,
+                step["model"],
                 x,
-                allowed_indices=allowed_local,
+                parent_labels=parent_labels,
+                parent_to_children=step.get("parent_to_children"),
+                allowed_indices=allowed_indices,
             )
             if valid is not None and not valid.any():
                 return last_result if fallback_to_previous else None
 
             pred_local = int(probs.argmax(1).item())
-            pred_global = int(child_ids[pred_local])
+            pred_global = int(child_ids[pred_local]) if child_ids is not None else pred_local
             current = {
                 "resolved_level": level_name,
                 "probs": probs,
-                "class_names": [level_class_names[int(child_id)] for child_id in child_ids],
-                "child_ids": list(child_ids),
+                "class_names": step["class_names"],
+                "child_ids": list(child_ids) if child_ids is not None else None,
                 "pred_global": pred_global,
             }
-            if level_name == target_level:
-                return current
-            last_result = current
-            parent_pred = pred_global
-            continue
 
-        # 没有 parent 子模型时，回退到该层全局模型，再用父类映射限制其输出空间
-        model = runtime.get_level_model(
-            level_name,
-            num_classes=num_classes_by_level[level_name],
-        )
-        _, probs, valid = forward_level_with_probs(
-            model,
-            x,
-            parent_labels=torch.tensor([parent_pred], device=device),
-            parent_to_children=parent_to_children.get(level_name),
-            allowed_indices=allowed_global,
-        )
-        if valid is not None and not valid.any():
-            return last_result if fallback_to_previous else None
-
-        pred_global = int(probs.argmax(1).item())
-        current = {
-            "resolved_level": level_name,
-            "probs": probs,
-            "class_names": level_class_names,
-            "child_ids": None,
-            "pred_global": pred_global,
-        }
         if level_name == target_level:
             return current
         last_result = current

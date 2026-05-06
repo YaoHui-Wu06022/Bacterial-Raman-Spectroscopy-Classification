@@ -6,6 +6,12 @@ from pathlib import Path
 
 import numpy as np
 
+from raman.data.archive import (
+    iter_arc_dirs,
+    iter_init_groups,
+    resolve_init_input,
+    resolve_path,
+)
 from raman.data.offline import (
     preprocess_single_spectrum,
     save_mean_plot,
@@ -17,15 +23,12 @@ from raman.data.spectrum import (
     write_arc_data,
 )
 
-PACK_EXT = ".npz"
-
 CUT_MIN = 600
 CUT_MAX = 1800
 TARGET_POINTS = 896
-WN_REF = build_wn_ref(CUT_MIN, CUT_MAX, TARGET_POINTS)
 
-ASLS_LAM = 3e5 # 改动
-ASLS_P = 0.005 # 改动
+ASLS_LAM = 3e5
+ASLS_P = 0.005
 ASLS_MAX_ITER = 15
 
 MIN_SAMPLES_PER_CLASS = 8
@@ -35,7 +38,6 @@ PCA_ENABLED = True
 PCA_COMPONENTS = 50
 PCA_CENTER = True
 PCA_OUTLIER_RATIO = 0.03
-
 
 @dataclass(frozen=True)
 class PipelineConfig:
@@ -57,23 +59,8 @@ class PipelineConfig:
         """根据当前裁剪范围和目标点数生成统一插值坐标"""
         return build_wn_ref(self.cut_min, self.cut_max, self.target_points)
 
+
 DEFAULT_PIPELINE_CONFIG = PipelineConfig()
-
-def resolve_path(base_dir, path_value):
-    """将相对路径解析到当前数据集根目录下，统一得到绝对路径"""
-    return (Path(base_dir) / path_value).resolve()
-
-
-def iter_arc_dirs(root_dir):
-    """递归遍历目录树，只返回包含 .arc_data 文件的叶子目录"""
-    root_dir = os.fspath(root_dir)
-    for root, dirs, files in os.walk(root_dir):
-        dirs.sort()
-        files.sort()
-        arc_files = [name for name in files if name.lower().endswith(".arc_data")]
-        if arc_files:
-            yield Path(root), arc_files
-
 
 def get_prefix(name):
     """统一按 letters_sign 规则提取类别前缀，兼容纯字母和字母后缀 +/-"""
@@ -82,16 +69,9 @@ def get_prefix(name):
         return None
     return f"{matched.group(1)}{matched.group(2) or ''}"
 
-
-def is_packed_path(path):
-    """判断一个路径是否是可读取的打包数据文件"""
-    return os.path.isfile(path) and str(path).lower().endswith(PACK_EXT)
-
-
 def resolve_pipeline_config(pipeline_config=None):
     """返回离线预处理配置；未传入时使用库内默认配置"""
     return pipeline_config or DEFAULT_PIPELINE_CONFIG
-
 
 def _resolve_classify_target_dir(root_process_raw, rel_dir, leaf_name):
     """根据叶子目录名推断目标类别目录，统一处理顶层和多级目录"""
@@ -102,14 +82,12 @@ def _resolve_classify_target_dir(root_process_raw, rel_dir, leaf_name):
         return root_process_raw / target_cls
     return root_process_raw / rel_parent / target_cls
 
-
 def _resolve_group_figure_dir(root_figure, rel_dir):
     """为一个分组解析均值谱图输出目录，避免多处重复拼接父目录"""
     rel_parent = rel_dir.parent
     if rel_parent in (Path("."), Path("")):
         return root_figure
     return root_figure / rel_parent
-
 
 def _iter_ancestor_level_keys(rel_dir):
     """生成非叶子祖先层级 key，用于高层级均值图聚合"""
@@ -119,11 +97,9 @@ def _iter_ancestor_level_keys(rel_dir):
     for level_idx in range(1, len(parts)):
         yield level_idx, parts[:level_idx]
 
-
 def _safe_plot_name(parts):
     """把层级路径转换成稳定的图片文件名"""
     return "__".join(parts)
-
 
 def _save_hierarchy_mean_plots(hierarchy_groups, root_figure, cfg):
     """输出 train 阶段聚合得到的高层级平均光谱图"""
@@ -153,167 +129,11 @@ def _save_hierarchy_mean_plots(hierarchy_groups, root_figure, cfg):
 
     return generated
 
-
 def _save_spectra_files(save_dir, filenames, wn_list, spectra_arr, fmt="%.3f"):
     """批量写出预处理后的光谱文件，统一文本精度和目录创建行为"""
     save_dir.mkdir(parents=True, exist_ok=True)
     for fname, wn_u, sp_u in zip(filenames, wn_list, spectra_arr):
         write_arc_data(save_dir / fname, wn_u, sp_u, fmt=fmt)
-
-
-class PackedArcDataset:
-    """从 init.npz 中按样本迭代恢复光谱内容"""
-
-    def __init__(self, npz_path):
-        if not is_packed_path(npz_path):
-            raise FileNotFoundError(f"Missing packed file: {npz_path}")
-        data = np.load(npz_path)
-        self.root_name = (
-            str(data["root_name"][0]) if "root_name" in data else "init"
-        )
-        self.paths = data["paths"].tolist()
-        self.offsets = data["offsets"]
-        self.lengths = data["lengths"]
-        self.wn_all = data["wn_all"]
-        self.sp_all = data["sp_all"]
-
-    def __len__(self):
-        return len(self.paths)
-
-    def get(self, index):
-        start = int(self.offsets[index])
-        length = int(self.lengths[index])
-        end = start + length
-        rel_path = self.paths[index]
-        wn = self.wn_all[start:end]
-        sp = self.sp_all[start:end]
-        return rel_path, wn, sp
-
-    def iter_samples(self):
-        for index in range(len(self.paths)):
-            yield self.get(index)
-
-
-def resolve_init_input(base_dir, profile):
-    """优先解析 init 目录，其次回退到打包后的 init.npz"""
-    root_init = resolve_path(base_dir, profile.root_init)
-    root_init_pack = resolve_path(base_dir, profile.root_init_pack)
-
-    if root_init.is_dir():
-        return root_init
-    if is_packed_path(root_init):
-        return root_init
-    if is_packed_path(root_init_pack):
-        return root_init_pack
-
-    raise FileNotFoundError(f"Missing input dir/file: {root_init}")
-
-
-def iter_init_groups(input_path):
-    """按叶子目录分组迭代原始样本，兼容目录输入和 npz 打包输入"""
-    input_path = Path(input_path)
-
-    if input_path.is_dir():
-        for leaf_dir, arc_files in iter_arc_dirs(input_path):
-            rel_dir = leaf_dir.relative_to(input_path)
-            samples = []
-            for fname in arc_files:
-                wn, sp = read_arc_data(leaf_dir / fname)
-                samples.append((fname, wn, sp))
-            yield rel_dir, leaf_dir.name, samples
-        return
-
-    packed = PackedArcDataset(input_path)
-    grouped = {}
-
-    for rel_path, wn, sp in packed.iter_samples():
-        normalized_rel_path = rel_path.replace("\\", "/")
-        rel_dir = Path(os.path.dirname(normalized_rel_path) or ".")
-        group_key = rel_dir.as_posix()
-        if group_key not in grouped:
-            grouped[group_key] = {
-                "rel_dir": rel_dir,
-                "leaf_name": packed.root_name if rel_dir == Path(".") else rel_dir.name,
-                "samples": [],
-            }
-        grouped[group_key]["samples"].append(
-            (os.path.basename(normalized_rel_path), wn, sp)
-        )
-
-    for group in grouped.values():
-        yield group["rel_dir"], group["leaf_name"], group["samples"]
-
-
-def pack_init(input_dir, output_path, verbose=True):
-    """把 init 下的散落光谱打包成一个 npz，便于迁移和归档"""
-    input_dir = Path(input_dir)
-    output_path = Path(output_path)
-    if not input_dir.is_dir():
-        raise FileNotFoundError(f"Missing input dir: {input_dir}")
-
-    root_name = input_dir.resolve().name
-    paths = []
-    offsets = [0]
-    wn_chunks = []
-    sp_chunks = []
-
-    for root, arc_files in iter_arc_dirs(input_dir):
-        for fname in arc_files:
-            full_path = root / fname
-            wn, sp = read_arc_data(full_path)
-            if wn.size == 0 or sp.size == 0:
-                continue
-
-            rel_path = full_path.relative_to(input_dir).as_posix()
-            paths.append(rel_path)
-
-            wn = wn.astype(np.float32)
-            sp = sp.astype(np.float32)
-            wn_chunks.append(wn)
-            sp_chunks.append(sp)
-            offsets.append(offsets[-1] + wn.size)
-
-    if not paths:
-        raise RuntimeError(f"No .arc_data files found under {input_dir}")
-
-    wn_all = np.concatenate(wn_chunks, axis=0)
-    sp_all = np.concatenate(sp_chunks, axis=0)
-    offsets = np.asarray(offsets, dtype=np.int64)
-    lengths = np.diff(offsets)
-    offsets = offsets[:-1]
-
-    np.savez_compressed(
-        output_path,
-        root_name=np.asarray([root_name]),
-        paths=np.asarray(paths),
-        offsets=offsets,
-        lengths=lengths,
-        wn_all=wn_all,
-        sp_all=sp_all,
-    )
-
-    if verbose:
-        total = int(wn_all.size)
-        print(f"[Pack] samples={len(paths)}, points={total}, saved={output_path}")
-
-
-def unpack_init(npz_path, output_dir, verbose=True):
-    """把 init.npz 恢复回目录树，便于重新检查和手工处理"""
-    npz_path = Path(npz_path)
-    output_dir = Path(output_dir)
-    packed = PackedArcDataset(npz_path)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    restored = 0
-    for rel_path, wn, sp in packed.iter_samples():
-        out_path = output_dir / Path(rel_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        write_arc_data(out_path, wn, sp)
-        restored += 1
-
-    if verbose:
-        print(f"[Unpack] samples={restored}, restored={output_dir}")
-
 
 def classify(profile, base_dir):
     """将 init 重新归类到 train_raw，统一使用 letters_sign 前缀规则"""
@@ -355,7 +175,6 @@ def classify(profile, base_dir):
             copied += 1
 
     print(f"Stage 1 complete: copied {copied} files into {root_process_raw}")
-
 
 def pca_reconstruct_and_error(spectra, n_components=0.95, center=True):
     """用 PCA 重构样本并返回逐样本误差，供训练集异常值过滤使用"""
@@ -512,7 +331,6 @@ def preprocess_group_samples(
         "wn_list": wn_list,
     }, stats
 
-
 def build_train(profile, base_dir, pipeline_config=None):
     """从 train_raw 构建 train，并输出每类均值谱图和异常值日志"""
     cfg = resolve_pipeline_config(pipeline_config)
@@ -607,7 +425,6 @@ def build_train(profile, base_dir, pipeline_config=None):
     print(f"- Mean plots: {root_figure}")
     print(f"- Hierarchy mean plots: {generated_hierarchy_plots}")
 
-
 def preview(profile, base_dir, pipeline_config=None):
     """基于 init 生成预览图，不落盘清洗结果，适合先检查原始数据质量"""
     cfg = resolve_pipeline_config(pipeline_config)
@@ -673,7 +490,6 @@ def preview(profile, base_dir, pipeline_config=None):
     print("\nDataset init preview finished:")
     print(f"- Mean plots: {root_init_fig}")
     print(f"- Generated={generated}, Skipped={skipped}")
-
 
 def build_test(
     profile,
@@ -773,77 +589,3 @@ def build_test(
         f"Processed={processed}, Skipped={skipped}, Error={errored}"
     )
 
-
-def compute_totals(node):
-    """递归回填每个目录节点的总样本数"""
-    total = node.get("__count__", 0)
-    for name, child in node.items():
-        if name.startswith("__"):
-            continue
-        total += compute_totals(child)
-    node["__total__"] = total
-    return total
-
-
-def build_tree(root_dir):
-    """把目录树转成带计数的嵌套字典，供 count 子命令打印"""
-    tree = {}
-    for leaf_dir, arc_files in iter_arc_dirs(root_dir):
-        rel_dir = Path(leaf_dir).relative_to(root_dir)
-        parts = [] if rel_dir == Path(".") else rel_dir.parts
-
-        node = tree
-        for part in parts:
-            node = node.setdefault(part, {})
-
-        node["__count__"] = node.get("__count__", 0) + len(arc_files)
-
-    compute_totals(tree)
-    return tree
-
-
-def count_dataset(root_dir):
-    """统计一个数据目录下各层文件数，并返回树形结构"""
-    root_dir = Path(root_dir)
-    if not root_dir.is_dir():
-        raise FileNotFoundError(f"Missing input dir: {root_dir}")
-
-    tree = build_tree(root_dir)
-    total_files = tree.get("__total__", 0)
-    return tree, total_files
-
-
-def print_tree(node, level=0, name=None):
-    """按缩进样式打印统计树，便于终端查看目录层级分布"""
-    indent = "  " * level
-    if name is not None:
-        count = node.get("__count__", 0)
-        total = node.get("__total__", 0)
-        children = [key for key in node.keys() if not key.startswith("__")]
-        if children:
-            if count > 0:
-                print(f"{indent}{name}: {count} 个文件 (含子目录总计 {total})")
-            else:
-                print(f"{indent}{name}: 总计 {total} 个文件")
-        else:
-            print(f"{indent}{name}: {count} 个文件")
-
-    for child_name in sorted(key for key in node.keys() if not key.startswith("__")):
-        print_tree(node[child_name], level + 1, child_name)
-
-
-def print_results(tree, total_files):
-    """统一打印 count 子命令的统计结果摘要"""
-    print("\n================ 数据集统计 ================\n")
-    print(f"总文件数: {total_files}\n")
-
-    root_count = tree.get("__count__", 0)
-    if root_count:
-        root_total = tree.get("__total__", 0)
-        print(f"[根目录] {root_count} 个文件 (含子目录总计 {root_total})\n")
-
-    for top_name in sorted(key for key in tree.keys() if not key.startswith("__")):
-        print_tree(tree[top_name], 0, top_name)
-        print("")
-
-    print("============================================\n")

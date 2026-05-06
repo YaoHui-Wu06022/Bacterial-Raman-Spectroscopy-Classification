@@ -178,42 +178,5 @@ class Config:
     max_pre_augs = 4
     max_post_augs = 2
 
-    # 分段峰强比例扰动
-    piecewise_gain_std = 0.12
-
-    # 强度相关高斯噪声，sigma = a + b * |x|
-    noise_base_rel_min = 0.005
-    noise_base_rel_max = 0.02
-    noise_slope_rel_min = 0.0
-    noise_slope_rel_max = 0.015
-
-    # 波数轴扰动
-    axis_warp_alpha = 0.002
-    axis_warp_beta = 1.0
-
-    # 弱 baseline 扰动
-    baseline_lin_min = 0.0
-    baseline_lin_max = 0.02
-    baseline_sin_min = 0.0
-    baseline_sin_max = 0.01
-    baseline_freq_min = 0.5
-    baseline_freq_max = 2.0
-
-    # 强 baseline 扰动
-    baseline_strong_amp_min = 0.05
-    baseline_strong_amp_max = 0.15
-
-    # 标准化后弱形状扰动
-    shift_max = 3
-    broad_sigma_min = 0.6
-    broad_sigma_max = 1.2
-    broad_truncate = 3.0
-
-    # 局部衰减遮挡
-    mask_width_min = 40
-    mask_width_max = 100
-    mask_atten_min = 0.1
-    mask_atten_max = 0.3
-
 
 config = Config()

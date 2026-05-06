@@ -96,6 +96,24 @@ def predict_directory(folder_path, output_dir, predictor, top_k=3, parent_mask=N
         f.writelines(details_lines)
 
     print(f"[Saved] file-level → {output_file_txt}")
+
+
+def iter_predict_folders(predict_root, one_folder=None):
+    if one_folder:
+        folder_path = one_folder
+        if not os.path.isabs(folder_path):
+            folder_path = os.path.join(predict_root, folder_path)
+        if not os.path.isdir(folder_path):
+            raise FileNotFoundError(f"Input folder not found: {folder_path}")
+        return [folder_path]
+
+    return sorted(
+        os.path.join(predict_root, name)
+        for name in os.listdir(predict_root)
+        if os.path.isdir(os.path.join(predict_root, name))
+    )
+
+
 # Main
 if __name__ == "__main__":
 
@@ -124,6 +142,7 @@ if __name__ == "__main__":
     )
 
     TOP_K = 3
+    PREDICT_ONE_FOLDER = None
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -134,19 +153,16 @@ if __name__ == "__main__":
     out_root = os.path.join(EXP_DIR, f"predict_results_{PREDICT_LEVEL}")
     os.makedirs(out_root, exist_ok=True)
 
-    subs = [
-        d for d in os.listdir(PREDICT_ROOT)
-        if os.path.isdir(os.path.join(PREDICT_ROOT, d))
-    ]
+    folders = iter_predict_folders(PREDICT_ROOT, PREDICT_ONE_FOLDER)
 
-    if not subs:
+    if not folders:
         print("No sub-folders found in predict root.")
         exit(0)
 
     print("\n>>> Batch prediction started ...\n")
 
-    for sub in subs:
-        inp = os.path.join(PREDICT_ROOT, sub)
+    for inp in folders:
+        sub = os.path.basename(inp.rstrip("/\\"))
         out = os.path.join(out_root, sub)
 
         print("\n---------------------------------------")

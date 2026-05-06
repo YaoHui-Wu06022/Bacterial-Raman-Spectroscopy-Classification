@@ -80,7 +80,6 @@
 │  └─ infer/
 │     ├─ core.py                     # 层级级联推理核心
 │     ├─ folder.py                   # 批量目录预测
-│     └─ single.py                   # 单目录预测
 ├─ colab/
 │  └─ colab_unified.ipynb            # Colab 一体化 notebook：解压库、数据处理、训练、评估、分析、打包
 ├─ notebooks/
