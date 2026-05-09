@@ -4,7 +4,7 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class DatasetProfile:
-    """描述一个数据集在离线预处理阶段需要的固定目录和坏波段配置"""
+    """描述一个数据集的名称、别名和阶段目录"""
     profile_id: str
     dataset_name: str
     count_root: str
@@ -19,9 +19,6 @@ class DatasetProfile:
     root_init_fig: str = "fig_init"
     log_name: str = "log.txt"
     aliases: tuple[str, ...] = ()
-
-
-COMMON_BAD_BANDS = ((890.0, 950.0),)
 
 
 PROFILES = {
@@ -49,6 +46,12 @@ PROFILES = {
         count_root="train",
         aliases=("厌氧菌", "anaerobe"),
     ),
+    "delete": DatasetProfile(
+        profile_id="delete",
+        dataset_name="移除数据",
+        count_root="train",
+        aliases=("delete",),
+    )
 }
 
 PROFILE_LOOKUP = {}

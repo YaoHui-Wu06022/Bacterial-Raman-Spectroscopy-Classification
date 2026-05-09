@@ -1,13 +1,12 @@
-import os
+import json
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
 
 from raman.data.archive import (
-    PackedArcDataset,
     iter_arc_dirs,
     iter_init_groups,
     resolve_init_input,
@@ -15,9 +14,9 @@ from raman.data.archive import (
 )
 from raman.data.offline import (
     preprocess_single_spectrum,
+    remove_group_cosmic_rays,
     save_mean_plot,
 )
-from raman.data.profiles import COMMON_BAD_BANDS
 from raman.data.spectrum import (
     build_wn_ref,
     read_arc_data,
@@ -27,18 +26,28 @@ from raman.data.spectrum import (
 CUT_MIN = 600
 CUT_MAX = 1800
 TARGET_POINTS = 896
+COMMON_BAD_BANDS = ((890.0, 950.0),)
 
 ASLS_LAM = 3e5 # 更改
 ASLS_P = 0.005 # 更改
 ASLS_MAX_ITER = 15
 
+COSMIC_RAY_ENABLED_PROFILE_IDS = ("bacteria","delete")
+COSMIC_RAY_WINDOW = 7  # 局部窗口
+COSMIC_RAY_THRESHOLD = 7.0  #异常阈值
+COSMIC_RAY_MAX_ITER = 2  # 最大迭代次数
+COSMIC_RAY_GROUP_THRESHOLD = 10.0  # 组内兜底异常阈值
+COSMIC_RAY_GROUP_MIN_SAMPLES = 10  # 少于该数量时不做组内统计
+
 MIN_SAMPLES_PER_CLASS = 8
-NORM_METHOD = "snv"
+PLOT_NORM_METHOD = "snv"
 
 PCA_ENABLED = True
-PCA_COMPONENTS = 50
+PCA_COMPONENTS = 0.95
 PCA_CENTER = True
 PCA_OUTLIER_RATIO = 0.03
+
+TRAIN_RAW_CONFIG_NAME = "config.json"
 
 @dataclass(frozen=True)
 class PipelineConfig:
@@ -46,11 +55,18 @@ class PipelineConfig:
     cut_min: float = CUT_MIN
     cut_max: float = CUT_MAX
     target_points: int = TARGET_POINTS
+    bad_bands: tuple[tuple[float, float], ...] = COMMON_BAD_BANDS
     asls_lam: float = ASLS_LAM
     asls_p: float = ASLS_P
     asls_max_iter: int = ASLS_MAX_ITER
+    cosmic_ray_enabled_profile_ids: tuple[str, ...] = COSMIC_RAY_ENABLED_PROFILE_IDS
+    cosmic_ray_window: int = COSMIC_RAY_WINDOW
+    cosmic_ray_threshold: float = COSMIC_RAY_THRESHOLD
+    cosmic_ray_max_iter: int = COSMIC_RAY_MAX_ITER
+    cosmic_ray_group_threshold: float = COSMIC_RAY_GROUP_THRESHOLD
+    cosmic_ray_group_min_samples: int = COSMIC_RAY_GROUP_MIN_SAMPLES
     min_samples_per_class: int = MIN_SAMPLES_PER_CLASS
-    norm_method: str = NORM_METHOD
+    plot_norm_method: str = PLOT_NORM_METHOD
     pca_enabled: bool = PCA_ENABLED
     pca_components: float | int = PCA_COMPONENTS
     pca_center: bool = PCA_CENTER
@@ -74,14 +90,80 @@ def resolve_pipeline_config(pipeline_config=None):
     """返回离线预处理配置；未传入时使用库内默认配置"""
     return pipeline_config or DEFAULT_PIPELINE_CONFIG
 
-def _resolve_classify_target_dir(root_process_raw, rel_dir, leaf_name):
-    """根据叶子目录名推断目标类别目录，统一处理顶层和多级目录"""
+def _json_ready(value):
+    """把 dataclass/tuple 等配置值转换成稳定 JSON 结构"""
+    return json.loads(json.dumps(value, ensure_ascii=False, sort_keys=True))
+
+def _train_raw_config_payload(profile, cfg):
+    """生成 train_raw 中间层的参数指纹"""
+    return {
+        "profile_id": profile.profile_id,
+        "pipeline_config": _json_ready(asdict(cfg)),
+    }
+
+def _train_raw_config_path(root_process_raw):
+    return Path(root_process_raw) / TRAIN_RAW_CONFIG_NAME
+
+def _write_train_raw_config(root_process_raw, profile, cfg):
+    """在 train_raw 中记录生成该中间层的配置"""
+    config_path = _train_raw_config_path(root_process_raw)
+    config_path.write_text(
+        json.dumps(
+            _train_raw_config_payload(profile, cfg),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+def _train_raw_config_matches(root_process_raw, profile, cfg):
+    """判断现有 train_raw 是否由当前配置生成"""
+    config_path = _train_raw_config_path(root_process_raw)
+    if not config_path.is_file():
+        return False
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return payload == _train_raw_config_payload(profile, cfg)
+
+def _cosmic_ray_enabled(profile, cfg):
+    """判断当前数据集是否启用宇宙射线去除"""
+    return profile.profile_id in set(cfg.cosmic_ray_enabled_profile_ids)
+
+def _cosmic_ray_kwargs(profile, cfg):
+    """构造单谱宇宙射线去除参数"""
+    return {
+        "cosmic_ray_remove": _cosmic_ray_enabled(profile, cfg),
+        "cosmic_ray_window": int(cfg.cosmic_ray_window),
+        "cosmic_ray_threshold": float(cfg.cosmic_ray_threshold),
+        "cosmic_ray_max_iter": int(cfg.cosmic_ray_max_iter),
+    }
+
+
+def _cosmic_ray_group_kwargs(profile, cfg):
+    """构造小文件夹内宇宙射线兜底参数"""
+    return {
+        "enabled": _cosmic_ray_enabled(profile, cfg),
+        "threshold": float(cfg.cosmic_ray_group_threshold),
+        "min_samples": int(cfg.cosmic_ray_group_min_samples),
+    }
+
+
+def _resolve_merged_class_dir(root_output, rel_dir, leaf_name):
+    """根据叶子小文件夹名推断最终合并类别目录"""
     rel_parent = rel_dir.parent
     prefix = get_prefix(leaf_name)
     target_cls = prefix if prefix else leaf_name
     if rel_parent in (Path("."), Path("")):
-        return root_process_raw / target_cls
-    return root_process_raw / rel_parent / target_cls
+        return root_output / target_cls
+    return root_output / rel_parent / target_cls
+
+def _with_leaf_prefix(leaf_name, filename):
+    """合并多个小文件夹时避免文件名冲突"""
+    prefix = f"{leaf_name}_"
+    return filename if filename.startswith(prefix) else f"{prefix}{filename}"
 
 def _resolve_group_figure_dir(root_figure, rel_dir):
     """为一个分组解析均值谱图输出目录，避免多处重复拼接父目录"""
@@ -121,9 +203,9 @@ def _save_hierarchy_mean_plots(hierarchy_groups, root_figure, cfg):
             wn=payload["wn"],
             spectra=spectra_arr,
             out_path=fig_save_path,
-            norm_method=cfg.norm_method,
-            bad_bands=COMMON_BAD_BANDS,
-            title=f"{label} (mean +/- std, n={spectra_arr.shape[0]})",
+            norm_method=cfg.plot_norm_method,
+            bad_bands=cfg.bad_bands,
+            title=f"{label} (mean, q10-q90, n={spectra_arr.shape[0]})",
         )
         print(f"  Hierarchy mean spectrum saved: {fig_save_path}")
         generated += 1
@@ -136,46 +218,28 @@ def _save_spectra_files(save_dir, filenames, wn_list, spectra_arr, fmt="%.3f"):
     for fname, wn_u, sp_u in zip(filenames, wn_list, spectra_arr):
         write_arc_data(save_dir / fname, wn_u, sp_u, fmt=fmt)
 
-def classify(profile, base_dir):
-    """将 init 重新归类到 train_raw，统一使用 letters_sign 前缀规则"""
-    base_dir = Path(base_dir)
-    root_process_raw = resolve_path(base_dir, profile.root_process_raw)
-    root_process_raw.mkdir(parents=True, exist_ok=True)
+def _save_mean_figure(root_figure, rel_dir, filename, wn, spectra, title, cfg):
+    """统一保存均值谱图，SNV 只在这里用于展示"""
+    fig_dir = _resolve_group_figure_dir(root_figure, rel_dir)
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    fig_path = fig_dir / filename
+    save_mean_plot(
+        wn=wn,
+        spectra=spectra,
+        out_path=fig_path,
+        norm_method=cfg.plot_norm_method,
+        bad_bands=cfg.bad_bands,
+        title=title,
+    )
+    print(f"  Mean spectrum saved: {fig_path}")
+    return fig_path
 
-    input_path = resolve_init_input(base_dir, profile)
-
-    copied = 0
-    if Path(input_path).is_dir():
-        for leaf_dir, arc_files in iter_arc_dirs(input_path):
-            rel_dir = leaf_dir.relative_to(input_path)
-            leaf_name = leaf_dir.name
-            target_dir = _resolve_classify_target_dir(
-                root_process_raw, rel_dir, leaf_name
-            )
-            target_dir.mkdir(parents=True, exist_ok=True)
-
-            for fname in arc_files:
-                dst = target_dir / f"{leaf_name}_{fname}"
-                shutil.copy(leaf_dir / fname, dst)
-                copied += 1
-    else:
-        packed = PackedArcDataset(input_path)
-        for rel_path, wn, sp in packed.iter_samples():
-            normalized_rel_path = rel_path.replace("\\", "/")
-            rel_dir = Path(os.path.dirname(normalized_rel_path) or ".")
-            leaf_name = packed.root_name if rel_dir == Path(".") else rel_dir.name
-
-            target_dir = _resolve_classify_target_dir(
-                root_process_raw, rel_dir, leaf_name
-            )
-            target_dir.mkdir(parents=True, exist_ok=True)
-
-            fname = os.path.basename(normalized_rel_path)
-            dst = target_dir / f"{leaf_name}_{fname}"
-            write_arc_data(dst, wn, sp)
-            copied += 1
-
-    print(f"Stage 1 complete: copied {copied} files into {root_process_raw}")
+def _reset_generated_dir(path):
+    """重建生成型目录，避免旧类别残留影响下一次扫描"""
+    path = Path(path)
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
 
 def pca_reconstruct_and_error(spectra, n_components=0.95, center=True):
     """用 PCA 重构样本并返回逐样本误差，供训练集异常值过滤使用"""
@@ -227,98 +291,111 @@ def log_removed_samples(label, filenames, errors, threshold, log_path):
         for fname, err in zip(filenames, errors):
             file.write(f"  {fname}\t{float(err):.6f}\n")
 
-def preprocess_group_samples(
-    samples,
-    bad_bands,
-    label_display,
-    min_samples=None,
-    log_path=None,
-    apply_pca=None,
-    pipeline_config=None,
-):
-    """对一个分组内的多条光谱做统一清洗，并按需执行 PCA 异常值过滤"""
-    cfg = resolve_pipeline_config(pipeline_config)
+def reset_log_file(log_path):
+    """每次进入构建流程时清空旧日志"""
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("", encoding="utf-8")
 
-    if min_samples is None:
-        min_samples = int(cfg.min_samples_per_class)
-    if apply_pca is None:
-        apply_pca = bool(cfg.pca_enabled)
-
-    wn_ref = cfg.build_wn_ref()
-    spectra, wn_list, filenames = [], [], []
-
-    for fname, wn, sp in samples:
-        if wn.size == 0 or sp.size == 0:
-            continue
-
-        wn_u, sp_u = preprocess_single_spectrum(
-            wn,
-            sp,
-            cut_min=cfg.cut_min,
-            cut_max=cfg.cut_max,
-            wn_ref=wn_ref,
-            bad_bands=bad_bands,
-            asls_lam=cfg.asls_lam,
-            asls_p=cfg.asls_p,
-            asls_max_iter=cfg.asls_max_iter,
-        )
-        if wn_u is None:
-            continue
-
-        spectra.append(sp_u)
-        wn_list.append(wn_u)
-        filenames.append(fname)
-
-    stats = {
-        "input": len(samples),
-        "valid_before_pca": len(spectra),
-        "kept": len(spectra),
+def _base_group_stats(input_count, valid_count):
+    """构造分组处理统计字段"""
+    return {
+        "input": input_count,
+        "valid_before_pca": valid_count,
+        "kept": valid_count,
         "removed": 0,
         "pca_components": 0,
         "threshold": None,
         "skip_reason": None,
+        "cosmic_single_replaced": 0,
+        "cosmic_group_replaced": 0,
     }
 
+def _apply_pca_filter(spectra_arr, filenames, wn_list, stats, label_display, cfg, log_path):
+    """对一个已对齐分组执行 PCA 异常样本过滤"""
+    if spectra_arr.shape[0] <= 1:
+        return spectra_arr, filenames, wn_list
+
+    _, k, errors = pca_reconstruct_and_error(
+        spectra_arr,
+        n_components=cfg.pca_components,
+        center=cfg.pca_center,
+    )
+    stats["pca_components"] = k
+    if k <= 0:
+        return spectra_arr, filenames, wn_list
+
+    ratio = float(np.clip(cfg.pca_outlier_ratio, 0.0, 1.0))
+    if ratio <= 0.0:
+        keep_mask = np.ones(len(errors), dtype=bool)
+        threshold = float("inf")
+    else:
+        threshold = float(np.quantile(errors, 1.0 - ratio))
+        keep_mask = errors <= threshold
+
+    removed_mask = ~keep_mask
+    stats["removed"] = int(removed_mask.sum())
+    stats["threshold"] = threshold
+
+    if stats["removed"] > 0 and log_path is not None:
+        log_removed_samples(
+            label_display,
+            [f for f, rm in zip(filenames, removed_mask) if rm],
+            errors[removed_mask],
+            threshold,
+            log_path,
+        )
+
+    spectra_arr = spectra_arr[keep_mask]
+    filenames = [f for f, keep in zip(filenames, keep_mask) if keep]
+    wn_list = [wn for wn, keep in zip(wn_list, keep_mask) if keep]
+    return spectra_arr, filenames, wn_list
+
+def _print_processing_stats(stats, show_zero_cosmic=False):
+    """统一输出 PCA 和宇宙射线清理结果"""
+    if stats["pca_components"] > 0:
+        print(
+            f"  PCA outlier removal: k={stats['pca_components']}, "
+            f"threshold={stats['threshold']:.6f}, removed={stats['removed']}"
+        )
+    if show_zero_cosmic or stats.get("cosmic_single_replaced", 0) > 0:
+        print(
+            "  Cosmic ray single cleanup: "
+            f"replaced={stats['cosmic_single_replaced']}"
+        )
+    if show_zero_cosmic or stats.get("cosmic_group_replaced", 0) > 0:
+        print(
+            "  Cosmic ray group cleanup: "
+            f"replaced={stats['cosmic_group_replaced']}"
+        )
+
+def _finalize_group_result(
+    spectra,
+    wn_list,
+    filenames,
+    stats,
+    min_samples,
+    apply_pca,
+    label_display,
+    cfg,
+    log_path,
+):
+    """统一完成分组数量检查、PCA 过滤和返回结构组装"""
     if len(spectra) < min_samples:
         stats["skip_reason"] = "too_few_preprocessed"
         return None, stats
 
     spectra_arr = np.vstack(spectra)
-
-    if apply_pca and spectra_arr.shape[0] > 1:
-        _, k, errors = pca_reconstruct_and_error(
+    if apply_pca:
+        spectra_arr, filenames, wn_list = _apply_pca_filter(
             spectra_arr,
-            n_components=cfg.pca_components,
-            center=cfg.pca_center,
+            filenames,
+            wn_list,
+            stats,
+            label_display,
+            cfg,
+            log_path,
         )
-
-        stats["pca_components"] = k
-
-        if k > 0:
-            ratio = float(np.clip(cfg.pca_outlier_ratio, 0.0, 1.0))
-            if ratio <= 0.0:
-                keep_mask = np.ones(len(errors), dtype=bool)
-                threshold = float("inf")
-            else:
-                threshold = float(np.quantile(errors, 1.0 - ratio))
-                keep_mask = errors <= threshold
-
-            removed_mask = ~keep_mask
-            stats["removed"] = int(removed_mask.sum())
-            stats["threshold"] = threshold
-
-            if stats["removed"] > 0 and log_path is not None:
-                log_removed_samples(
-                    label_display,
-                    [f for f, rm in zip(filenames, removed_mask) if rm],
-                    errors[removed_mask],
-                    threshold,
-                    log_path,
-                )
-
-            spectra_arr = spectra_arr[keep_mask]
-            filenames = [f for f, keep in zip(filenames, keep_mask) if keep]
-            wn_list = [wn for wn, keep in zip(wn_list, keep_mask) if keep]
 
     stats["kept"] = len(filenames)
     if len(filenames) < min_samples:
@@ -332,37 +409,236 @@ def preprocess_group_samples(
         "wn_list": wn_list,
     }, stats
 
+def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=1):
+    """执行小文件夹内物理清洗，不做 PCA"""
+    wn_ref = cfg.build_wn_ref()
+    spectra, wn_list, filenames = [], [], []
+    cosmic_ray_options = _cosmic_ray_kwargs(profile, cfg)
+    cosmic_ray_group_options = _cosmic_ray_group_kwargs(profile, cfg)
+    cosmic_single_replaced = 0
+
+    for fname, wn, sp in samples:
+        if wn.size == 0 or sp.size == 0:
+            continue
+
+        wn_u, sp_u, single_replaced = preprocess_single_spectrum(
+            wn,
+            sp,
+            cut_min=cfg.cut_min,
+            cut_max=cfg.cut_max,
+            wn_ref=wn_ref,
+            bad_bands=cfg.bad_bands,
+            asls_lam=cfg.asls_lam,
+            asls_p=cfg.asls_p,
+            asls_max_iter=cfg.asls_max_iter,
+            **cosmic_ray_options,
+        )
+        cosmic_single_replaced += int(single_replaced)
+        if wn_u is None:
+            continue
+
+        spectra.append(sp_u)
+        wn_list.append(wn_u)
+        filenames.append(fname)
+
+    stats = _base_group_stats(len(samples), len(spectra))
+    stats["cosmic_single_replaced"] = int(cosmic_single_replaced)
+
+    if len(spectra) >= min_samples and cosmic_ray_group_options.get("enabled", False):
+        spectra_arr = np.vstack(spectra)
+        spectra_arr, replaced = remove_group_cosmic_rays(
+            spectra_arr,
+            threshold=cosmic_ray_group_options.get(
+                "threshold",
+                cfg.cosmic_ray_group_threshold,
+            ),
+            min_samples=cosmic_ray_group_options.get(
+                "min_samples",
+                cfg.cosmic_ray_group_min_samples,
+            ),
+        )
+        spectra = list(spectra_arr)
+        stats["cosmic_group_replaced"] = int(replaced)
+
+    return _finalize_group_result(
+        spectra,
+        wn_list,
+        filenames,
+        stats,
+        min_samples,
+        False,
+        label_display,
+        cfg,
+        None,
+    )
+
+def finalize_clean_group_samples(
+    samples,
+    label_display,
+    min_samples=None,
+    log_path=None,
+    apply_pca=None,
+    pipeline_config=None,
+):
+    """对已经物理清洗好的光谱分组执行可选 PCA 过滤"""
+    cfg = resolve_pipeline_config(pipeline_config)
+    if min_samples is None:
+        min_samples = int(cfg.min_samples_per_class)
+    if apply_pca is None:
+        apply_pca = bool(cfg.pca_enabled)
+
+    spectra, wn_list, filenames = [], [], []
+    for fname, wn, sp in samples:
+        if wn.size == 0 or sp.size == 0:
+            continue
+        spectra.append(np.asarray(sp, dtype=np.float32))
+        wn_list.append(wn)
+        filenames.append(fname)
+
+    stats = _base_group_stats(len(samples), len(spectra))
+
+    return _finalize_group_result(
+        spectra,
+        wn_list,
+        filenames,
+        stats,
+        min_samples,
+        apply_pca,
+        label_display,
+        cfg,
+        log_path,
+    )
+
+def _has_arc_data(root_dir):
+    """递归判断目录中是否已有可复用光谱文件"""
+    root_dir = Path(root_dir)
+    return root_dir.exists() and any(root_dir.rglob("*.arc_data"))
+
+def build_train_raw(profile, base_dir, pipeline_config=None):
+    """从 init 生成按小文件夹保存的物理清洗中间层 train_raw"""
+    cfg = resolve_pipeline_config(pipeline_config)
+    base_dir = Path(base_dir)
+    input_path = resolve_init_input(base_dir, profile)
+    root_process_raw = resolve_path(base_dir, profile.root_process_raw)
+    _reset_generated_dir(root_process_raw)
+
+    generated = 0
+    skipped = 0
+
+    for rel_dir, leaf_name, samples in iter_init_groups(input_path):
+        label = rel_dir.as_posix() if rel_dir != Path(".") else leaf_name
+        label_display = label.replace("\\", "/")
+        print(f"\n=== Build train_raw: {label_display} ===")
+
+        processed_group, stats = preprocess_physical_group(
+            profile,
+            cfg,
+            samples,
+            label_display,
+        )
+
+        if stats["skip_reason"] is not None:
+            print(
+                f"  Skip: no valid spectra after preprocessing "
+                f"({stats['valid_before_pca']}/{stats['input']})"
+            )
+            skipped += 1
+            continue
+
+        _print_processing_stats(stats)
+
+        save_dir = root_process_raw / rel_dir
+        _save_spectra_files(
+            save_dir,
+            processed_group["filenames"],
+            processed_group["wn_list"],
+            processed_group["spectra"],
+        )
+        generated += len(processed_group["filenames"])
+
+    print("\nTrain raw preprocessing finished:")
+    print(f"- Clean intermediate spectra: {root_process_raw}")
+    print(f"- Generated={generated}, Skipped groups={skipped}")
+    _write_train_raw_config(root_process_raw, profile, cfg)
+    print(f"- Config: {_train_raw_config_path(root_process_raw)}")
+
+def _collect_merged_train_groups(root_process_raw, root_process_clean):
+    """从 train_raw 小文件夹收集样本，并按叶子名前缀合并为最终类别"""
+    groups = {}
+    for leaf_dir, arc_files in iter_arc_dirs(root_process_raw):
+        rel_dir = leaf_dir.relative_to(root_process_raw)
+        leaf_name = leaf_dir.name
+        target_dir = _resolve_merged_class_dir(
+            root_process_clean,
+            rel_dir,
+            leaf_name,
+        )
+        target_rel_dir = target_dir.relative_to(root_process_clean)
+        group = groups.setdefault(
+            target_rel_dir.as_posix(),
+            {
+                "target_dir": target_dir,
+                "rel_dir": target_rel_dir,
+                "samples": [],
+            },
+        )
+
+        for fname in arc_files:
+            wn, sp = read_arc_data(leaf_dir / fname)
+            out_name = _with_leaf_prefix(leaf_name, fname)
+            group["samples"].append((out_name, wn, sp))
+
+    return groups
+
+def _read_arc_samples(root, arc_files, input_root):
+    """读取一个小文件夹内的光谱，并统计读取失败数量"""
+    samples = []
+    errored = 0
+    for fname in arc_files:
+        in_path = root / fname
+        try:
+            wn, sp = read_arc_data(in_path)
+            samples.append((fname, wn, sp))
+        except Exception as exc:
+            rel_path = in_path.relative_to(input_root).as_posix()
+            print(f"[ERROR] {rel_path}: {exc}")
+            errored += 1
+    return samples, errored
+
 def build_train(profile, base_dir, pipeline_config=None):
-    """从 train_raw 构建 train，并输出每类均值谱图和异常值日志"""
+    """复用 train_raw，按类别合并后执行 PCA 并生成最终 train"""
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
     root_process_raw = resolve_path(base_dir, profile.root_process_raw)
     root_process_clean = resolve_path(base_dir, profile.root_train_clean)
     root_figure = resolve_path(base_dir, profile.root_train_fig)
     log_path = resolve_path(base_dir, profile.log_name)
+    reset_log_file(log_path)
 
-    if not root_process_raw.is_dir():
-        raise FileNotFoundError(f"Missing input dir: {root_process_raw}")
+    if not _has_arc_data(root_process_raw):
+        print(f"No reusable train_raw found, build from init: {root_process_raw}")
+        build_train_raw(profile, base_dir, pipeline_config=cfg)
+    elif not _train_raw_config_matches(root_process_raw, profile, cfg):
+        print(f"train_raw config changed, rebuild from init: {root_process_raw}")
+        build_train_raw(profile, base_dir, pipeline_config=cfg)
+    else:
+        print(f"Reuse existing train_raw: {root_process_raw}")
 
-    root_process_clean.mkdir(parents=True, exist_ok=True)
-    root_figure.mkdir(parents=True, exist_ok=True)
+    if not _has_arc_data(root_process_raw):
+        raise FileNotFoundError(f"No .arc_data files found in: {root_process_raw}")
+
+    _reset_generated_dir(root_process_clean)
+    _reset_generated_dir(root_figure)
     hierarchy_groups = {}
+    merged_groups = _collect_merged_train_groups(root_process_raw, root_process_clean)
 
-    for cls_raw_dir, arc_files in iter_arc_dirs(root_process_raw):
-        rel_dir = cls_raw_dir.relative_to(root_process_raw)
-        label = rel_dir.as_posix() if rel_dir != Path(".") else root_process_raw.name
-        label_display = label.replace("\\", "/")
+    for group in sorted(merged_groups.values(), key=lambda item: item["rel_dir"].as_posix()):
+        rel_dir = group["rel_dir"]
+        label_display = rel_dir.as_posix()
+        print(f"\n=== Build train: {label_display} ===")
 
-        print(f"\n=== Processing: {label_display} ===")
-
-        samples = []
-        for fname in arc_files:
-            wn, sp = read_arc_data(cls_raw_dir / fname)
-            samples.append((fname, wn, sp))
-
-        processed_group, stats = preprocess_group_samples(
-            samples=samples,
-            bad_bands=COMMON_BAD_BANDS,
+        processed_group, stats = finalize_clean_group_samples(
+            samples=group["samples"],
             label_display=label_display,
             log_path=log_path,
             pipeline_config=cfg,
@@ -374,11 +650,7 @@ def build_train(profile, base_dir, pipeline_config=None):
             )
             continue
 
-        if stats["pca_components"] > 0:
-            print(
-                f"  PCA outlier removal: k={stats['pca_components']}, "
-                f"threshold={stats['threshold']:.6f}, removed={stats['removed']}"
-            )
+        _print_processing_stats(stats)
 
         if stats["skip_reason"] == "too_few_after_pca":
             print(f"  Skip: too few samples ({stats['kept']}) in {label_display}")
@@ -388,23 +660,19 @@ def build_train(profile, base_dir, pipeline_config=None):
         filenames = processed_group["filenames"]
         wn_list = processed_group["wn_list"]
 
-        save_dir = root_process_clean / rel_dir
+        save_dir = group["target_dir"]
         _save_spectra_files(save_dir, filenames, wn_list, spectra_arr)
 
-        fig_dir = _resolve_group_figure_dir(root_figure, rel_dir)
-        fig_dir.mkdir(parents=True, exist_ok=True)
-        fig_save_path = fig_dir / f"{cls_raw_dir.name}.png"
-        title = " - ".join(rel_dir.parts) + " (mean +/- std)"
-        save_mean_plot(
+        title = " - ".join(rel_dir.parts) + " (mean, q10-q90)"
+        _save_mean_figure(
+            root_figure=root_figure,
+            rel_dir=rel_dir,
+            filename=f"{rel_dir.name}.png",
             wn=wn_list[0],
             spectra=spectra_arr,
-            out_path=fig_save_path,
-            norm_method=cfg.norm_method,
-            bad_bands=COMMON_BAD_BANDS,
             title=title,
+            cfg=cfg,
         )
-
-        print(f"  Mean spectrum saved: {fig_save_path}")
 
         for level_idx, parts in _iter_ancestor_level_keys(rel_dir):
             key = (level_idx, parts)
@@ -422,7 +690,8 @@ def build_train(profile, base_dir, pipeline_config=None):
     )
 
     print("\nTraining dataset preprocessing finished:")
-    print(f"- Clean spectra: {root_process_clean}")
+    print(f"- Reusable clean intermediate spectra: {root_process_raw}")
+    print(f"- Final train spectra: {root_process_clean}")
     print(f"- Mean plots: {root_figure}")
     print(f"- Hierarchy mean plots: {generated_hierarchy_plots}")
 
@@ -443,14 +712,11 @@ def preview(profile, base_dir, pipeline_config=None):
 
         print(f"\n=== Preview: {label_display} ===")
 
-        processed_group, stats = preprocess_group_samples(
-            samples=samples,
-            bad_bands=COMMON_BAD_BANDS,
-            label_display=label_display,
-            min_samples=1,
-            log_path=None,
-            apply_pca=False,
-            pipeline_config=cfg,
+        processed_group, stats = preprocess_physical_group(
+            profile,
+            cfg,
+            samples,
+            label_display,
         )
 
         if stats["skip_reason"] is not None:
@@ -461,31 +727,22 @@ def preview(profile, base_dir, pipeline_config=None):
             skipped += 1
             continue
 
-        if stats["pca_components"] > 0:
-            print(
-                f"  PCA outlier removal: k={stats['pca_components']}, "
-                f"threshold={stats['threshold']:.6f}, removed={stats['removed']}"
-            )
-
-        fig_dir = _resolve_group_figure_dir(root_init_fig, rel_dir)
-        fig_dir.mkdir(parents=True, exist_ok=True)
-        fig_save_path = fig_dir / f"{leaf_name}.png"
+        _print_processing_stats(stats, show_zero_cosmic=True)
 
         title = " - ".join(rel_dir.parts) if rel_dir != Path(".") else leaf_name
         title = (
-            f"{title} (mean +/- std, kept {stats['kept']}/{stats['input']})"
+            f"{title} (mean, q10-q90, kept {stats['kept']}/{stats['input']})"
         )
 
-        save_mean_plot(
+        _save_mean_figure(
+            root_figure=root_init_fig,
+            rel_dir=rel_dir,
+            filename=f"{leaf_name}.png",
             wn=processed_group["wn"],
             spectra=processed_group["spectra"],
-            out_path=fig_save_path,
-            norm_method=cfg.norm_method,
-            bad_bands=COMMON_BAD_BANDS,
             title=title,
+            cfg=cfg,
         )
-
-        print(f"  Mean spectrum saved: {fig_save_path}")
         generated += 1
 
     print("\nDataset init preview finished:")
@@ -501,7 +758,6 @@ def build_test(
 ):
     """从测试原始目录构建 test，并输出每个文件夹的均值谱图"""
     cfg = resolve_pipeline_config(pipeline_config)
-    wn_ref = cfg.build_wn_ref()
     base_dir = Path(base_dir)
     input_dir = (
         Path(input_dir)
@@ -518,75 +774,54 @@ def build_test(
     if not input_dir.is_dir():
         raise FileNotFoundError(f"Missing input dir: {input_dir}")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    root_test_fig.mkdir(parents=True, exist_ok=True)
+    _reset_generated_dir(output_dir)
+    _reset_generated_dir(root_test_fig)
 
     processed = 0
     skipped = 0
     errored = 0
 
     for root, arc_files in iter_arc_dirs(input_dir):
-        spectra = []
-        wn_list = []
+        rel_dir = root.relative_to(input_dir)
+        label_display = rel_dir.as_posix()
+        samples, group_errors = _read_arc_samples(root, arc_files, input_dir)
+        errored += group_errors
 
-        for fname in arc_files:
-            in_path = root / fname
-            rel_dir = in_path.parent.relative_to(input_dir)
-            out_dir = output_dir / rel_dir
-            out_dir.mkdir(parents=True, exist_ok=True)
-            out_path = out_dir / fname
+        processed_group, stats = preprocess_physical_group(
+            profile,
+            cfg,
+            samples,
+            label_display,
+        )
+        skipped += stats["input"] - stats["valid_before_pca"]
 
-            try:
-                wn, sp = read_arc_data(in_path)
-                wn_u, sp_u = preprocess_single_spectrum(
-                    wn,
-                    sp,
-                    cut_min=cfg.cut_min,
-                    cut_max=cfg.cut_max,
-                    wn_ref=wn_ref,
-                    bad_bands=COMMON_BAD_BANDS,
-                    asls_lam=cfg.asls_lam,
-                    asls_p=cfg.asls_p,
-                    asls_max_iter=cfg.asls_max_iter,
-                )
-                if wn_u is None:
-                    rel_path = in_path.relative_to(input_dir).as_posix()
-                    print(f"[SKIP] {rel_path} (empty after cut)")
-                    skipped += 1
-                    continue
-
-                write_arc_data(out_path, wn_u, sp_u, fmt="%.3f")
-
-                spectra.append(sp_u)
-                wn_list.append(wn_u)
-                processed += 1
-            except Exception as exc:
-                rel_path = in_path.relative_to(input_dir).as_posix()
-                print(f"[ERROR] {rel_path}: {exc}")
-                errored += 1
-
-        if spectra:
-            spectra_arr = np.vstack(spectra)
-            wn_ref = wn_list[0]
-
-            rel_dir = root.relative_to(input_dir)
-            fig_dir = _resolve_group_figure_dir(root_test_fig, rel_dir)
-            fig_dir.mkdir(parents=True, exist_ok=True)
-            fig_path = fig_dir / f"{root.name}.png"
-
-            save_mean_plot(
-                wn=wn_ref,
-                spectra=spectra_arr,
-                out_path=fig_path,
-                norm_method=cfg.norm_method,
-                bad_bands=COMMON_BAD_BANDS,
-                title=f"{rel_dir.as_posix()} (mean +/- std)",
+        if stats["skip_reason"] is not None:
+            print(
+                f"  Skip: no valid spectra after preprocessing "
+                f"({stats['valid_before_pca']}/{stats['input']})"
             )
+            continue
 
-            print(f"  Mean spectrum saved: {fig_path}")
+        _print_processing_stats(stats)
+        _save_spectra_files(
+            output_dir / rel_dir,
+            processed_group["filenames"],
+            processed_group["wn_list"],
+            processed_group["spectra"],
+        )
+        processed += len(processed_group["filenames"])
+
+        _save_mean_figure(
+            root_figure=root_test_fig,
+            rel_dir=rel_dir,
+            filename=f"{root.name}.png",
+            wn=processed_group["wn"],
+            spectra=processed_group["spectra"],
+            title=f"{label_display} (mean, q10-q90)",
+            cfg=cfg,
+        )
 
     print(
         "Test dataset preprocessing finished. "
         f"Processed={processed}, Skipped={skipped}, Error={errored}"
     )
-

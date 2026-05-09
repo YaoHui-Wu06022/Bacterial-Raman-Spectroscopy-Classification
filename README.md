@@ -32,6 +32,8 @@
 
 ## 2. 仓库结构与模块职责
 
+### 2.1 根目录入口
+
 ```text
 拉曼光谱分类/
 ├─ train.py                          # 训练入口，只负责手动覆盖项与 run_training 调用
@@ -39,65 +41,96 @@
 ├─ pca_svm_baseline.py               # PCA + SVM 基线评估入口
 ├─ analyze.py                        # 分析入口，支持 single / aggregate 两种模式
 ├─ independent_test.py               # 独立测试集形态、分类分布与 embedding 近邻诊断
-├─ raman/
-│  ├─ config.py                      # 训练配置定义：输入、模型、损失、增强概率、优化器参数
-│  ├─ config_io.py                   # config.yaml 读写与实验配置回载
-│  ├─ model.py                       # 主模型实现：多尺度 stem + 1D CNN + encoder + pooling + head
-│  ├─ trainer.py                     # 训练总调度：数据集、层级任务、模型循环与 hierarchy meta
-│  ├─ data/
-│  │  ├─ paths.py                    # 训练/测试目录解析，统一把 dataset_root 映射到具体阶段目录
-│  │  ├─ loader.py                   # RamanDataset：目录扫描、层级标签、样本索引与读取接口
-│  │  ├─ input.py                    # 在线模型输入：标准化、SG、d1 通道与训练增强
-│  │  ├─ spectrum.py                 # 光谱文件读写、波数轴、坏波段 mask 与通用归一化
-│  │  ├─ offline.py                  # 离线 AsLS、单谱清洗与均值谱绘图
-│  │  ├─ archive.py                  # init.npz 打包/解包与 init 输入解析
-│  │  ├─ build.py                    # 离线构建主流程：classify、preview、build_train、build_test
-│  │  ├─ count.py                    # 数据集文件数量统计与树形输出
-│  │  ├─ profiles.py                 # 各数据集的目录布局、原始目录命名、统一坏波段设置
-│  │  ├─ cli.py                      # 离线数据处理 CLI：pack/unpack/classify/preview/train/test/count
-│  │  └─ __main__.py                 # 支持 python -m raman.data
-│  ├─ training/
-│  │  ├─ split.py                    # 训练/验证切分、训练范围解析、父类过滤
-│  │  ├─ losses.py                   # Focal / SupCon / AlignLoss / 类别权重
-│  │  ├─ model_loop.py               # 单个模型的训练循环、EMA 权重、最佳模型保存
-│  │  ├─ validation.py               # 训练期验证循环、父类 mask、局部标签映射与指标计算
-│  │  ├─ checkpoint.py               # 续训 checkpoint 保存、恢复与清理
-│  │  ├─ se_stats.py                 # 训练期累计 SEBlock 缩放统计
-│  │  └─ session.py                  # 输出目录、日志、随机种子与配置快照
-│  ├─ analysis/
-│  │  ├─ pipeline.py                 # 分析调度：构建上下文、解析任务、切换 single / aggregate
-│  │  ├─ tasks.py                    # 分析任务与 DataLoader 构建
-│  │  ├─ level.py                    # 单层/单模型分析执行：IG、Grad-CAM、UMAP、SE
-│  │  ├─ aggregate.py                # parent 子模型聚合分析
-│  │  ├─ ig.py                       # Integrated Gradients：输入通道重要性与类别波段重要性
-│  │  ├─ gradcam.py                  # Layer Grad-CAM：层级/分组重要性分析
-│  │  ├─ embedding.py                # embedding 收集与 train + test 联合 UMAP 可视化
-│  │  └─ se.py                       # 读取训练期 SE sidecar 并输出 SEBlock 缩放统计
-│  ├─ eval/
-│  │  ├─ experiment.py               # 实验目录、配置、hierarchy meta 与模型路径解析
-│  │  ├─ runtime.py                  # 实验运行时：模型懒加载、缓存与 SE sidecar 读取
-│  │  ├─ common.py                   # 共享推理辅助：logits 选择、层级掩码、级联推理、指标计算
-│  │  ├─ evaluator.py                # 测试集评估主流程与结果落盘
-│  │  ├─ baseline.py                 # PCA + SVM 基线实现
-│  │  └─ report.py                   # classification report、混淆矩阵、文本结果输出
-│  └─ infer/
-│     ├─ core.py                     # 层级级联推理核心
-│     └─ folder.py                   # 批量目录预测，也可通过 PREDICT_ONE_FOLDER 跑单个文件夹
-├─ colab/
-│  └─ colab_unified.ipynb            # Colab 一体化 notebook：解压库、数据处理、训练、评估、分析、打包
-├─ notebooks/
-│  └─ single_process_AsLS_cut_SNV.ipynb # 单条光谱从原始输入到模型通道构建的可视化 notebook
-└─ dataset/
-   └─ <数据集名>/
-      ├─ init/                       # 原始归档解包后的初始数据
-      ├─ init.npz                    # init 的压缩归档
-      ├─ train_raw/                  # 按文件名前缀归类后的训练原始数据
-      ├─ train/                      # 训练用清洗后数据
-      ├─ test_raw/                   # 测试原始数据
-      ├─ test/                       # 测试用清洗后数据
-      ├─ fig_init/                   # init 预览图
-      ├─ fig_train/                  # 训练集均值图与高层级均值图
-      └─ fig_test/                   # 测试集均值图
+```
+
+### 2.2 核心模型与配置
+
+```text
+raman/
+├─ config.py                         # 训练配置定义：输入、模型、损失、增强概率、优化器参数
+├─ config_io.py                      # config.yaml 读写与实验配置回载
+├─ model.py                          # 主模型实现：多尺度 stem + 1D CNN + encoder + pooling + head
+└─ trainer.py                        # 训练总调度：数据集、层级任务、模型循环与 hierarchy meta
+```
+
+### 2.3 数据层
+
+```text
+raman/data/
+├─ paths.py                          # 训练/测试目录解析，统一把 dataset_root 映射到具体阶段目录
+├─ loader.py                         # RamanDataset：目录扫描、层级标签、样本索引与读取接口
+├─ input.py                          # 在线模型输入：标准化、SG、d1 通道与训练增强
+├─ spectrum.py                       # 光谱文件读写、波数轴、坏波段 mask 与通用归一化
+├─ offline.py                        # 离线 AsLS、宇宙射线去除、单谱清洗与均值谱绘图
+├─ archive.py                        # init.npz 打包/解包与 init 输入解析
+├─ build.py                          # 离线构建主流程：preview、build_train、build_test
+├─ count.py                          # 数据集文件数量统计与树形输出
+├─ profiles.py                       # 各数据集的目录布局、数据集名称与别名
+├─ cli.py                            # 离线数据处理 CLI：pack/unpack/preview/train/test/count
+└─ __main__.py                       # 支持 python -m raman.data
+```
+
+### 2.4 训练层
+
+```text
+raman/training/
+├─ split.py                          # 训练/验证切分、训练范围解析、父类过滤
+├─ losses.py                         # Focal / SupCon / AlignLoss / 类别权重
+├─ model_loop.py                     # 单个模型的训练循环、EMA 权重、最佳模型保存
+├─ validation.py                     # 训练期验证循环、父类 mask、局部标签映射与指标计算
+├─ checkpoint.py                     # 续训 checkpoint 保存、恢复与清理
+├─ se_stats.py                       # 训练期累计 SEBlock 缩放统计
+└─ session.py                        # 输出目录、日志、随机种子与配置快照
+```
+
+### 2.5 评估与推理层
+
+```text
+raman/eval/
+├─ experiment.py                     # 实验目录、配置、hierarchy meta 与模型路径解析
+├─ runtime.py                        # 实验运行时：模型懒加载、缓存与 SE sidecar 读取
+├─ common.py                         # 共享推理辅助：logits 选择、层级掩码、级联推理、指标计算
+├─ evaluator.py                      # 测试集评估主流程与结果落盘
+├─ baseline.py                       # PCA + SVM 基线实现
+└─ report.py                         # classification report、混淆矩阵、文本结果输出
+
+raman/infer/
+├─ core.py                           # 层级级联推理核心
+└─ folder.py                         # 批量目录预测，也可通过 PREDICT_ONE_FOLDER 跑单个文件夹
+```
+
+### 2.6 分析层 
+
+```text
+raman/analysis/
+├─ pipeline.py                       # 分析调度：构建上下文、解析任务、切换 single / aggregate
+├─ tasks.py                          # 分析任务与 DataLoader 构建
+├─ level.py                          # 单层/单模型分析执行：IG、Grad-CAM、UMAP、SE
+├─ aggregate.py                      # parent 子模型聚合分析
+├─ ig.py                             # Integrated Gradients：输入通道重要性与类别波段重要性
+├─ gradcam.py                        # Layer Grad-CAM：层级/分组重要性分析
+├─ embedding.py                      # embedding 收集与 train + test 联合 UMAP 可视化
+└─ se.py                             # 读取训练期 SE sidecar 并输出 SEBlock 缩放统计
+```
+
+### 2.7 Notebook 与数据目录
+
+```text
+colab/
+└─ colab_unified.ipynb               # Colab 一体化 notebook：解压库、数据处理、训练、评估、分析、打包
+notebooks/
+└─ single_process_AsLS_cut_SNV.ipynb # 单条光谱从原始输入到模型通道构建的可视化 notebook
+dataset/
+└─ <数据集名>/
+   ├─ init/                          # 原始归档解包后的初始数据
+   ├─ init.npz                       # init 的压缩归档
+   ├─ train_raw/                     # 可复用清洗中间层，保留小文件夹结构
+   ├─ train/                         # 训练用清洗后数据
+   ├─ test_raw/                      # 测试原始数据
+   ├─ test/                          # 测试用清洗后数据
+   ├─ fig_init/                      # init 预览图
+   ├─ fig_train/                     # 训练集均值图与高层级均值图
+   └─ fig_test/                      # 测试集均值图
 ```
 
 ## 3. 记号说明
@@ -135,7 +168,7 @@ python -m raman.data pack 细菌       # 打包init数据集
 python -m raman.data unpack 细菌     # 还原init数据集
 python -m raman.data preview 细菌    # 对init每个文件夹做均值谱图输出，方便检查原始数据质量
 python -m raman.data count 细菌      # 统计数据集
-python -m raman.data train 细菌      # 先从init重组train_raw，再清洗训练数据并执行PCA清洗
+python -m raman.data train 细菌      # 先构建可复用train_raw，再合并类别、执行PCA清洗并生成train
 python -m raman.data test 细菌       # 对测试数据进行一致的清洗
 ```
 
@@ -143,11 +176,13 @@ python -m raman.data test 细菌       # 对测试数据进行一致的清洗
 
 1. 读取原始光谱
 2. 先根据坏段生成 valid_mask
-3. 做 AsLS 基线校正时，用 valid_mask 忽略坏段对基线的影响
-4. 再按 CUT_MIN / CUT_MAX 裁切波数范围
-5. 在裁切后的源光谱里删除坏段
-6. 在目标统一波数轴 wn_ref 里也删除坏段
-7. 最后插值到统一波数轴
+3. 按数据集设置执行单谱宇宙射线尖峰去除
+4. 做 AsLS 基线校正时，用 valid_mask 忽略坏段对基线的影响
+5. 再按 CUT_MIN / CUT_MAX 裁切波数范围
+6. 在裁切后的源光谱里删除坏段
+7. 在目标统一波数轴 wn_ref 里也删除坏段
+8. 最后插值到统一波数轴
+9. 对同一小文件夹做组内宇宙射线兜底清理
 
 ### 4.1 参数修改
 
@@ -159,20 +194,20 @@ python -m raman.data test 细菌       # 对测试数据进行一致的清洗
 
 - 波段裁剪范围 `cut_min` / `cut_max`
 - 统一参考波数轴点数 `target_points`
+- 坏波段范围 `bad_bands`
 - AsLS 参数 `asls_lam` / `asls_p` / `asls_max_iter`
+- 宇宙射线去除阈值与启用数据集
 - 训练集最小样本数 `min_samples_per_class`
-- 绘图归一化方式 `norm_method`
+- 绘图归一化方式 `plot_norm_method`
 - PCA 异常值过滤相关参数
 
 不同数据集的目录名在 `raman/data/profiles.py` 里维护
-
-由于设备采集差异，对所有数据集坏波段固定为`890~950 cm^-1`
 
 ### 4.2 数据集目录结构
 
 - `init/`：原始按测量文件夹组织的数据
 - `init.npz`：`init/` 的打包版本
-- `train_raw/`：按类别前缀重组后的中间结果
+- `train_raw/`：从 `init/` 生成的可复用清洗中间层，保留小文件夹结构
 - `train/`：训练集离线清洗结果
 - `test_raw/`：测试集原始输入目录
 - `test/`：测试集离线清洗结果
@@ -180,48 +215,194 @@ python -m raman.data test 细菌       # 对测试数据进行一致的清洗
 - `fig_test/`：测试集均值谱图
 - `fig_init/`：原始数据预览图
 - `log.txt`：训练集 PCA 异常值剔除日志
+- `train_raw/config.json`：记录生成 `train_raw` 的清洗参数，参数不一致时会自动重建
 
 ### 4.3 原始数据预览
 
 - 直接基于 `init/` 或 `init.npz` 做预处理预览
-- 执行基线校正、裁剪、坏波段剔除与统一参考轴插值
+- 执行宇宙射线去除、基线校正、裁剪、坏波段剔除与统一参考轴插值
 - 不做 PCA 异常值过滤与光谱输出
 - 只输出每个分组的均值谱图到 `fig_init/`
 
 先检查原始数据质量，看是否需要将某个文件夹移除，不再进入后续训练数据集
 
-### 4.4 重组数据集
+### 4.4 清洗中间层
 
 由于采集数据按日期划分，原始数据集一般命名为`类别+数字`
 
-所以需要重组数据，把多个文件夹按类别收缩到一个文件夹中
+训练命令会先把 `init/` 中每个叶子小文件夹独立清洗到 `train_raw/`
 
 - 扫描 `init/` 或 `init.npz`
 
-- 读取叶子目录名
+- 每个小文件夹内部独立执行宇宙射线去除、AsLS、裁剪、坏段删除和插值
 
-- 统一按 `letters_sign` 规则提取类别前缀
-  
-  例如：`ABC12 -> ABC`，`ESBL+03 -> ESBL+`
-  
-- 将样本复制到 `train_raw/`，文件名更改为`叶子目录名_原文件名`
+- `train_raw/` 仍保留小文件夹结构，不在这一层按前缀合并类别
 
-这一步的目的是先把原始采集目录整理成更稳定的类别目录结构，供后续统一清洗
+- 如果 `train_raw/` 已存在且 `config.json` 与当前 `PipelineConfig` 一致，会直接复用
+
+- 如果清洗参数改变，`train_raw/` 会自动重建，避免旧中间结果和新参数混用
+
+最终生成 `train/` 时，才会按 `letters_sign` 规则提取类别前缀并合并小文件夹
+
+例如：`ABC12 -> ABC`，`ESBL+03 -> ESBL+`
 
 ### 4.5 训练集离线清洗
 
 每条光谱执行：
 
 1. 读取 `.arc_data`
-2. AsLS 基线校正
-3. 波段裁剪
-4. 在裁剪后的原始波数轴上删除坏段
-5. 对统一后的波数轴做线性插值，不跨坏段补点
-6. 对同一分组样本按 PCA 重构误差做异常值过滤
+2. 单谱宇宙射线尖峰去除
+3. AsLS 基线校正
+4. 波段裁剪
+5. 在裁剪后的原始波数轴上删除坏段
+6. 对统一后的波数轴做线性插值，不跨坏段补点
+7. 对同一小文件夹做组内宇宙射线兜底清理
+8. 对同一分组样本按 PCA 重构误差做异常值过滤
 
 如果某个分组预处理后样本数少于 `min_samples_per_class`，该分组会跳过
 
 被 PCA 剔除的样本会记录到 `log.txt`
+
+#### 宇宙射线去除
+
+宇宙射线在拉曼光谱中通常表现为很窄、很高、只出现在少数采样点上的正向尖峰
+
+这类尖峰和真实拉曼峰的差异在于：
+
+- 真实峰一般具有连续峰形，不会只在单个或极少数采样点突然跳高
+- 宇宙射线尖峰通常相对局部邻域异常抬高
+- 同一小文件夹内，大多数样本不会在完全相同位置同时出现同样尖峰
+
+当前实现采用两级保守处理：
+
+1. 单谱局部中值清理
+2. 小文件夹内组统计兜底清理
+
+对于单条光谱 $x \in \mathbb{R}^L$，$i$ 表示光谱序列中的第 $i$ 个波数采样点
+
+```math
+\tilde{x}_i = \operatorname{median}\{x_{i'} \mid i' \in \mathcal{W}_m(i)\}
+
+```
+
+其中 $\mathcal{W}_m(i)$ 表示以位置 $i$ 为中心、长度为 $m$ 的局部波数窗口，$i'$ 是该窗口内的临时位置索引
+
+残差定义为
+
+```math
+r_i = x_i - \tilde{x}_i
+```
+
+只考虑正向异常残差，并用 MAD 估计单条光谱内的鲁棒尺度：
+
+```math
+\sigma _x
+=
+1.4826 \cdot
+\operatorname{median}_{i}
+\left(
+\left|
+r_i - \operatorname{median}_{i'}(r_{i'})
+\right|
+\right)
+```
+
+若某个波数位置 $i$ 满足：
+
+```math
+r_i > \lambda_x \sigma_x
+
+```
+
+其中 $\lambda_x$ 是单谱宇宙射线检测的阈值系数
+
+则认为该位置是单谱内的疑似宇宙射线尖峰，并用局部中值替换：
+
+```math
+x_i \leftarrow \tilde{x}_i
+```
+
+单谱清理完成后，光谱继续进入 AsLS、裁剪、坏段删除和统一波数轴插值
+
+在同一小文件夹内，设插值后的光谱矩阵为：
+
+```math
+X^{(g)} \in \mathbb{R}^{N_g \times L}
+
+```
+
+其中 $g$ 表示当前小文件夹，$N_g$ 是该小文件夹内的样本数，$L$ 是统一后的波数轴长度
+
+矩阵元素 $X^{(g)}_{n,i}$ 表示当前小文件夹中第 $n$ 条光谱在第 $i$ 个波数采样点处的强度
+
+对每个波数位置 $i$，计算组内中位数：
+
+```math
+\mu^{(g)}_i
+=
+\operatorname{median}_{n}
+\left(
+X^{(g)}_{n,i}
+\right)
+```
+
+组内残差定义为：
+
+```math
+e^{(g)}_{n,i}
+=
+X^{(g)}_{n,i}
+-
+\mu^{(g)}_i
+```
+
+再对每个波数位置 $i$ 估计组内鲁棒尺度：
+
+```math
+\sigma^{(g)}_i
+=
+1.4826 \cdot
+\operatorname{median}_{n}
+\left(
+\left|
+e^{(g)}_{n,i}
+-
+\operatorname{median}_{n'}
+\left(
+e^{(g)}_{n',i}
+\right)
+\right|
+\right)
+```
+
+若某条光谱在某个波数位置满足：
+
+```math
+e^{(g)}_{n,i}
+>
+\lambda_g \sigma^{(g)}_i
+```
+
+则说明第 $n$ 条光谱相对同一小文件夹内其它样本，在第 $i$ 个波数位置处存在异常正向抬高
+
+此时将该位置替换为该波数位置的组内中位数：
+
+```math
+X^{(g)}_{n,i}
+\leftarrow
+\mu^{(g)}_i
+```
+
+这个组内步骤不是基线校正，也不是为了抹平真实类别差异。它只处理“少数样本独有的正向尖峰”，用于兜底单谱局部中值没有完全去掉的残留宇宙射线
+
+
+
+它只处理“少数样本独有的正向尖峰”，用来兜底单谱局部中值没有完全去掉的残留宇宙射线
+
+`preview / train / test` 会输出每个小文件夹的两类替换点数量：
+
+- `Cosmic ray single cleanup`：单谱阶段替换点数
+- `Cosmic ray group cleanup`：组内兜底阶段替换点数
 
 #### AsLS 基线校正原理
 

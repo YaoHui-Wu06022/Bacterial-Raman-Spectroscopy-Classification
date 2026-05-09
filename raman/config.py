@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from raman.data.build import DEFAULT_PIPELINE_CONFIG
-from raman.data.profiles import COMMON_BAD_BANDS, get_profile
+from raman.data.build import COMMON_BAD_BANDS, DEFAULT_PIPELINE_CONFIG
+from raman.data.profiles import get_profile
 
 
 class Config:
