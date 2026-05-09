@@ -24,7 +24,7 @@ from raman.training import load_split_files
 
 
 # 手动设置实验目录与分析层级
-EXP_DIR = "output/厌氧菌/20260506_075855_95.42%"
+EXP_DIR = ""
 COMPARE_LEVEL = "level_1"
 TOP_K = 3
 

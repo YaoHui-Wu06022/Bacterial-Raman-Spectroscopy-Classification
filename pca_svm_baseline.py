@@ -3,10 +3,10 @@
 from raman.eval import BaselineOverrides, run_pca_svm_baseline
 
 # 手动覆盖
-EXP_DIR = "output/reference/20260420_084809"
+EXP_DIR = ""
 LEVEL = "level_1"
 USE_ALL_CHANNELS = False
-PCA_N_COMPONENTS = 5
+PCA_N_COMPONENTS = 2
 SVM_C = 1.0
 SVM_KERNEL = "rbf"
 SVM_GAMMA = "scale"

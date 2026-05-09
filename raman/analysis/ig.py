@@ -454,7 +454,7 @@ def plot_band_importance_heatmap(
     else:
         x_label = "Wavenumber"
 
-    fig_height = max(4, 0.6 * len(class_names))
+    fig_height = max(8, 0.6 * len(class_names))
     fig, ax = plt.subplots(figsize=(12, fig_height))
 
     gap_indices = _estimate_gap_indices(wavenumbers)

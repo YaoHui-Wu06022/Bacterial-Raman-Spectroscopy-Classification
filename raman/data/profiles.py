@@ -31,6 +31,12 @@ PROFILES = {
         count_root="train",
         aliases=("细菌", "bacteria"),
     ),
+    "Enterobacteriaceae": DatasetProfile(
+        profile_id="Enterobacteriaceae",
+        dataset_name="肠杆菌",
+        count_root="train",
+        aliases=("肠杆菌", "Enterobacteriaceae"),
+    ),
     "resistance": DatasetProfile(
         profile_id="resistance",
         dataset_name="耐药菌",
@@ -42,12 +48,6 @@ PROFILES = {
         dataset_name="厌氧菌",
         count_root="train",
         aliases=("厌氧菌", "anaerobe"),
-    ),
-    "reference": DatasetProfile(
-        profile_id="reference",
-        dataset_name="reference",
-        count_root="train",
-        aliases=("reference",),
     ),
 }
 
