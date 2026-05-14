@@ -248,7 +248,7 @@ def train_model(
         {"params": group_conv, "lr": config.learning_rate*0.6},
         {"params": group_backbone, "lr": config.learning_rate},
         {"params": group_head, "lr": config.learning_rate*1.2},
-    ], weight_decay=1e-4)
+    ], weight_decay=5e-4)
 
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=config.scheduler_Tmax, eta_min=config.scheduler_eta_min

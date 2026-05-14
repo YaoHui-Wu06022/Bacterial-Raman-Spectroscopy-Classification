@@ -32,11 +32,11 @@ ASLS_LAM = 3e5 # 更改
 ASLS_P = 0.005 # 更改
 ASLS_MAX_ITER = 15
 
-COSMIC_RAY_ENABLED_PROFILE_IDS = ("bacteria","delete")
+COSMIC_RAY_ENABLED_PROFILE_IDS = ("bacteria", "delete", "Enterobacteriaceae")
 COSMIC_RAY_WINDOW = 7  # 局部窗口
-COSMIC_RAY_THRESHOLD = 7.0  #异常阈值
+COSMIC_RAY_THRESHOLD = 8.0  #异常阈值
 COSMIC_RAY_MAX_ITER = 2  # 最大迭代次数
-COSMIC_RAY_GROUP_THRESHOLD = 10.0  # 组内兜底异常阈值
+COSMIC_RAY_GROUP_THRESHOLD = 15  # 组内兜底异常阈值
 COSMIC_RAY_GROUP_MIN_SAMPLES = 10  # 少于该数量时不做组内统计
 
 MIN_SAMPLES_PER_CLASS = 8
@@ -297,6 +297,16 @@ def reset_log_file(log_path):
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text("", encoding="utf-8")
 
+def _append_log_lines(log_path, lines):
+    """把预处理过程中的关键统计追加到 log.txt"""
+    if log_path is None or not lines:
+        return
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as file:
+        for line in lines:
+            file.write(f"{line}\n")
+
 def _base_group_stats(input_count, valid_count):
     """构造分组处理统计字段"""
     return {
@@ -368,6 +378,21 @@ def _print_processing_stats(stats, show_zero_cosmic=False):
             "  Cosmic ray group cleanup: "
             f"replaced={stats['cosmic_group_replaced']}"
         )
+
+def _log_cosmic_ray_stats(label_display, stats, log_path, show_zero_cosmic=False):
+    """把每个小文件夹的宇宙射线清理统计写入日志"""
+    lines = []
+    if show_zero_cosmic or stats.get("cosmic_single_replaced", 0) > 0:
+        lines.append(
+            f"[{label_display}] Cosmic ray single cleanup: "
+            f"replaced={stats['cosmic_single_replaced']}"
+        )
+    if show_zero_cosmic or stats.get("cosmic_group_replaced", 0) > 0:
+        lines.append(
+            f"[{label_display}] Cosmic ray group cleanup: "
+            f"replaced={stats['cosmic_group_replaced']}"
+        )
+    _append_log_lines(log_path, lines)
 
 def _finalize_group_result(
     spectra,
@@ -514,7 +539,7 @@ def _has_arc_data(root_dir):
     root_dir = Path(root_dir)
     return root_dir.exists() and any(root_dir.rglob("*.arc_data"))
 
-def build_train_raw(profile, base_dir, pipeline_config=None):
+def build_train_raw(profile, base_dir, pipeline_config=None, log_path=None):
     """从 init 生成按小文件夹保存的物理清洗中间层 train_raw"""
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
@@ -546,6 +571,7 @@ def build_train_raw(profile, base_dir, pipeline_config=None):
             continue
 
         _print_processing_stats(stats)
+        _log_cosmic_ray_stats(label_display, stats, log_path)
 
         save_dir = root_process_raw / rel_dir
         _save_spectra_files(
@@ -617,10 +643,10 @@ def build_train(profile, base_dir, pipeline_config=None):
 
     if not _has_arc_data(root_process_raw):
         print(f"No reusable train_raw found, build from init: {root_process_raw}")
-        build_train_raw(profile, base_dir, pipeline_config=cfg)
+        build_train_raw(profile, base_dir, pipeline_config=cfg, log_path=log_path)
     elif not _train_raw_config_matches(root_process_raw, profile, cfg):
         print(f"train_raw config changed, rebuild from init: {root_process_raw}")
-        build_train_raw(profile, base_dir, pipeline_config=cfg)
+        build_train_raw(profile, base_dir, pipeline_config=cfg, log_path=log_path)
     else:
         print(f"Reuse existing train_raw: {root_process_raw}")
 

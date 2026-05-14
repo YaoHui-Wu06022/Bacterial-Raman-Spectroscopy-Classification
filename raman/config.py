@@ -28,7 +28,7 @@ class Config:
 
     # 数据集设置
     # 只需要改这里的数据集名称，预处理设置来源于 raman.data
-    dataset_name = "细菌"
+    dataset_name = "肠杆菌"
 
     @property
     def dataset_root(self):
@@ -116,7 +116,7 @@ class Config:
     # transformer
     transformer_nhead = 6
     transformer_dim = 192
-    transformer_ffn_dim = 384
+    transformer_ffn_dim = 768 # 原版 4 倍
     transformer_layers = 2
     transformer_dropout = 0.2
     # lstm
