@@ -4,10 +4,9 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class DatasetProfile:
-    """描述一个数据集的名称、别名和阶段目录"""
+    """描述一个数据集的名称和阶段目录"""
     profile_id: str
     dataset_name: str
-    count_root: str
     root_init: str = "init"
     root_init_pack: str = "init.npz"
     root_process_raw: str = "train_raw"
@@ -18,39 +17,32 @@ class DatasetProfile:
     root_test_raw: str = "test_raw"
     root_init_fig: str = "fig_init"
     log_name: str = "log.txt"
-    aliases: tuple[str, ...] = ()
 
 
 PROFILES = {
     "bacteria": DatasetProfile(
         profile_id="bacteria",
         dataset_name="细菌",
-        count_root="train",
-        aliases=("细菌", "bacteria"),
     ),
     "Enterobacteriaceae": DatasetProfile(
         profile_id="Enterobacteriaceae",
         dataset_name="肠杆菌",
-        count_root="train",
-        aliases=("肠杆菌", "Enterobacteriaceae"),
+    ),
+    "Non_Enterobacterale": DatasetProfile(
+        profile_id="Non_Enterobacterale",
+        dataset_name="非肠杆菌",
     ),
     "resistance": DatasetProfile(
         profile_id="resistance",
         dataset_name="耐药菌",
-        count_root="train",
-        aliases=("耐药菌", "resistance"),
     ),
     "anaerobe": DatasetProfile(
         profile_id="anaerobe",
         dataset_name="厌氧菌",
-        count_root="train",
-        aliases=("厌氧菌", "anaerobe"),
     ),
     "delete": DatasetProfile(
         profile_id="delete",
         dataset_name="移除数据",
-        count_root="train",
-        aliases=("delete",),
     )
 }
 
@@ -58,8 +50,6 @@ PROFILE_LOOKUP = {}
 for profile in PROFILES.values():
     PROFILE_LOOKUP[profile.profile_id] = profile
     PROFILE_LOOKUP[profile.dataset_name] = profile
-    for alias in profile.aliases:
-        PROFILE_LOOKUP[alias] = profile
 
 
 def list_profiles():

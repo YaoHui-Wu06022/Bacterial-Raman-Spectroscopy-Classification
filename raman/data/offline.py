@@ -1,7 +1,10 @@
+from dataclasses import dataclass
+
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.patches import Patch
 from scipy import sparse
+from scipy.signal import find_peaks, peak_prominences, peak_widths
 from scipy.sparse.linalg import spsolve
 
 from raman.data.spectrum import (
@@ -10,6 +13,21 @@ from raman.data.spectrum import (
     normalize_bad_bands,
     snv,
 )
+
+
+@dataclass(frozen=True)
+class CosmicRayStats:
+    """记录单谱宇宙射线清理数量，int(stats) 返回总替换点数"""
+
+    narrow: int = 0
+    wide: int = 0
+
+    @property
+    def total(self):
+        return int(self.narrow) + int(self.wide)
+
+    def __int__(self):
+        return self.total
 
 
 def asls_baseline(spectrum, lam=1e5, p=0.01, niter=10, valid_mask=None):
@@ -60,12 +78,177 @@ def _median_filter_1d(x, window):
     return np.median(windows, axis=1).astype(np.float32, copy=False)
 
 
+def _residual_z_score(residual, valid_mask):
+    residual_valid = residual[valid_mask]
+    residual_valid = residual_valid[np.isfinite(residual_valid)]
+    if residual_valid.size == 0:
+        return None
+
+    center = np.median(residual_valid)
+    centered_abs = np.abs(residual_valid - center)
+    mad = np.median(centered_abs)
+    scale = 1.4826 * mad
+    if scale <= 1e-8:
+        nonzero_abs = centered_abs[centered_abs > 1e-8]
+        if nonzero_abs.size > 0:
+            scale = 1.4826 * float(np.median(nonzero_abs))
+    if scale <= 1e-8:
+        scale = float(np.std(residual_valid))
+    if scale <= 1e-8:
+        return None
+
+    return (residual - center) / scale
+
+
+def _iter_true_segments(mask):
+    start = None
+    for idx, enabled in enumerate(mask):
+        if enabled and start is None:
+            start = idx
+        elif not enabled and start is not None:
+            yield start, idx
+            start = None
+    if start is not None:
+        yield start, len(mask)
+
+
+def _replace_segment(cleaned, fallback, start, end, valid_mask):
+    left = start - 1
+    while left >= 0 and not valid_mask[left]:
+        left -= 1
+
+    right = end
+    while right < cleaned.size and not valid_mask[right]:
+        right += 1
+
+    if left >= 0 and right < cleaned.size and right > left:
+        x = np.arange(start, end, dtype=np.float32)
+        cleaned[start:end] = np.interp(
+            x,
+            np.array([left, right], dtype=np.float32),
+            np.array([cleaned[left], cleaned[right]], dtype=np.float32),
+        )
+    else:
+        cleaned[start:end] = fallback[start:end]
+
+
+def _merge_intervals(intervals):
+    intervals = list(intervals)
+    if not intervals:
+        return []
+
+    intervals = sorted(intervals, key=lambda item: (item[0], item[1]))
+    merged = [list(intervals[0])]
+    for start, end in intervals[1:]:
+        last = merged[-1]
+        if start <= last[1]:
+            last[1] = max(last[1], end)
+        else:
+            merged.append([start, end])
+    return [(start, end) for start, end in merged]
+
+
+def _estimate_noise_from_diff(cleaned, valid_mask):
+    valid_values = cleaned[valid_mask]
+    valid_values = valid_values[np.isfinite(valid_values)]
+    if valid_values.size < 3:
+        return 0.0
+
+    diff = np.diff(valid_values)
+    if diff.size == 0:
+        return 0.0
+
+    mad = np.median(np.abs(diff - np.median(diff)))
+    scale = 1.4826 * mad / np.sqrt(2.0)
+    if scale <= 1e-8:
+        scale = float(np.std(diff) / np.sqrt(2.0))
+    return max(scale, 0.0)
+
+
+def _remove_peak_morphology_spikes(
+    cleaned,
+    valid_mask,
+    prominence_z,
+    width_max_cm,
+    ratio_z_per_cm,
+    pad_points,
+    rel_height,
+    wn=None,
+):
+    noise = _estimate_noise_from_diff(cleaned, valid_mask)
+    if noise <= 1e-8:
+        return 0
+
+    peaks, _ = find_peaks(cleaned)
+    if peaks.size == 0:
+        return 0
+
+    peaks = peaks[valid_mask[peaks]]
+    if peaks.size == 0:
+        return 0
+
+    prominences = peak_prominences(cleaned, peaks)[0]
+    widths, _, left_ips, right_ips = peak_widths(
+        cleaned,
+        peaks,
+        rel_height=float(rel_height),
+    )
+
+    if wn is not None and len(wn) == cleaned.size:
+        wn = np.asarray(wn, dtype=np.float32)
+        step = float(np.median(np.diff(wn)))
+    else:
+        step = 1.0
+    step = max(abs(step), 1e-6)
+
+    width_cm = widths * step
+    prominence_score = prominences / noise
+    ratio = prominence_score / np.maximum(width_cm, step)
+
+    selected = (
+        (prominence_score >= float(prominence_z))
+        & (width_cm <= float(width_max_cm))
+        & (ratio >= float(ratio_z_per_cm))
+    )
+    if not selected.any():
+        return 0
+
+    fallback = _median_filter_1d(cleaned, 7)
+    intervals = []
+    for left_ip, right_ip in zip(left_ips[selected], right_ips[selected]):
+        start = max(0, int(np.floor(left_ip)) - int(pad_points))
+        end = min(cleaned.size, int(np.ceil(right_ip)) + int(pad_points) + 1)
+        if start < end:
+            intervals.append((start, end))
+
+    replaced_mask = np.zeros(cleaned.shape, dtype=bool)
+    for start, end in _merge_intervals(intervals):
+        segment_mask = np.zeros(cleaned.shape, dtype=bool)
+        segment_mask[start:end] = True
+        segment_mask &= valid_mask
+        if not segment_mask.any():
+            continue
+
+        start_idx = int(np.where(segment_mask)[0][0])
+        end_idx = int(np.where(segment_mask)[0][-1]) + 1
+        _replace_segment(cleaned, fallback, start_idx, end_idx, valid_mask)
+        replaced_mask[start_idx:end_idx] = True
+
+    return int(replaced_mask.sum())
+
+
 def remove_cosmic_rays(
     sp,
     window=7,
     threshold=8.0,
     max_iter=2,
     valid_mask=None,
+    wn=None,
+    peak_prominence_z=8.0,
+    peak_width_max_cm=22.0,
+    peak_ratio_z_per_cm=0.55,
+    peak_pad_points=1,
+    peak_rel_height=0.5,
 ):
     """
     保守去除宇宙射线尖峰
@@ -74,7 +257,7 @@ def remove_cosmic_rays(
     """
     cleaned = np.asarray(sp, dtype=np.float32).copy()
     if cleaned.size < 3 or max_iter <= 0:
-        return cleaned, 0
+        return cleaned, CosmicRayStats()
 
     if valid_mask is None:
         valid_mask = np.ones(cleaned.shape, dtype=bool)
@@ -83,31 +266,37 @@ def remove_cosmic_rays(
         if valid_mask.shape != cleaned.shape:
             valid_mask = np.ones(cleaned.shape, dtype=bool)
 
-    replaced_mask = np.zeros(cleaned.shape, dtype=bool)
+    narrow_mask = np.zeros(cleaned.shape, dtype=bool)
     for _ in range(int(max_iter)):
         local_median = _median_filter_1d(cleaned, window)
         residual = cleaned - local_median
-        residual_valid = residual[valid_mask]
-        residual_valid = residual_valid[np.isfinite(residual_valid)]
-        if residual_valid.size == 0:
+        z_score = _residual_z_score(residual, valid_mask)
+        if z_score is None:
             break
 
-        center = np.median(residual_valid)
-        mad = np.median(np.abs(residual_valid - center))
-        scale = 1.4826 * mad
-        if scale <= 1e-8:
-            scale = float(np.std(residual_valid))
-        if scale <= 1e-8:
-            break
-
-        spike_mask = valid_mask & (residual > float(threshold) * scale)
+        spike_mask = valid_mask & (z_score > float(threshold))
         if not spike_mask.any():
             break
 
-        replaced_mask |= spike_mask
+        narrow_mask |= spike_mask
         cleaned[spike_mask] = local_median[spike_mask]
 
-    return cleaned, int(replaced_mask.sum())
+    wide_replaced = _remove_peak_morphology_spikes(
+        cleaned,
+        valid_mask,
+        prominence_z=peak_prominence_z,
+        width_max_cm=peak_width_max_cm,
+        ratio_z_per_cm=peak_ratio_z_per_cm,
+        pad_points=peak_pad_points,
+        rel_height=peak_rel_height,
+        wn=wn,
+    )
+
+    return cleaned, CosmicRayStats(
+        narrow=int(narrow_mask.sum()),
+        wide=int(wide_replaced),
+    )
+
 
 
 def remove_group_cosmic_rays(
@@ -160,12 +349,17 @@ def preprocess_single_spectrum(
     cosmic_ray_window=7,
     cosmic_ray_threshold=8.0,
     cosmic_ray_max_iter=2,
+    cosmic_ray_peak_prominence_z=8.0,
+    cosmic_ray_peak_width_max_cm=22.0,
+    cosmic_ray_peak_ratio_z_per_cm=0.55,
+    cosmic_ray_peak_pad_points=1,
+    cosmic_ray_peak_rel_height=0.5,
 ):
     """对单条光谱执行宇宙射线去除、基线校正、裁剪和插值"""
     bad_bands = normalize_bad_bands(bad_bands)
     valid_mask = build_valid_mask(wn, bad_bands)
     sp_clean = np.asarray(sp, dtype=np.float32)
-    cosmic_replaced = 0
+    cosmic_replaced = CosmicRayStats()
 
     if cosmic_ray_remove:
         sp_clean, cosmic_replaced = remove_cosmic_rays(
@@ -174,6 +368,12 @@ def preprocess_single_spectrum(
             threshold=cosmic_ray_threshold,
             max_iter=cosmic_ray_max_iter,
             valid_mask=valid_mask,
+            wn=wn,
+            peak_prominence_z=cosmic_ray_peak_prominence_z,
+            peak_width_max_cm=cosmic_ray_peak_width_max_cm,
+            peak_ratio_z_per_cm=cosmic_ray_peak_ratio_z_per_cm,
+            peak_pad_points=cosmic_ray_peak_pad_points,
+            peak_rel_height=cosmic_ray_peak_rel_height,
         )
 
     baseline = asls_baseline(
