@@ -20,11 +20,12 @@ class CosmicRayStats:
     """记录单谱宇宙射线清理数量，int(stats) 返回总替换点数"""
 
     narrow: int = 0
-    wide: int = 0
+    peak: int = 0
+    residual: int = 0
 
     @property
     def total(self):
-        return int(self.narrow) + int(self.wide)
+        return int(self.narrow) + int(self.peak) + int(self.residual)
 
     def __int__(self):
         return self.total
@@ -259,6 +260,10 @@ def _iter_true_segments(mask):
 
 
 def _replace_segment(cleaned, fallback, start, end, valid_mask):
+    segment_valid = valid_mask[start:end]
+    if not segment_valid.any():
+        return
+
     left = start - 1
     while left >= 0 and not valid_mask[left]:
         left -= 1
@@ -269,13 +274,17 @@ def _replace_segment(cleaned, fallback, start, end, valid_mask):
 
     if left >= 0 and right < cleaned.size and right > left:
         x = np.arange(start, end, dtype=np.float32)
-        cleaned[start:end] = np.interp(
+        replacement = np.interp(
             x,
             np.array([left, right], dtype=np.float32),
             np.array([cleaned[left], cleaned[right]], dtype=np.float32),
         )
     else:
-        cleaned[start:end] = fallback[start:end]
+        replacement = fallback[start:end]
+
+    segment = cleaned[start:end].copy()
+    segment[segment_valid] = replacement[segment_valid]
+    cleaned[start:end] = segment
 
 
 def _merge_intervals(intervals):
@@ -289,6 +298,33 @@ def _merge_intervals(intervals):
         last = merged[-1]
         if start <= last[1]:
             last[1] = max(last[1], end)
+        else:
+            merged.append([start, end])
+    return [(start, end) for start, end in merged]
+
+
+def _expand_mask(mask, pad_points, valid_mask=None):
+    mask = np.asarray(mask, dtype=bool)
+    result = np.zeros(mask.shape, dtype=bool)
+    pad_points = max(0, int(pad_points))
+    for start, end in _iter_true_segments(mask):
+        result[max(0, start - pad_points): min(mask.size, end + pad_points)] = True
+    if valid_mask is not None:
+        result &= np.asarray(valid_mask, dtype=bool)
+    return result
+
+
+def _merge_segments_with_small_gaps(mask, max_gap_points=1):
+    segments = list(_iter_true_segments(mask))
+    if not segments:
+        return []
+
+    merged = [list(segments[0])]
+    max_gap_points = max(0, int(max_gap_points))
+    for start, end in segments[1:]:
+        last = merged[-1]
+        if start - last[1] <= max_gap_points:
+            last[1] = end
         else:
             merged.append([start, end])
     return [(start, end) for start, end in merged]
@@ -321,17 +357,18 @@ def _remove_peak_morphology_spikes(
     rel_height,
     wn=None,
 ):
+    empty_mask = np.zeros(cleaned.shape, dtype=bool)
     noise = _estimate_noise_from_diff(cleaned, valid_mask)
     if noise <= 1e-8:
-        return 0
+        return 0, empty_mask
 
     peaks, _ = find_peaks(cleaned)
     if peaks.size == 0:
-        return 0
+        return 0, empty_mask
 
     peaks = peaks[valid_mask[peaks]]
     if peaks.size == 0:
-        return 0
+        return 0, empty_mask
 
     prominences = peak_prominences(cleaned, peaks)[0]
     widths, _, left_ips, right_ips = peak_widths(
@@ -352,7 +389,7 @@ def _remove_peak_morphology_spikes(
         & (ratio >= float(ratio_z_per_cm))
     )
     if not selected.any():
-        return 0
+        return 0, empty_mask
 
     fallback = _median_filter_1d(cleaned, 7)
     pad_points = _cm_to_pad_points(pad_cm, wn)
@@ -374,9 +411,95 @@ def _remove_peak_morphology_spikes(
         start_idx = int(np.where(segment_mask)[0][0])
         end_idx = int(np.where(segment_mask)[0][-1]) + 1
         _replace_segment(cleaned, fallback, start_idx, end_idx, valid_mask)
-        replaced_mask[start_idx:end_idx] = True
+        replaced_mask[start_idx:end_idx] |= valid_mask[start_idx:end_idx]
 
-    return int(replaced_mask.sum())
+    return int(replaced_mask.sum()), replaced_mask
+
+
+def _remove_anchored_residual_plateaus(
+    cleaned,
+    valid_mask,
+    anchor_mask,
+    window_cm,
+    threshold_z,
+    min_width_cm,
+    max_width_cm,
+    anchor_pad_cm,
+    replace_pad_cm,
+    min_area_z_cm,
+    max_points_fraction,
+    wn=None,
+):
+    if not anchor_mask.any():
+        return 0, np.zeros(cleaned.shape, dtype=bool)
+
+    step = _median_step_cm(wn)
+    window = _cm_to_odd_window_points(window_cm, wn)
+    fallback = _median_filter_1d(cleaned, window)
+    residual = cleaned - fallback
+    z_score = _residual_z_score(residual, valid_mask)
+    if z_score is None:
+        return 0, np.zeros(cleaned.shape, dtype=bool)
+
+    anchor_pad_points = _cm_to_pad_points(anchor_pad_cm, wn)
+    anchor_region = _expand_mask(anchor_mask, anchor_pad_points, valid_mask)
+    candidate_mask = (
+        valid_mask
+        & anchor_region
+        & (residual > 0)
+        & (z_score >= float(threshold_z))
+    )
+    if not candidate_mask.any():
+        return 0, np.zeros(cleaned.shape, dtype=bool)
+
+    replace_pad_points = _cm_to_pad_points(replace_pad_cm, wn)
+    max_points = max(1, int(np.floor(valid_mask.sum() * float(max_points_fraction))))
+    replaced_mask = np.zeros(cleaned.shape, dtype=bool)
+
+    for start, end in _merge_segments_with_small_gaps(candidate_mask, max_gap_points=1):
+        segment_valid = valid_mask[start:end]
+        if not segment_valid.any():
+            continue
+
+        valid_indices = np.where(segment_valid)[0] + start
+        first_idx = int(valid_indices[0])
+        last_idx = int(valid_indices[-1])
+        anchor_start = first_idx
+        while anchor_start > 0 and anchor_region[anchor_start - 1]:
+            anchor_start -= 1
+
+        anchor_end = last_idx + 1
+        while anchor_end < cleaned.size and anchor_region[anchor_end]:
+            anchor_end += 1
+
+        component_anchor_mask = anchor_mask[anchor_start:anchor_end] & valid_mask[anchor_start:anchor_end]
+        if int(component_anchor_mask.sum()) < 2:
+            continue
+
+        width_cm = abs(float(wn[last_idx] - wn[first_idx])) + step if wn is not None else (last_idx - first_idx + 1) * step
+        if width_cm < float(min_width_cm) or width_cm > float(max_width_cm):
+            continue
+
+        z_segment = z_score[start:end][segment_valid]
+        peak_z = float(np.max(z_segment))
+        area_z_cm = float(np.sum(np.maximum(z_segment, 0.0)) * step)
+        if peak_z < float(threshold_z) or area_z_cm < float(min_area_z_cm):
+            continue
+
+        replace_start = max(0, anchor_start - replace_pad_points)
+        replace_end = min(cleaned.size, anchor_end + replace_pad_points)
+        segment_replace_mask = np.zeros(cleaned.shape, dtype=bool)
+        segment_replace_mask[replace_start:replace_end] = True
+        segment_replace_mask &= valid_mask
+
+        new_points = segment_replace_mask & ~replaced_mask
+        if int(replaced_mask.sum() + new_points.sum()) > max_points:
+            continue
+
+        _replace_segment(cleaned, fallback, replace_start, replace_end, valid_mask)
+        replaced_mask |= segment_replace_mask
+
+    return int(replaced_mask.sum()), replaced_mask
 
 
 def remove_cosmic_rays(
@@ -391,11 +514,13 @@ def remove_cosmic_rays(
     peak_ratio_z_per_cm=4.0,
     peak_pad_cm=2.0,
     peak_rel_height=0.5,
+    residual_threshold_z=10.0,
+    residual_max_points_fraction=0.03,
 ):
     """
     去除宇宙射线尖峰
 
-    只检测相对局部中值异常抬高的窄峰，坏段位置不参与判断
+    只检测相对局部中值异常抬高的正向异常峰；调用方可通过 valid_mask 限制检测范围
     """
     cleaned = np.asarray(sp, dtype=np.float32).copy()
     if cleaned.size < 3 or max_iter <= 0:
@@ -424,7 +549,7 @@ def remove_cosmic_rays(
         narrow_mask |= spike_mask
         cleaned[spike_mask] = local_median[spike_mask]
 
-    wide_replaced = _remove_peak_morphology_spikes(
+    peak_replaced, peak_mask = _remove_peak_morphology_spikes(
         cleaned,
         valid_mask,
         prominence_z=peak_prominence_z,
@@ -435,9 +560,32 @@ def remove_cosmic_rays(
         wn=wn,
     )
 
+    residual_min_width_cm = float(peak_pad_cm)
+    residual_window_cm = float(peak_width_max_cm) * 2
+    residual_max_width_cm = float(peak_width_max_cm) * 2
+    residual_anchor_pad_cm = float(peak_pad_cm) * 3.0
+    residual_replace_pad_cm = float(peak_pad_cm)
+    residual_min_area_z_cm = float(residual_threshold_z) * residual_min_width_cm
+
+    residual_replaced, _ = _remove_anchored_residual_plateaus(
+        cleaned,
+        valid_mask,
+        anchor_mask=(narrow_mask | peak_mask),
+        window_cm=residual_window_cm,
+        threshold_z=residual_threshold_z,
+        min_width_cm=residual_min_width_cm,
+        max_width_cm=residual_max_width_cm,
+        anchor_pad_cm=residual_anchor_pad_cm,
+        replace_pad_cm=residual_replace_pad_cm,
+        min_area_z_cm=residual_min_area_z_cm,
+        max_points_fraction=residual_max_points_fraction,
+        wn=wn,
+    )
+
     return cleaned, CosmicRayStats(
         narrow=int(narrow_mask.sum()),
-        wide=int(wide_replaced),
+        peak=int(peak_replaced),
+        residual=int(residual_replaced),
     )
 
 
@@ -452,6 +600,8 @@ def preprocess_single_spectrum(
     baseline_lam,
     baseline_asls_p,
     baseline_max_iter,
+    baseline_fit_min=None,
+    baseline_fit_max=None,
     baseline_method="asls",
     cosmic_ray_remove=False,
     cosmic_ray_window_cm=10.0,
@@ -462,41 +612,56 @@ def preprocess_single_spectrum(
     cosmic_ray_peak_ratio_z_per_cm=4.0,
     cosmic_ray_peak_pad_cm=2.0,
     cosmic_ray_peak_rel_height=0.5,
+    cosmic_ray_residual_threshold_z=10.0,
+    cosmic_ray_residual_max_points_fraction=0.03,
 ):
     """对单条光谱执行宇宙射线去除、基线校正、裁剪和插值"""
     bad_bands = normalize_bad_bands(bad_bands)
-    valid_mask = build_valid_mask(wn, bad_bands)
     sp_clean = np.asarray(sp, dtype=np.float32)
     cosmic_replaced = CosmicRayStats()
 
     if cosmic_ray_remove:
+        # 宇宙射线先按整条原始谱处理，避免坏段边界附近的尖峰因 mask 断开而漏修。
+        # 坏段 mask 仍用于后续基线估计、裁切删除和绘图遮挡。
         sp_clean, cosmic_replaced = remove_cosmic_rays(
             sp_clean,
             window_cm=cosmic_ray_window_cm,
             threshold=cosmic_ray_threshold,
             max_iter=cosmic_ray_max_iter,
-            valid_mask=valid_mask,
+            valid_mask=None,
             wn=wn,
             peak_prominence_z=cosmic_ray_peak_prominence_z,
             peak_width_max_cm=cosmic_ray_peak_width_max_cm,
             peak_ratio_z_per_cm=cosmic_ray_peak_ratio_z_per_cm,
             peak_pad_cm=cosmic_ray_peak_pad_cm,
             peak_rel_height=cosmic_ray_peak_rel_height,
+            residual_threshold_z=cosmic_ray_residual_threshold_z,
+            residual_max_points_fraction=cosmic_ray_residual_max_points_fraction,
         )
 
+    fit_min = cut_min if baseline_fit_min is None else float(baseline_fit_min)
+    fit_max = cut_max if baseline_fit_max is None else float(baseline_fit_max)
+    baseline_fit_mask = (wn >= fit_min) & (wn <= fit_max)
+    wn_fit = wn[baseline_fit_mask]
+    sp_fit = sp_clean[baseline_fit_mask]
+    valid_fit_mask = build_valid_mask(wn_fit, bad_bands)
+
+    if wn_fit.size < 10:
+        return None, None, cosmic_replaced
+
     baseline = estimate_baseline(
-        sp_clean,
+        sp_fit,
         method=baseline_method,
         lam=baseline_lam,
         p=baseline_asls_p,
         niter=baseline_max_iter,
-        valid_mask=valid_mask,
+        valid_mask=valid_fit_mask,
     )
-    sp_bc = sp_clean - baseline
+    sp_bc_fit = sp_fit - baseline
 
-    mask_cut = (wn >= cut_min) & (wn <= cut_max)
-    wn_cut = wn[mask_cut]
-    sp_cut = sp_bc[mask_cut]
+    mask_cut = (wn_fit >= cut_min) & (wn_fit <= cut_max)
+    wn_cut = wn_fit[mask_cut]
+    sp_cut = sp_bc_fit[mask_cut]
 
     if wn_cut.size < 10:
         return None, None, cosmic_replaced

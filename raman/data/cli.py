@@ -1,7 +1,6 @@
 import argparse
 from pathlib import Path
 
-from raman.data.audit import SpectrumAuditConfig, audit_dataset
 from raman.data.build import build_test, build_train, preview
 from raman.data.archive import pack_init, unpack_init
 from raman.data.count import count_dataset, print_results
@@ -68,27 +67,6 @@ def run_count(args):
     print_results(tree, total_files)
 
 
-def run_audit(args):
-    """审核文件夹内单谱形态离群样本，并输出异常谱处理图"""
-    profile = get_profile(args.dataset)
-    dataset_dir = resolve_dataset_dir(profile)
-    audit_cfg = SpectrumAuditConfig(
-        score_threshold=args.score_threshold,
-        corr_threshold=args.corr_threshold,
-        point_z_threshold=args.point_z_threshold,
-        max_bad_point_ratio=args.max_bad_point_ratio,
-        max_plots_per_group=args.max_plots_per_group,
-    )
-    audit_dataset(
-        profile,
-        dataset_dir,
-        subdir=args.subdir,
-        folder=args.folder,
-        output_dir=args.output_dir,
-        audit_config=audit_cfg,
-    )
-
-
 def build_parser():
     """构造 raman.data 命令行参数解析器"""
     parser = argparse.ArgumentParser(description="Unified data prep entrypoint.")
@@ -101,7 +79,6 @@ def build_parser():
         ("train", run_train, "Build reusable train_raw, then build train"),
         ("test", run_test, "Build test from test_raw"),
         ("count", run_count, "Count arc_data files in a dataset subdir"),
-        ("audit", run_audit, "Audit single-spectrum outliers in a folder or stage"),
     ):
         sub = subparsers.add_parser(command, help=help_text)
         sub.add_argument("dataset", help="Dataset name, such as 细菌 / 耐药菌 / 厌氧菌")
@@ -109,15 +86,6 @@ def build_parser():
             sub.add_argument("--quiet", action="store_true")
         if command == "count":
             sub.add_argument("--subdir", default=None, help="Override counted subdir")
-        if command == "audit":
-            sub.add_argument("--subdir", default="init", help="Dataset stage to audit")
-            sub.add_argument("--folder", default=None, help="Folder path relative to dataset root")
-            sub.add_argument("--output-dir", default=None, help="Override audit output dir")
-            sub.add_argument("--score-threshold", type=float, default=3.5)
-            sub.add_argument("--corr-threshold", type=float, default=0.92)
-            sub.add_argument("--point-z-threshold", type=float, default=8.0)
-            sub.add_argument("--max-bad-point-ratio", type=float, default=0.03)
-            sub.add_argument("--max-plots-per-group", type=int, default=20)
         sub.set_defaults(func=handler)
 
     return parser

@@ -40,10 +40,6 @@ PROFILES = {
         profile_id="anaerobe",
         dataset_name="厌氧菌",
     ),
-    "delete": DatasetProfile(
-        profile_id="delete",
-        dataset_name="移除数据",
-    )
 }
 
 PROFILE_LOOKUP = {}

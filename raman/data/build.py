@@ -28,20 +28,24 @@ TARGET_POINTS = 896
 COMMON_BAD_BANDS = ((890.0, 950.0),)
 
 BASELINE_METHOD = "airPLS"
-BASELINE_LAM = 1e5 # 基线平滑强度
-BASELINE_ASLS_P = 0.01 # 仅 AsLS 使用的不对称权重
-BASELINE_MAX_ITER = 15
+BASELINE_LAM = 3e4  # 基线平滑强度；越大，估计基线越平滑
+BASELINE_ASLS_P = 0.01  # 仅 AsLS 使用的不对称权重；airPLS/arPLS 不使用
+BASELINE_MAX_ITER = 15  # 基线迭代次数上限
+BASELINE_FIT_MIN = 400  # 基线拟合下限，保留训练范围外缓冲区以稳定边缘基线
+BASELINE_FIT_MAX = 2000  # 基线拟合上限，避免更远端异常尖峰污染基线
 
-COSMIC_RAY_ENABLED_PROFILE_IDS = ("bacteria", "delete", "Enterobacteriaceae")
-COSMIC_RAY_NARROW_WINDOW_CM = 10.0  # 局部中值窗口
-COSMIC_RAY_THRESHOLD = 7.0  #异常阈值
-COSMIC_RAY_MAX_ITER = 2  # 最大迭代次数
+COSMIC_RAY_ENABLED_PROFILE_IDS = ("bacteria","Enterobacteriaceae")
+COSMIC_RAY_NARROW_WINDOW_CM = 10.0  # narrow 阶段局部 median/MAD 窗口宽度，单位 cm^-1
+COSMIC_RAY_THRESHOLD = 7.0  # narrow 阶段正残差 z 阈值
+COSMIC_RAY_MAX_ITER = 2  # narrow 阶段最大迭代次数
 
-COSMIC_RAY_PEAK_PROMINENCE_Z = 8.0  # 峰显著度阈值
-COSMIC_RAY_PEAK_WIDTH_MAX_CM = 10.0 # 峰宽上限
-COSMIC_RAY_PEAK_RATIO_Z_PER_CM = 4.0 # 显著度 / 峰宽 比值阈值
-COSMIC_RAY_PEAK_PAD_CM = 2.0 # 替换峰区时，左右额外扩展宽度
-COSMIC_RAY_PEAK_REL_HEIGHT = 0.5 # 计算峰宽时使用的相对高度
+COSMIC_RAY_PEAK_PROMINENCE_Z = 8.0  # peak 阶段峰显著度 z 阈值
+COSMIC_RAY_PEAK_WIDTH_MAX_CM = 13.0  # peak 阶段可替换峰宽上限，单位 cm^-1
+COSMIC_RAY_PEAK_RATIO_Z_PER_CM = 4.0  # peak 阶段显著度 / 峰宽比阈值
+COSMIC_RAY_PEAK_PAD_CM = 2.0  # peak 阶段替换峰区时左右额外扩展宽度，单位 cm^-1
+COSMIC_RAY_PEAK_REL_HEIGHT = 0.5  # peak 阶段计算峰宽时使用的相对高度
+COSMIC_RAY_RESIDUAL_THRESHOLD_Z = 10.0  # residual 阶段只在已替换点邻域内清理平台残留的 z 阈值
+COSMIC_RAY_RESIDUAL_MAX_POINTS_FRACTION = 0.03  # residual 阶段单条谱最多替换有效点比例，防止过清理
 
 MIN_SAMPLES_PER_CLASS = 8
 PLOT_NORM_METHOD = "snv"
@@ -64,6 +68,8 @@ class PipelineConfig:
     baseline_lam: float = BASELINE_LAM
     baseline_asls_p: float = BASELINE_ASLS_P
     baseline_max_iter: int = BASELINE_MAX_ITER
+    baseline_fit_min: float = BASELINE_FIT_MIN
+    baseline_fit_max: float = BASELINE_FIT_MAX
     cosmic_ray_enabled_profile_ids: tuple[str, ...] = COSMIC_RAY_ENABLED_PROFILE_IDS
     cosmic_ray_narrow_window_cm: float = COSMIC_RAY_NARROW_WINDOW_CM
     cosmic_ray_threshold: float = COSMIC_RAY_THRESHOLD
@@ -73,6 +79,8 @@ class PipelineConfig:
     cosmic_ray_peak_ratio_z_per_cm: float = COSMIC_RAY_PEAK_RATIO_Z_PER_CM
     cosmic_ray_peak_pad_cm: float = COSMIC_RAY_PEAK_PAD_CM
     cosmic_ray_peak_rel_height: float = COSMIC_RAY_PEAK_REL_HEIGHT
+    cosmic_ray_residual_threshold_z: float = COSMIC_RAY_RESIDUAL_THRESHOLD_Z
+    cosmic_ray_residual_max_points_fraction: float = COSMIC_RAY_RESIDUAL_MAX_POINTS_FRACTION
     min_samples_per_class: int = MIN_SAMPLES_PER_CLASS
     plot_norm_method: str = PLOT_NORM_METHOD
     pca_enabled: bool = PCA_ENABLED
@@ -106,6 +114,7 @@ def _train_raw_config_payload(profile, cfg):
     """生成 train_raw 中间层的参数指纹"""
     return {
         "profile_id": profile.profile_id,
+        "cosmic_ray_bad_band_masked": False,
         "pipeline_config": _json_ready(asdict(cfg)),
     }
 
@@ -152,6 +161,10 @@ def _cosmic_ray_kwargs(profile, cfg):
         "cosmic_ray_peak_ratio_z_per_cm": float(cfg.cosmic_ray_peak_ratio_z_per_cm),
         "cosmic_ray_peak_pad_cm": float(cfg.cosmic_ray_peak_pad_cm),
         "cosmic_ray_peak_rel_height": float(cfg.cosmic_ray_peak_rel_height),
+        # residual 阶段清理前两步削峰后的平台残留，只暴露阈值和最多替换比例。
+        # 其它宽度规格在 remove_cosmic_rays() 内由 peak 参数派生。
+        "cosmic_ray_residual_threshold_z": float(cfg.cosmic_ray_residual_threshold_z),
+        "cosmic_ray_residual_max_points_fraction": float(cfg.cosmic_ray_residual_max_points_fraction),
     }
 
 
@@ -323,7 +336,8 @@ def _base_group_stats(input_count, valid_count):
         "skip_reason": None,
         "cosmic_single_replaced": 0,
         "cosmic_single_narrow_replaced": 0,
-        "cosmic_single_wide_replaced": 0,
+        "cosmic_single_peak_replaced": 0,
+        "cosmic_single_residual_replaced": 0,
     }
 
 def _apply_pca_filter(spectra_arr, filenames, wn_list, stats, label_display, cfg, log_path):
@@ -378,10 +392,15 @@ def _print_processing_stats(stats, show_zero_cosmic=False):
             "  Cosmic ray single narrow cleanup: "
             f"replaced={stats['cosmic_single_narrow_replaced']}"
         )
-    if show_zero_cosmic or stats.get("cosmic_single_wide_replaced", 0) > 0:
+    if show_zero_cosmic or stats.get("cosmic_single_peak_replaced", 0) > 0:
         print(
-            "  Cosmic ray single wide cleanup: "
-            f"replaced={stats['cosmic_single_wide_replaced']}"
+            "  Cosmic ray single peak cleanup: "
+            f"replaced={stats['cosmic_single_peak_replaced']}"
+        )
+    if show_zero_cosmic or stats.get("cosmic_single_residual_replaced", 0) > 0:
+        print(
+            "  Cosmic ray single residual cleanup: "
+            f"replaced={stats['cosmic_single_residual_replaced']}"
         )
 
 def _log_cosmic_ray_stats(label_display, stats, log_path, show_zero_cosmic=False):
@@ -392,10 +411,15 @@ def _log_cosmic_ray_stats(label_display, stats, log_path, show_zero_cosmic=False
             f"[{label_display}] Cosmic ray single narrow cleanup: "
             f"replaced={stats['cosmic_single_narrow_replaced']}"
         )
-    if show_zero_cosmic or stats.get("cosmic_single_wide_replaced", 0) > 0:
+    if show_zero_cosmic or stats.get("cosmic_single_peak_replaced", 0) > 0:
         lines.append(
-            f"[{label_display}] Cosmic ray single wide cleanup: "
-            f"replaced={stats['cosmic_single_wide_replaced']}"
+            f"[{label_display}] Cosmic ray single peak cleanup: "
+            f"replaced={stats['cosmic_single_peak_replaced']}"
+        )
+    if show_zero_cosmic or stats.get("cosmic_single_residual_replaced", 0) > 0:
+        lines.append(
+            f"[{label_display}] Cosmic ray single residual cleanup: "
+            f"replaced={stats['cosmic_single_residual_replaced']}"
         )
     _append_log_lines(log_path, lines)
 
@@ -446,7 +470,8 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
     cosmic_ray_options = _cosmic_ray_kwargs(profile, cfg)
     cosmic_single_replaced = 0
     cosmic_single_narrow_replaced = 0
-    cosmic_single_wide_replaced = 0
+    cosmic_single_peak_replaced = 0
+    cosmic_single_residual_replaced = 0
 
     for fname, wn, sp in samples:
         if wn.size == 0 or sp.size == 0:
@@ -463,11 +488,14 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
             baseline_lam=cfg.baseline_lam,
             baseline_asls_p=cfg.baseline_asls_p,
             baseline_max_iter=cfg.baseline_max_iter,
+            baseline_fit_min=cfg.baseline_fit_min,
+            baseline_fit_max=cfg.baseline_fit_max,
             **cosmic_ray_options,
         )
         cosmic_single_replaced += int(single_replaced)
         cosmic_single_narrow_replaced += int(getattr(single_replaced, "narrow", 0))
-        cosmic_single_wide_replaced += int(getattr(single_replaced, "wide", 0))
+        cosmic_single_peak_replaced += int(getattr(single_replaced, "peak", 0))
+        cosmic_single_residual_replaced += int(getattr(single_replaced, "residual", 0))
         if wn_u is None:
             continue
 
@@ -478,7 +506,8 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
     stats = _base_group_stats(len(samples), len(spectra))
     stats["cosmic_single_replaced"] = int(cosmic_single_replaced)
     stats["cosmic_single_narrow_replaced"] = int(cosmic_single_narrow_replaced)
-    stats["cosmic_single_wide_replaced"] = int(cosmic_single_wide_replaced)
+    stats["cosmic_single_peak_replaced"] = int(cosmic_single_peak_replaced)
+    stats["cosmic_single_residual_replaced"] = int(cosmic_single_residual_replaced)
 
     return _finalize_group_result(
         spectra,
