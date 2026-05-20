@@ -118,13 +118,19 @@ def _preprocess_group_samples(profile, cfg, root, arc_files):
             cut_max=cfg.cut_max,
             wn_ref=wn_ref,
             bad_bands=cfg.bad_bands,
-            asls_lam=cfg.asls_lam,
-            asls_p=cfg.asls_p,
-            asls_max_iter=cfg.asls_max_iter,
+            baseline_method=cfg.baseline_method,
+            baseline_lam=cfg.baseline_lam,
+            baseline_asls_p=cfg.baseline_asls_p,
+            baseline_max_iter=cfg.baseline_max_iter,
             cosmic_ray_remove=cosmic_ray_remove,
-            cosmic_ray_window=cfg.cosmic_ray_window,
+            cosmic_ray_window_cm=cfg.cosmic_ray_narrow_window_cm,
             cosmic_ray_threshold=cfg.cosmic_ray_threshold,
             cosmic_ray_max_iter=cfg.cosmic_ray_max_iter,
+            cosmic_ray_peak_prominence_z=cfg.cosmic_ray_peak_prominence_z,
+            cosmic_ray_peak_width_max_cm=cfg.cosmic_ray_peak_width_max_cm,
+            cosmic_ray_peak_ratio_z_per_cm=cfg.cosmic_ray_peak_ratio_z_per_cm,
+            cosmic_ray_peak_pad_cm=cfg.cosmic_ray_peak_pad_cm,
+            cosmic_ray_peak_rel_height=cfg.cosmic_ray_peak_rel_height,
         )
         if wn_u is None or sp_u is None:
             payloads.append({"path": path, "skip_reason": "preprocess_failed"})

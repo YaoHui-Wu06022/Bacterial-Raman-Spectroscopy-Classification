@@ -14,7 +14,6 @@ from raman.data.archive import (
 )
 from raman.data.offline import (
     preprocess_single_spectrum,
-    remove_group_cosmic_rays,
     save_mean_plot,
 )
 from raman.data.spectrum import (
@@ -28,23 +27,21 @@ CUT_MAX = 1800
 TARGET_POINTS = 896
 COMMON_BAD_BANDS = ((890.0, 950.0),)
 
-ASLS_LAM = 1e5 # 更改
-ASLS_P = 0.01 # 更改
-ASLS_MAX_ITER = 15
+BASELINE_METHOD = "airPLS"
+BASELINE_LAM = 1e5 # 基线平滑强度
+BASELINE_ASLS_P = 0.01 # 仅 AsLS 使用的不对称权重
+BASELINE_MAX_ITER = 15
 
 COSMIC_RAY_ENABLED_PROFILE_IDS = ("bacteria", "delete", "Enterobacteriaceae")
-COSMIC_RAY_WINDOW = 7  # 局部窗口
+COSMIC_RAY_NARROW_WINDOW_CM = 10.0  # 局部中值窗口
 COSMIC_RAY_THRESHOLD = 7.0  #异常阈值
 COSMIC_RAY_MAX_ITER = 2  # 最大迭代次数
 
 COSMIC_RAY_PEAK_PROMINENCE_Z = 8.0  # 峰显著度阈值
-COSMIC_RAY_PEAK_WIDTH_MAX_CM = 12.0 # 峰宽上限
-COSMIC_RAY_PEAK_RATIO_Z_PER_CM = 2.0 # 显著度 / 峰宽 比值阈值
-COSMIC_RAY_PEAK_PAD_POINTS = 1 # 替换峰区时，左右额外扩展的点数
+COSMIC_RAY_PEAK_WIDTH_MAX_CM = 10.0 # 峰宽上限
+COSMIC_RAY_PEAK_RATIO_Z_PER_CM = 4.0 # 显著度 / 峰宽 比值阈值
+COSMIC_RAY_PEAK_PAD_CM = 2.0 # 替换峰区时，左右额外扩展宽度
 COSMIC_RAY_PEAK_REL_HEIGHT = 0.5 # 计算峰宽时使用的相对高度
-
-COSMIC_RAY_GROUP_THRESHOLD = 15  # 组内兜底异常阈值
-COSMIC_RAY_GROUP_MIN_SAMPLES = 10  # 少于该数量时不做组内统计
 
 MIN_SAMPLES_PER_CLASS = 8
 PLOT_NORM_METHOD = "snv"
@@ -63,20 +60,19 @@ class PipelineConfig:
     cut_max: float = CUT_MAX
     target_points: int = TARGET_POINTS
     bad_bands: tuple[tuple[float, float], ...] = COMMON_BAD_BANDS
-    asls_lam: float = ASLS_LAM
-    asls_p: float = ASLS_P
-    asls_max_iter: int = ASLS_MAX_ITER
+    baseline_method: str = BASELINE_METHOD
+    baseline_lam: float = BASELINE_LAM
+    baseline_asls_p: float = BASELINE_ASLS_P
+    baseline_max_iter: int = BASELINE_MAX_ITER
     cosmic_ray_enabled_profile_ids: tuple[str, ...] = COSMIC_RAY_ENABLED_PROFILE_IDS
-    cosmic_ray_window: int = COSMIC_RAY_WINDOW
+    cosmic_ray_narrow_window_cm: float = COSMIC_RAY_NARROW_WINDOW_CM
     cosmic_ray_threshold: float = COSMIC_RAY_THRESHOLD
     cosmic_ray_max_iter: int = COSMIC_RAY_MAX_ITER
     cosmic_ray_peak_prominence_z: float = COSMIC_RAY_PEAK_PROMINENCE_Z
     cosmic_ray_peak_width_max_cm: float = COSMIC_RAY_PEAK_WIDTH_MAX_CM
     cosmic_ray_peak_ratio_z_per_cm: float = COSMIC_RAY_PEAK_RATIO_Z_PER_CM
-    cosmic_ray_peak_pad_points: int = COSMIC_RAY_PEAK_PAD_POINTS
+    cosmic_ray_peak_pad_cm: float = COSMIC_RAY_PEAK_PAD_CM
     cosmic_ray_peak_rel_height: float = COSMIC_RAY_PEAK_REL_HEIGHT
-    cosmic_ray_group_threshold: float = COSMIC_RAY_GROUP_THRESHOLD
-    cosmic_ray_group_min_samples: int = COSMIC_RAY_GROUP_MIN_SAMPLES
     min_samples_per_class: int = MIN_SAMPLES_PER_CLASS
     plot_norm_method: str = PLOT_NORM_METHOD
     pca_enabled: bool = PCA_ENABLED
@@ -148,23 +144,14 @@ def _cosmic_ray_kwargs(profile, cfg):
     """构造单谱宇宙射线去除参数"""
     return {
         "cosmic_ray_remove": _cosmic_ray_enabled(profile, cfg),
-        "cosmic_ray_window": int(cfg.cosmic_ray_window),
+        "cosmic_ray_window_cm": float(cfg.cosmic_ray_narrow_window_cm),
         "cosmic_ray_threshold": float(cfg.cosmic_ray_threshold),
         "cosmic_ray_max_iter": int(cfg.cosmic_ray_max_iter),
         "cosmic_ray_peak_prominence_z": float(cfg.cosmic_ray_peak_prominence_z),
         "cosmic_ray_peak_width_max_cm": float(cfg.cosmic_ray_peak_width_max_cm),
         "cosmic_ray_peak_ratio_z_per_cm": float(cfg.cosmic_ray_peak_ratio_z_per_cm),
-        "cosmic_ray_peak_pad_points": int(cfg.cosmic_ray_peak_pad_points),
+        "cosmic_ray_peak_pad_cm": float(cfg.cosmic_ray_peak_pad_cm),
         "cosmic_ray_peak_rel_height": float(cfg.cosmic_ray_peak_rel_height),
-    }
-
-
-def _cosmic_ray_group_kwargs(profile, cfg):
-    """构造小文件夹内宇宙射线兜底参数"""
-    return {
-        "enabled": _cosmic_ray_enabled(profile, cfg),
-        "threshold": float(cfg.cosmic_ray_group_threshold),
-        "min_samples": int(cfg.cosmic_ray_group_min_samples),
     }
 
 
@@ -337,7 +324,6 @@ def _base_group_stats(input_count, valid_count):
         "cosmic_single_replaced": 0,
         "cosmic_single_narrow_replaced": 0,
         "cosmic_single_wide_replaced": 0,
-        "cosmic_group_replaced": 0,
     }
 
 def _apply_pca_filter(spectra_arr, filenames, wn_list, stats, label_display, cfg, log_path):
@@ -397,11 +383,6 @@ def _print_processing_stats(stats, show_zero_cosmic=False):
             "  Cosmic ray single wide cleanup: "
             f"replaced={stats['cosmic_single_wide_replaced']}"
         )
-    if show_zero_cosmic or stats.get("cosmic_group_replaced", 0) > 0:
-        print(
-            "  Cosmic ray group cleanup: "
-            f"replaced={stats['cosmic_group_replaced']}"
-        )
 
 def _log_cosmic_ray_stats(label_display, stats, log_path, show_zero_cosmic=False):
     """把每个小文件夹的宇宙射线清理统计写入日志"""
@@ -415,11 +396,6 @@ def _log_cosmic_ray_stats(label_display, stats, log_path, show_zero_cosmic=False
         lines.append(
             f"[{label_display}] Cosmic ray single wide cleanup: "
             f"replaced={stats['cosmic_single_wide_replaced']}"
-        )
-    if show_zero_cosmic or stats.get("cosmic_group_replaced", 0) > 0:
-        lines.append(
-            f"[{label_display}] Cosmic ray group cleanup: "
-            f"replaced={stats['cosmic_group_replaced']}"
         )
     _append_log_lines(log_path, lines)
 
@@ -468,7 +444,6 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
     wn_ref = cfg.build_wn_ref()
     spectra, wn_list, filenames = [], [], []
     cosmic_ray_options = _cosmic_ray_kwargs(profile, cfg)
-    cosmic_ray_group_options = _cosmic_ray_group_kwargs(profile, cfg)
     cosmic_single_replaced = 0
     cosmic_single_narrow_replaced = 0
     cosmic_single_wide_replaced = 0
@@ -484,9 +459,10 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
             cut_max=cfg.cut_max,
             wn_ref=wn_ref,
             bad_bands=cfg.bad_bands,
-            asls_lam=cfg.asls_lam,
-            asls_p=cfg.asls_p,
-            asls_max_iter=cfg.asls_max_iter,
+            baseline_method=cfg.baseline_method,
+            baseline_lam=cfg.baseline_lam,
+            baseline_asls_p=cfg.baseline_asls_p,
+            baseline_max_iter=cfg.baseline_max_iter,
             **cosmic_ray_options,
         )
         cosmic_single_replaced += int(single_replaced)
@@ -503,22 +479,6 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
     stats["cosmic_single_replaced"] = int(cosmic_single_replaced)
     stats["cosmic_single_narrow_replaced"] = int(cosmic_single_narrow_replaced)
     stats["cosmic_single_wide_replaced"] = int(cosmic_single_wide_replaced)
-
-    if len(spectra) >= min_samples and cosmic_ray_group_options.get("enabled", False):
-        spectra_arr = np.vstack(spectra)
-        spectra_arr, replaced = remove_group_cosmic_rays(
-            spectra_arr,
-            threshold=cosmic_ray_group_options.get(
-                "threshold",
-                cfg.cosmic_ray_group_threshold,
-            ),
-            min_samples=cosmic_ray_group_options.get(
-                "min_samples",
-                cfg.cosmic_ray_group_min_samples,
-            ),
-        )
-        spectra = list(spectra_arr)
-        stats["cosmic_group_replaced"] = int(replaced)
 
     return _finalize_group_result(
         spectra,
