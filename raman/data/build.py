@@ -34,7 +34,7 @@ BASELINE_MAX_ITER = 15  # 基线迭代次数上限
 BASELINE_FIT_MIN = 400  # 基线拟合下限，保留训练范围外缓冲区以稳定边缘基线
 BASELINE_FIT_MAX = 2000  # 基线拟合上限，避免更远端异常尖峰污染基线
 
-COSMIC_RAY_ENABLED_PROFILE_IDS = ("bacteria","Enterobacteriaceae")
+COSMIC_RAY_ENABLED_PROFILE_IDS = ("bacteria","Enterobacteriaceae","MN_IgA")
 COSMIC_RAY_NARROW_WINDOW_CM = 10.0  # narrow 阶段局部 median/MAD 窗口宽度，单位 cm^-1
 COSMIC_RAY_THRESHOLD = 7.0  # narrow 阶段正残差 z 阈值
 COSMIC_RAY_MAX_ITER = 2  # narrow 阶段最大迭代次数
@@ -310,12 +310,14 @@ def log_removed_samples(label, filenames, errors, threshold, log_path):
 
 def reset_log_file(log_path):
     """每次进入构建流程时清空旧日志"""
+    if log_path is None:
+        return
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text("", encoding="utf-8")
 
 def _append_log_lines(log_path, lines):
-    """把预处理过程中的关键统计追加到 log.txt"""
+    """把预处理过程中的关键统计追加到指定日志"""
     if log_path is None or not lines:
         return
     log_path = Path(log_path)
@@ -334,6 +336,7 @@ def _base_group_stats(input_count, valid_count):
         "pca_components": 0,
         "threshold": None,
         "skip_reason": None,
+        "cosmic_single_spectra": 0,
         "cosmic_single_replaced": 0,
         "cosmic_single_narrow_replaced": 0,
         "cosmic_single_peak_replaced": 0,
@@ -380,6 +383,26 @@ def _apply_pca_filter(spectra_arr, filenames, wn_list, stats, label_display, cfg
     wn_list = [wn for wn, keep in zip(wn_list, keep_mask) if keep]
     return spectra_arr, filenames, wn_list
 
+def _cosmic_spectra_count(stats):
+    return max(int(stats.get("cosmic_single_spectra", 0) or 0), 0)
+
+def _cosmic_avg(stats, key):
+    spectra_count = _cosmic_spectra_count(stats)
+    if spectra_count <= 0:
+        return 0.0
+    return float(stats.get(key, 0) or 0) / spectra_count
+
+def _format_cosmic_ray_stats(stats):
+    spectra_count = _cosmic_spectra_count(stats)
+    return (
+        "Cosmic ray replacement avg points/spectrum: "
+        f"total={_cosmic_avg(stats, 'cosmic_single_replaced'):.2f}, "
+        f"narrow_final={_cosmic_avg(stats, 'cosmic_single_narrow_replaced'):.2f}, "
+        f"peak_final={_cosmic_avg(stats, 'cosmic_single_peak_replaced'):.2f}, "
+        f"residual_final={_cosmic_avg(stats, 'cosmic_single_residual_replaced'):.2f}, "
+        f"spectra={spectra_count}"
+    )
+
 def _print_processing_stats(stats, show_zero_cosmic=False):
     """统一输出 PCA 和宇宙射线清理结果"""
     if stats["pca_components"] > 0:
@@ -387,40 +410,14 @@ def _print_processing_stats(stats, show_zero_cosmic=False):
             f"  PCA outlier removal: k={stats['pca_components']}, "
             f"threshold={stats['threshold']:.6f}, removed={stats['removed']}"
         )
-    if show_zero_cosmic or stats.get("cosmic_single_narrow_replaced", 0) > 0:
-        print(
-            "  Cosmic ray single narrow cleanup: "
-            f"replaced={stats['cosmic_single_narrow_replaced']}"
-        )
-    if show_zero_cosmic or stats.get("cosmic_single_peak_replaced", 0) > 0:
-        print(
-            "  Cosmic ray single peak cleanup: "
-            f"replaced={stats['cosmic_single_peak_replaced']}"
-        )
-    if show_zero_cosmic or stats.get("cosmic_single_residual_replaced", 0) > 0:
-        print(
-            "  Cosmic ray single residual cleanup: "
-            f"replaced={stats['cosmic_single_residual_replaced']}"
-        )
+    if show_zero_cosmic or stats.get("cosmic_single_replaced", 0) > 0:
+        print(f"  {_format_cosmic_ray_stats(stats)}")
 
 def _log_cosmic_ray_stats(label_display, stats, log_path, show_zero_cosmic=False):
     """把每个小文件夹的宇宙射线清理统计写入日志"""
-    lines = []
-    if show_zero_cosmic or stats.get("cosmic_single_narrow_replaced", 0) > 0:
-        lines.append(
-            f"[{label_display}] Cosmic ray single narrow cleanup: "
-            f"replaced={stats['cosmic_single_narrow_replaced']}"
-        )
-    if show_zero_cosmic or stats.get("cosmic_single_peak_replaced", 0) > 0:
-        lines.append(
-            f"[{label_display}] Cosmic ray single peak cleanup: "
-            f"replaced={stats['cosmic_single_peak_replaced']}"
-        )
-    if show_zero_cosmic or stats.get("cosmic_single_residual_replaced", 0) > 0:
-        lines.append(
-            f"[{label_display}] Cosmic ray single residual cleanup: "
-            f"replaced={stats['cosmic_single_residual_replaced']}"
-        )
+    if not show_zero_cosmic and stats.get("cosmic_single_replaced", 0) <= 0:
+        return
+    lines = [f"[{label_display}] {_format_cosmic_ray_stats(stats)}"]
     _append_log_lines(log_path, lines)
 
 def _finalize_group_result(
@@ -468,6 +465,7 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
     wn_ref = cfg.build_wn_ref()
     spectra, wn_list, filenames = [], [], []
     cosmic_ray_options = _cosmic_ray_kwargs(profile, cfg)
+    cosmic_single_spectra = 0
     cosmic_single_replaced = 0
     cosmic_single_narrow_replaced = 0
     cosmic_single_peak_replaced = 0
@@ -477,6 +475,7 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
         if wn.size == 0 or sp.size == 0:
             continue
 
+        cosmic_single_spectra += 1
         wn_u, sp_u, single_replaced = preprocess_single_spectrum(
             wn,
             sp,
@@ -504,6 +503,7 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
         filenames.append(fname)
 
     stats = _base_group_stats(len(samples), len(spectra))
+    stats["cosmic_single_spectra"] = int(cosmic_single_spectra)
     stats["cosmic_single_replaced"] = int(cosmic_single_replaced)
     stats["cosmic_single_narrow_replaced"] = int(cosmic_single_narrow_replaced)
     stats["cosmic_single_peak_replaced"] = int(cosmic_single_peak_replaced)
@@ -563,13 +563,14 @@ def _has_arc_data(root_dir):
     root_dir = Path(root_dir)
     return root_dir.exists() and any(root_dir.rglob("*.arc_data"))
 
-def build_train_raw(profile, base_dir, pipeline_config=None, log_path=None):
+def build_train_raw(profile, base_dir, pipeline_config=None, cosmic_log_path=None):
     """从 init 生成按小文件夹保存的物理清洗中间层 train_raw"""
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
     input_path = resolve_init_input(base_dir, profile)
     root_process_raw = resolve_path(base_dir, profile.root_process_raw)
     _reset_generated_dir(root_process_raw)
+    reset_log_file(cosmic_log_path)
 
     generated = 0
     skipped = 0
@@ -595,7 +596,7 @@ def build_train_raw(profile, base_dir, pipeline_config=None, log_path=None):
             continue
 
         _print_processing_stats(stats)
-        _log_cosmic_ray_stats(label_display, stats, log_path)
+        _log_cosmic_ray_stats(label_display, stats, cosmic_log_path)
 
         save_dir = root_process_raw / rel_dir
         _save_spectra_files(
@@ -609,6 +610,8 @@ def build_train_raw(profile, base_dir, pipeline_config=None, log_path=None):
     print("\nTrain raw preprocessing finished:")
     print(f"- Clean intermediate spectra: {root_process_raw}")
     print(f"- Generated={generated}, Skipped groups={skipped}")
+    if cosmic_log_path is not None:
+        print(f"- Cosmic ray log: {cosmic_log_path}")
     _write_train_raw_config(root_process_raw, profile, cfg)
     print(f"- Config: {_train_raw_config_path(root_process_raw)}")
 
@@ -662,15 +665,26 @@ def build_train(profile, base_dir, pipeline_config=None):
     root_process_raw = resolve_path(base_dir, profile.root_process_raw)
     root_process_clean = resolve_path(base_dir, profile.root_train_clean)
     root_figure = resolve_path(base_dir, profile.root_train_fig)
-    log_path = resolve_path(base_dir, profile.log_name)
-    reset_log_file(log_path)
+    pca_log_path = resolve_path(base_dir, profile.pca_log_name)
+    cosmic_log_path = resolve_path(base_dir, profile.cosmic_ray_log_name)
+    reset_log_file(pca_log_path)
 
     if not _has_arc_data(root_process_raw):
         print(f"No reusable train_raw found, build from init: {root_process_raw}")
-        build_train_raw(profile, base_dir, pipeline_config=cfg, log_path=log_path)
+        build_train_raw(
+            profile,
+            base_dir,
+            pipeline_config=cfg,
+            cosmic_log_path=cosmic_log_path,
+        )
     elif not _train_raw_config_matches(root_process_raw, profile, cfg):
         print(f"train_raw config changed, rebuild from init: {root_process_raw}")
-        build_train_raw(profile, base_dir, pipeline_config=cfg, log_path=log_path)
+        build_train_raw(
+            profile,
+            base_dir,
+            pipeline_config=cfg,
+            cosmic_log_path=cosmic_log_path,
+        )
     else:
         print(f"Reuse existing train_raw: {root_process_raw}")
 
@@ -690,7 +704,7 @@ def build_train(profile, base_dir, pipeline_config=None):
         processed_group, stats = finalize_clean_group_samples(
             samples=group["samples"],
             label_display=label_display,
-            log_path=log_path,
+            log_path=pca_log_path,
             pipeline_config=cfg,
         )
 
@@ -744,6 +758,9 @@ def build_train(profile, base_dir, pipeline_config=None):
     print(f"- Final train spectra: {root_process_clean}")
     print(f"- Mean plots: {root_figure}")
     print(f"- Hierarchy mean plots: {generated_hierarchy_plots}")
+    print(f"- PCA log: {pca_log_path}")
+    if cosmic_log_path.is_file():
+        print(f"- Cosmic ray log: {cosmic_log_path}")
 
 def preview(profile, base_dir, pipeline_config=None):
     """基于 init 生成预览图，不落盘清洗结果，适合先检查原始数据质量"""
@@ -751,7 +768,9 @@ def preview(profile, base_dir, pipeline_config=None):
     base_dir = Path(base_dir)
     input_path = resolve_init_input(base_dir, profile)
     root_init_fig = resolve_path(base_dir, profile.root_init_fig)
+    cosmic_log_path = resolve_path(base_dir, profile.cosmic_ray_log_name)
     root_init_fig.mkdir(parents=True, exist_ok=True)
+    reset_log_file(cosmic_log_path)
 
     generated = 0
     skipped = 0
@@ -778,6 +797,12 @@ def preview(profile, base_dir, pipeline_config=None):
             continue
 
         _print_processing_stats(stats, show_zero_cosmic=True)
+        _log_cosmic_ray_stats(
+            label_display,
+            stats,
+            cosmic_log_path,
+            show_zero_cosmic=True,
+        )
 
         title = " - ".join(rel_dir.parts) if rel_dir != Path(".") else leaf_name
         title = (
@@ -797,6 +822,7 @@ def preview(profile, base_dir, pipeline_config=None):
 
     print("\nDataset init preview finished:")
     print(f"- Mean plots: {root_init_fig}")
+    print(f"- Cosmic ray log: {cosmic_log_path}")
     print(f"- Generated={generated}, Skipped={skipped}")
 
 def build_test(

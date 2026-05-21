@@ -17,7 +17,7 @@ from raman.data.spectrum import (
 
 @dataclass(frozen=True)
 class CosmicRayStats:
-    """记录单谱宇宙射线清理数量，int(stats) 返回总替换点数"""
+    """记录单谱宇宙射线最终归属替换点数，int(stats) 返回唯一替换点数"""
 
     narrow: int = 0
     peak: int = 0
@@ -549,7 +549,7 @@ def remove_cosmic_rays(
         narrow_mask |= spike_mask
         cleaned[spike_mask] = local_median[spike_mask]
 
-    peak_replaced, peak_mask = _remove_peak_morphology_spikes(
+    _, peak_mask = _remove_peak_morphology_spikes(
         cleaned,
         valid_mask,
         prominence_z=peak_prominence_z,
@@ -567,7 +567,7 @@ def remove_cosmic_rays(
     residual_replace_pad_cm = float(peak_pad_cm)
     residual_min_area_z_cm = float(residual_threshold_z) * residual_min_width_cm
 
-    residual_replaced, _ = _remove_anchored_residual_plateaus(
+    _, residual_mask = _remove_anchored_residual_plateaus(
         cleaned,
         valid_mask,
         anchor_mask=(narrow_mask | peak_mask),
@@ -582,10 +582,14 @@ def remove_cosmic_rays(
         wn=wn,
     )
 
+    residual_mask = np.asarray(residual_mask, dtype=bool)
+    peak_final_mask = peak_mask & ~residual_mask
+    narrow_final_mask = narrow_mask & ~peak_mask & ~residual_mask
+
     return cleaned, CosmicRayStats(
-        narrow=int(narrow_mask.sum()),
-        peak=int(peak_replaced),
-        residual=int(residual_replaced),
+        narrow=int(narrow_final_mask.sum()),
+        peak=int(peak_final_mask.sum()),
+        residual=int(residual_mask.sum()),
     )
 
 

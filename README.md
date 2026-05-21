@@ -135,14 +135,23 @@ dataset/
 
 ## 3. 记号说明
 
-- $n$：样本索引，常用于表示第 $n$ 个样本
+- $n$：目标样本索引，常用于表示当前正在分析的第 $n$ 条光谱
+- $m$：临时样本索引，常用于在同一组或参考组内做求和、取中位数等统计
 - $i$：位置索引，表示光谱序列中的第 $i$ 个波数采样点
+- $\nu_i$：第 $i$ 个采样点对应的波数值，单位通常为 `cm^-1`
+- $L$：单条光谱的采样点数量
+- $N$：当前目标文件夹或当前 batch 中的样本数量，具体含义由上下文决定
+- $M$：参考组中的样本数量
 - $c$：类别索引，表示第 $c$ 类
 - $k$：PCA主成分个数
 - $K$：类别总数
 - $t$：训练轮次（epoch）或时间步索引
 - $x$：输入光谱、输入特征或中间表示
 - $y$：真实标签
+- $z_n$：第 $n$ 条经过标准化后的光谱
+- $d_n$：第 $n$ 条光谱相对组内中心谱的残差
+- $\sigma_i$：第 $i$ 个波数采样点上的组内鲁棒尺度
+- $\tau_z$：逐点 robust z-score 的判定阈值
 
 ### 3.1 函数命名约定
 
@@ -161,7 +170,11 @@ dataset/
 
 离线数据预处理统一走 `raman.data`
 
-常用命令：
+- `preview` 和 `audit` 的输入对象主要是 `init/` 或 `init.npz` 中的原始库
+- `audit` 虽然审核的是 `init/` 中的原始文件，但评分前会临时执行当前离线预处理流程
+- 人工确认异常谱并移动到 `delete/` 后，再正式生成 `train_raw/` 和 `train/`
+
+### 4.1 常用命令
 
 ```
 python -m raman.data pack 细菌       # 打包init数据集
@@ -183,11 +196,11 @@ python -m raman.data test 细菌       # 对测试数据进行一致的清洗
 7. 在目标统一波数轴 `wn_ref` 里也删除坏段
 8. 最后插值到统一波数轴
 
-### 4.1 参数修改
+### 4.2 参数修改
 
-离线清洗参数在 `raman/data/build.py` 里修改：
+离线清洗参数在 `raman/data/build.py` 里修改
 
-清洗参数集成为`DEFAULT_PIPELINE_CONFIG`
+清洗参数集成为 `DEFAULT_PIPELINE_CONFIG`
 
 设置涵盖：
 
@@ -206,7 +219,7 @@ python -m raman.data test 细菌       # 对测试数据进行一致的清洗
 
 不同数据集的目录名在 `raman/data/profiles.py` 里维护
 
-### 4.2 数据集目录结构
+### 4.3 数据集目录结构
 
 - `init/`：原始按测量文件夹组织的数据
 - `init.npz`：`init/` 的打包版本
@@ -214,20 +227,42 @@ python -m raman.data test 细菌       # 对测试数据进行一致的清洗
 - `train/`：训练集离线清洗结果
 - `test_raw/`：测试集原始输入目录
 - `test/`：测试集离线清洗结果
-- `fig_train/`：训练集均值谱图
-- `fig_test/`：测试集均值谱图
 - `fig_init/`：原始数据预览图
+- `fig_train/`：训练集均值谱图与高层级均值谱图
+- `fig_test/`：测试集均值谱图
+- `delete/`：人工确认移除后的原始 `.arc_data` 文件
 - `log.txt`：训练集 PCA 异常值剔除日志
 - `train_raw/config.json`：记录生成 `train_raw` 的清洗参数，参数不一致时会自动重建
 
-### 4.3 原始数据预览
+### 4.4 数据分析流程
 
-- 直接基于 `init/` 或 `init.npz` 做预处理预览
-- 执行宇宙射线去除、缓冲区基线校正、裁剪、坏波段剔除与统一参考轴插值
-- 不做 PCA 异常值过滤与光谱输出
-- 只输出每个分组的均值谱图到 `fig_init/`
+离线阶段建议按以下顺序处理：
+
+1. 准备或还原原始数据到 `init/`
+2. 使用 `preview` 生成 `fig_init/`，先从均值谱层面检查原始数据质量
+3. 使用 `raman.audit single`、`raman.audit folder` 或 `raman.audit full` 对 `init/` 中的原始库做只读审核
+4. 结合审核报告和复核图人工确认异常谱
+5. 使用 `raman.audit move` 将确认移除的原始 `.arc_data` 从 `init/` 移到 `delete/`
+6. 使用 `python -m raman.data train <数据集名>` 从清理后的 `init/` 构建 `train_raw/` 和 `train/`
+7. 使用 `python -m raman.data test <数据集名>` 对独立测试集生成一致的 `test/`
+
+审核命令的输入仍然是 `init/` 中的原始文件，但评分前会临时执行当前离线预处理流程，包括宇宙射线去除、基线校正、裁剪、坏段剔除和统一波数轴插值
+
+### 4.5 原始数据预览
+
+原始数据预览用于在正式清洗和训练前，先从均值谱层面观察原始数据质量
+
+```bash
+python -m raman.data preview 细菌
+```
 
 先检查原始数据质量，看是否需要将某个文件夹移除，或部分光谱移除
+
+如果均值谱图已经明显异常，可以优先检查该文件夹的原始采集数据或直接进入审核流程
+
+如果均值谱图看起来基本正常，但怀疑某个小文件夹里混入了少数异常单谱，则更适合使用 `raman.audit single`、`raman.audit folder` 或 `raman.audit full` 做进一步审核
+
+### 4.6 原始库审核与人工移除
 
 #### 单谱离群审核
 
@@ -247,34 +282,106 @@ dataset/<数据集名>/audit_single/
 
 如果指定 `--folder SA03` 这类末级文件夹名，程序会在 `init/<属名>/SA03` 中自动匹配
 
-若匹配唯一，结果会输出到 `dataset/<数据集名>/audit_single/<属名>/SA03/`。例如 `--folder SA03` 会输出到 `dataset/细菌/audit_single/Staphylococcus/SA03/`
+若匹配唯一，结果会输出到 `dataset/<数据集名>/audit_single/<属名>/SA03/`
 
-其中：
+输出文件包括：
 
-- `summary.csv` 记录每条谱的评分、相关系数、逐点异常比例和是否被标记
-- `figures/` 保存被标记单谱的复核图
+- `summary.csv`：记录每条谱的评分、相关系数、逐点异常比例和是否被标记
+- `figures/`：保存被标记单谱的复核图
 - 每张复核图包含原始谱、预处理后单谱与组内分布对比、逐点 robust z-score
 
 `raman.audit single` 的判定对象是同一个小文件夹内的单谱离群
 
 它会先对文件夹内每条谱执行当前离线预处理流程，包括宇宙射线去除、基线校正、裁剪、坏段剔除和插值；然后对处理后的光谱做 SNV 标准化，并以该文件夹内的中位谱作为中心参考
 
-设同一文件夹内标准化后的光谱为 $z_1,\dots,z_N$，组内中心谱为：
+设同一文件夹内标准化后的光谱为 $z_1,\dots,z_N$，组内中心谱为逐点中位谱：
 
 ```math
-\bar{z}
+\bar{z}_i
 =
-\operatorname{median}
+\operatorname{median}_{m=1,\dots,N}
 \left(
-z_1,\dots,z_N
+z_{m,i}
+\right),
+\qquad
+i=1,\dots,L
+```
+
+其中 $m$ 是在当前小文件夹内部做统计时使用的临时样本索引
+
+逐波数采样点的组内鲁棒尺度用 MAD 估计
+
+```math
+\sigma_i
+=
+\max
+\left(
+1.4826\cdot
+\operatorname{median}_{m=1,\dots,N}
+\left(
+\left|
+z_{m,i}-\bar{z}_{i}
+\right|
+\right),
+\sigma_{\min}
 \right)
 ```
 
-对第 $n$ 条谱，残差为：
+其中 $\sigma_{\min}$ 是尺度下限，用来避免某些波数点组内差异过小导致 z-score 被无限放大
+
+单谱整体形状差异先用 RMSE 衡量：
 
 ```math
-d_n = z_n - \bar{z}
+\mathrm{RMSE}_n
+=
+\sqrt{
+\frac{1}{L}
+\sum_{i=1}^{L}
+\left(
+z_{n,i}
+-
+\bar{z}_{i}
+\right)^2
+}
 ```
+
+再把 RMSE 放到同文件夹内所有 RMSE 的鲁棒分布中：
+
+```math
+\mathrm{score}_n
+=
+\frac{
+\mathrm{RMSE}_n
+-
+\operatorname{median}(\mathrm{RMSE})
+}{
+1.4826\cdot
+\operatorname{MAD}(\mathrm{RMSE})
+}
+```
+
+逐点异常比例为：
+
+```math
+\mathrm{bad\_point\_ratio}_{n}^{(\mathrm{group})}
+=
+\frac{1}{L}
+\sum_{i=1}^{L}
+\mathbf{1}
+\left(
+\left|
+\frac{
+z_{n,i}-\bar{z}_{i}
+}{
+\sigma_i
+}
+\right|
+>
+\tau_z
+\right)
+```
+
+其中 $\tau_z$ 表示逐点 robust z-score 的判定阈值
 
 代码会从三个角度标记候选异常谱：
 
@@ -282,17 +389,13 @@ d_n = z_n - \bar{z}
 - `corr`：该谱和组内中位谱的相关系数是否过低
 - `bad_point_ratio`：逐点 robust z-score 超过阈值的比例是否过高
 
-需要注意的是，`raman.audit single` 只负责标记和出图，不会移动或删除原始文件
-
-最终是否把某条谱移到 `dataset/<数据集名>/delete/`，仍建议结合复核图人工判断
-
 如果需要判断一个小文件夹整体是否像同前缀参考组，或者像 `AB01/AB03` 这种文件夹内存在两群谱，更适合使用 `raman.audit folder` 做跨文件夹参考评分
 
 #### 参考组离群审核
 
 `raman.audit folder` 用于审核某个小文件夹内的单谱是否接近同属、同前缀参考组
 
-它更适合检查“这个文件夹里是否混入了另一批谱”或“某几条谱是否明显不像同前缀数据”这类问题。
+它更适合检查“这个文件夹里是否混入了另一批谱”或“某几条谱是否明显不像同前缀数据”这类问题
 
 常用命令：
 
@@ -303,19 +406,7 @@ python -m raman.audit folder 细菌 --folder Enterobacter/ECL04
 python -m raman.audit folder 细菌 --folder Acinetobacter/AB01 --no-plot
 ```
 
-默认输入根目录为：
-
-```text
-dataset/细菌/init/
-```
-
-默认输出到：
-
-```text
-dataset/细菌/audit_folder/
-```
-
-和 `raman.audit single` 一样，`--folder` 可以写 `属名/小文件夹名`，也可以只写末级文件夹名；例如 `--folder SA03` 会自动匹配到 `Staphylococcus/SA03`，默认输出到 `dataset/细菌/audit_folder/Staphylococcus/SA03/`。
+和 `raman.audit single` 一样，`--folder` 可以写 `属名/小文件夹名`，也可以只写末级文件夹名
 
 输出文件包括：
 
@@ -323,23 +414,107 @@ dataset/细菌/audit_folder/
 - `summary.json`：记录参考文件夹、阈值和汇总结果
 - `review.png`：保存候选异常谱的复核图，使用 `--no-plot` 时不生成
 
+参考组的选择先看同属同前缀文件夹
+
+例如目标为 `Klebsiella/KAE03` 时，会优先使用同属下其他 `KAE*` 文件夹作为参考；如果同前缀参考谱数量不足，则退回使用同属下其他文件夹
+
+目标文件夹中 SNV 后的光谱仍记 $z_1,\dots,z_N$
+
+设参考组中 SNV 后的光谱为 $r_1,\dots,r_M$，参考中位谱为
+
+```math
+\bar{r}
+=
+\operatorname{median}
+\left(
+r_1,\dots,r_M
+\right)
+```
+
+参考组逐波数采样点的鲁棒尺度为
+
+```math
+\sigma_i^{(\mathrm{ref})}
+=
+\max
+\left(
+1.4826\cdot
+\operatorname{median}_{m=1,\dots,M}
+\left(
+\left|
+r_{m,i}-\bar{r}_{i}
+\right|
+\right),
+\sigma_{\min}^{(\mathrm{ref})}
+\right)
+```
+
+对目标文件夹中的第 $n$ 条光谱 $z_n$，计算其相对参考组的逐点异常比例：
+
+```math
+\mathrm{bad\_ratio}_{n}^{(\mathrm{ref})}
+=
+\frac{1}{L}
+\sum_{i=1}^{L}
+\mathbf{1}
+\left(
+\left|
+\frac{
+z_{n,i}-\bar{r}_{i}
+}{
+\sigma_i^{(\mathrm{ref})}
+}
+\right|
+>
+\tau_z
+\right)
+```
+
+其中 $\tau_z$ 表示参考组逐点 robust z-score 的判定阈值
+
+同时会计算目标谱和参考中位谱的相关系数，以及目标谱和所有参考单谱之间的最高相关系数：
+
+```math
+\mathrm{corr\_ref}_n
+=
+\rho(z_n,\bar{r}),
+\qquad
+\mathrm{nearest\_ref\_corr}_n
+=
+\max_{m=1,\dots,M} \rho(z_n,r_m)
+```
+
+其中：
+
+- $\mathrm{corr\_ref}_n$ 衡量目标谱 $z_n$ 和参考中位谱 $\bar{r}$ 的整体相似度
+- $\mathrm{nearest\_ref\_corr}_n$ 衡量目标谱 $z_n$ 和参考组中最相近单谱的相似度
+- $\rho(\cdot,\cdot)$ 表示相关系数
+
+参考组审核的阈值不是固定写死，而是从参考谱自身分布中自适应生成
+
+例如相关系数阈值会参考参考谱与参考中位谱相关系数的低分位数，逐点异常比例和 RMSE 阈值会参考参考组自身的高分位数
+
+这样不同属、不同前缀之间峰形差异较大时，阈值不会被另一类数据强行套用
+
 主要判读字段：
 
 - `corr_ref`：该谱和同属、同前缀参考中位谱的相关系数
 - `nearest_ref_corr`：该谱和参考谱中最相近单谱的相关系数
 - `corr_folder`：该谱和当前文件夹中位谱的相关系数
-- `bad_ratio_z6` / `bad_ratio_z8`：相对参考组逐点 robust z-score 超过阈值的比例
+- `bad_ratio_z6` / `bad_ratio_z8`：目标谱相对参考组逐点 robust z-score 超过阈值 6 或 8 的比例
 - `rmse_to_ref`：该谱和参考中位谱之间的均方根误差
 - `cosmic_total`：当前预处理流程中宇宙射线替换点总数
 - `decision` / `reasons`：是否建议复核移除，以及触发原因
 
-脚本只做评分、汇总和出图，不会移动或删除原始文件。`decision=remove` 表示“建议人工复核的候选异常谱”，不是自动剔除结论。
+如果一条谱同时触发多个参考组证据，例如参考相似度低、参考组逐点异常比例高、相对参考中位谱 RMSE 偏大、宇宙射线替换点异常偏多等，才会被标为 `decision=remove`
+
+`decision=remove` 表示“建议人工复核的候选异常谱”，不是自动剔除结论
 
 #### 全库只读复查
 
 如果需要一次性扫描 `init/` 下所有小文件夹，可以使用 `raman.audit full`
 
-它会综合单谱组内离群、同属同前缀参考离群、残留宇宙射线样突起和阶梯状光谱等规则，生成候选清单和汇总报告；脚本只写报告和复核图，不会移动或删除 `.arc_data` 文件。
+它会综合单谱组内离群、同属同前缀参考离群、残留宇宙射线样突起和阶梯状光谱等规则，生成候选清单和汇总报告；脚本只写报告和复核图，不会移动或删除 `.arc_data` 文件
 
 常用命令：
 
@@ -364,27 +539,6 @@ dataset/细菌/audit_full_scan/<时间戳>/
 - `all_spectra_scores.csv`：所有光谱的审核评分，便于后续排序筛选
 - `figures/`：候选谱和候选文件夹的复核图，数量由 `--max-spectrum-figures` 和 `--max-folder-figures` 控制
 
-其中 `--max-remove-candidates` 只限制被标为 `remove_candidate` 的高置信单谱数量，不会真正删除数据
-
-最终移除仍建议先结合复核图确认，再用 `raman.audit move` 执行
-
-新流程不会写入旧的 `dataset/移除数据/`，而是在对应数据集下创建 `delete/`：
-
-```bash
-python -m raman.audit move 细菌 --from-list dataset/细菌/audit_full_scan/<时间戳>/delete_candidates.csv --dry-run
-python -m raman.audit move 细菌 --from-list dataset/细菌/audit_full_scan/<时间戳>/delete_candidates.csv
-python -m raman.audit move 细菌 Burkholderia/BCC01 --reason 组内离群 --dry-run
-python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_data --reason 阶梯谱
-```
-
-移动规则为：
-
-- 源路径来自 `dataset/<数据集名>/init/<属名>/<小文件夹>/...`
-- 目标路径为 `dataset/<数据集名>/delete/<属名>/<小文件夹>/...`
-- 目标路径不带 `init` 层
-- 默认不覆盖已有文件
-- 移动后会在 `dataset/<数据集名>/delete/<属名>/移除记录.txt` 中按小文件夹记录文件名和移除原因
-
 `raman.audit full` 的评估对象是全库单谱，判定时主要看以下几个维度：
 
 - 组内离群：每个小文件夹内部先计算 SNV 后的组内中位谱，比较单谱与组内中位谱的形状差异、相关系数和逐点 robust z-score；对应 `group_shape_score`、`low_group_corr`、`group_point_outlier`
@@ -403,15 +557,61 @@ python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_
 
 单谱不会因为某一个轻微信号就直接移除
 
-脚本会把多条证据合并：明显阶梯谱、强残留宇宙射线并伴随组内或参考组离群、强参考组离群、强组内离群、强粗糙噪声会标为 `remove_candidate`，证据不足但值得看图的谱标为 `review_candidate`
+脚本会把多条证据合并：
+
+- 明显阶梯谱
+- 强残留宇宙射线并伴随组内或参考组离群
+- 强参考组离群
+- 强组内离群
+- 强粗糙噪声
+
+这些会标为 `remove_candidate`
+
+证据不足但值得看图的谱会标为 `review_candidate`
 
 `single`、`folder`、`full` 三个命令共用 `raman/audit/config.py` 中的 `AuditConfig` 阈值配置，避免不同审核入口使用不同参数
 
-### 4.4 清洗中间层
+#### 审核后移动
 
-由于采集数据按日期划分，原始数据集一般命名为`类别+数字`
+最终移除仍建议先结合复核图确认，再用 `raman.audit move` 执行
+
+对应数据集下创建 `delete/`
+
+```bash
+python -m raman.audit move 细菌 --from-list dataset/细菌/audit_full_scan/<时间戳>/delete_candidates.csv --dry-run
+python -m raman.audit move 细菌 --from-list dataset/细菌/audit_full_scan/<时间戳>/delete_candidates.csv
+python -m raman.audit move 细菌 Burkholderia/BCC01 --reason 组内离群 --dry-run
+python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_data --reason 阶梯谱
+```
+
+移动规则为：
+
+- 源路径来自 `dataset/<数据集名>/init/<属名>/<小文件夹>/...`
+- 目标路径为 `dataset/<数据集名>/delete/<属名>/<小文件夹>/...`
+- 目标路径不带 `init` 层
+- 默认不覆盖已有文件
+- 移动后会在 `dataset/<数据集名>/delete/<属名>/移除记录.txt` 中按小文件夹记录文件名和移除原因
+
+手动删除记录中的原因标签由 `raman/audit/config.py` 的 `AuditConfig.delete_reason_labels` 控制
+
+当前默认标签包括：
+
+- 阶梯谱
+- 粗糙噪声
+- 参考组离群
+- 组内离群
+
+### 4.7 构建训练集
+
+训练命令会先把 `init/` 中每个叶子小文件夹独立清洗到 `train_raw/`，再按类别前缀合并生成最终训练目录 `train/`
+
+#### 清洗中间层
+
+由于采集数据按日期划分，原始数据集一般命名为 `类别+数字`
 
 训练命令会先把 `init/` 中每个叶子小文件夹独立清洗到 `train_raw/`
+
+处理逻辑：
 
 - 扫描 `init/` 或 `init.npz`
 
@@ -423,11 +623,11 @@ python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_
 
 - 如果清洗参数改变，`train_raw/` 会自动重建，避免旧中间结果和新参数混用
 
+#### 最终生成
+
 最终生成 `train/` 时，才会按 `letters_sign` 规则提取类别前缀并合并小文件夹
 
 例如：`ABC12 -> ABC`，`ESBL+03 -> ESBL+`
-
-### 4.5 训练集离线清洗
 
 每条光谱执行：
 
@@ -442,6 +642,8 @@ python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_
 如果某个分组预处理后样本数少于 `min_samples_per_class`，该分组会跳过
 
 被 PCA 剔除的样本会记录到 `log.txt`
+
+### 4.8 离线处理顺序细节
 
 #### 宇宙射线去除
 
@@ -465,7 +667,7 @@ python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_
 
 对于单条光谱 $x \in \mathbb{R}^L$，$i$ 表示光谱序列中的第 $i$ 个波数采样点
 
-先在位置 $i$ 附近取局部窗口 $\mathcal{W}_m(i)$，用窗口内中值估计该位置的局部正常强度
+先在位置 $i$ 附近取局部窗口 $\mathcal{W}_m(i)$，用窗口内中值估计该位置的局部正常强度：
 
 ```math
 \tilde{x}_i

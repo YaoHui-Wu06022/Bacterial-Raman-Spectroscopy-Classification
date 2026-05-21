@@ -16,7 +16,8 @@ class DatasetProfile:
     root_test_fig: str = "fig_test"
     root_test_raw: str = "test_raw"
     root_init_fig: str = "fig_init"
-    log_name: str = "log.txt"
+    pca_log_name: str = "pca_log.txt"
+    cosmic_ray_log_name: str = "cosmic_ray_removal_log.txt"
 
 
 PROFILES = {
@@ -31,6 +32,10 @@ PROFILES = {
     "Non_Enterobacterale": DatasetProfile(
         profile_id="Non_Enterobacterale",
         dataset_name="非肠杆菌",
+    ),
+    "MN_IgA": DatasetProfile(
+        profile_id="MN_IgA",
+        dataset_name="MN_IgA",
     ),
     "resistance": DatasetProfile(
         profile_id="resistance",
