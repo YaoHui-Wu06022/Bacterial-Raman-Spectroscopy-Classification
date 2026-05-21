@@ -227,27 +227,27 @@ python -m raman.data test 细菌       # 对测试数据进行一致的清洗
 - 不做 PCA 异常值过滤与光谱输出
 - 只输出每个分组的均值谱图到 `fig_init/`
 
-先检查原始数据质量，看是否需要将某个文件夹移除，不再进入后续训练数据集
+先检查原始数据质量，看是否需要将某个文件夹移除，或部分光谱移除
 
 #### 单谱离群审核
 
-如果均值谱图看起来基本正常，但怀疑某个小文件夹里混入了少数异常单谱，可以使用 `dataset/audit_single_spectra.py` 做文件夹内单谱审核：
+如果均值谱图看起来基本正常，但怀疑某个小文件夹里混入了少数异常单谱，可以使用 `raman.audit single` 做文件夹内单谱审核：
 
 ```bash
-python dataset/audit_single_spectra.py 细菌 --subdir init
-python dataset/audit_single_spectra.py 细菌 --folder Acinetobacter/AB01
-python dataset/audit_single_spectra.py 细菌 --folder SA03 --max-plots-per-group 30
+python -m raman.audit single 细菌 --subdir init
+python -m raman.audit single 细菌 --folder Acinetobacter/AB01
+python -m raman.audit single 细菌 --folder SA03 --max-plots-per-group 30
 ```
 
 默认情况下，审核结果会输出到：
 
 ```text
-dataset/<数据集名>/audit/
+dataset/<数据集名>/audit_single/
 ```
 
 如果指定 `--folder SA03` 这类末级文件夹名，程序会在 `init/<属名>/SA03` 中自动匹配
 
-若匹配唯一，结果会输出到 `dataset/<数据集名>/audit/<属名>/SA03/`。例如 `--folder SA03` 会输出到 `dataset/细菌/audit/Staphylococcus/SA03/`
+若匹配唯一，结果会输出到 `dataset/<数据集名>/audit_single/<属名>/SA03/`。例如 `--folder SA03` 会输出到 `dataset/细菌/audit_single/Staphylococcus/SA03/`
 
 其中：
 
@@ -255,7 +255,7 @@ dataset/<数据集名>/audit/
 - `figures/` 保存被标记单谱的复核图
 - 每张复核图包含原始谱、预处理后单谱与组内分布对比、逐点 robust z-score
 
-`audit_single_spectra.py` 的判定对象是同一个小文件夹内的单谱离群
+`raman.audit single` 的判定对象是同一个小文件夹内的单谱离群
 
 它会先对文件夹内每条谱执行当前离线预处理流程，包括宇宙射线去除、基线校正、裁剪、坏段剔除和插值；然后对处理后的光谱做 SNV 标准化，并以该文件夹内的中位谱作为中心参考
 
@@ -282,25 +282,25 @@ d_n = z_n - \bar{z}
 - `corr`：该谱和组内中位谱的相关系数是否过低
 - `bad_point_ratio`：逐点 robust z-score 超过阈值的比例是否过高
 
-需要注意的是，`audit_single_spectra.py` 只负责标记和出图，不会移动或删除原始文件
+需要注意的是，`raman.audit single` 只负责标记和出图，不会移动或删除原始文件
 
-最终是否把某条谱移到 `dataset/移除数据/`，仍建议结合复核图人工判断
+最终是否把某条谱移到 `dataset/<数据集名>/delete/`，仍建议结合复核图人工判断
 
-如果需要判断一个小文件夹整体是否像同前缀参考组，或者像 `AB01/AB03` 这种文件夹内存在两群谱，更适合使用 `dataset/audit_folder_spectra.py` 做跨文件夹参考评分
+如果需要判断一个小文件夹整体是否像同前缀参考组，或者像 `AB01/AB03` 这种文件夹内存在两群谱，更适合使用 `raman.audit folder` 做跨文件夹参考评分
 
-#### 跨文件夹参考评分
+#### 参考组离群审核
 
-`dataset/audit_folder_spectra.py` 用于审核某个小文件夹内的单谱是否接近同属、同前缀参考组
+`raman.audit folder` 用于审核某个小文件夹内的单谱是否接近同属、同前缀参考组
 
 它更适合检查“这个文件夹里是否混入了另一批谱”或“某几条谱是否明显不像同前缀数据”这类问题。
 
 常用命令：
 
 ```bash
-python dataset/audit_folder_spectra.py 细菌 --folder Acinetobacter/AB01
-python dataset/audit_folder_spectra.py 细菌 --folder AB01
-python dataset/audit_folder_spectra.py 细菌 --folder Enterobacter/ECL04
-python dataset/audit_folder_spectra.py 细菌 --folder Acinetobacter/AB01 --no-plot
+python -m raman.audit folder 细菌 --folder Acinetobacter/AB01
+python -m raman.audit folder 细菌 --folder AB01
+python -m raman.audit folder 细菌 --folder Enterobacter/ECL04
+python -m raman.audit folder 细菌 --folder Acinetobacter/AB01 --no-plot
 ```
 
 默认输入根目录为：
@@ -315,7 +315,7 @@ dataset/细菌/init/
 dataset/细菌/audit_folder/
 ```
 
-和 `audit_single_spectra.py` 一样，`--folder` 可以写 `属名/小文件夹名`，也可以只写末级文件夹名；例如 `--folder SA03` 会自动匹配到 `Staphylococcus/SA03`，默认输出到 `dataset/细菌/audit_folder/Staphylococcus/SA03/`。
+和 `raman.audit single` 一样，`--folder` 可以写 `属名/小文件夹名`，也可以只写末级文件夹名；例如 `--folder SA03` 会自动匹配到 `Staphylococcus/SA03`，默认输出到 `dataset/细菌/audit_folder/Staphylococcus/SA03/`。
 
 输出文件包括：
 
@@ -337,15 +337,15 @@ dataset/细菌/audit_folder/
 
 #### 全库只读复查
 
-如果需要一次性扫描 `init/` 下所有小文件夹，可以使用 `dataset/audit_full_scan.py`
+如果需要一次性扫描 `init/` 下所有小文件夹，可以使用 `raman.audit full`
 
 它会综合单谱组内离群、同属同前缀参考离群、残留宇宙射线样突起和阶梯状光谱等规则，生成候选清单和汇总报告；脚本只写报告和复核图，不会移动或删除 `.arc_data` 文件。
 
 常用命令：
 
 ```bash
-python dataset/audit_full_scan.py 细菌
-python dataset/audit_full_scan.py 细菌 --max-remove-candidates 100 --max-folder-candidates 5
+python -m raman.audit full 细菌
+python -m raman.audit full 细菌 --max-remove-candidates 100 --max-folder-candidates 5
 ```
 
 默认输出到带时间戳的目录：
@@ -358,15 +358,34 @@ dataset/细菌/audit_full_scan/<时间戳>/
 
 - `summary.md`：中文总结报告，列出建议移除候选谱、仅复核候选谱、文件夹候选和参数建议
 - `spectrum_candidates.csv`：单谱级候选清单，包含路径、异常原因、评分和推荐动作
+- `delete_candidates.csv`：只包含 `remove_candidate`，后续可以直接交给 `raman.audit move`
+- `delete_manifest.txt`：一行一个建议移除路径，便于人工快速浏览
 - `folder_candidates.csv`：文件夹级候选清单，默认最多列出 5 个高风险文件夹
 - `all_spectra_scores.csv`：所有光谱的审核评分，便于后续排序筛选
 - `figures/`：候选谱和候选文件夹的复核图，数量由 `--max-spectrum-figures` 和 `--max-folder-figures` 控制
 
 其中 `--max-remove-candidates` 只限制被标为 `remove_candidate` 的高置信单谱数量，不会真正删除数据
 
-最终移除仍建议结合复核图，用 `dataset/move_to_removed.py` 手动执行
+最终移除仍建议先结合复核图确认，再用 `raman.audit move` 执行
 
-`audit_full_scan.py` 的评估对象是全库单谱，判定时主要看以下几个维度：
+新流程不会写入旧的 `dataset/移除数据/`，而是在对应数据集下创建 `delete/`：
+
+```bash
+python -m raman.audit move 细菌 --from-list dataset/细菌/audit_full_scan/<时间戳>/delete_candidates.csv --dry-run
+python -m raman.audit move 细菌 --from-list dataset/细菌/audit_full_scan/<时间戳>/delete_candidates.csv
+python -m raman.audit move 细菌 Burkholderia/BCC01 --reason 组内离群 --dry-run
+python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_data --reason 阶梯谱
+```
+
+移动规则为：
+
+- 源路径来自 `dataset/<数据集名>/init/<属名>/<小文件夹>/...`
+- 目标路径为 `dataset/<数据集名>/delete/<属名>/<小文件夹>/...`
+- 目标路径不带 `init` 层
+- 默认不覆盖已有文件
+- 移动后会在 `dataset/<数据集名>/delete/<属名>/移除记录.txt` 中按小文件夹记录文件名和移除原因
+
+`raman.audit full` 的评估对象是全库单谱，判定时主要看以下几个维度：
 
 - 组内离群：每个小文件夹内部先计算 SNV 后的组内中位谱，比较单谱与组内中位谱的形状差异、相关系数和逐点 robust z-score；对应 `group_shape_score`、`low_group_corr`、`group_point_outlier`
 
@@ -384,7 +403,9 @@ dataset/细菌/audit_full_scan/<时间戳>/
 
 单谱不会因为某一个轻微信号就直接移除
 
-脚本会把多条证据合并：明显阶梯谱、强残留宇宙射线并伴随组内或参考组离群、强参考组离群、强组内离群、强粗糙噪声会标为 `remove_candidate`；证据不足但值得看图的谱标为 `review_candidate`
+脚本会把多条证据合并：明显阶梯谱、强残留宇宙射线并伴随组内或参考组离群、强参考组离群、强组内离群、强粗糙噪声会标为 `remove_candidate`，证据不足但值得看图的谱标为 `review_candidate`
+
+`single`、`folder`、`full` 三个命令共用 `raman/audit/config.py` 中的 `AuditConfig` 阈值配置，避免不同审核入口使用不同参数
 
 ### 4.4 清洗中间层
 
