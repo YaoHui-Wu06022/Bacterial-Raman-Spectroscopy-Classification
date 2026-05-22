@@ -222,6 +222,13 @@ def preprocess_spectrum_for_audit(path, profile, cfg=None, wn_ref=None, include_
     path = Path(path)
     payload = {"path": path, "skip_reason": ""}
     wn, sp = read_arc_data(path)
+    payload["raw_points"] = int(wn.size)
+    if wn.size:
+        payload["raw_wn_min"] = float(np.min(wn))
+        payload["raw_wn_max"] = float(np.max(wn))
+        low = max(payload["raw_wn_min"], float(cfg.cut_min))
+        high = min(payload["raw_wn_max"], float(cfg.cut_max))
+        payload["coverage_ratio"] = max(0.0, high - low) / max(float(cfg.cut_max) - float(cfg.cut_min), 1e-8)
 
     if include_raw:
         payload["raw_wn"] = wn
@@ -304,6 +311,10 @@ def load_audit_records(profile, cfg, input_root, record_cls):
                 file=filename,
                 skip_reason=payload.get("skip_reason", ""),
             )
+            record.raw_points = int(payload.get("raw_points", 0))
+            record.raw_wn_min = float(payload.get("raw_wn_min", np.nan))
+            record.raw_wn_max = float(payload.get("raw_wn_max", np.nan))
+            record.coverage_ratio = float(payload.get("coverage_ratio", np.nan))
             if not record.skip_reason:
                 stats = payload["cosmic_stats"]
                 record.z = np.asarray(payload["z"], dtype=np.float32)

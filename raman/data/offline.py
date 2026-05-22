@@ -293,9 +293,64 @@ def _robust_local_scale(values):
     return max(scale, 0.0)
 
 
-def _damped_segment_replacement(cleaned, fallback, start, end, left_indices, right_indices):
-    trend = np.asarray(fallback[start:end], dtype=np.float64)
-    original = np.asarray(cleaned[start:end], dtype=np.float64)
+def _segment_texture_seed(start, end, anchor_values):
+    seed = (int(start) * 1000003) ^ (int(end) * 9176)
+    for value in np.asarray(anchor_values, dtype=np.float64):
+        if np.isfinite(value):
+            seed = (seed * 1664525 + int(round(float(value) * 10.0)) + 1013904223) & 0xFFFFFFFF
+    return seed
+
+
+def _zero_edge_taper(size):
+    if size <= 1:
+        return np.zeros(int(size), dtype=np.float64)
+    return np.sin(np.linspace(0.0, np.pi, int(size), dtype=np.float64))
+
+
+def _detrended_side_texture(values):
+    values = np.asarray(values, dtype=np.float64)
+    values = values[np.isfinite(values)]
+    if values.size < 3:
+        return np.empty(0, dtype=np.float64)
+
+    side_trend = np.interp(
+        np.arange(values.size, dtype=np.float64),
+        np.array([0, values.size - 1], dtype=np.float64),
+        np.array([values[0], values[-1]], dtype=np.float64),
+    )
+    texture = values - side_trend
+    return texture - float(np.median(texture))
+
+
+def _neighbor_texture(left_values, right_values, size, target_scale, seed):
+    if size <= 0 or target_scale <= 1e-8:
+        return np.zeros(int(size), dtype=np.float64)
+
+    parts = [
+        _detrended_side_texture(left_values),
+        _detrended_side_texture(right_values),
+    ]
+    texture_pool = np.concatenate([part for part in parts if part.size > 0])
+    if texture_pool.size == 0:
+        return np.zeros(int(size), dtype=np.float64)
+
+    pool_scale = _robust_local_scale(texture_pool)
+    if pool_scale <= 1e-8:
+        return np.zeros(int(size), dtype=np.float64)
+
+    texture_pool = texture_pool / pool_scale * float(target_scale)
+    texture_pool = np.clip(texture_pool, -2.5 * target_scale, 2.5 * target_scale)
+
+    offset = int(seed) % texture_pool.size
+    texture = np.resize(np.roll(texture_pool, -offset), int(size))
+    if texture.size >= 3:
+        texture = np.convolve(texture, np.array([0.15, 0.70, 0.15]), mode="same")
+    return texture * _zero_edge_taper(texture.size)
+
+
+def _textured_linear_segment_replacement(cleaned, fallback, start, end, left_indices, right_indices):
+    trend = _linear_segment_replacement(cleaned, fallback, start, end, left_indices, right_indices)
+    trend = np.asarray(trend, dtype=np.float64)
     if trend.size == 0 or not np.all(np.isfinite(trend)):
         return None
 
@@ -304,7 +359,7 @@ def _damped_segment_replacement(cleaned, fallback, start, end, left_indices, rig
     anchor_values = np.concatenate([left_values, right_values])
     anchor_values = anchor_values[np.isfinite(anchor_values)]
     if anchor_values.size < 2:
-        return None
+        return trend.astype(np.float32, copy=False)
 
     local_min = float(np.min(anchor_values))
     local_max = float(np.max(anchor_values))
@@ -315,40 +370,50 @@ def _damped_segment_replacement(cleaned, fallback, start, end, left_indices, rig
     if right_values.size >= 2:
         diff_parts.append(np.diff(right_values))
     diff_scale = _robust_local_scale(np.concatenate(diff_parts)) if diff_parts else 0.0
-    detail_limit = max(
-        min(3.0 * diff_scale, 0.25 * local_range) if diff_scale > 0.0 else 0.0,
-        0.01 * float(np.median(np.abs(anchor_values))),
-        1e-6,
-    )
-
-    # 保留原段相对趋势的形态；边缘梯度越异常、相对趋势幅度越大，压缩越强。
-    detail = original - trend
-    segment_left = left_values[-1] if left_values.size > 0 and np.isfinite(left_values[-1]) else original[0]
-    segment_right = right_values[0] if right_values.size > 0 and np.isfinite(right_values[0]) else original[-1]
-    extended = np.concatenate([[segment_left], original, [segment_right]])
-    diffs = np.abs(np.diff(extended))
-    point_gradient = np.maximum(diffs[:-1], diffs[1:])
-
     anchor_level = float(np.median(np.abs(anchor_values)))
-    gradient_limit = max(
-        3.0 * diff_scale if diff_scale > 0.0 else 0.0,
-        0.10 * local_range,
-        0.01 * anchor_level,
+
+    texture_scale = max(
+        0.75 * diff_scale if diff_scale > 0.0 else 0.0,
+        0.002 * anchor_level,
         1e-6,
     )
-    positive_limit = max(detail_limit, 1e-6)
-    negative_limit = max(2.0 * detail_limit, 1e-6)
+    if local_range > 0.0:
+        texture_scale = min(texture_scale, 0.18 * local_range)
+    texture_scale = min(texture_scale, max(0.030 * anchor_level, 1e-6))
 
-    gradient_scale = np.minimum(1.0, gradient_limit / np.maximum(point_gradient, 1e-8))
-    amplitude_limit = np.where(detail >= 0.0, positive_limit, negative_limit)
-    amplitude_scale = np.minimum(1.0, amplitude_limit / np.maximum(np.abs(detail), 1e-8))
-    detail_scale = np.minimum(gradient_scale, amplitude_scale)
+    base = trend.copy()
 
-    replacement = trend + detail * detail_scale
+    taper = _zero_edge_taper(trend.size)
+
+    fallback_segment = np.asarray(fallback[start:end], dtype=np.float64)
+    if fallback_segment.shape == trend.shape and np.all(np.isfinite(fallback_segment)):
+        curve = fallback_segment - float(np.median(fallback_segment))
+        curve_limit = max(0.75 * texture_scale, 1e-6)
+        if local_range > 0.0:
+            curve_limit = min(curve_limit, 0.12 * local_range)
+        curve = 0.20 * np.clip(curve, -curve_limit, curve_limit) * taper
+    else:
+        curve = np.zeros_like(trend)
+
+    # 主体跟随两端线性桥接，只叠加弱曲率和邻域纹理，避免补成双峰或深 U 形。
+    texture = _neighbor_texture(
+        left_values,
+        right_values,
+        trend.size,
+        texture_scale,
+        _segment_texture_seed(start, end, anchor_values),
+    )
+    replacement = base + curve + texture
+
+    margin = max(
+        3.0 * texture_scale,
+        float(np.max(np.abs(curve))) if curve.size else 0.0,
+        1e-6,
+    )
     replacement = np.clip(
         replacement,
-        local_min - 2.0 * detail_limit,
-        local_max + detail_limit,
+        local_min - margin,
+        local_max + margin,
     )
     return replacement.astype(np.float32, copy=False)
 
@@ -361,15 +426,22 @@ def _replace_segment(cleaned, fallback, start, end, valid_mask, anchor_bad_mask=
     if anchor_bad_mask is None or anchor_bad_mask.shape != cleaned.shape:
         anchor_bad_mask = np.zeros(cleaned.shape, dtype=bool)
 
-    # peak 段保留原段相对趋势的形态，只压低异常起伏；失败时回退线性插值。
+    # peak 段用两端锚点插值，并移植邻域纹理，避免保留污染段趋势。
     left_indices, right_indices = _collect_replacement_anchors(
         valid_mask,
         anchor_bad_mask,
         start,
         end,
-        count=5,
+        count=12,
     )
-    replacement = _damped_segment_replacement(cleaned, fallback, start, end, left_indices, right_indices)
+    replacement = _textured_linear_segment_replacement(
+        cleaned,
+        fallback,
+        start,
+        end,
+        left_indices,
+        right_indices,
+    )
     if replacement is None:
         replacement = _linear_segment_replacement(
             cleaned,
@@ -411,6 +483,7 @@ def _remove_peak_segments(
     max_width_points,
     mean_z_min,
     pad_points,
+    narrow_mask=None,
 ):
     window = _odd_window_points(peak_window_points)
     fallback = _median_filter_1d(cleaned, window)
@@ -429,6 +502,11 @@ def _remove_peak_segments(
 
     pad_points = _pad_points(pad_points)
     expand_gap_points = _pad_points(expand_gap_points)
+    if narrow_mask is None or np.asarray(narrow_mask).shape != cleaned.shape:
+        narrow_mask = np.zeros(cleaned.shape, dtype=bool)
+    else:
+        narrow_mask = np.asarray(narrow_mask, dtype=bool) & valid_mask
+    anchor_bad_mask = expand_mask | narrow_mask
     replaced_mask = np.zeros(cleaned.shape, dtype=bool)
 
     for start, end in _merge_segments_with_small_gaps(expand_mask, max_gap_points=expand_gap_points):
@@ -451,13 +529,38 @@ def _remove_peak_segments(
         if mean_z < float(mean_z_min):
             continue
 
-        replace_start = max(0, first_idx - pad_points)
-        replace_end = min(cleaned.size, last_idx + pad_points + 1)
+        # narrow 已经动过的点如果贴着 peak 段，通常还是同一段污染的肩部；
+        # 先并入污染段，再加 pad，避免 narrow 肩部把局部 median 和边界锚点抬高。
+        replace_first = first_idx
+        replace_last = last_idx
+        while replace_first > 0:
+            left_start = max(0, replace_first - expand_gap_points - 1)
+            left_near = narrow_mask[left_start:replace_first]
+            if not left_near.any():
+                break
+            replace_first = left_start + int(np.flatnonzero(left_near)[0])
+        while replace_last + 1 < cleaned.size:
+            right_end = min(cleaned.size, replace_last + expand_gap_points + 2)
+            right_near = narrow_mask[replace_last + 1:right_end]
+            if not right_near.any():
+                break
+            replace_last = replace_last + 1 + int(np.flatnonzero(right_near)[-1])
+
+        replace_start = max(0, replace_first - pad_points)
+        replace_end = min(cleaned.size, replace_last + pad_points + 1)
+
         segment_replace_mask = np.zeros(cleaned.shape, dtype=bool)
         segment_replace_mask[replace_start:replace_end] = True
         segment_replace_mask &= valid_mask
 
-        _replace_segment(cleaned, fallback, replace_start, replace_end, valid_mask, expand_mask)
+        _replace_segment(
+            cleaned,
+            fallback,
+            replace_start,
+            replace_end,
+            valid_mask,
+            anchor_bad_mask,
+        )
         replaced_mask |= segment_replace_mask
 
     return int(replaced_mask.sum()), replaced_mask
@@ -519,6 +622,7 @@ def remove_cosmic_rays(
         max_width_points=peak_width_max_points,
         mean_z_min=peak_mean_z_min,
         pad_points=peak_pad_points,
+        narrow_mask=narrow_mask,
     )
 
     narrow_final_mask = narrow_mask & ~peak_mask

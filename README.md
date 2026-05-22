@@ -138,7 +138,6 @@ dataset/
 - $n$：目标样本索引，常用于表示当前正在分析的第 $n$ 条光谱
 - $m$：临时样本索引，常用于在同一组或参考组内做求和、取中位数等统计
 - $i$：位置索引，表示光谱序列中的第 $i$ 个波数采样点
-- $\nu_i$：第 $i$ 个采样点对应的波数值，单位通常为 `cm^-1`
 - $L$：单条光谱的采样点数量
 - $N$：当前目标文件夹或当前 batch 中的样本数量，具体含义由上下文决定
 - $M$：参考组中的样本数量
@@ -647,10 +646,10 @@ python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_
 - 宇宙射线更容易表现为窄尖峰，或窄到中等宽度的突起片段
 - 宇宙射线通常是正向异常，不作为负向异常处理
 
-单谱清理分为两个阶段
+当前单谱清理只保留两个阶段：
 
 1. narrow 阶段：局部 median 和鲁棒 z-score 清理单点或极窄尖峰
-2. peak 阶段：在 narrow 后的局部 median 正残差上检测短正异常段，清理窄到中等宽度的残留突起
+2. peak 阶段：在 narrow 后的局部 median 正残差上，用双阈值检测并扩展短正异常段
 
 宇宙射线清理发生在坏段删除之前，并且默认不使用坏段 mask 参与检测；坏段只在绘图遮挡、基线估计和后续裁切插值阶段使用。这样可以避免 890-950 `cm^-1` 坏段边界附近的宇宙射线因为 mask 断开而无法被修复。
 
@@ -658,27 +657,31 @@ python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_
 
 对于单条光谱 $x \in \mathbb{R}^L$，$i$ 表示光谱序列中的第 $i$ 个波数采样点
 
-先在位置 $i$ 附近取局部窗口 $\mathcal{W}_m(i)$，用窗口内中值估计该位置的局部正常强度：
+先在位置 $i$ 附近取局部窗口 $\mathcal{W}_{\mathrm{narrow}}(i)$，用窗口内中值估计该位置的局部正常强度：
 
 ```math
-\tilde{x}_i
+\tilde{x}_i^{(\mathrm{narrow})}
 =
 \operatorname{median}
 \left\{
 x_{\ell}
 \mid
-\ell \in \mathcal{W}_m(i)
+\ell \in \mathcal{W}_{\mathrm{narrow}}(i)
 \right\}
 ```
 
-- $\mathcal{W}_m(i)$ 表示以位置 $i$ 为中心、长度为 $m$ 的局部波数窗口
+- $\mathcal{W}_{\mathrm{narrow}}(i)$ 表示以位置 $i$ 为中心的 narrow 局部窗口
 - $\ell$ 是窗口内的临时位置索引
-- 窗口宽度用 `cm^-1` 表示，实际计算时会根据当前波数轴步长换算为奇数采样点窗口
+- $\mathcal{W}_{\mathrm{narrow}}(i)$ 的长度对应 `cosmic_ray_window_points`
 
 局部残差定义为：
 
 ```math
-r_i^{(\mathrm{narrow})} = x_i - \tilde{x}_i
+r_i^{(\mathrm{narrow})}
+=
+x_i
+-
+\tilde{x}_i^{(\mathrm{narrow})}
 ```
 
 为了避免局部强峰和少量异常点影响尺度估计，对残差使用 MAD 估计鲁棒尺度
@@ -690,9 +693,12 @@ r_i^{(\mathrm{narrow})} = x_i - \tilde{x}_i
 \operatorname{median}_{i}
 \left(
 \left|
-r_i
+r_i^{(\mathrm{narrow})}
 -
-\operatorname{median}_{\ell}(r_{\ell})
+\operatorname{median}_{\ell}
+\left(
+r_{\ell}^{(\mathrm{narrow})}
+\right)
 \right|
 \right)
 ```
@@ -703,9 +709,12 @@ r_i
 z_i^{(\mathrm{narrow})}
 =
 \frac{
-r_i
+r_i^{(\mathrm{narrow})}
 -
-\operatorname{median}_{\ell}(r_{\ell})
+\operatorname{median}_{\ell}
+\left(
+r_{\ell}^{(\mathrm{narrow})}
+\right)
 }
 {\sigma_{\mathrm{narrow}}}
 ```
@@ -721,19 +730,19 @@ z_i^{(\mathrm{narrow})}
 则认为该位置是单谱内的疑似宇宙射线尖峰，并用局部中值替换
 
 ```math
-x_i \leftarrow \tilde{x}_i
+x_i \leftarrow \tilde{x}_i^{(\mathrm{narrow})}
 ```
 
 其中 $\lambda_{\mathrm{narrow}}$ 对应 `cosmic_ray_threshold`
 
 ##### peak 阶段
 
-narrow 后继续处理局部正异常段，但不再对清理后的原谱做峰形搜索，而是直接在局部 median 残差上判断短突起。
+narrow 后继续处理局部正异常段，但不再对清理后的原谱做峰形搜索，而是直接在 `cleaned_after_narrow - local_median` 的正残差上判断短突起。
 
 先用较宽的局部 median 得到参考谱形：
 
 ```math
-\tilde{x}_i
+\tilde{x}_i^{(\mathrm{peak})}
 =
 \operatorname{median}
 \left\{
@@ -743,12 +752,14 @@ x_{\ell}
 \right\}
 ```
 
+其中 $\mathcal{W}_{\mathrm{peak}}(i)$ 的长度对应 `cosmic_ray_peak_window_points`
+
 peak 阶段的正向残差定义为：
 
 ```math
 r_i^{(\mathrm{peak})}
 =
-x_i - \tilde{x}_i
+x_i - \tilde{x}_i^{(\mathrm{peak})}
 ```
 
 再对残差计算鲁棒 z-score：
@@ -769,66 +780,73 @@ r_{\ell}^{(\mathrm{peak})}
 }
 ```
 
-只检测正向残差异常：
+peak 阶段采用“双阈值段扩展”：
+
+- `cosmic_ray_peak_prominence_z` 是高阈值，只负责确认异常核心点
+- `cosmic_ray_peak_expand_z` 是低阈值，只负责从异常核心向两侧扩展完整污染段
+- `cosmic_ray_peak_expand_gap_points` 允许扩展段中跨过很短的断点，避免一个污染峰被切碎
+
+异常核心需要满足：
 
 ```math
 r_i^{(\mathrm{peak})} > 0,
 \quad
 z_i^{(\mathrm{peak})}
 \ge
-\lambda_{\mathrm{peak}}
+\lambda_{\mathrm{core}}
 ```
 
-其中 $\lambda_{\mathrm{peak}}$ 对应 `cosmic_ray_peak_prominence_z`。连续满足条件的点会合并为候选片段 $S$，相邻片段之间只隔很小空隙时也会合并。
+其中 $\lambda_{\mathrm{core}}$ 对应 `cosmic_ray_peak_prominence_z`
 
-对每个候选片段计算波数宽度：
+扩展段从核心点向左右连续扩展，扩展点需要满足：
 
 ```math
-\omega_S
+r_i^{(\mathrm{peak})} > 0,
+\quad
+z_i^{(\mathrm{peak})}
+\ge
+\lambda_{\mathrm{expand}}
+```
+
+其中 $\lambda_{\mathrm{expand}}$ 对应 `cosmic_ray_peak_expand_z`
+
+对每个扩展片段 $S$ 计算采样点宽度：
+
+```math
+w_S
 =
-\max_{i \in S} \nu_i
+\max(S)
 -
-\min_{i \in S} \nu_i
+\min(S)
 +
-\Delta \nu
+1
 ```
 
-要求候选片段不能宽于 peak 阶段上限：
+要求候选片段不能宽于 peak 阶段点数上限：
 
 ```math
-\omega_S
+w_S
 \le
-\omega_{\max}^{(\mathrm{peak})}
+w_{\max}^{(\mathrm{peak})}
 ```
 
-其中 $\omega_{\max}^{(\mathrm{peak})}$ 对应 `cosmic_ray_peak_width_max_cm`。
+其中 $w_{\max}^{(\mathrm{peak})}$ 对应 `cosmic_ray_peak_width_max_points`
 
-同时计算片段的正向 z-score 面积和平均强度：
+同时计算扩展片段内正向 z-score 的平均强度：
 
 ```math
-\alpha_S
+\bar{z}_S
 =
+\frac{1}{|S|}
 \sum_{i \in S}
 \max
 \left(
 z_i^{(\mathrm{peak})},
 0
 \right)
-\Delta \nu
 ```
 
-```math
-\bar{z}_S
-=
-\frac{
-\alpha_S
-}
-{
-\max(\omega_S,\Delta\nu)
-}
-```
-
-当前候选片段需要满足：
+候选片段还需要满足：
 
 ```math
 \bar{z}_S
@@ -836,9 +854,31 @@ z_i^{(\mathrm{peak})},
 \eta
 ```
 
-其中 $\eta$ 对应 `cosmic_ray_peak_ratio_z_per_cm`，现在表示该残差片段的平均正向 z-score 下限。
+其中 $\eta$ 对应 `cosmic_ray_peak_mean_z_min`
 
-如果候选片段满足上述条件，就按 `cosmic_ray_peak_pad_cm` 向左右轻微扩展后替换。替换方式优先使用片段左右两侧有效点做线性插值；如果边界不足，则回退到局部中值估计。
+如果候选片段满足上述条件，代码会先检查该片段两侧是否有 narrow 阶段已经替换过、且距离不超过 `cosmic_ray_peak_expand_gap_points` 的点。如果有，就把这些点并入同一段污染区域，再按 `cosmic_ray_peak_pad_points` 向左右轻微扩展后统一替换。
+
+替换点数统计时，peak 覆盖到的点归入 `peak`，不再重复计入 `narrow`
+
+##### peak 段补值
+
+peak 段替换不直接保留污染段原始形态，避免把宇宙射线边缘趋势也带回去
+
+当前实现会先在替换段左右两侧各收集最多 12 个干净锚点
+
+锚点必须在 `valid_mask` 内，并且不能属于当前 peak 扩展段或 narrow 阶段已替换点
+
+当前补值由三部分组成：
+
+1. 用替换段左右最近的干净锚点做线性桥接，保证段首段尾不会产生明显断点
+2. 从 peak 阶段的局部 median fallback 中提取很弱的低频曲率，只作为线性桥接上的小幅修正
+3. 从左右干净邻域提取去趋势后的上下波动纹理，并按确定性方式移植到修复段内
+
+低频曲率和纹理都会在替换段边缘衰减到 0，避免修复后重新造出台阶
+
+纹理不是每次随机生成的噪声，而是由替换段位置和两侧锚点值确定；同一条谱重复预处理会得到一致结果
+
+修复段的主趋势优先使用两端锚点的线性插值；如果两端锚点不完整，则使用 peak 阶段的局部 median fallback 作为主趋势。若纹理补值无法构造，则直接使用这个主趋势。
 
 #### AsLS 基线校正原理
 

@@ -1,28 +1,23 @@
-"""审核工具统一命令入口"""
+"""audit 命令统一入口。"""
 
 from __future__ import annotations
 
 import argparse
 import sys
 
-from raman.audit import bad_band, folder, full_scan, move, single
+from raman.audit import bad_band, full_scan, move
 
 
 def build_parser():
     parser = argparse.ArgumentParser(description="Raman 数据审核与移除工具")
     subparsers = parser.add_subparsers(dest="command", required=True)
-
-    subparsers.add_parser("single", help="组内单谱离群审核")
-    subparsers.add_parser("folder", help="同属同前缀参考组审核")
-    subparsers.add_parser("full", help="全库只读异常谱复查")
-    subparsers.add_parser("bad-band", help="系统性下凹坏段扫描")
+    subparsers.add_parser("full", help="全库分阶段清洗")
+    subparsers.add_parser("bad-band", help="系统性坏段扫描")
     subparsers.add_parser("move", help="按路径或清单移动到 delete")
     return parser
 
 
 COMMANDS = {
-    "single": single.main,
-    "folder": folder.main,
     "full": full_scan.main,
     "bad-band": bad_band.main,
     "move": move.main,

@@ -1,11 +1,10 @@
-"""按路径或审核清单移动异常数据到数据集 delete 目录"""
+"""按路径或 audit 清单移动异常数据到 delete。"""
 
 from __future__ import annotations
 
 import argparse
 import csv
 import shutil
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +18,7 @@ class MoveItem:
     destination: Path
     relative: Path
     reason: str
+    category: str = ""
 
 
 def is_relative_to(path: Path, parent: Path) -> bool:
@@ -33,6 +33,16 @@ def normalize_input(text: str) -> Path:
     return Path(str(text).strip().strip('"').strip("'"))
 
 
+def normalize_category(category: str | None) -> str:
+    category = str(category or "").strip().strip("/\\")
+    if not category:
+        return ""
+    if category not in DEFAULT_AUDIT_CONFIG.delete_categories:
+        allowed = "、".join(DEFAULT_AUDIT_CONFIG.delete_categories)
+        raise ValueError(f"Unsupported delete category: {category}. Allowed: {allowed}")
+    return category
+
+
 def find_unique_folder_by_name(init_root: Path, name: str) -> Path | None:
     matches = sorted(path for path in init_root.glob(f"*/{name}") if path.is_dir())
     if not matches:
@@ -44,7 +54,6 @@ def find_unique_folder_by_name(init_root: Path, name: str) -> Path | None:
 
 
 def source_from_input(raw: Path, dataset_dir: Path, init_root: Path, allow_genus: bool) -> tuple[Path, Path]:
-    """解析输入路径并返回源路径和去掉 init 后的相对路径"""
     if raw.is_absolute():
         source = raw.resolve(strict=True)
     else:
@@ -101,18 +110,27 @@ def normalize_reason(reason: str) -> str:
     return "；".join(dict.fromkeys(labels))
 
 
-def build_item(text: str, reason: str, dataset_dir: Path, init_root: Path, delete_root: Path, allow_genus: bool) -> MoveItem:
+def build_item(
+    text: str,
+    reason: str,
+    category: str,
+    dataset_dir: Path,
+    init_root: Path,
+    delete_root: Path,
+    allow_genus: bool,
+) -> MoveItem:
     source, rel = source_from_input(normalize_input(text), dataset_dir, init_root, allow_genus)
-    destination = (delete_root / rel).resolve()
-    if not is_relative_to(destination, delete_root.resolve()):
+    category = normalize_category(category)
+    destination_root = (delete_root / category).resolve() if category else delete_root.resolve()
+    destination = (destination_root / rel).resolve()
+    if not is_relative_to(destination, destination_root):
         raise ValueError(f"Destination escapes delete root: {destination}")
     if destination.exists():
         raise FileExistsError(f"Destination already exists, refusing to overwrite: {destination}")
-    return MoveItem(source=source, destination=destination, relative=rel, reason=normalize_reason(reason))
+    return MoveItem(source=source, destination=destination, relative=rel, reason=normalize_reason(reason), category=category)
 
 
-def read_items_from_list(path: Path, fallback_reason: str | None = None) -> list[tuple[str, str]]:
-    """读取 full_scan 生成的 delete_candidates.csv 或手工 txt 清单"""
+def read_items_from_list(path: Path, fallback_reason: str | None = None, fallback_category: str | None = None) -> list[tuple[str, str, str]]:
     path = path.resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Missing list file: {path}")
@@ -124,46 +142,46 @@ def read_items_from_list(path: Path, fallback_reason: str | None = None) -> list
                 rel_path = row.get("rel_path") or row.get("path")
                 if not rel_path:
                     continue
-                reason = row.get("reason_labels") or fallback_reason
-                items.append((rel_path, reason or ""))
+                reason = row.get("reason_labels") or fallback_reason or ""
+                category = row.get("delete_category") or fallback_category or ""
+                items.append((rel_path, reason, category))
             return items
     if fallback_reason is None:
         raise ValueError("TXT manifest requires --reason because it has no reason_labels column")
-    return [(line.strip(), fallback_reason) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [(line.strip(), fallback_reason, fallback_category or "") for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def collect_record_lines(delete_root: Path, destination: Path, rel: Path, reason: str) -> dict[Path, list[tuple[str, str, str]]]:
-    """生成按属写入的移除记录内容"""
-    if len(rel.parts) < 2:
-        return {}
-    genus = rel.parts[0]
-    folder = rel.parts[1]
-    records: dict[Path, list[tuple[str, str, str]]] = {}
-    genus_record = delete_root / genus / "移除记录.txt"
-    if destination.is_dir():
-        files = sorted(path for path in destination.rglob("*.arc_data") if path.is_file())
-        for file in files:
-            file_rel = file.relative_to(delete_root)
-            file_folder = file_rel.parts[1] if len(file_rel.parts) > 1 else folder
-            file_record = delete_root / file_rel.parts[0] / "移除记录.txt"
-            records.setdefault(file_record, []).append((file_folder, file.name, reason))
-    else:
-        records.setdefault(genus_record, []).append((folder, destination.name, reason))
-    return records
+def _append_category_record(delete_root: Path, items: list[MoveItem]):
+    by_category: dict[str, list[MoveItem]] = {}
+    for item in items:
+        if item.category:
+            by_category.setdefault(item.category, []).append(item)
+    for category, category_items in by_category.items():
+        record_path = delete_root / category / "移除记录.txt"
+        existing = record_path.read_text(encoding="utf-8") if record_path.exists() else ""
+        lines = [existing.rstrip(), ""] if existing.strip() else []
+        for item in category_items:
+            lines.append(f"{item.relative.as_posix()}\t{item.reason}")
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        record_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
-def append_delete_records(delete_root: Path, items: list[MoveItem]):
+def _append_legacy_records(delete_root: Path, items: list[MoveItem]):
     grouped: dict[Path, list[tuple[str, str, str]]] = {}
     for item in items:
-        for record_path, rows in collect_record_lines(delete_root, item.destination, item.relative, item.reason).items():
-            grouped.setdefault(record_path, []).extend(rows)
+        if item.category or len(item.relative.parts) < 2:
+            continue
+        genus = item.relative.parts[0]
+        folder = item.relative.parts[1]
+        record_path = delete_root / genus / "移除记录.txt"
+        grouped.setdefault(record_path, []).append((folder, item.destination.name, item.reason))
 
     for record_path, rows in grouped.items():
         existing = record_path.read_text(encoding="utf-8") if record_path.exists() else ""
+        chunks = [existing.rstrip(), ""] if existing.strip() else []
         sections: dict[str, list[tuple[str, str]]] = {}
         for folder, filename, reason in rows:
             sections.setdefault(folder, []).append((filename, reason))
-        chunks = [existing.rstrip(), ""] if existing.strip() else []
         for folder in sorted(sections):
             chunks.append(folder)
             for filename, reason in sections[folder]:
@@ -173,10 +191,16 @@ def append_delete_records(delete_root: Path, items: list[MoveItem]):
         record_path.write_text("\n".join(chunks).rstrip() + "\n", encoding="utf-8")
 
 
+def append_delete_records(delete_root: Path, items: list[MoveItem]):
+    _append_category_record(delete_root, items)
+    _append_legacy_records(delete_root, items)
+
+
 def execute_items(delete_root: Path, items: list[MoveItem], dry_run: bool):
     print("Dry-run move plan:" if dry_run else "Move plan:")
     for item in items:
-        print(f"{item.source} -> {item.destination} | {item.reason}")
+        category = f" | category={item.category}" if item.category else ""
+        print(f"{item.source} -> {item.destination} | {item.reason}{category}")
     if dry_run:
         print("Dry-run only. No files were moved.")
         return
@@ -187,37 +211,40 @@ def execute_items(delete_root: Path, items: list[MoveItem], dry_run: bool):
     print(f"Moved {len(items)} item(s).")
 
 
-def move_items(dataset, paths=None, from_list=None, reason=None, dry_run=False, allow_genus=False):
-    """移动显式路径或 full_scan 清单中的候选数据"""
+def move_items(dataset, paths=None, from_list=None, reason=None, dry_run=False, allow_genus=False, category=None):
     profile, dataset_dir = resolve_dataset(dataset, PROJECT_ROOT)
     init_root = dataset_dir / profile.root_init
     delete_root = dataset_dir / "delete"
     if not init_root.is_dir():
         raise FileNotFoundError(f"Missing init root: {init_root}")
 
-    raw_items: list[tuple[str, str]] = []
+    raw_items: list[tuple[str, str, str]] = []
     if from_list:
-        raw_items.extend(read_items_from_list(Path(from_list), reason))
+        raw_items.extend(read_items_from_list(Path(from_list), reason, category))
     for path in paths or []:
-        raw_items.append((path, reason or ""))
+        raw_items.append((path, reason or "", category or ""))
     if not raw_items and from_list:
         print("No paths to move. The candidate list is empty.")
         return []
     if not raw_items:
         raise ValueError("No paths to move. Use --path or --from-list")
 
-    items = [build_item(path, item_reason, dataset_dir, init_root, delete_root, allow_genus) for path, item_reason in raw_items]
+    items = [
+        build_item(path, item_reason, item_category, dataset_dir, init_root, delete_root, allow_genus)
+        for path, item_reason, item_category in raw_items
+    ]
     execute_items(delete_root, items, dry_run)
     return items
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="把 init 下的异常数据移动到 dataset/<数据集名>/delete")
+    parser = argparse.ArgumentParser(description="把 init 下的数据移动到 dataset/<数据集>/delete")
     parser.add_argument("dataset", nargs="?", default="细菌", help="数据集名或 profile id")
     parser.add_argument("paths", nargs="*", help="要移动的文件夹或文件路径")
     parser.add_argument("--path", action="append", default=[], help="要移动的文件夹或文件路径，可重复")
-    parser.add_argument("--from-list", default=None, help="full_scan 生成的 delete_candidates.csv")
-    parser.add_argument("--reason", default=None, help="手动移动原因：残留宇宙射线 / 阶梯谱 / 粗糙噪声 / 参考组离群 / 组内离群，可用分号连接")
+    parser.add_argument("--from-list", default=None, help="audit 生成的 delete_candidates.csv")
+    parser.add_argument("--reason", default=None, help="手工移动原因；CSV 清单优先使用 reason_labels 列")
+    parser.add_argument("--category", default=None, choices=DEFAULT_AUDIT_CONFIG.delete_categories, help="移动到 delete 下的分类目录")
     parser.add_argument("--dry-run", action="store_true", help="只打印移动计划，不移动文件")
     parser.add_argument("--allow-genus", action="store_true", help="允许移动整属目录")
     return parser
@@ -233,13 +260,10 @@ def main(argv=None):
         reason=args.reason,
         dry_run=args.dry_run,
         allow_genus=args.allow_genus,
+        category=args.category,
     )
     return 0
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        raise SystemExit(1)
+    raise SystemExit(main())

@@ -169,7 +169,7 @@ class Config:
     # 标准化后增强概率
     p_shift = 0.40
     p_broadening = 0.45
-    p_cut = 0.40
+    p_cut = 0.20
 
     # 增强叠加数量上限
     max_pre_augs = 4

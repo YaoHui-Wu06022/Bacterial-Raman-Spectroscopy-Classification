@@ -1,95 +1,68 @@
-"""审核阈值统一配置
-
-这些参数集中放在这里，避免单谱审核、参考组审核和全库扫描各自维护一套阈值
-CLI 只负责输入输出和报告数量，不再暴露重复评分参数
-"""
+"""audit 分阶段清洗参数。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from raman.data.build import COSMIC_RAY_PEAK_WIDTH_MAX_POINTS
+
 
 @dataclass(frozen=True)
 class AuditConfig:
-    """所有审计入口共用的参数配置"""
+    """所有 audit 阶段共用的阈值"""
 
-    # 前缀池离群评分：将同属同前缀的小文件夹先合并，再与前缀均值谱比较
-    min_group_samples: int = 5
-    group_score_threshold: float = 3.5
-    group_corr_threshold: float = 0.92
-    group_point_z_threshold: float = 8.0
-    group_bad_ratio_threshold: float = 0.03
-    prefix_strong_score_threshold: float = 4.5
-    prefix_strong_corr_threshold: float = 0.88
-    prefix_strong_bad_ratio_threshold: float = 0.04
-    prefix_extreme_bad_ratio_threshold: float = 0.08
-    prefix_variance_remove_score_threshold: float = 8.0
-    prefix_variance_remove_corr_threshold: float = 0.82
-    prefix_other_folder_corr_threshold: float = 0.88
-    prefix_other_folder_invalid_corr_threshold: float = 0.82
+    min_prefix_samples: int = 5
 
-    # 粗糙噪声评分：在同一文件夹内，基于一阶差分的鲁棒尺度进行判断
-    roughness_z_threshold: float = 3.5
-    roughness_min: float = 0.12
+    # 第一阶段：无效谱
+    invalid_raw_coverage_min: float = 0.9  # 原始波数覆盖比例下限，低于此值认为有长段缺失
+    invalid_flat_window_points: int = 40  # 平坦段检测的滑动窗口点数
+    invalid_flat_range_max: float = 0.08  # 窗口内 SNV 极差低于此值时，认为该窗口近似无信息
+    invalid_long_flat_points: int = 100  # 连续平坦点数达到此值，直接进入删除候选
+    invalid_review_flat_points: int = 80  # 连续平坦点数达到此值但未到删除线，进入复核候选
+    invalid_flat_fraction: float = 0.30  # 全谱贴近中位数的比例过高，认为整体有效峰结构弱
+    invalid_flat_near_median: float = 0.03  # 判断“贴近中位数”的 SNV 距离阈值
+    invalid_noise_roughness_min: float = 0.80  # 谱自身一阶差分粗糙度下限，越高说明高频噪声越强
+    invalid_noise_smooth_points: int = 31  # 平滑窗口点数，用于分离有效慢变结构和高频细节
+    invalid_noise_structure_ratio_max: float = 1.50  # 平滑结构幅度 / 粗糙度过低，说明强噪声里缺少有效峰结构
+    invalid_noise_review_roughness_min: float = 0.6  # 强噪声复核线，比删除线稍宽松
+    invalid_noise_review_structure_ratio_max: float = 2.00  # 有效结构偏弱复核线，比删除线稍宽松
 
-    # 参考组评分：当文件数量足够时，优先使用同属同前缀的文件夹作为参考
-    min_ref_files: int = 20
-    min_ref_samples: int = 5
-    ref_corr_floor: float = 0.80
-    ref_corr_margin: float = 0.05
-    nearest_ref_corr_floor: float = 0.86
-    nearest_ref_corr_margin: float = 0.03
-    ref_bad_ratio_floor: float = 0.04
-    ref_bad_ratio_margin: float = 0.02
-    ref_rmse_floor: float = 0.75
-    ref_rmse_multiplier: float = 1.35
-    ref_cosmic_floor: int = 80
-    ref_cosmic_margin: int = 30
-    folder_corr_ref_warning: float = 0.75
+    # 第二阶段：宇宙射线清理后仍残留的宽上升平台 / 阶梯异常
+    anomalous_wide_min_points: int = COSMIC_RAY_PEAK_WIDTH_MAX_POINTS # 宽异常至少要超过 peak 可修复宽度
+    anomalous_wide_smooth_points: int = 5  # 检测前的短窗口平滑点数
+    anomalous_wide_floor_window_points: int = 71  # 局部下包络窗口点数，用于估计正常底部
+    anomalous_wide_z_min: float = 3.0  # 宽异常连续区域的 z 下限
+    anomalous_wide_area_z_min: float = 50.0  # 删除候选的宽异常面积下限
+    anomalous_wide_max_z_min: float = 5.0  # 删除候选的宽异常峰值 z 下限
+    anomalous_wide_review_edge_z_min: float = 3.75  # 宽异常进入复核候选的边缘突跳 z 下限
+    anomalous_wide_delete_edge_z_min: float = 5.0  # 删除候选的边缘突跳 z 下限
 
-    # 阶梯状光谱检测：检测预处理后仍存在的长平台或突跳
-    step_smooth_points: int = 21
-    step_side_points: int = 28
-    step_gap_points: int = 4
-    step_jump_z_threshold: float = 8.0
-    step_level_z_threshold: float = 12.0
-    step_min_delta: float = 0.9
-    step_opposite_window: int = 32
-    step_edge_cm: float = 12.0
+    # 第三阶段：同属同前缀类内相似性和局部正残差异常
+    class_min_ref_samples: int = 8  # 参考池最少谱数，低于此值不自动判定
+    class_corr_ref_review_max: float = 0.86  # 与同前缀中位谱相关性低于此值，进入复核证据
+    class_corr_ref_remove_max: float = 0.78  # 与同前缀中位谱相关性低于此值，作为删除强证据
+    class_nearest_ref_review_max: float = 0.90  # 与其它小文件夹最近邻相关性低于此值，进入复核证据
+    class_nearest_ref_remove_max: float = 0.82  # 与其它小文件夹最近邻相关性低于此值，作为删除强证据
+    class_rmse_ref_review_min: float = 0.55  # 与同前缀中位谱 RMSE 高于此值，进入复核证据
+    class_rmse_ref_remove_min: float = 0.75  # 与同前缀中位谱 RMSE 高于此值，作为删除强证据
+    class_local_z_min: float = 3.0  # 局部正残差连续区域的 z 下限
+    class_local_width_min_points: int = COSMIC_RAY_PEAK_WIDTH_MAX_POINTS  # 局部异常最小连续点数
+    class_local_review_z_min: float = 6.0  # 局部正残差峰值复核线
+    class_local_review_area_min: float = 100.0  # 局部正残差面积复核线
+    class_local_remove_z_min: float = 8.0  # 局部正残差峰值删除线
+    class_local_remove_area_min: float = 150.0  # 局部正残差面积删除线
+    class_folder_candidate_max_count: int = 8  # 同小文件夹候选数超过此值，只做复核
+    class_folder_candidate_max_fraction: float = 0.30  # 同小文件夹候选比例超过此值，只做复核
 
-    # 残差宇宙射线样异常复核：检测清理后残差中正向、短到中等宽度的异常峰
-    residual_pos_z_threshold: float = 8.0
-    residual_min_max_z: float = 12.0
-    residual_review_max_pos_z: float = 16.0
-    residual_max_width_cm: float = 30.0
-
-    # 前缀均值谱预筛：先筛明显额外凸起、阶梯样异常和完全不贴合的重噪声无效谱
-    local_bump_z_threshold: float = 3.5
-    local_bump_remove_z: float = 5.0
-    local_bump_remove_area: float = 60.0
-    local_bump_max_width_cm: float = 90.0
-    species_bump_min_max_z: float = 12.0
-    species_invalid_corr_threshold: float = 0.75
-    species_invalid_nearest_corr_threshold: float = 0.82
-    species_invalid_bad_ratio_threshold: float = 0.06
-
-    # 文件夹级汇总规则：这些规则只用于触发文件夹层面的复核提示
-    folder_candidate_fraction_review: float = 0.20
-    folder_ref_outlier_fraction_review: float = 0.15
-    folder_step_fraction_review: float = 0.15
-    folder_candidate_fraction_remove: float = 0.45
-    folder_ref_outlier_fraction_remove: float = 0.30
-    folder_step_fraction_remove: float = 0.25
-
-    # 手动删除记录中的原因标签
+    delete_categories: tuple[str, ...] = (
+        "Invalid Spectrum",
+        "Anomalous_Cosmic_Rays",
+        "Class_Similarity_Outliers",
+    )
     delete_reason_labels: tuple[str, ...] = (
-        "残留宇宙射线",
-        "阶梯谱",
-        "无效噪声谱",
-        "前缀离群",
-        "粗糙噪声",
-        "参考组离群",
-        "组内离群",
+        "Invalid Spectrum",
+        "Anomalous_Cosmic_Rays",
+        "Class_Similarity_Outliers",
     )
 
 

@@ -1,4 +1,4 @@
-"""全库两阶段强异常谱清理入口"""
+"""全库分阶段清洗入口。"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
@@ -22,31 +23,103 @@ from raman.audit.common import (
     output_wn,
     plot_segments_without_bad_bands,
     resolve_dataset,
-    select_limited,
     write_csv,
 )
 from raman.audit.config import DEFAULT_AUDIT_CONFIG
 from raman.audit.scoring import (
     SpectrumRecord,
-    classify_prefix_cleanup,
-    classify_species_prefilter,
+    STAGE_DELETE_CATEGORY,
     reason_labels,
     record_to_row,
-    score_prefix_pools,
+    score_stage,
+    stage_title,
+    validate_stage,
 )
 from raman.data.build import DEFAULT_PIPELINE_CONFIG
 from raman.data.spectrum import read_arc_data
 
 
-def plot_spectrum_candidate(record, out_path, profile, cfg, prefix_stats, audit_cfg):
-    """输出单谱复核图。"""
-    stats = prefix_stats.get(record.prefix_scope)
-    if stats is None or record.z is None:
+def run_stage_scan(profile, cfg, audit_cfg, init_root, stage):
+    records = load_audit_records(profile, cfg, init_root, SpectrumRecord)
+    prefix_stats = score_stage(records, cfg, stage, audit_cfg)
+    return records, prefix_stats
+
+
+def _class_scope_stats(record, prefix_stats):
+    stats = prefix_stats.get(record.ref_pool_scope or record.prefix_scope)
+    if not stats:
+        return None
+    return stats
+
+
+def _class_folder_review_targets(records):
+    targets = []
+    seen = set()
+    for record in records:
+        if record.stage != "class-similarity" or record.z is None:
+            continue
+        if record.folder_candidate_count <= 0:
+            continue
+        if (
+            record.folder_candidate_count <= DEFAULT_AUDIT_CONFIG.class_folder_candidate_max_count
+            and record.folder_candidate_fraction <= DEFAULT_AUDIT_CONFIG.class_folder_candidate_max_fraction
+        ):
+            continue
+        key = (record.genus, record.folder, record.prefix_scope)
+        if key in seen:
+            continue
+        seen.add(key)
+        targets.append(record)
+    return sorted(targets, key=lambda item: (-item.folder_candidate_count, -item.folder_candidate_fraction, item.rel_path))
+
+
+def plot_class_folder_review(record, out_path, profile, cfg, prefix_stats, audit_cfg):
+    stats = _class_scope_stats(record, prefix_stats)
+    if stats is None:
+        return
+    scope_records = [item for item in stats["records"] if item.z is not None]
+    folder_records = [item for item in scope_records if item.folder == record.folder]
+    other_records = [item for item in scope_records if item.folder != record.folder]
+    if not folder_records or not other_records:
+        return
+
+    folder_mean = np.mean(np.stack([item.z for item in folder_records]).astype(np.float32), axis=0)
+    other_mean = np.mean(np.stack([item.z for item in other_records]).astype(np.float32), axis=0)
+    folder_count = len(folder_records)
+    other_count = len(other_records)
+    wn = output_wn(cfg)[: folder_mean.size]
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    plot_segments_without_bad_bands(axes[0], wn, other_mean, cfg.bad_bands, color="0.35", linewidth=1.0, label="same prefix other folders mean")
+    plot_segments_without_bad_bands(axes[0], wn, folder_mean, cfg.bad_bands, color="C3", linewidth=1.1, label="this folder mean")
+    axes[0].set_title("Folder concentration review")
+    axes[0].set_ylabel("SNV intensity")
+    axes[0].legend(loc="best")
+
+    diff = folder_mean - other_mean
+    plot_segments_without_bad_bands(axes[1], wn, diff, cfg.bad_bands, color="C4", linewidth=1.0, label="folder minus others")
+    axes[1].axhline(0.0, color="0.3", linestyle="--", linewidth=0.9)
+    axes[1].set_ylabel("Difference")
+    axes[1].set_xlabel("Wavenumber")
+    axes[1].legend(loc="best")
+
+    fig.suptitle(
+        f"{record.genus}/{record.folder} | candidates={record.folder_candidate_count}/{folder_count} "
+        f"({record.folder_candidate_fraction:.3f}) | other folders={other_count}"
+    )
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=160)
+    plt.close(fig)
+
+
+def plot_stage_candidate(record, out_path, profile, cfg, prefix_stats, audit_cfg):
+    if record.z is None:
         return
 
     raw_wn, raw_sp = read_arc_data(record.path)
     raw_cosmic = cosmic_clean_for_plot(raw_wn, raw_sp, profile, cfg)
-    wn = output_wn(cfg)
+    wn = output_wn(cfg)[: record.z.size]
 
     fig, axes = plt.subplots(4, 1, figsize=(12, 13), sharex=False)
     plot_segments_without_bad_bands(axes[0], raw_wn, raw_sp, cfg.bad_bands, color="0.60", linewidth=0.9, label="raw")
@@ -55,37 +128,88 @@ def plot_spectrum_candidate(record, out_path, profile, cfg, prefix_stats, audit_
     axes[0].set_ylabel("Intensity")
     axes[0].legend(loc="best")
 
-    fill_between_segments_without_bad_bands(axes[1], wn, stats["q10"], stats["q90"], cfg.bad_bands, color="C0", alpha=0.16, label="prefix q10-q90")
-    plot_segments_without_bad_bands(axes[1], wn, stats["center"], cfg.bad_bands, color="C0", linewidth=1.4, label="prefix mean")
-    plot_segments_without_bad_bands(axes[1], wn, record.z, cfg.bad_bands, color="C3", linewidth=1.0, label="sample SNV")
-    axes[1].set_title("After preprocessing vs merged prefix mean")
-    axes[1].set_ylabel("SNV intensity")
-    axes[1].legend(loc="best")
+    if record.stage == "anomalous-cosmic" and record.sp is not None:
+        plot_segments_without_bad_bands(axes[1], wn, record.sp, cfg.bad_bands, color="C2", linewidth=0.9, label="baseline corrected")
+        if record.wide_smooth is not None:
+            plot_segments_without_bad_bands(axes[1], wn, record.wide_smooth, cfg.bad_bands, color="C1", linewidth=1.1, label="short smooth")
+        if record.wide_floor is not None:
+            plot_segments_without_bad_bands(axes[1], wn, record.wide_floor, cfg.bad_bands, color="0.35", linewidth=1.0, label="local floor")
+        for start, end in record.wide_bump_ranges:
+            axes[1].axvspan(float(wn[start]), float(wn[end - 1]), color="darkorange", alpha=0.16)
+        axes[1].set_title("Baseline corrected / wide platform detection")
+        axes[1].set_ylabel("Corrected intensity")
+        axes[1].legend(loc="best")
 
-    prefix_z = (record.z - stats["center"]) / stats["wave_scale"]
-    plot_segments_without_bad_bands(axes[2], wn, prefix_z, cfg.bad_bands, color="C4", linewidth=0.9, label="prefix residual z")
-    axes[2].axhline(audit_cfg.local_bump_z_threshold, color="C3", linestyle="--", linewidth=0.8, label="local bump z")
-    axes[2].axhline(-audit_cfg.group_point_z_threshold, color="0.5", linestyle=":", linewidth=0.8)
-    for pos in record.step_positions:
-        axes[2].axvline(pos, color="black", linestyle=":", linewidth=0.8)
-    axes[2].set_title("Prefix residual z-score and detected steps")
-    axes[2].set_ylabel("z")
-    axes[2].legend(loc="best")
+        if record.wide_z is not None:
+            plot_segments_without_bad_bands(axes[2], wn, record.wide_z, cfg.bad_bands, color="C4", linewidth=1.0, label="wide residual z")
+            axes[2].axhline(audit_cfg.anomalous_wide_z_min, color="darkorange", linestyle="--", linewidth=1.0, label="wide z threshold")
+        for start, end in record.wide_bump_ranges:
+            axes[2].axvspan(float(wn[start]), float(wn[end - 1]), color="darkorange", alpha=0.16)
+        axes[2].set_title("Wide rising platform / step z-score")
+        axes[2].set_ylabel("z")
+        axes[2].legend(loc="best")
+    elif record.stage == "class-similarity":
+        stats = _class_scope_stats(record, prefix_stats)
+        if stats is not None:
+            ref_center = stats["center"]
+            ref_q10 = stats["q10"]
+            ref_q90 = stats["q90"]
+            fill_between_segments_without_bad_bands(axes[1], wn, ref_q10, ref_q90, cfg.bad_bands, color="0.85", alpha=0.55, label="reference q10-q90")
+            plot_segments_without_bad_bands(axes[1], wn, ref_center, cfg.bad_bands, color="0.35", linewidth=1.0, label="reference median")
+        plot_segments_without_bad_bands(axes[1], wn, record.z, cfg.bad_bands, color="C3", linewidth=1.0, label="sample SNV")
+        axes[1].set_title("Sample vs class reference pool")
+        axes[1].set_ylabel("SNV intensity")
+        axes[1].legend(loc="best")
+
+        if record.local_pos_z is not None:
+            plot_segments_without_bad_bands(axes[2], wn, record.local_pos_z, cfg.bad_bands, color="C4", linewidth=1.0, label="local positive z")
+            axes[2].axhline(audit_cfg.class_local_z_min, color="darkorange", linestyle="--", linewidth=1.0, label="local z threshold")
+        for start, end in record.local_pos_ranges:
+            axes[2].axvspan(float(wn[start]), float(wn[end - 1]), color="darkorange", alpha=0.16)
+        axes[2].set_title("Local positive residual anomaly")
+        axes[2].set_ylabel("z")
+        axes[2].legend(loc="best")
+    else:
+        plot_segments_without_bad_bands(axes[1], wn, record.z, cfg.bad_bands, color="C3", linewidth=1.0, label="sample SNV")
+        axes[1].set_title("Preprocessed sample")
+        axes[1].set_ylabel("SNV intensity")
+        axes[1].legend(loc="best")
+
+        smooth_window = audit_cfg.invalid_noise_smooth_points
+        from raman.audit.common import moving_average
+
+        smooth = moving_average(record.z, smooth_window)
+        detail = record.z - smooth
+        plot_segments_without_bad_bands(axes[2], wn, record.z, cfg.bad_bands, color="0.70", linewidth=0.7, label="SNV")
+        plot_segments_without_bad_bands(axes[2], wn, smooth, cfg.bad_bands, color="C1", linewidth=1.1, label=f"smooth {smooth_window}pt")
+        plot_segments_without_bad_bands(axes[2], wn, detail, cfg.bad_bands, color="C4", linewidth=0.7, label="detail")
+        axes[2].set_title("Self noise / structure view")
+        axes[2].set_ylabel("SNV")
+        axes[2].legend(loc="best")
 
     axes[3].axis("off")
     text = (
+        f"Stage: {record.stage}\n"
         f"Decision: {record.decision}\n"
-        f"Stage: {record.clean_stage}\n"
         f"Reasons: {'; '.join(record.reasons)}\n"
         f"Labels: {'; '.join(reason_labels(record.reasons))}\n"
-        f"prefix={record.prefix_scope}, score={record.prefix_outlier_score:.3f}\n"
-        f"corr_species_mean={record.corr_species_mean:.3f}, nearest_prefix_corr={record.nearest_prefix_corr:.3f}\n"
-        f"nearest_other_folder_corr={record.nearest_prefix_other_corr:.3f}, other_ref_pool={record.other_ref_pool_size}\n"
-        f"local_bump_regions={record.species_bump_regions}, bump_z={record.local_bump_max_z:.3f}, area={record.local_bump_area:.3f}\n"
-        f"variance_share={record.prefix_variance_share:.5f}, variance_ratio={record.prefix_variance_ratio:.3f}\n"
-        f"bad_ratio_z6={record.bad_ratio_z6:.3f} (diagnostic only)\n"
-        f"step_count={record.step_count}, bad_band_edge_step={record.bad_band_edge_step_count}\n"
-        f"roughness_z={record.roughness_z:.3f}, cosmic_total={record.cosmic_total}"
+        f"raw_wn={record.raw_wn_min:.1f}-{record.raw_wn_max:.1f}, coverage={record.coverage_ratio:.3f}\n"
+        f"long_flat_points={record.long_flat_points}, flat_fraction={record.flat_fraction:.3f}, roughness={record.roughness:.4f}\n"
+        f"smooth_range={record.smooth_range:.4f}, detail_noise={record.detail_noise:.4f}, structure_ratio={record.structure_ratio:.3f}\n"
+        f"wide_bump_count={record.wide_bump_count}, z={record.wide_bump_max_z:.3f}, "
+        f"area={record.wide_bump_area:.3f}, width_points={record.wide_bump_width_points}, "
+        f"width_cm={record.wide_bump_width_cm:.1f}, center={record.wide_bump_center_cm:.1f}\n"
+        f"edge_jump_z={record.wide_edge_jump_z:.3f}, left={record.wide_left_edge_jump_z:.3f}, "
+        f"right={record.wide_right_edge_jump_z:.3f}\n"
+        f"rising_area={record.rising_region_area:.3f}, rising_width={record.rising_region_width_cm:.1f}\n"
+        f"ref_pool_size={record.ref_pool_size}, other_ref_pool_size={record.other_ref_pool_size}, "
+        f"corr_ref={record.corr_ref:.3f}, nearest_ref_corr={record.nearest_ref_corr:.3f}, rmse_to_ref={record.rmse_to_ref:.3f}\n"
+        f"local_pos_count={record.local_pos_count}, local_pos_max_z={record.local_pos_max_z:.3f}, "
+        f"local_pos_area={record.local_pos_area:.3f}, local_pos_width_points={record.local_pos_width_points}, "
+        f"local_pos_center={record.local_pos_center_cm:.1f}\n"
+        f"folder_candidate_count={record.folder_candidate_count}, folder_candidate_fraction={record.folder_candidate_fraction:.3f}\n"
+        f"cosmic_total={record.cosmic_total}, narrow={record.cosmic_narrow}, peak={record.cosmic_peak}\n"
+        f"risk_score={record.risk_score:.3f}"
     )
     axes[3].text(0.01, 0.98, text, va="top", ha="left", fontsize=10, family="monospace")
 
@@ -96,63 +220,104 @@ def plot_spectrum_candidate(record, out_path, profile, cfg, prefix_stats, audit_
     plt.close(fig)
 
 
-def write_figures(out_dir, records, profile, cfg, prefix_stats, max_spectrum_figures, audit_cfg):
-    """按数量上限输出候选谱复核图。"""
-    candidates = [record for record in records if record.decision in {"remove_candidate", "review_candidate"} and record.z is not None]
-    candidates = sorted(candidates, key=lambda item: (item.decision != "remove_candidate", -item.risk_score, item.rel_path))
-    spectrum_to_plot = select_limited(candidates, max_spectrum_figures)
-    for record in spectrum_to_plot:
-        out_path = out_dir / "figures" / "spectra" / record.genus / record.folder / f"{Path(record.file).stem}.png"
-        plot_spectrum_candidate(record, out_path, profile, cfg, prefix_stats, audit_cfg)
-    return len(spectrum_to_plot)
+def write_stage_figures(out_dir, records, profile, cfg, prefix_stats, max_spectrum_figures, audit_cfg):
+    delete_records = sorted(
+        [record for record in records if record.decision == "remove_candidate" and record.z is not None],
+        key=lambda item: (-item.risk_score, item.rel_path),
+    )
+    review_records = sorted(
+        [record for record in records if record.decision == "review_candidate" and record.z is not None],
+        key=lambda item: (-item.risk_score, item.rel_path),
+    )
+    folder_targets = []
+    if records and records[0].stage == "class-similarity":
+        folder_targets = _class_folder_review_targets(records)
+
+    if max_spectrum_figures < 0:
+        selected = []
+        folder_targets = []
+    elif max_spectrum_figures == 0:
+        selected = delete_records + review_records
+        if folder_targets:
+            folder_targets = folder_targets[:100]
+    else:
+        folder_quota = 0
+        if folder_targets:
+            folder_quota = min(len(folder_targets), 100, max(1, max_spectrum_figures // 5))
+        spectrum_quota = max(0, max_spectrum_figures - folder_quota)
+        review_quota = min(len(review_records), spectrum_quota // 2)
+        delete_quota = min(len(delete_records), spectrum_quota - review_quota)
+        review_quota = min(len(review_records), spectrum_quota - delete_quota)
+        selected = delete_records[:delete_quota] + review_records[:review_quota]
+        folder_targets = folder_targets[:folder_quota]
+
+    for record in selected:
+        kind = "delete" if record.decision == "remove_candidate" else "review"
+        out_path = out_dir / "figures" / kind / record.genus / record.folder / f"{Path(record.file).stem}.png"
+        plot_stage_candidate(record, out_path, profile, cfg, prefix_stats, audit_cfg)
+
+    for record in folder_targets:
+        out_path = out_dir / "figures" / "folder_review" / record.genus / f"{record.folder}.png"
+        plot_class_folder_review(record, out_path, profile, cfg, prefix_stats, audit_cfg)
+
+    folder_figures = len(folder_targets)
+    return {"spectrum": len(selected), "folder": folder_figures, "total": len(selected) + folder_figures}
 
 
-def write_summary(out_dir, dataset_name, records, cfg, dataset_dir, init_root, fig_count, move_strong):
-    """写中文报告和机器可读摘要。"""
+def _candidate_rows(records):
+    rows = [record_to_row(record) for record in records if record.decision in {"remove_candidate", "review_candidate", "skip"}]
+    return sorted(rows, key=lambda row: (row["decision"] != "remove_candidate", -float(row["risk_score"] or 0), row["rel_path"]))
+
+
+def write_stage_summary(out_dir, dataset_name, records, cfg, audit_cfg, dataset_dir, init_root, stage, figure_counts, moved):
     valid = [record for record in records if record.z is not None]
     skipped = [record for record in records if record.z is None]
     remove_records = [record for record in valid if record.decision == "remove_candidate"]
     review_records = [record for record in valid if record.decision == "review_candidate"]
-    stage_counts = {}
-    for record in valid:
-        stage_counts[record.clean_stage or "keep"] = stage_counts.get(record.clean_stage or "keep", 0) + 1
+    reason_counts = {}
+    for record in remove_records + review_records:
+        for reason in record.reasons:
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
 
     lines = [
-        f"# dataset/{dataset_name} 两阶段强异常清理报告",
+        f"# dataset/{dataset_name} audit {stage}",
         "",
         "## 总体",
         "",
+        f"- 阶段：{stage_title(stage)}",
         f"- 数据目录：`{init_root}`",
         f"- 输出目录：`{out_dir}`",
         f"- 总光谱数：{len(records)}",
         f"- 有效光谱数：{len(valid)}",
         f"- 跳过光谱数：{len(skipped)}",
-        f"- 强异常移除候选：{len(remove_records)}",
-        f"- 仅复核候选：{len(review_records)}",
-        f"- 已输出候选谱图：{fig_count}",
-        f"- 自动移动强异常：{'是' if move_strong else '否'}",
-        "- 第一阶段使用同属同前缀合并均值谱筛掉局部异常凸起、阶梯样异常和完全不贴合的无效谱",
-        "- 第二阶段排除第一阶段强异常后，按方差贡献、相关性和排除同小文件夹后的最近邻相关性做强离群清洗",
-        "- bad_ratio_z6 / bad_ratio_z8 仅作为诊断字段保留，不再作为删除必要条件",
-        "- review_candidate 只写报告，不会自动移动",
+        f"- 删除候选：{len(remove_records)}",
+        f"- 复核候选：{len(review_records)}",
+        f"- 单谱候选图：{figure_counts['spectrum']}",
+        f"- 文件夹复核图：{figure_counts['folder']}",
+        f"- 图总数：{figure_counts['total']}",
+        f"- 已执行移动：{'是' if moved else '否'}",
+        f"- 删除目录：`delete/{STAGE_DELETE_CATEGORY[stage]}`",
         "",
-        "## 阶段统计",
+        "## 原因统计",
         "",
     ]
-    for stage, count in sorted(stage_counts.items()):
-        lines.append(f"- {stage}: {count}")
-
-    lines.extend(["", "## 强异常移除候选", ""])
-    if remove_records:
-        for record in sorted(remove_records, key=lambda item: (-item.risk_score, item.rel_path))[:120]:
-            lines.append(f"- `{record.rel_path}`：{'; '.join(reason_labels(record.reasons))}（{'; '.join(record.reasons)}）")
+    if reason_counts:
+        for reason, count in sorted(reason_counts.items()):
+            lines.append(f"- {reason}: {count}")
     else:
         lines.append("- 暂无")
 
-    lines.extend(["", "## 仅复核候选", ""])
+    lines.extend(["", "## 删除候选", ""])
+    if remove_records:
+        for record in sorted(remove_records, key=lambda item: (-item.risk_score, item.rel_path))[:150]:
+            lines.append(f"- `{record.rel_path}`：{'; '.join(record.reasons)}")
+    else:
+        lines.append("- 暂无")
+
+    lines.extend(["", "## 复核候选", ""])
     if review_records:
-        for record in sorted(review_records, key=lambda item: (-item.risk_score, item.rel_path))[:120]:
-            lines.append(f"- `{record.rel_path}`：{'; '.join(reason_labels(record.reasons))}（{'; '.join(record.reasons)}）")
+        for record in sorted(review_records, key=lambda item: (-item.risk_score, item.rel_path))[:150]:
+            lines.append(f"- `{record.rel_path}`：{'; '.join(record.reasons)}")
     else:
         lines.append("- 暂无")
 
@@ -161,41 +326,49 @@ def write_summary(out_dir, dataset_name, records, cfg, dataset_dir, init_root, f
         "dataset_dir": str(dataset_dir),
         "init_root": str(init_root),
         "output_dir": str(out_dir),
+        "stage": stage,
+        "delete_category": STAGE_DELETE_CATEGORY[stage],
         "pipeline_config": asdict(cfg),
-        "audit_config": asdict(DEFAULT_AUDIT_CONFIG),
+        "audit_config": asdict(audit_cfg),
         "total_spectra": len(records),
         "valid_spectra": len(valid),
         "skipped_spectra": len(skipped),
-        "remove_candidates": len(remove_records),
+        "delete_candidates": len(remove_records),
         "review_candidates": len(review_records),
-        "stage_counts": stage_counts,
-        "figures": {"spectra": fig_count},
-        "move_strong": move_strong,
+        "reason_counts": reason_counts,
+        "figures": figure_counts,
+        "moved": moved,
     }
     (out_dir / "summary.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def run_two_stage_scan(profile, cfg, audit_cfg, init_root):
-    records = load_audit_records(profile, cfg, init_root, SpectrumRecord)
-    first_stats = score_prefix_pools(records, cfg, audit_cfg)
-    classify_species_prefilter(records, audit_cfg)
-    first_remove_ids = {id(record) for record in records if record.decision == "remove_candidate"}
-    final_stats = score_prefix_pools(records, cfg, audit_cfg, exclude_ids=first_remove_ids)
-    classify_prefix_cleanup(records, audit_cfg)
-    return records, final_stats or first_stats
+def write_stage_outputs(out_dir, records, profile, cfg, audit_cfg, prefix_stats, dataset_dir, init_root, stage, max_spectrum_figures, moved=False):
+    all_rows = [record_to_row(record) for record in records]
+    fieldnames = list(all_rows[0].keys()) if all_rows else None
+    candidate_rows = _candidate_rows(records)
+    delete_rows = [row for row in candidate_rows if row["decision"] == "remove_candidate"]
+    review_rows = [row for row in candidate_rows if row["decision"] == "review_candidate"]
+
+    delete_csv = out_dir / "delete_candidates.csv"
+    write_csv(delete_csv, delete_rows, fieldnames)
+    write_csv(out_dir / "review_candidates.csv", review_rows, fieldnames)
+    write_csv(out_dir / "all_spectra_scores.csv", all_rows, fieldnames)
+    (out_dir / "delete_manifest.txt").write_text("".join(f"{row['rel_path']}\n" for row in delete_rows), encoding="utf-8")
+
+    figure_counts = write_stage_figures(out_dir, records, profile, cfg, prefix_stats, max_spectrum_figures, audit_cfg)
+    write_stage_summary(out_dir, profile.dataset_name, records, cfg, audit_cfg, dataset_dir, init_root, stage, figure_counts, moved)
+    return {"delete_csv": delete_csv, "delete_rows": delete_rows, "review_rows": review_rows, "figures": figure_counts}
 
 
 def full_scan(
     dataset,
+    stage="invalid",
     output_root=None,
     timestamp=None,
-    max_remove_candidates=0,
-    max_folder_candidates=0,
-    max_spectrum_figures=0,
-    max_folder_figures=0,
-    move_strong=False,
+    max_spectrum_figures=200,
+    move=False,
 ):
-    """执行全库两阶段强异常清理。"""
+    stage = validate_stage(stage)
     profile, dataset_dir = resolve_dataset(dataset, PROJECT_ROOT)
     cfg = DEFAULT_PIPELINE_CONFIG
     audit_cfg = DEFAULT_AUDIT_CONFIG
@@ -204,8 +377,8 @@ def full_scan(
         raise FileNotFoundError(f"Missing init folder: {init_root}")
 
     if timestamp is None:
-        mode_name = "full_scan_move_strong" if move_strong else "full_scan_dry_run"
-        timestamp = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{mode_name}"
+        mode_name = "move" if move else "dry_run"
+        timestamp = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{stage}_{mode_name}"
     output_root = Path(output_root) if output_root else dataset_dir / "audit_full_scan"
     if not output_root.is_absolute():
         output_root = PROJECT_ROOT / output_root
@@ -213,44 +386,26 @@ def full_scan(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Dataset: {dataset_dir}")
+    print(f"Stage: {stage}")
     print(f"Input: {init_root}")
     print(f"Output: {out_dir}")
 
-    records, prefix_stats = run_two_stage_scan(profile, cfg, audit_cfg, init_root)
+    records, prefix_stats = run_stage_scan(profile, cfg, audit_cfg, init_root, stage)
+    result = write_stage_outputs(out_dir, records, profile, cfg, audit_cfg, prefix_stats, dataset_dir, init_root, stage, max_spectrum_figures, moved=False)
 
-    candidate_rows = [
-        record_to_row(record)
-        for record in records
-        if record.decision in {"remove_candidate", "review_candidate", "skip"}
-    ]
-    candidate_rows = sorted(candidate_rows, key=lambda row: (row["decision"] != "remove_candidate", row["prefix_scope"], row["group"], row["file"]))
-    delete_rows = [row for row in candidate_rows if row["decision"] == "remove_candidate"]
-    review_rows = [row for row in candidate_rows if row["decision"] == "review_candidate"]
-    all_rows = [record_to_row(record) for record in records]
-    spectrum_fieldnames = list(all_rows[0].keys()) if all_rows else None
-
-    delete_csv = out_dir / "delete_candidates.csv"
-    write_csv(out_dir / "spectrum_candidates.csv", candidate_rows, spectrum_fieldnames)
-    write_csv(delete_csv, delete_rows, spectrum_fieldnames)
-    write_csv(out_dir / "review_candidates.csv", review_rows, spectrum_fieldnames)
-    write_csv(out_dir / "all_spectra_scores.csv", all_rows, spectrum_fieldnames)
-    (out_dir / "delete_manifest.txt").write_text("".join(f"{row['rel_path']}\n" for row in delete_rows), encoding="utf-8")
-
-    fig_count = write_figures(out_dir, records, profile, cfg, prefix_stats, max_spectrum_figures, audit_cfg)
-    write_summary(out_dir, profile.dataset_name, records, cfg, dataset_dir, init_root, fig_count, move_strong)
-
-    if move_strong and delete_rows:
+    if move and result["delete_rows"]:
         from raman.audit.move import move_items
 
-        log_path = out_dir / "move_strong_log.txt"
+        log_path = out_dir / "move_log.txt"
         with log_path.open("w", encoding="utf-8") as log_file, redirect_stdout(log_file):
-            move_items(dataset, from_list=str(delete_csv), dry_run=False)
-        print(f"- Strong candidates moved: {len(delete_rows)}")
+            move_items(dataset, from_list=str(result["delete_csv"]), dry_run=False, category=STAGE_DELETE_CATEGORY[stage])
+        write_stage_summary(out_dir, profile.dataset_name, records, cfg, audit_cfg, dataset_dir, init_root, stage, result["figures"], moved=True)
+        print(f"- Moved candidates: {len(result['delete_rows'])}")
         print(f"- Move log: {log_path}")
 
-    print("\nFull scan finished:")
+    print("\nStage scan finished:")
     print(f"- Summary: {out_dir / 'summary.md'}")
-    print(f"- Delete candidates: {delete_csv}")
+    print(f"- Delete candidates: {result['delete_csv']}")
     print(f"- Review candidates: {out_dir / 'review_candidates.csv'}")
     print(f"- All scores: {out_dir / 'all_spectra_scores.csv'}")
     print(f"- Figures: {out_dir / 'figures'}")
@@ -258,15 +413,17 @@ def full_scan(
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="全库两阶段强异常谱清理")
+    parser = argparse.ArgumentParser(description="分阶段清洗 Raman audit")
     parser.add_argument("dataset", nargs="?", default="细菌", help="数据集名或 profile id")
+    parser.add_argument("--stage", choices=("invalid", "anomalous-cosmic", "class-similarity"), default="invalid", help="本次执行的清洗阶段")
     parser.add_argument("--output-root", default=None, help="覆盖输出根目录")
-    parser.add_argument("--timestamp", default=None, help="覆盖时间戳目录名")
-    parser.add_argument("--max-remove-candidates", type=int, default=0, help="兼容旧参数；新流程不按数量截断强异常")
-    parser.add_argument("--max-folder-candidates", type=int, default=0, help="兼容旧参数；新流程不输出文件夹候选")
-    parser.add_argument("--max-spectrum-figures", type=int, default=0, help="最多输出多少张单谱复核图，0 表示全部，负数表示不输出")
-    parser.add_argument("--max-folder-figures", type=int, default=0, help="兼容旧参数；新流程不输出文件夹候选图")
-    parser.add_argument("--move-strong", action="store_true", help="将强异常 delete_candidates 自动移动到 delete；review 不会移动")
+    parser.add_argument("--timestamp", default=None, help="覆盖输出目录名")
+    parser.add_argument("--max-spectrum-figures", type=int, default=200, help="最多输出多少张候选图；默认 200，0 表示全部，负数表示不输出")
+    parser.add_argument("--move", action="store_true", help="移动本阶段 delete_candidates 到对应 delete 分类目录")
+    parser.add_argument("--move-strong", dest="move", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--max-remove-candidates", type=int, default=0, help=argparse.SUPPRESS)
+    parser.add_argument("--max-folder-candidates", type=int, default=0, help=argparse.SUPPRESS)
+    parser.add_argument("--max-folder-figures", type=int, default=0, help=argparse.SUPPRESS)
     return parser
 
 
@@ -274,13 +431,11 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     full_scan(
         args.dataset,
+        stage=args.stage,
         output_root=args.output_root,
         timestamp=args.timestamp,
-        max_remove_candidates=args.max_remove_candidates,
-        max_folder_candidates=args.max_folder_candidates,
         max_spectrum_figures=args.max_spectrum_figures,
-        max_folder_figures=args.max_folder_figures,
-        move_strong=args.move_strong,
+        move=args.move,
     )
     return 0
 
