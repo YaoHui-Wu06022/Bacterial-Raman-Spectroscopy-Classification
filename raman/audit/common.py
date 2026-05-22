@@ -7,7 +7,9 @@ from pathlib import Path
 
 import numpy as np
 
+from raman.data.archive import iter_arc_dirs
 from raman.data.build import DEFAULT_PIPELINE_CONFIG, _cosmic_ray_kwargs, resolve_pipeline_config
+from raman.data.offline import remove_cosmic_rays
 from raman.data.offline import preprocess_single_spectrum
 from raman.data.profiles import get_dataset_dir, get_profile
 from raman.data.spectrum import build_valid_mask, read_arc_data, snv
@@ -127,6 +129,40 @@ def region_width_cm(wn, start, end):
     return float(abs(wn[end - 1] - wn[start]) + step)
 
 
+def positive_region_summary(wn, values, threshold, max_width_cm):
+    """Summarize positive local residual regions above a threshold."""
+    wn = np.asarray(wn, dtype=np.float32)
+    values = np.asarray(values, dtype=np.float32)
+    step = median_step_cm(wn)
+    regions = []
+    for start, end in contiguous_regions(values >= threshold):
+        width = region_width_cm(wn, start, end)
+        if width > max_width_cm:
+            continue
+        segment = values[start:end]
+        area = float(np.sum(np.maximum(segment, 0.0)) * step)
+        peak_idx = int(start + np.argmax(segment))
+        regions.append(
+            {
+                "start": start,
+                "end": end,
+                "center_cm": float(wn[peak_idx]),
+                "width_cm": width,
+                "max_z": float(np.max(segment)),
+                "area": area,
+            }
+        )
+    if not regions:
+        return {"count": 0, "max_z": 0.0, "max_area": 0.0, "max_width_cm": 0.0, "centers_cm": ()}
+    return {
+        "count": len(regions),
+        "max_z": max(region["max_z"] for region in regions),
+        "max_area": max(region["area"] for region in regions),
+        "max_width_cm": max(region["width_cm"] for region in regions),
+        "centers_cm": tuple(region["center_cm"] for region in regions),
+    }
+
+
 def output_wn(cfg):
     wn = cfg.build_wn_ref()
     keep = build_valid_mask(wn, cfg.bad_bands)
@@ -227,6 +263,86 @@ def preprocess_spectrum_for_audit(path, profile, cfg=None, wn_ref=None, include_
         }
     )
     return payload
+
+
+def write_csv(path, rows, fieldnames=None):
+    """写 CSV，空结果也保留表头。"""
+    import csv
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = fieldnames or (list(rows[0].keys()) if rows else None)
+    if not fieldnames:
+        path.write_text("", encoding="utf-8-sig")
+        return
+    with path.open("w", encoding="utf-8-sig", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def load_audit_records(profile, cfg, input_root, record_cls):
+    """读取审核输入根目录下所有叶子目录并执行当前离线预处理。"""
+    records = []
+    wn_ref = cfg.build_wn_ref()
+    for root, arc_files in iter_arc_dirs(input_root):
+        rel_group = root.relative_to(input_root)
+        genus = rel_group.parts[0] if len(rel_group.parts) >= 1 else "."
+        folder = rel_group.parts[1] if len(rel_group.parts) >= 2 else root.name
+        group = rel_group.as_posix()
+        print(f"[Preprocess] {group}: {len(arc_files)} files")
+
+        for filename in arc_files:
+            path = root / filename
+            payload = preprocess_spectrum_for_audit(path, profile, cfg, wn_ref=wn_ref, include_raw=False)
+            record = record_cls(
+                path=path,
+                rel_path=path.relative_to(input_root).as_posix(),
+                group=group,
+                genus=genus,
+                folder=folder,
+                file=filename,
+                skip_reason=payload.get("skip_reason", ""),
+            )
+            if not record.skip_reason:
+                stats = payload["cosmic_stats"]
+                record.z = np.asarray(payload["z"], dtype=np.float32)
+                record.sp = np.asarray(payload["sp"], dtype=np.float32)
+                record.cosmic_total = int(stats)
+                record.cosmic_narrow = int(getattr(stats, "narrow", 0))
+                record.cosmic_peak = int(getattr(stats, "peak", 0))
+            records.append(record)
+    return records
+
+
+def cosmic_clean_for_plot(wn, sp, profile, cfg):
+    """仅用于复核图展示宇宙射线清理结果。"""
+    if profile.profile_id not in set(cfg.cosmic_ray_enabled_profile_ids):
+        return np.asarray(sp, dtype=np.float32)
+    cleaned, _ = remove_cosmic_rays(
+        sp,
+        window_points=cfg.cosmic_ray_narrow_window_points,
+        threshold=cfg.cosmic_ray_threshold,
+        max_iter=cfg.cosmic_ray_max_iter,
+        valid_mask=None,
+        peak_prominence_z=cfg.cosmic_ray_peak_prominence_z,
+        peak_window_points=cfg.cosmic_ray_peak_window_points,
+        peak_expand_z=cfg.cosmic_ray_peak_expand_z,
+        peak_expand_gap_points=cfg.cosmic_ray_peak_expand_gap_points,
+        peak_width_max_points=cfg.cosmic_ray_peak_width_max_points,
+        peak_mean_z_min=cfg.cosmic_ray_peak_mean_z_min,
+        peak_pad_points=cfg.cosmic_ray_peak_pad_points,
+    )
+    return cleaned
+
+
+def select_limited(items, limit):
+    """按常见 CLI 语义选择前 N 项；0 表示全部，负数表示不选。"""
+    if limit < 0:
+        return []
+    if limit == 0:
+        return list(items)
+    return list(items)[:limit]
 
 
 def relative_to_init(path, dataset_dir, init_root, profile):

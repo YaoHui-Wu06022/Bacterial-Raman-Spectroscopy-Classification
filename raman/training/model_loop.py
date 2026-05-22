@@ -244,10 +244,10 @@ def train_model(
         else:
             group_backbone.append(p)
 
-    optimizer = optim.Adam([
+    optimizer = optim.AdamW([
         {"params": group_conv, "lr": config.learning_rate*0.6},
         {"params": group_backbone, "lr": config.learning_rate},
-        {"params": group_head, "lr": config.learning_rate*1.2},
+        {"params": group_head, "lr": config.learning_rate*1.1},
     ], weight_decay=5e-4)
 
     scheduler = optim.lr_scheduler.CosineAnnealingLR(

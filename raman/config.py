@@ -116,7 +116,7 @@ class Config:
     # transformer
     transformer_nhead = 6
     transformer_dim = 192
-    transformer_ffn_dim = 768 # 原版 4 倍
+    transformer_ffn_dim = 384 
     transformer_layers = 2
     transformer_dropout = 0.2
     # lstm
@@ -160,16 +160,16 @@ class Config:
     umap_min_dist = 0.1
 
     # RAW 域增强概率
-    p_piecewise_gain = 0.30
-    p_noise = 0.60
-    p_axis = 0.20
-    p_baseline_weak = 0.50
-    p_baseline_strong = 0.30
+    p_piecewise_gain = 0.40
+    p_noise = 0.70
+    p_axis = 0.30
+    p_baseline_weak = 0.55
+    p_baseline_strong = 0.35
 
     # 标准化后增强概率
-    p_shift = 0.30
-    p_broadening = 0.35
-    p_cut = 0.30
+    p_shift = 0.40
+    p_broadening = 0.45
+    p_cut = 0.40
 
     # 增强叠加数量上限
     max_pre_augs = 4

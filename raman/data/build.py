@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import shutil
@@ -28,24 +29,24 @@ TARGET_POINTS = 896
 COMMON_BAD_BANDS = ((890.0, 950.0),)
 
 BASELINE_METHOD = "airPLS"
-BASELINE_LAM = 3e4  # 基线平滑强度；越大，估计基线越平滑
+BASELINE_LAM = 1e5  # 基线平滑强度；越大，估计基线越平滑
 BASELINE_ASLS_P = 0.01  # 仅 AsLS 使用的不对称权重；airPLS/arPLS 不使用
 BASELINE_MAX_ITER = 15  # 基线迭代次数上限
 BASELINE_FIT_MIN = 400  # 基线拟合下限，保留训练范围外缓冲区以稳定边缘基线
 BASELINE_FIT_MAX = 2000  # 基线拟合上限，避免更远端异常尖峰污染基线
 
 COSMIC_RAY_ENABLED_PROFILE_IDS = ("bacteria","Enterobacteriaceae","MN_IgA")
-COSMIC_RAY_NARROW_WINDOW_CM = 10.0  # narrow 阶段局部 median/MAD 窗口宽度，单位 cm^-1
+COSMIC_RAY_NARROW_WINDOW_POINTS = 7  # narrow 阶段局部 median/MAD 窗口宽度，单位点
 COSMIC_RAY_THRESHOLD = 7.0  # narrow 阶段正残差 z 阈值
 COSMIC_RAY_MAX_ITER = 2  # narrow 阶段最大迭代次数
 
-COSMIC_RAY_PEAK_PROMINENCE_Z = 8.0  # peak 阶段峰显著度 z 阈值
-COSMIC_RAY_PEAK_WIDTH_MAX_CM = 13.0  # peak 阶段可替换峰宽上限，单位 cm^-1
-COSMIC_RAY_PEAK_RATIO_Z_PER_CM = 4.0  # peak 阶段显著度 / 峰宽比阈值
-COSMIC_RAY_PEAK_PAD_CM = 2.0  # peak 阶段替换峰区时左右额外扩展宽度，单位 cm^-1
-COSMIC_RAY_PEAK_REL_HEIGHT = 0.5  # peak 阶段计算峰宽时使用的相对高度
-COSMIC_RAY_RESIDUAL_THRESHOLD_Z = 10.0  # residual 阶段只在已替换点邻域内清理平台残留的 z 阈值
-COSMIC_RAY_RESIDUAL_MAX_POINTS_FRACTION = 0.03  # residual 阶段单条谱最多替换有效点比例，防止过清理
+COSMIC_RAY_PEAK_PROMINENCE_Z = 9.2  # peak 阶段局部 median 正残差 z 阈值
+COSMIC_RAY_PEAK_WINDOW_POINTS = 31  # peak 阶段局部 median 窗口宽度
+COSMIC_RAY_PEAK_EXPAND_Z = 4.0  # peak 阶段从高阈值核心向外扩展的低 z 阈值
+COSMIC_RAY_PEAK_EXPAND_GAP_POINTS = 2  # peak 阶段合并扩展段时允许跨过的断点数
+COSMIC_RAY_PEAK_WIDTH_MAX_POINTS = 15  # peak 阶段可替换正异常段宽度上限
+COSMIC_RAY_PEAK_MEAN_Z_MIN = 6.0  # peak 阶段扩展段平均 z 下限
+COSMIC_RAY_PEAK_PAD_POINTS = 1  # peak 阶段替换异常段时左右额外扩展宽度
 
 MIN_SAMPLES_PER_CLASS = 8
 PLOT_NORM_METHOD = "snv"
@@ -71,16 +72,16 @@ class PipelineConfig:
     baseline_fit_min: float = BASELINE_FIT_MIN
     baseline_fit_max: float = BASELINE_FIT_MAX
     cosmic_ray_enabled_profile_ids: tuple[str, ...] = COSMIC_RAY_ENABLED_PROFILE_IDS
-    cosmic_ray_narrow_window_cm: float = COSMIC_RAY_NARROW_WINDOW_CM
+    cosmic_ray_narrow_window_points: int = COSMIC_RAY_NARROW_WINDOW_POINTS
     cosmic_ray_threshold: float = COSMIC_RAY_THRESHOLD
     cosmic_ray_max_iter: int = COSMIC_RAY_MAX_ITER
     cosmic_ray_peak_prominence_z: float = COSMIC_RAY_PEAK_PROMINENCE_Z
-    cosmic_ray_peak_width_max_cm: float = COSMIC_RAY_PEAK_WIDTH_MAX_CM
-    cosmic_ray_peak_ratio_z_per_cm: float = COSMIC_RAY_PEAK_RATIO_Z_PER_CM
-    cosmic_ray_peak_pad_cm: float = COSMIC_RAY_PEAK_PAD_CM
-    cosmic_ray_peak_rel_height: float = COSMIC_RAY_PEAK_REL_HEIGHT
-    cosmic_ray_residual_threshold_z: float = COSMIC_RAY_RESIDUAL_THRESHOLD_Z
-    cosmic_ray_residual_max_points_fraction: float = COSMIC_RAY_RESIDUAL_MAX_POINTS_FRACTION
+    cosmic_ray_peak_window_points: int = COSMIC_RAY_PEAK_WINDOW_POINTS
+    cosmic_ray_peak_expand_z: float = COSMIC_RAY_PEAK_EXPAND_Z
+    cosmic_ray_peak_expand_gap_points: int = COSMIC_RAY_PEAK_EXPAND_GAP_POINTS
+    cosmic_ray_peak_width_max_points: int = COSMIC_RAY_PEAK_WIDTH_MAX_POINTS
+    cosmic_ray_peak_mean_z_min: float = COSMIC_RAY_PEAK_MEAN_Z_MIN
+    cosmic_ray_peak_pad_points: int = COSMIC_RAY_PEAK_PAD_POINTS
     min_samples_per_class: int = MIN_SAMPLES_PER_CLASS
     plot_norm_method: str = PLOT_NORM_METHOD
     pca_enabled: bool = PCA_ENABLED
@@ -110,23 +111,66 @@ def _json_ready(value):
     """把 dataclass/tuple 等配置值转换成稳定 JSON 结构"""
     return json.loads(json.dumps(value, ensure_ascii=False, sort_keys=True))
 
-def _train_raw_config_payload(profile, cfg):
+def _input_signature(input_path):
+    """记录 init 输入状态，避免 init 变化后误复用旧 train_raw"""
+    input_path = Path(input_path)
+    digest = hashlib.sha256()
+    if input_path.is_dir():
+        count = 0
+        total_size = 0
+        max_mtime_ns = 0
+        for file_path in sorted(input_path.rglob("*.arc_data")):
+            stat = file_path.stat()
+            rel_path = file_path.relative_to(input_path).as_posix()
+            count += 1
+            total_size += int(stat.st_size)
+            max_mtime_ns = max(max_mtime_ns, int(stat.st_mtime_ns))
+            digest.update(rel_path.encode("utf-8", errors="surrogateescape"))
+            digest.update(b"\0")
+            digest.update(str(int(stat.st_size)).encode("ascii"))
+            digest.update(b"\0")
+            digest.update(str(int(stat.st_mtime_ns)).encode("ascii"))
+            digest.update(b"\n")
+        return {
+            "kind": "directory",
+            "count": count,
+            "total_size": total_size,
+            "max_mtime_ns": max_mtime_ns,
+            "sha256": digest.hexdigest(),
+        }
+
+    stat = input_path.stat()
+    digest.update(input_path.name.encode("utf-8", errors="surrogateescape"))
+    digest.update(b"\0")
+    digest.update(str(int(stat.st_size)).encode("ascii"))
+    digest.update(b"\0")
+    digest.update(str(int(stat.st_mtime_ns)).encode("ascii"))
+    return {
+        "kind": "file",
+        "count": 1,
+        "total_size": int(stat.st_size),
+        "max_mtime_ns": int(stat.st_mtime_ns),
+        "sha256": digest.hexdigest(),
+    }
+
+def _train_raw_config_payload(profile, cfg, input_path):
     """生成 train_raw 中间层的参数指纹"""
     return {
         "profile_id": profile.profile_id,
         "cosmic_ray_bad_band_masked": False,
         "pipeline_config": _json_ready(asdict(cfg)),
+        "source_signature": _input_signature(input_path),
     }
 
 def _train_raw_config_path(root_process_raw):
     return Path(root_process_raw) / TRAIN_RAW_CONFIG_NAME
 
-def _write_train_raw_config(root_process_raw, profile, cfg):
+def _write_train_raw_config(root_process_raw, profile, cfg, input_path):
     """在 train_raw 中记录生成该中间层的配置"""
     config_path = _train_raw_config_path(root_process_raw)
     config_path.write_text(
         json.dumps(
-            _train_raw_config_payload(profile, cfg),
+            _train_raw_config_payload(profile, cfg, input_path),
             ensure_ascii=False,
             indent=2,
             sort_keys=True,
@@ -134,7 +178,7 @@ def _write_train_raw_config(root_process_raw, profile, cfg):
         encoding="utf-8",
     )
 
-def _train_raw_config_matches(root_process_raw, profile, cfg):
+def _train_raw_config_matches(root_process_raw, profile, cfg, input_path):
     """判断现有 train_raw 是否由当前配置生成"""
     config_path = _train_raw_config_path(root_process_raw)
     if not config_path.is_file():
@@ -143,7 +187,7 @@ def _train_raw_config_matches(root_process_raw, profile, cfg):
         payload = json.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return payload == _train_raw_config_payload(profile, cfg)
+    return payload == _train_raw_config_payload(profile, cfg, input_path)
 
 def _cosmic_ray_enabled(profile, cfg):
     """判断当前数据集是否启用宇宙射线去除"""
@@ -153,18 +197,16 @@ def _cosmic_ray_kwargs(profile, cfg):
     """构造单谱宇宙射线去除参数"""
     return {
         "cosmic_ray_remove": _cosmic_ray_enabled(profile, cfg),
-        "cosmic_ray_window_cm": float(cfg.cosmic_ray_narrow_window_cm),
+        "cosmic_ray_window_points": int(cfg.cosmic_ray_narrow_window_points),
         "cosmic_ray_threshold": float(cfg.cosmic_ray_threshold),
         "cosmic_ray_max_iter": int(cfg.cosmic_ray_max_iter),
         "cosmic_ray_peak_prominence_z": float(cfg.cosmic_ray_peak_prominence_z),
-        "cosmic_ray_peak_width_max_cm": float(cfg.cosmic_ray_peak_width_max_cm),
-        "cosmic_ray_peak_ratio_z_per_cm": float(cfg.cosmic_ray_peak_ratio_z_per_cm),
-        "cosmic_ray_peak_pad_cm": float(cfg.cosmic_ray_peak_pad_cm),
-        "cosmic_ray_peak_rel_height": float(cfg.cosmic_ray_peak_rel_height),
-        # residual 阶段清理前两步削峰后的平台残留，只暴露阈值和最多替换比例。
-        # 其它宽度规格在 remove_cosmic_rays() 内由 peak 参数派生。
-        "cosmic_ray_residual_threshold_z": float(cfg.cosmic_ray_residual_threshold_z),
-        "cosmic_ray_residual_max_points_fraction": float(cfg.cosmic_ray_residual_max_points_fraction),
+        "cosmic_ray_peak_window_points": int(cfg.cosmic_ray_peak_window_points),
+        "cosmic_ray_peak_expand_z": float(cfg.cosmic_ray_peak_expand_z),
+        "cosmic_ray_peak_expand_gap_points": int(cfg.cosmic_ray_peak_expand_gap_points),
+        "cosmic_ray_peak_width_max_points": int(cfg.cosmic_ray_peak_width_max_points),
+        "cosmic_ray_peak_mean_z_min": float(cfg.cosmic_ray_peak_mean_z_min),
+        "cosmic_ray_peak_pad_points": int(cfg.cosmic_ray_peak_pad_points),
     }
 
 
@@ -340,7 +382,6 @@ def _base_group_stats(input_count, valid_count):
         "cosmic_single_replaced": 0,
         "cosmic_single_narrow_replaced": 0,
         "cosmic_single_peak_replaced": 0,
-        "cosmic_single_residual_replaced": 0,
     }
 
 def _apply_pca_filter(spectra_arr, filenames, wn_list, stats, label_display, cfg, log_path):
@@ -397,9 +438,8 @@ def _format_cosmic_ray_stats(stats):
     return (
         "Cosmic ray replacement avg points/spectrum: "
         f"total={_cosmic_avg(stats, 'cosmic_single_replaced'):.2f}, "
-        f"narrow_final={_cosmic_avg(stats, 'cosmic_single_narrow_replaced'):.2f}, "
-        f"peak_final={_cosmic_avg(stats, 'cosmic_single_peak_replaced'):.2f}, "
-        f"residual_final={_cosmic_avg(stats, 'cosmic_single_residual_replaced'):.2f}, "
+        f"narrow={_cosmic_avg(stats, 'cosmic_single_narrow_replaced'):.2f}, "
+        f"peak={_cosmic_avg(stats, 'cosmic_single_peak_replaced'):.2f}, "
         f"spectra={spectra_count}"
     )
 
@@ -469,7 +509,6 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
     cosmic_single_replaced = 0
     cosmic_single_narrow_replaced = 0
     cosmic_single_peak_replaced = 0
-    cosmic_single_residual_replaced = 0
 
     for fname, wn, sp in samples:
         if wn.size == 0 or sp.size == 0:
@@ -494,7 +533,6 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
         cosmic_single_replaced += int(single_replaced)
         cosmic_single_narrow_replaced += int(getattr(single_replaced, "narrow", 0))
         cosmic_single_peak_replaced += int(getattr(single_replaced, "peak", 0))
-        cosmic_single_residual_replaced += int(getattr(single_replaced, "residual", 0))
         if wn_u is None:
             continue
 
@@ -507,7 +545,6 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
     stats["cosmic_single_replaced"] = int(cosmic_single_replaced)
     stats["cosmic_single_narrow_replaced"] = int(cosmic_single_narrow_replaced)
     stats["cosmic_single_peak_replaced"] = int(cosmic_single_peak_replaced)
-    stats["cosmic_single_residual_replaced"] = int(cosmic_single_residual_replaced)
 
     return _finalize_group_result(
         spectra,
@@ -612,7 +649,7 @@ def build_train_raw(profile, base_dir, pipeline_config=None, cosmic_log_path=Non
     print(f"- Generated={generated}, Skipped groups={skipped}")
     if cosmic_log_path is not None:
         print(f"- Cosmic ray log: {cosmic_log_path}")
-    _write_train_raw_config(root_process_raw, profile, cfg)
+    _write_train_raw_config(root_process_raw, profile, cfg, input_path)
     print(f"- Config: {_train_raw_config_path(root_process_raw)}")
 
 def _collect_merged_train_groups(root_process_raw, root_process_clean):
@@ -662,6 +699,7 @@ def build_train(profile, base_dir, pipeline_config=None):
     """复用 train_raw，按类别合并后执行 PCA 并生成最终 train"""
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
+    input_path = resolve_init_input(base_dir, profile)
     root_process_raw = resolve_path(base_dir, profile.root_process_raw)
     root_process_clean = resolve_path(base_dir, profile.root_train_clean)
     root_figure = resolve_path(base_dir, profile.root_train_fig)
@@ -677,8 +715,8 @@ def build_train(profile, base_dir, pipeline_config=None):
             pipeline_config=cfg,
             cosmic_log_path=cosmic_log_path,
         )
-    elif not _train_raw_config_matches(root_process_raw, profile, cfg):
-        print(f"train_raw config changed, rebuild from init: {root_process_raw}")
+    elif not _train_raw_config_matches(root_process_raw, profile, cfg, input_path):
+        print(f"train_raw config or init data changed, rebuild from init: {root_process_raw}")
         build_train_raw(
             profile,
             base_dir,
@@ -763,16 +801,19 @@ def build_train(profile, base_dir, pipeline_config=None):
         print(f"- Cosmic ray log: {cosmic_log_path}")
 
 def preview(profile, base_dir, pipeline_config=None):
-    """基于 init 生成预览图，不落盘清洗结果，适合先检查原始数据质量"""
+    """基于 init 生成预览图，并同步写出可复用 train_raw"""
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
     input_path = resolve_init_input(base_dir, profile)
     root_init_fig = resolve_path(base_dir, profile.root_init_fig)
+    root_process_raw = resolve_path(base_dir, profile.root_process_raw)
     cosmic_log_path = resolve_path(base_dir, profile.cosmic_ray_log_name)
     root_init_fig.mkdir(parents=True, exist_ok=True)
+    _reset_generated_dir(root_process_raw)
     reset_log_file(cosmic_log_path)
 
     generated = 0
+    generated_raw = 0
     skipped = 0
 
     for rel_dir, leaf_name, samples in iter_init_groups(input_path):
@@ -804,6 +845,15 @@ def preview(profile, base_dir, pipeline_config=None):
             show_zero_cosmic=True,
         )
 
+        save_dir = root_process_raw / rel_dir
+        _save_spectra_files(
+            save_dir,
+            processed_group["filenames"],
+            processed_group["wn_list"],
+            processed_group["spectra"],
+        )
+        generated_raw += len(processed_group["filenames"])
+
         title = " - ".join(rel_dir.parts) if rel_dir != Path(".") else leaf_name
         title = (
             f"{title} (mean, q10-q90, kept {stats['kept']}/{stats['input']})"
@@ -820,8 +870,13 @@ def preview(profile, base_dir, pipeline_config=None):
         )
         generated += 1
 
+    _write_train_raw_config(root_process_raw, profile, cfg, input_path)
+
     print("\nDataset init preview finished:")
     print(f"- Mean plots: {root_init_fig}")
+    print(f"- Clean intermediate spectra: {root_process_raw}")
+    print(f"- Train raw generated={generated_raw}")
+    print(f"- Config: {_train_raw_config_path(root_process_raw)}")
     print(f"- Cosmic ray log: {cosmic_log_path}")
     print(f"- Generated={generated}, Skipped={skipped}")
 

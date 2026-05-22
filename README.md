@@ -172,14 +172,15 @@ dataset/
 
 - `preview` 和 `audit` 的输入对象主要是 `init/` 或 `init.npz` 中的原始库
 - `audit` 虽然审核的是 `init/` 中的原始文件，但评分前会临时执行当前离线预处理流程
-- 人工确认异常谱并移动到 `delete/` 后，再正式生成 `train_raw/` 和 `train/`
+- `preview` 会生成 `fig_init/`，并同步写出可复用的 `train_raw/`
+- 人工确认异常谱并移动到 `delete/` 后，`train` 会根据 `init` 输入指纹自动判断是否需要重建 `train_raw/`
 
 ### 4.1 常用命令
 
 ```
 python -m raman.data pack 细菌       # 打包init数据集
 python -m raman.data unpack 细菌     # 还原init数据集
-python -m raman.data preview 细菌    # 对init每个文件夹做均值谱图输出，方便检查原始数据质量
+python -m raman.data preview 细菌    # 对init每个文件夹做均值谱图输出，并同步生成train_raw
 python -m raman.data count 细菌      # 统计数据集
 python -m raman.data train 细菌      # 先构建可复用train_raw，再合并类别、执行PCA清洗并生成train
 python -m raman.data test 细菌       # 对测试数据进行一致的清洗
@@ -239,24 +240,26 @@ python -m raman.data test 细菌       # 对测试数据进行一致的清洗
 离线阶段建议按以下顺序处理：
 
 1. 准备或还原原始数据到 `init/`
-2. 使用 `preview` 生成 `fig_init/`，先从均值谱层面检查原始数据质量
+2. 使用 `preview` 生成 `fig_init/` 和 `train_raw/`，先从均值谱层面检查原始数据质量
 3. 使用 `raman.audit single`、`raman.audit folder` 或 `raman.audit full` 对 `init/` 中的原始库做只读审核
 4. 结合审核报告和复核图人工确认异常谱
 5. 使用 `raman.audit move` 将确认移除的原始 `.arc_data` 从 `init/` 移到 `delete/`
-6. 使用 `python -m raman.data train <数据集名>` 从清理后的 `init/` 构建 `train_raw/` 和 `train/`
+6. 使用 `python -m raman.data train <数据集名>` 复用或重建 `train_raw/`，并生成最终 `train/`
 7. 使用 `python -m raman.data test <数据集名>` 对独立测试集生成一致的 `test/`
 
 审核命令的输入仍然是 `init/` 中的原始文件，但评分前会临时执行当前离线预处理流程，包括宇宙射线去除、基线校正、裁剪、坏段剔除和统一波数轴插值
 
 ### 4.5 原始数据预览
 
-原始数据预览用于在正式清洗和训练前，先从均值谱层面观察原始数据质量
+原始数据预览用于在正式清洗和训练前，先从均值谱层面观察原始数据质量，并同步写出可复用的 `train_raw/`
 
 ```bash
 python -m raman.data preview 细菌
 ```
 
 先检查原始数据质量，看是否需要将某个文件夹移除，或部分光谱移除
+
+如果预览后又把原始谱移到 `delete/`，后续 `train` 会检测到 `init` 输入指纹变化，并自动重建 `train_raw/`
 
 如果均值谱图已经明显异常，可以优先检查该文件夹的原始采集数据或直接进入审核流程
 
@@ -514,13 +517,14 @@ z_{n,i}-\bar{r}_{i}
 
 如果需要一次性扫描 `init/` 下所有小文件夹，可以使用 `raman.audit full`
 
-它会综合单谱组内离群、同属同前缀参考离群、残留宇宙射线样突起和阶梯状光谱等规则，生成候选清单和汇总报告；脚本只写报告和复核图，不会移动或删除 `.arc_data` 文件
+它按“同属同前缀”先合并成种简称池，再做两阶段清理：先用前缀均值谱筛明显额外凸起、阶梯样异常和完全不贴合的无效噪声谱，再排除这些强异常后做前缀池强离群清洗。默认只写报告和复核图；加 `--move-strong` 时只自动移动强异常，`review_candidate` 不会自动移动。
 
 常用命令：
 
 ```bash
 python -m raman.audit full 细菌
-python -m raman.audit full 细菌 --max-remove-candidates 100 --max-folder-candidates 5
+python -m raman.audit full 细菌 --max-spectrum-figures 80
+python -m raman.audit full 细菌 --move-strong --max-spectrum-figures 80
 ```
 
 默认输出到带时间戳的目录：
@@ -531,45 +535,32 @@ dataset/细菌/audit_full_scan/<时间戳>/
 
 主要输出文件包括：
 
-- `summary.md`：中文总结报告，列出建议移除候选谱、仅复核候选谱、文件夹候选和参数建议
+- `summary.md`：中文总结报告，列出强异常移除候选、仅复核候选和阶段统计
 - `spectrum_candidates.csv`：单谱级候选清单，包含路径、异常原因、评分和推荐动作
-- `delete_candidates.csv`：只包含 `remove_candidate`，后续可以直接交给 `raman.audit move`
+- `delete_candidates.csv`：只包含强异常 `remove_candidate`
+- `review_candidates.csv`：只包含边界复核候选，不自动移动
 - `delete_manifest.txt`：一行一个建议移除路径，便于人工快速浏览
-- `folder_candidates.csv`：文件夹级候选清单，默认最多列出 5 个高风险文件夹
 - `all_spectra_scores.csv`：所有光谱的审核评分，便于后续排序筛选
-- `figures/`：候选谱和候选文件夹的复核图，数量由 `--max-spectrum-figures` 和 `--max-folder-figures` 控制
+- `figures/`：候选谱复核图，数量由 `--max-spectrum-figures` 控制
 
 `raman.audit full` 的评估对象是全库单谱，判定时主要看以下几个维度：
 
-- 组内离群：每个小文件夹内部先计算 SNV 后的组内中位谱，比较单谱与组内中位谱的形状差异、相关系数和逐点 robust z-score；对应 `group_shape_score`、`low_group_corr`、`group_point_outlier`
+- 前缀均值谱预筛：按 `属/前缀` 合并所有小文件夹，例如 `Enterobacter/ECL01..ECL03` 合并为 `Enterobacter/ECL`，用前缀均值谱和逐点 residual z-score 判断 `species_extra_bump`、`species_step_like`、`species_invalid_noise`
 
-- 参考组离群：优先使用同属、同前缀的其他小文件夹作为参考组；如果同前缀参考不足，则退回到同属参考
+- 前缀池强离群：第一阶段强异常先排除，再按同一个前缀池重新计算中心谱；只有低相关、形态分数高、逐点异常比例高等强证据同时成立时，才进入 `remove_candidate`
 
-  比较单谱与参考中位谱、最近参考单谱之间的相似度，以及相对参考 robust z-score 的异常点比例；对应 `low_ref_similarity`、`many_ref_point_outliers`、`high_rmse_to_ref`
+- 阶梯状异常：对预处理后的 SNV 光谱做低频平滑，再看一阶差分的鲁棒尺度，寻找持续的台阶突变；明显台阶标为 `species_step_like`
 
-- 阶梯状异常：对预处理后的 SNV 光谱做低频平滑，再看一阶差分的鲁棒尺度，寻找持续的台阶突变；坏段边界附近的台阶单独标为 `bad_band_edge_step`，非坏段边界的明显台阶标为 `step_like_spectrum`
+- 残留宇宙射线样突起：在单谱相对前缀均值谱的正向 residual z-score 中寻找窄到中等宽度的连续高突起；对应 `species_extra_bump`
 
-- 残留宇宙射线样突起：在单谱相对组内中位谱的正向 residual z-score 中寻找窄到中等宽度的连续高突起，主要用于标记清理后仍像宽宇宙射线残留的谱；对应 `residual_cosmic_like`
+`full_scan` 会把候选分成两层：
 
-- 粗糙噪声：用一阶差分的 MAD 尺度衡量单谱粗糙度，如果显著高于同文件夹其他谱，会标为 `rough_noise_outlier`
+- `remove_candidate`：明显额外凸起、明显阶梯谱、完全不贴合的无效噪声谱、强前缀池离群
+- `review_candidate`：前缀池边界离群或粗糙噪声等需要看图确认的谱
 
-- 文件夹级汇总：统计每个小文件夹内候选谱比例、参考组离群比例、阶梯谱比例和文件夹中位谱相对参考中位谱的相关系数；对应 `folder_far_from_references`、`many_candidate_spectra`、`many_ref_outliers`、`many_step_like_spectra`
+`--move-strong` 只会移动 `delete_candidates.csv` 中的强异常；`review_candidates.csv` 永远只供人工复核，不会被自动移动。
 
-单谱不会因为某一个轻微信号就直接移除
-
-脚本会把多条证据合并：
-
-- 明显阶梯谱
-- 强残留宇宙射线并伴随组内或参考组离群
-- 强参考组离群
-- 强组内离群
-- 强粗糙噪声
-
-这些会标为 `remove_candidate`
-
-证据不足但值得看图的谱会标为 `review_candidate`
-
-`single`、`folder`、`full` 三个命令共用 `raman/audit/config.py` 中的 `AuditConfig` 阈值配置，避免不同审核入口使用不同参数
+`single`、`folder`、`full` 三个命令共用 `raman/audit/config.py` 中的 `AuditConfig` 阈值配置，避免不同审核入口使用不同参数。`single` 已改为按指定文件夹所属前缀池查看候选，不再按小文件夹内部独立清洗。
 
 #### 审核后移动
 
@@ -596,6 +587,7 @@ python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_
 
 当前默认标签包括：
 
+- 残留宇宙射线
 - 阶梯谱
 - 粗糙噪声
 - 参考组离群
@@ -603,13 +595,13 @@ python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_
 
 ### 4.7 构建训练集
 
-训练命令会先把 `init/` 中每个叶子小文件夹独立清洗到 `train_raw/`，再按类别前缀合并生成最终训练目录 `train/`
+训练命令会优先复用 `preview` 或上一次训练生成的 `train_raw/`，再按类别前缀合并生成最终训练目录 `train/`
 
 #### 清洗中间层
 
 由于采集数据按日期划分，原始数据集一般命名为 `类别+数字`
 
-训练命令会先把 `init/` 中每个叶子小文件夹独立清洗到 `train_raw/`
+`preview` 和训练命令都会把 `init/` 中每个叶子小文件夹独立清洗到 `train_raw/`
 
 处理逻辑：
 
@@ -619,9 +611,9 @@ python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_
 
 - `train_raw/` 仍保留小文件夹结构，不在这一层按前缀合并类别
 
-- 如果 `train_raw/` 已存在且 `config.json` 与当前 `PipelineConfig` 一致，会直接复用
+- 如果 `train_raw/` 已存在，且 `config.json` 与当前 `PipelineConfig` 和 `init` 输入指纹一致，会直接复用
 
-- 如果清洗参数改变，`train_raw/` 会自动重建，避免旧中间结果和新参数混用
+- 如果清洗参数或 `init` 原始数据改变，`train_raw/` 会自动重建，避免旧中间结果和新参数混用
 
 #### 最终生成
 
@@ -641,7 +633,7 @@ python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_
 
 如果某个分组预处理后样本数少于 `min_samples_per_class`，该分组会跳过
 
-被 PCA 剔除的样本会记录到 `log.txt`
+被 PCA 剔除的样本会记录到 `pca_log.txt`
 
 ### 4.8 离线处理顺序细节
 
@@ -655,11 +647,10 @@ python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_
 - 宇宙射线更容易表现为窄尖峰，或窄到中等宽度的突起片段
 - 宇宙射线通常是正向异常，不作为负向异常处理
 
-单谱清理分为三个阶段
+单谱清理分为两个阶段
 
 1. narrow 阶段：局部 median 和鲁棒 z-score 清理单点或极窄尖峰
-2. peak morphology 阶段：基于峰显著度、峰宽和显著度/峰宽比清理窄到中等宽度的正向突起
-3. residual 阶段：只在前两阶段已经替换过的位置附近，保守清理削峰后仍残留的正向平台片段
+2. peak 阶段：在 narrow 后的局部 median 正残差上检测短正异常段，清理窄到中等宽度的残留突起
 
 宇宙射线清理发生在坏段删除之前，并且默认不使用坏段 mask 参与检测；坏段只在绘图遮挡、基线估计和后续裁切插值阶段使用。这样可以避免 890-950 `cm^-1` 坏段边界附近的宇宙射线因为 mask 断开而无法被修复。
 
@@ -735,129 +726,11 @@ x_i \leftarrow \tilde{x}_i
 
 其中 $\lambda_{\mathrm{narrow}}$ 对应 `cosmic_ray_threshold`
 
-##### peak morphology 阶段
+##### peak 阶段
 
-继续寻找仍然存在的正向突起峰
+narrow 后继续处理局部正异常段，但不再对清理后的原谱做峰形搜索，而是直接在局部 median 残差上判断短突起。
 
-设候选峰 $j$ 的峰顶位置为 $p_j$，峰顶强度为 $x_{p_j}$
-
-从该峰向左右两侧下降，直到遇到更高峰或边界时，可以得到左右两侧的参考谷底高度
-
-```math
-h_j^{\mathrm{left}},
-\quad
-h_j^{\mathrm{right}}
-```
-
-峰显著度定义为峰顶相对较高一侧谷底的抬高量：
-
-```math
-\operatorname{prominence}_j
-=
-x_{p_j}
--
-\max
-\left(
-h_j^{\mathrm{left}},
-h_j^{\mathrm{right}}
-\right)
-```
-
-只有相对周围背景真正“突出来”的峰，才会有较大的 prominence
-
-使用一阶差分（相邻点差分）的鲁棒尺度估计当前光谱的局部噪声水平，记为 $\sigma_{\mathrm{diff}}$，并将峰显著度标准化
-
-```math
-\rho_j
-=
-\frac{
-\operatorname{prominence}_j
-}
-{\sigma_{\mathrm{diff}}}
-```
-
-根据半高位置附近的峰宽估计候选峰在波数轴上的实际宽度
-
-```math
-\omega_j
-=
-\operatorname{width}_j \cdot \Delta \nu
-```
-
-其中：
-
-- $\operatorname{width}_j$ 是以采样点数表示的峰宽
-- $\Delta \nu$ 是当前波数轴的平均采样步长
-- $\omega_j$ 的单位是 `cm^-1`
-
-当前候选峰需要同时满足：
-
-```math
-\rho_j
-\ge
-\lambda_{\mathrm{peak}},
-\quad
-\omega_j
-\le
-\omega_{\max}^{(\mathrm{peak})},
-\quad
-\frac{
-\rho_j
-}
-{
-\max(\omega_j,\Delta\nu)
-}
-\ge
-\eta
-```
-
-其中：
-
-- $\lambda_{\mathrm{peak}}$ 对应 `cosmic_ray_peak_prominence_z`
-- $\omega_{\max}^{(\mathrm{peak})}$ 对应 `cosmic_ray_peak_width_max_cm`
-- $\eta$ 对应 `cosmic_ray_peak_ratio_z_per_cm`
-
-如果候选峰满足这些条件，就根据该峰的左右半高位置确定峰区，并按 $\delta_{\mathrm{peak}}$ 向左右轻微扩展后替换
-
-- $\delta_{\mathrm{peak}}$ 对应 `cosmic_ray_peak_pad_cm`
-
-替换方式优先使用峰区左右两侧有效点做线性插值；如果边界不足，则回退到局部中值估计
-
-##### residual 阶段 
-
-这一阶段不会重新全谱扫描所有峰，而是只在 narrow 阶段和 peak morphology 阶段已经替换过的位置附近建立锚定区域
-
-设前两阶段替换过的位置集合为$\mathcal{A}$
-
-代码按锚定半径 $\delta_{\mathrm{anchor}}$ 对该集合进行扩展，得到 residual 阶段的搜索区域
-
-```math
-\mathcal{R}_{\mathrm{anchor}}
-=
-\left\{
-i
-\mid
-\exists k \in \mathcal{A},
-\left|
-\nu_i - \nu_k
-\right|
-\le
-\delta_{\mathrm{anchor}}
-\right\}
-```
-
-其中：
-
-- $\nu_i$ 是第 $i$ 个采样点对应的波数
-- $\delta_{\mathrm{anchor}}$ 由 peak 阶段的扩展宽度派生
-
-```math
-\delta_{\mathrm{anchor}}
-=
-3\delta_{\mathrm{peak}}
-```
-
-然后用更宽的局部 median 估计 residual 阶段的局部参考谱形
+先用较宽的局部 median 得到参考谱形：
 
 ```math
 \tilde{x}_i
@@ -866,65 +739,49 @@ i
 \left\{
 x_{\ell}
 \mid
-\ell \in \mathcal{W}_{\mathrm{res}}(i)
+\ell \in \mathcal{W}_{\mathrm{peak}}(i)
 \right\}
 ```
 
-residual 局部窗口宽度由 peak 阶段峰宽上限派生
+peak 阶段的正向残差定义为：
 
 ```math
-m_{\mathrm{res}}
-=
-2.5
-\,
-\omega_{\max}^{(\mathrm{peak})}
-```
-
-残留正向突起定义为：
-
-```math
-r_i^{(\mathrm{res})}
+r_i^{(\mathrm{peak})}
 =
 x_i - \tilde{x}_i
 ```
 
-再基于 residual 阶段的残差分布计算鲁棒 z-score
+再对残差计算鲁棒 z-score：
 
 ```math
-z_i^{(\mathrm{res})}
+z_i^{(\mathrm{peak})}
 =
 \frac{
-r_i^{(\mathrm{res})}
+r_i^{(\mathrm{peak})}
 -
 \operatorname{median}_{\ell}
 \left(
-r_{\ell}^{(\mathrm{res})}
+r_{\ell}^{(\mathrm{peak})}
 \right)
 }
 {
-\sigma_{\mathrm{res}}
+\sigma_{\mathrm{peak}}
 }
 ```
 
-其中 $\sigma_{\mathrm{res}}$ 是由 residual 残差估计得到的鲁棒尺度，和 narrow 阶段计算方法相同，但是窗口大小不同
-
-只在锚定区域内检测正向残留异常：
+只检测正向残差异常：
 
 ```math
-i \in \mathcal{R}_{\mathrm{anchor}},
+r_i^{(\mathrm{peak})} > 0,
 \quad
-r_i^{(\mathrm{res})} > 0,
-\quad
-z_i^{(\mathrm{res})}
+z_i^{(\mathrm{peak})}
 \ge
-\lambda_{\mathrm{res}}
+\lambda_{\mathrm{peak}}
 ```
 
-其中 $\lambda_{\mathrm{res}}$ 对应 `cosmic_ray_residual_threshold_z`
+其中 $\lambda_{\mathrm{peak}}$ 对应 `cosmic_ray_peak_prominence_z`。连续满足条件的点会合并为候选片段 $S$，相邻片段之间只隔很小空隙时也会合并。
 
-连续满足条件的点会合并为候选片段 $S$；如果两个候选片段之间只隔很小的空隙，代码也会把它们合并处理
-
-对每个候选片段，先计算其波数宽度：
+对每个候选片段计算波数宽度：
 
 ```math
 \omega_S
@@ -936,29 +793,17 @@ z_i^{(\mathrm{res})}
 \Delta \nu
 ```
 
-要求 residual 候选片段的宽度落在有限范围内
+要求候选片段不能宽于 peak 阶段上限：
 
 ```math
-\omega_{\min}^{(\mathrm{res})}
-\le
 \omega_S
 \le
-\omega_{\max}^{(\mathrm{res})}
+\omega_{\max}^{(\mathrm{peak})}
 ```
 
-其中：
+其中 $\omega_{\max}^{(\mathrm{peak})}$ 对应 `cosmic_ray_peak_width_max_cm`。
 
-```math
-\omega_{\min}^{(\mathrm{res})}
-=
-\delta_{\mathrm{peak}}\qquad \omega_{\max}^{(\mathrm{res})}
-=
-2 \omega_{\max}^{(\mathrm{peak})}
-```
-
-residual 阶段不会处理过窄的孤立点，也不会处理过宽的正常 Raman 宽峰或背景结构
-
-同时计算候选片段的正向异常面积：
+同时计算片段的正向 z-score 面积和平均强度：
 
 ```math
 \alpha_S
@@ -966,62 +811,34 @@ residual 阶段不会处理过窄的孤立点，也不会处理过宽的正常 R
 \sum_{i \in S}
 \max
 \left(
-z_i^{(\mathrm{res})},
+z_i^{(\mathrm{peak})},
 0
 \right)
 \Delta \nu
 ```
 
-最小面积阈值由 residual 阈值和最小宽度派生
-
 ```math
-\alpha_{\min}^{(\mathrm{res})}
+\bar{z}_S
 =
-\lambda_{\mathrm{res}}
-\,
-\omega_{\min}^{(\mathrm{res})}
-```
-
-只有当候选片段同时满足：
-
-```math
-\omega_{\min}^{(\mathrm{res})}
-\le
-\omega_S
-\le
-\omega_{\max}^{(\mathrm{res})},
-\quad
-\alpha_S
-\ge
-\alpha_{\min}^{(\mathrm{res})}
-```
-
-才会进入替换逻辑
-
-真正替换时，代码不会只替换候选片段 $S$ 本身，而是会结合它所在的锚定连通区域，并按 $\delta_{\mathrm{replace}}$ 向左右扩展
-
-```math
-\delta_{\mathrm{replace}}
-=
-\delta_{\mathrm{peak}}
-```
-
-还会限制 residual 阶段在单条光谱中最多替换的有效点比例
-
-```math
 \frac{
-N_{\mathrm{replace}}^{(\mathrm{res})}
+\alpha_S
 }
 {
-N_{\mathrm{valid}}
+\max(\omega_S,\Delta\nu)
 }
-\le
-prop_{\max}^{(\mathrm{res})}
 ```
 
-其中 $prop_{\max}^{(\mathrm{res})}$ 对应 `cosmic_ray_residual_max_points_fraction`
+当前候选片段需要满足：
 
-这一步的目的，是补清理第一、二阶段削峰后仍留下的宽平台残留，同时避免 residual 阶段脱离已有宇宙射线证据去扫描和修改正常 Raman 峰
+```math
+\bar{z}_S
+\ge
+\eta
+```
+
+其中 $\eta$ 对应 `cosmic_ray_peak_ratio_z_per_cm`，现在表示该残差片段的平均正向 z-score 下限。
+
+如果候选片段满足上述条件，就按 `cosmic_ray_peak_pad_cm` 向左右轻微扩展后替换。替换方式优先使用片段左右两侧有效点做线性插值；如果边界不足，则回退到局部中值估计。
 
 #### AsLS 基线校正原理
 
@@ -2669,6 +2486,10 @@ L_{\text{align}}
 \frac{1}{|C_{\text{valid}}|}
 \sum_{c \in C_{\text{valid}}}
 L_c^{(\text{align})}
+```
+
+```python
+return loss_sum / valid_group_count
 ```
 
 其中：

@@ -217,7 +217,7 @@ def build_parser():
     parser.add_argument("paths", nargs="*", help="要移动的文件夹或文件路径")
     parser.add_argument("--path", action="append", default=[], help="要移动的文件夹或文件路径，可重复")
     parser.add_argument("--from-list", default=None, help="full_scan 生成的 delete_candidates.csv")
-    parser.add_argument("--reason", default=None, help="手动移动原因：阶梯谱 / 粗糙噪声 / 参考组离群 / 组内离群，可用分号连接")
+    parser.add_argument("--reason", default=None, help="手动移动原因：残留宇宙射线 / 阶梯谱 / 粗糙噪声 / 参考组离群 / 组内离群，可用分号连接")
     parser.add_argument("--dry-run", action="store_true", help="只打印移动计划，不移动文件")
     parser.add_argument("--allow-genus", action="store_true", help="允许移动整属目录")
     return parser

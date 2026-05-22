@@ -131,7 +131,7 @@ class SupConLoss(nn.Module):
         sim = torch.matmul(z, z.t()) / self.tau
 
         off_diag_mask = torch.ones_like(sim, dtype=torch.bool)
-        off_diag_mask.fill_diagonal_(False)
+        off_diag_mask.fill_diagonal_(False) # 把矩阵主对角线位置改成 False
 
         y = y.view(-1, 1)
         pos_mask = (y == y.t()) & off_diag_mask # 标出正样本位置
