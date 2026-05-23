@@ -1,4 +1,4 @@
-"""第三阶段：同属同前缀类内相似性清洗。"""
+"""第三阶段：同属同前缀类内相似性清洗"""
 
 from __future__ import annotations
 
@@ -9,14 +9,17 @@ from raman.audit.scoring import STAGE_DELETE_CATEGORY
 
 
 def _finite_le(value, threshold):
+    """判断有限值是否小于等于阈值"""
     return np.isfinite(value) and value <= threshold
 
 
 def _finite_ge(value, threshold):
+    """判断有限值是否大于等于阈值"""
     return np.isfinite(value) and value >= threshold
 
 
 def _candidate_evidence(record, audit_cfg: AuditConfig):
+    """汇总单条谱的类内相似性候选证据"""
     reasons = []
     strong_count = 0
     review_count = 0
@@ -66,6 +69,7 @@ def _candidate_evidence(record, audit_cfg: AuditConfig):
 
 
 def _risk_score(record, audit_cfg: AuditConfig):
+    """计算类内相似性风险排序分"""
     score = 0.0
     if np.isfinite(record.corr_ref):
         score += max(audit_cfg.class_corr_ref_review_max - record.corr_ref, 0.0) * 20.0
@@ -80,7 +84,7 @@ def _risk_score(record, audit_cfg: AuditConfig):
 
 
 def classify_class_similarity(records, audit_cfg: AuditConfig):
-    """用同属同前缀参考池判断类内相似性；小文件夹集中命中只做复核。"""
+    """用同属同前缀参考池判断类内相似性；小文件夹集中命中只做复核"""
     preliminary: dict[int, tuple[bool, bool, tuple[str, ...]]] = {}
     group_totals = {}
     group_candidate_counts = {}

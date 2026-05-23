@@ -1,4 +1,4 @@
-"""第一阶段：无效谱清洗。"""
+"""第一阶段：无效谱清洗"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from raman.audit.scoring import STAGE_DELETE_CATEGORY
 
 
 def classify_invalid(records, audit_cfg: AuditConfig):
-    """只判断谱本身是否无效，不做类内离群删除。"""
+    """只判断谱本身是否无效，不做类内离群删除"""
     for record in records:
         record.stage = "invalid"
         if record.z is None:

@@ -1,8 +1,6 @@
 """数据审核公共工具"""
 
 from __future__ import annotations
-
-import re
 from pathlib import Path
 
 import numpy as np
@@ -18,10 +16,6 @@ from raman.data.spectrum import build_valid_mask, read_arc_data, snv
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def safe_name(name: object) -> str:
-    return re.sub(r"[^0-9A-Za-z_.-]+", "_", str(name)).strip("_") or "sample"
-
-
 def prefix_of(name: str) -> str:
     """提取小文件夹名前缀，例如 KAE01 -> KAE"""
     letters = []
@@ -34,22 +28,13 @@ def prefix_of(name: str) -> str:
 
 
 def resolve_dataset(dataset: str, project_root: Path = PROJECT_ROOT):
+    """解析数据集 profile 和数据目录"""
     profile = get_profile(dataset)
     return profile, get_dataset_dir(profile, project_root)
 
 
-def robust_scale(values):
-    """返回中位数和 MAD 鲁棒尺度"""
-    values = np.asarray(values, dtype=np.float32)
-    center = float(np.median(values))
-    mad = float(np.median(np.abs(values - center)))
-    scale = 1.4826 * mad
-    if scale <= 1e-8:
-        scale = float(np.std(values))
-    return center, max(scale, 1e-8)
-
-
 def robust_mad_scale(values, floor=1e-8):
+    """返回一组数值的 MAD 鲁棒尺度"""
     values = np.asarray(values, dtype=np.float32)
     if values.size == 0:
         return float(floor)
@@ -71,6 +56,7 @@ def spectral_corr(a, b):
 
 
 def corr_many_to_one(arr, spec):
+    """计算多条已标准化谱和单条谱的快速相关近似"""
     if arr.size == 0:
         return np.array([], dtype=np.float32)
     return (arr @ spec / max(spec.size, 1)).astype(np.float32, copy=False)
@@ -90,6 +76,7 @@ def robust_wave_stats(spectra, min_scale=0.05, floor_fraction=0.25):
 
 
 def moving_average(values, window):
+    """对一维数组做奇数窗口滑动平均"""
     values = np.asarray(values, dtype=np.float32)
     window = max(3, int(window))
     if window % 2 == 0:
@@ -103,6 +90,7 @@ def moving_average(values, window):
 
 
 def contiguous_regions(mask):
+    """返回布尔掩码中连续 True 区间"""
     mask = np.asarray(mask, dtype=bool)
     if mask.size == 0:
         return []
@@ -114,6 +102,7 @@ def contiguous_regions(mask):
 
 
 def median_step_cm(wn):
+    """估计波数轴的中位步长"""
     wn = np.asarray(wn, dtype=np.float32)
     if wn.size < 2:
         return 1.0
@@ -123,58 +112,28 @@ def median_step_cm(wn):
 
 
 def region_width_cm(wn, start, end):
+    """计算索引区间对应的波数宽度"""
     if end <= start:
         return 0.0
     step = median_step_cm(wn)
     return float(abs(wn[end - 1] - wn[start]) + step)
 
 
-def positive_region_summary(wn, values, threshold, max_width_cm):
-    """Summarize positive local residual regions above a threshold."""
-    wn = np.asarray(wn, dtype=np.float32)
-    values = np.asarray(values, dtype=np.float32)
-    step = median_step_cm(wn)
-    regions = []
-    for start, end in contiguous_regions(values >= threshold):
-        width = region_width_cm(wn, start, end)
-        if width > max_width_cm:
-            continue
-        segment = values[start:end]
-        area = float(np.sum(np.maximum(segment, 0.0)) * step)
-        peak_idx = int(start + np.argmax(segment))
-        regions.append(
-            {
-                "start": start,
-                "end": end,
-                "center_cm": float(wn[peak_idx]),
-                "width_cm": width,
-                "max_z": float(np.max(segment)),
-                "area": area,
-            }
-        )
-    if not regions:
-        return {"count": 0, "max_z": 0.0, "max_area": 0.0, "max_width_cm": 0.0, "centers_cm": ()}
-    return {
-        "count": len(regions),
-        "max_z": max(region["max_z"] for region in regions),
-        "max_area": max(region["area"] for region in regions),
-        "max_width_cm": max(region["width_cm"] for region in regions),
-        "centers_cm": tuple(region["center_cm"] for region in regions),
-    }
-
-
 def output_wn(cfg):
+    """返回应用坏段遮罩后的输出波数轴"""
     wn = cfg.build_wn_ref()
     keep = build_valid_mask(wn, cfg.bad_bands)
     return wn[keep] if keep is not None else wn
 
 
 def add_bad_band_spans(ax, bad_bands, alpha=0.14):
+    """在图上标出坏段区间"""
     for band_min, band_max in bad_bands:
         ax.axvspan(band_min, band_max, color="gray", alpha=alpha)
 
 
 def _keep_mask_without_bad_bands(wn, bad_bands):
+    """构造绘图时避开坏段和大间隔的掩码"""
     wn = np.asarray(wn, dtype=np.float32)
     keep = np.ones_like(wn, dtype=bool)
     for band_min, band_max in bad_bands:
@@ -202,6 +161,7 @@ def plot_segments_without_bad_bands(ax, wn, values, bad_bands, **kwargs):
 
 
 def fill_between_segments_without_bad_bands(ax, wn, lower, upper, bad_bands, **kwargs):
+    """分段绘制区间填充，避免跨坏段连起来"""
     wn = np.asarray(wn, dtype=np.float32)
     lower = np.asarray(lower, dtype=np.float32)
     upper = np.asarray(upper, dtype=np.float32)
@@ -273,7 +233,7 @@ def preprocess_spectrum_for_audit(path, profile, cfg=None, wn_ref=None, include_
 
 
 def write_csv(path, rows, fieldnames=None):
-    """写 CSV，空结果也保留表头。"""
+    """写 CSV，空结果也保留表头"""
     import csv
 
     path = Path(path)
@@ -289,7 +249,7 @@ def write_csv(path, rows, fieldnames=None):
 
 
 def load_audit_records(profile, cfg, input_root, record_cls):
-    """读取审核输入根目录下所有叶子目录并执行当前离线预处理。"""
+    """读取审核输入根目录下所有叶子目录并执行当前离线预处理"""
     records = []
     wn_ref = cfg.build_wn_ref()
     for root, arc_files in iter_arc_dirs(input_root):
@@ -327,7 +287,7 @@ def load_audit_records(profile, cfg, input_root, record_cls):
 
 
 def cosmic_clean_for_plot(wn, sp, profile, cfg):
-    """仅用于复核图展示宇宙射线清理结果。"""
+    """仅用于复核图展示宇宙射线清理结果"""
     if profile.profile_id not in set(cfg.cosmic_ray_enabled_profile_ids):
         return np.asarray(sp, dtype=np.float32)
     cleaned, _ = remove_cosmic_rays(
@@ -347,16 +307,8 @@ def cosmic_clean_for_plot(wn, sp, profile, cfg):
     return cleaned
 
 
-def select_limited(items, limit):
-    """按常见 CLI 语义选择前 N 项；0 表示全部，负数表示不选。"""
-    if limit < 0:
-        return []
-    if limit == 0:
-        return list(items)
-    return list(items)[:limit]
-
-
 def relative_to_init(path, dataset_dir, init_root, profile):
+    """把路径转换成相对 init 的路径"""
     path = Path(path).resolve()
     dataset_dir = Path(dataset_dir).resolve()
     init_root = Path(init_root).resolve()
@@ -409,6 +361,7 @@ def resolve_audit_folder(folder, dataset_dir, profile, init_root):
 
 
 def resolve_audit_input(dataset_dir, profile, subdir=None, folder=None):
+    """解析审核输入根目录和相对基准路径"""
     dataset_dir = Path(dataset_dir).resolve()
     init_root = (dataset_dir / (subdir or profile.root_init)).resolve()
     if folder is None:
@@ -416,11 +369,3 @@ def resolve_audit_input(dataset_dir, profile, subdir=None, folder=None):
     input_root = resolve_audit_folder(folder, dataset_dir, profile, init_root)
     rel_base = relative_to_init(input_root, dataset_dir, init_root, profile)
     return input_root, rel_base
-
-
-def join_rel(base, child):
-    if base == Path("."):
-        return child
-    if child == Path("."):
-        return base
-    return base / child

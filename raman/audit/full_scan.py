@@ -20,6 +20,7 @@ from raman.audit.common import (
     cosmic_clean_for_plot,
     fill_between_segments_without_bad_bands,
     load_audit_records,
+    moving_average,
     output_wn,
     plot_segments_without_bad_bands,
     resolve_dataset,
@@ -39,20 +40,8 @@ from raman.data.build import DEFAULT_PIPELINE_CONFIG
 from raman.data.spectrum import read_arc_data
 
 
-def run_stage_scan(profile, cfg, audit_cfg, init_root, stage):
-    records = load_audit_records(profile, cfg, init_root, SpectrumRecord)
-    prefix_stats = score_stage(records, cfg, stage, audit_cfg)
-    return records, prefix_stats
-
-
-def _class_scope_stats(record, prefix_stats):
-    stats = prefix_stats.get(record.ref_pool_scope or record.prefix_scope)
-    if not stats:
-        return None
-    return stats
-
-
-def _class_folder_review_targets(records):
+def _class_folder_review_targets(records, audit_cfg):
+    """挑出需要生成文件夹集中度复核图的记录。"""
     targets = []
     seen = set()
     for record in records:
@@ -61,8 +50,8 @@ def _class_folder_review_targets(records):
         if record.folder_candidate_count <= 0:
             continue
         if (
-            record.folder_candidate_count <= DEFAULT_AUDIT_CONFIG.class_folder_candidate_max_count
-            and record.folder_candidate_fraction <= DEFAULT_AUDIT_CONFIG.class_folder_candidate_max_fraction
+            record.folder_candidate_count <= audit_cfg.class_folder_candidate_max_count
+            and record.folder_candidate_fraction <= audit_cfg.class_folder_candidate_max_fraction
         ):
             continue
         key = (record.genus, record.folder, record.prefix_scope)
@@ -74,7 +63,8 @@ def _class_folder_review_targets(records):
 
 
 def plot_class_folder_review(record, out_path, profile, cfg, prefix_stats, audit_cfg):
-    stats = _class_scope_stats(record, prefix_stats)
+    """绘制小文件夹均值和其它同前缀均值对比图。"""
+    stats = prefix_stats.get(record.ref_pool_scope or record.prefix_scope)
     if stats is None:
         return
     scope_records = [item for item in stats["records"] if item.z is not None]
@@ -113,82 +103,85 @@ def plot_class_folder_review(record, out_path, profile, cfg, prefix_stats, audit
     plt.close(fig)
 
 
-def plot_stage_candidate(record, out_path, profile, cfg, prefix_stats, audit_cfg):
-    if record.z is None:
-        return
+def _shade_ranges(ax, wn, ranges, color="darkorange", alpha=0.16):
+    """在图上标出若干索引区间。"""
+    for start, end in ranges:
+        ax.axvspan(float(wn[start]), float(wn[end - 1]), color=color, alpha=alpha)
 
+
+def _plot_raw_panel(ax, record, profile, cfg):
+    """绘制原始谱和宇宙射线清理后谱。"""
     raw_wn, raw_sp = read_arc_data(record.path)
     raw_cosmic = cosmic_clean_for_plot(raw_wn, raw_sp, profile, cfg)
-    wn = output_wn(cfg)[: record.z.size]
+    plot_segments_without_bad_bands(ax, raw_wn, raw_sp, cfg.bad_bands, color="0.60", linewidth=0.9, label="raw")
+    plot_segments_without_bad_bands(ax, raw_wn, raw_cosmic, cfg.bad_bands, color="C0", linewidth=0.9, label="cosmic cleaned")
+    ax.set_title("Raw / cosmic cleaned")
+    ax.set_ylabel("Intensity")
+    ax.legend(loc="best")
 
-    fig, axes = plt.subplots(4, 1, figsize=(12, 13), sharex=False)
-    plot_segments_without_bad_bands(axes[0], raw_wn, raw_sp, cfg.bad_bands, color="0.60", linewidth=0.9, label="raw")
-    plot_segments_without_bad_bands(axes[0], raw_wn, raw_cosmic, cfg.bad_bands, color="C0", linewidth=0.9, label="cosmic cleaned")
-    axes[0].set_title("Raw / cosmic cleaned")
-    axes[0].set_ylabel("Intensity")
-    axes[0].legend(loc="best")
 
-    if record.stage == "anomalous-cosmic" and record.sp is not None:
-        plot_segments_without_bad_bands(axes[1], wn, record.sp, cfg.bad_bands, color="C2", linewidth=0.9, label="baseline corrected")
-        if record.wide_smooth is not None:
-            plot_segments_without_bad_bands(axes[1], wn, record.wide_smooth, cfg.bad_bands, color="C1", linewidth=1.1, label="short smooth")
-        if record.wide_floor is not None:
-            plot_segments_without_bad_bands(axes[1], wn, record.wide_floor, cfg.bad_bands, color="0.35", linewidth=1.0, label="local floor")
-        for start, end in record.wide_bump_ranges:
-            axes[1].axvspan(float(wn[start]), float(wn[end - 1]), color="darkorange", alpha=0.16)
-        axes[1].set_title("Baseline corrected / wide platform detection")
-        axes[1].set_ylabel("Corrected intensity")
-        axes[1].legend(loc="best")
+def _plot_anomalous_panels(axes, record, wn, cfg, audit_cfg):
+    """绘制第二阶段宽平台/阶梯异常视图。"""
+    plot_segments_without_bad_bands(axes[1], wn, record.sp, cfg.bad_bands, color="C2", linewidth=0.9, label="baseline corrected")
+    if record.wide_smooth is not None:
+        plot_segments_without_bad_bands(axes[1], wn, record.wide_smooth, cfg.bad_bands, color="C1", linewidth=1.1, label="short smooth")
+    if record.wide_floor is not None:
+        plot_segments_without_bad_bands(axes[1], wn, record.wide_floor, cfg.bad_bands, color="0.35", linewidth=1.0, label="local floor")
+    _shade_ranges(axes[1], wn, record.wide_bump_ranges)
+    axes[1].set_title("Baseline corrected / wide platform detection")
+    axes[1].set_ylabel("Corrected intensity")
+    axes[1].legend(loc="best")
 
-        if record.wide_z is not None:
-            plot_segments_without_bad_bands(axes[2], wn, record.wide_z, cfg.bad_bands, color="C4", linewidth=1.0, label="wide residual z")
-            axes[2].axhline(audit_cfg.anomalous_wide_z_min, color="darkorange", linestyle="--", linewidth=1.0, label="wide z threshold")
-        for start, end in record.wide_bump_ranges:
-            axes[2].axvspan(float(wn[start]), float(wn[end - 1]), color="darkorange", alpha=0.16)
-        axes[2].set_title("Wide rising platform / step z-score")
-        axes[2].set_ylabel("z")
-        axes[2].legend(loc="best")
-    elif record.stage == "class-similarity":
-        stats = _class_scope_stats(record, prefix_stats)
-        if stats is not None:
-            ref_center = stats["center"]
-            ref_q10 = stats["q10"]
-            ref_q90 = stats["q90"]
-            fill_between_segments_without_bad_bands(axes[1], wn, ref_q10, ref_q90, cfg.bad_bands, color="0.85", alpha=0.55, label="reference q10-q90")
-            plot_segments_without_bad_bands(axes[1], wn, ref_center, cfg.bad_bands, color="0.35", linewidth=1.0, label="reference median")
-        plot_segments_without_bad_bands(axes[1], wn, record.z, cfg.bad_bands, color="C3", linewidth=1.0, label="sample SNV")
-        axes[1].set_title("Sample vs class reference pool")
-        axes[1].set_ylabel("SNV intensity")
-        axes[1].legend(loc="best")
+    if record.wide_z is not None:
+        plot_segments_without_bad_bands(axes[2], wn, record.wide_z, cfg.bad_bands, color="C4", linewidth=1.0, label="wide residual z")
+        axes[2].axhline(audit_cfg.anomalous_wide_z_min, color="darkorange", linestyle="--", linewidth=1.0, label="wide z threshold")
+    _shade_ranges(axes[2], wn, record.wide_bump_ranges)
+    axes[2].set_title("Wide rising platform / step z-score")
+    axes[2].set_ylabel("z")
+    axes[2].legend(loc="best")
 
-        if record.local_pos_z is not None:
-            plot_segments_without_bad_bands(axes[2], wn, record.local_pos_z, cfg.bad_bands, color="C4", linewidth=1.0, label="local positive z")
-            axes[2].axhline(audit_cfg.class_local_z_min, color="darkorange", linestyle="--", linewidth=1.0, label="local z threshold")
-        for start, end in record.local_pos_ranges:
-            axes[2].axvspan(float(wn[start]), float(wn[end - 1]), color="darkorange", alpha=0.16)
-        axes[2].set_title("Local positive residual anomaly")
-        axes[2].set_ylabel("z")
-        axes[2].legend(loc="best")
-    else:
-        plot_segments_without_bad_bands(axes[1], wn, record.z, cfg.bad_bands, color="C3", linewidth=1.0, label="sample SNV")
-        axes[1].set_title("Preprocessed sample")
-        axes[1].set_ylabel("SNV intensity")
-        axes[1].legend(loc="best")
 
-        smooth_window = audit_cfg.invalid_noise_smooth_points
-        from raman.audit.common import moving_average
+def _plot_class_panels(axes, record, wn, cfg, prefix_stats, audit_cfg):
+    """绘制第三阶段类内相似性视图。"""
+    stats = prefix_stats.get(record.ref_pool_scope or record.prefix_scope)
+    if stats is not None:
+        fill_between_segments_without_bad_bands(axes[1], wn, stats["q10"], stats["q90"], cfg.bad_bands, color="0.85", alpha=0.55, label="reference q10-q90")
+        plot_segments_without_bad_bands(axes[1], wn, stats["center"], cfg.bad_bands, color="0.35", linewidth=1.0, label="reference median")
+    plot_segments_without_bad_bands(axes[1], wn, record.z, cfg.bad_bands, color="C3", linewidth=1.0, label="sample SNV")
+    axes[1].set_title("Sample vs class reference pool")
+    axes[1].set_ylabel("SNV intensity")
+    axes[1].legend(loc="best")
 
-        smooth = moving_average(record.z, smooth_window)
-        detail = record.z - smooth
-        plot_segments_without_bad_bands(axes[2], wn, record.z, cfg.bad_bands, color="0.70", linewidth=0.7, label="SNV")
-        plot_segments_without_bad_bands(axes[2], wn, smooth, cfg.bad_bands, color="C1", linewidth=1.1, label=f"smooth {smooth_window}pt")
-        plot_segments_without_bad_bands(axes[2], wn, detail, cfg.bad_bands, color="C4", linewidth=0.7, label="detail")
-        axes[2].set_title("Self noise / structure view")
-        axes[2].set_ylabel("SNV")
-        axes[2].legend(loc="best")
+    if record.local_pos_z is not None:
+        plot_segments_without_bad_bands(axes[2], wn, record.local_pos_z, cfg.bad_bands, color="C4", linewidth=1.0, label="local positive z")
+        axes[2].axhline(audit_cfg.class_local_z_min, color="darkorange", linestyle="--", linewidth=1.0, label="local z threshold")
+    _shade_ranges(axes[2], wn, record.local_pos_ranges)
+    axes[2].set_title("Local positive residual anomaly")
+    axes[2].set_ylabel("z")
+    axes[2].legend(loc="best")
 
-    axes[3].axis("off")
-    text = (
+
+def _plot_invalid_panels(axes, record, wn, cfg, audit_cfg):
+    """绘制第一阶段无效谱自身质量视图。"""
+    plot_segments_without_bad_bands(axes[1], wn, record.z, cfg.bad_bands, color="C3", linewidth=1.0, label="sample SNV")
+    axes[1].set_title("Preprocessed sample")
+    axes[1].set_ylabel("SNV intensity")
+    axes[1].legend(loc="best")
+
+    smooth_window = audit_cfg.invalid_noise_smooth_points
+    smooth = moving_average(record.z, smooth_window)
+    detail = record.z - smooth
+    plot_segments_without_bad_bands(axes[2], wn, record.z, cfg.bad_bands, color="0.70", linewidth=0.7, label="SNV")
+    plot_segments_without_bad_bands(axes[2], wn, smooth, cfg.bad_bands, color="C1", linewidth=1.1, label=f"smooth {smooth_window}pt")
+    plot_segments_without_bad_bands(axes[2], wn, detail, cfg.bad_bands, color="C4", linewidth=0.7, label="detail")
+    axes[2].set_title("Self noise / structure view")
+    axes[2].set_ylabel("SNV")
+    axes[2].legend(loc="best")
+
+
+def _record_summary_text(record):
+    """生成候选谱图底部的文本摘要。"""
+    return (
         f"Stage: {record.stage}\n"
         f"Decision: {record.decision}\n"
         f"Reasons: {'; '.join(record.reasons)}\n"
@@ -211,6 +204,26 @@ def plot_stage_candidate(record, out_path, profile, cfg, prefix_stats, audit_cfg
         f"cosmic_total={record.cosmic_total}, narrow={record.cosmic_narrow}, peak={record.cosmic_peak}\n"
         f"risk_score={record.risk_score:.3f}"
     )
+
+
+def plot_stage_candidate(record, out_path, profile, cfg, prefix_stats, audit_cfg):
+    """绘制单条候选谱的阶段复核图。"""
+    if record.z is None:
+        return
+
+    wn = output_wn(cfg)[: record.z.size]
+    fig, axes = plt.subplots(4, 1, figsize=(12, 13), sharex=False)
+    _plot_raw_panel(axes[0], record, profile, cfg)
+
+    if record.stage == "anomalous-cosmic" and record.sp is not None:
+        _plot_anomalous_panels(axes, record, wn, cfg, audit_cfg)
+    elif record.stage == "class-similarity":
+        _plot_class_panels(axes, record, wn, cfg, prefix_stats, audit_cfg)
+    else:
+        _plot_invalid_panels(axes, record, wn, cfg, audit_cfg)
+
+    axes[3].axis("off")
+    text = _record_summary_text(record)
     axes[3].text(0.01, 0.98, text, va="top", ha="left", fontsize=10, family="monospace")
 
     fig.suptitle(record.rel_path)
@@ -220,7 +233,23 @@ def plot_stage_candidate(record, out_path, profile, cfg, prefix_stats, audit_cfg
     plt.close(fig)
 
 
+def _select_figure_targets(delete_records, review_records, folder_targets, max_figures):
+    """按总图数上限分配单谱图和文件夹图名额。"""
+    if max_figures < 0:
+        return [], []
+    if max_figures == 0:
+        return delete_records + review_records, folder_targets[:100]
+
+    folder_quota = min(len(folder_targets), 100, max(1, max_figures // 5)) if folder_targets else 0
+    spectrum_quota = max(0, max_figures - folder_quota)
+    review_quota = min(len(review_records), spectrum_quota // 2)
+    delete_quota = min(len(delete_records), spectrum_quota - review_quota)
+    review_quota = min(len(review_records), spectrum_quota - delete_quota)
+    return delete_records[:delete_quota] + review_records[:review_quota], folder_targets[:folder_quota]
+
+
 def write_stage_figures(out_dir, records, profile, cfg, prefix_stats, max_spectrum_figures, audit_cfg):
+    """按图数量上限输出候选谱和文件夹复核图。"""
     delete_records = sorted(
         [record for record in records if record.decision == "remove_candidate" and record.z is not None],
         key=lambda item: (-item.risk_score, item.rel_path),
@@ -229,27 +258,13 @@ def write_stage_figures(out_dir, records, profile, cfg, prefix_stats, max_spectr
         [record for record in records if record.decision == "review_candidate" and record.z is not None],
         key=lambda item: (-item.risk_score, item.rel_path),
     )
-    folder_targets = []
-    if records and records[0].stage == "class-similarity":
-        folder_targets = _class_folder_review_targets(records)
-
-    if max_spectrum_figures < 0:
-        selected = []
-        folder_targets = []
-    elif max_spectrum_figures == 0:
-        selected = delete_records + review_records
-        if folder_targets:
-            folder_targets = folder_targets[:100]
-    else:
-        folder_quota = 0
-        if folder_targets:
-            folder_quota = min(len(folder_targets), 100, max(1, max_spectrum_figures // 5))
-        spectrum_quota = max(0, max_spectrum_figures - folder_quota)
-        review_quota = min(len(review_records), spectrum_quota // 2)
-        delete_quota = min(len(delete_records), spectrum_quota - review_quota)
-        review_quota = min(len(review_records), spectrum_quota - delete_quota)
-        selected = delete_records[:delete_quota] + review_records[:review_quota]
-        folder_targets = folder_targets[:folder_quota]
+    folder_targets = _class_folder_review_targets(records, audit_cfg) if records and records[0].stage == "class-similarity" else []
+    selected, folder_targets = _select_figure_targets(
+        delete_records,
+        review_records,
+        folder_targets,
+        max_spectrum_figures,
+    )
 
     for record in selected:
         kind = "delete" if record.decision == "remove_candidate" else "review"
@@ -264,12 +279,8 @@ def write_stage_figures(out_dir, records, profile, cfg, prefix_stats, max_spectr
     return {"spectrum": len(selected), "folder": folder_figures, "total": len(selected) + folder_figures}
 
 
-def _candidate_rows(records):
-    rows = [record_to_row(record) for record in records if record.decision in {"remove_candidate", "review_candidate", "skip"}]
-    return sorted(rows, key=lambda row: (row["decision"] != "remove_candidate", -float(row["risk_score"] or 0), row["rel_path"]))
-
-
 def write_stage_summary(out_dir, dataset_name, records, cfg, audit_cfg, dataset_dir, init_root, stage, figure_counts, moved):
+    """写入阶段扫描 summary.md 和 summary.json。"""
     valid = [record for record in records if record.z is not None]
     skipped = [record for record in records if record.z is None]
     remove_records = [record for record in valid if record.decision == "remove_candidate"]
@@ -343,9 +354,13 @@ def write_stage_summary(out_dir, dataset_name, records, cfg, audit_cfg, dataset_
 
 
 def write_stage_outputs(out_dir, records, profile, cfg, audit_cfg, prefix_stats, dataset_dir, init_root, stage, max_spectrum_figures, moved=False):
+    """写入阶段扫描的 CSV、图和摘要。"""
     all_rows = [record_to_row(record) for record in records]
     fieldnames = list(all_rows[0].keys()) if all_rows else None
-    candidate_rows = _candidate_rows(records)
+    candidate_rows = sorted(
+        [record_to_row(record) for record in records if record.decision in {"remove_candidate", "review_candidate", "skip"}],
+        key=lambda row: (row["decision"] != "remove_candidate", -float(row["risk_score"] or 0), row["rel_path"]),
+    )
     delete_rows = [row for row in candidate_rows if row["decision"] == "remove_candidate"]
     review_rows = [row for row in candidate_rows if row["decision"] == "review_candidate"]
 
@@ -368,6 +383,7 @@ def full_scan(
     max_spectrum_figures=200,
     move=False,
 ):
+    """执行一次全库分阶段扫描，可选择移动强候选。"""
     stage = validate_stage(stage)
     profile, dataset_dir = resolve_dataset(dataset, PROJECT_ROOT)
     cfg = DEFAULT_PIPELINE_CONFIG
@@ -390,7 +406,8 @@ def full_scan(
     print(f"Input: {init_root}")
     print(f"Output: {out_dir}")
 
-    records, prefix_stats = run_stage_scan(profile, cfg, audit_cfg, init_root, stage)
+    records = load_audit_records(profile, cfg, init_root, SpectrumRecord)
+    prefix_stats = score_stage(records, cfg, stage, audit_cfg)
     result = write_stage_outputs(out_dir, records, profile, cfg, audit_cfg, prefix_stats, dataset_dir, init_root, stage, max_spectrum_figures, moved=False)
 
     if move and result["delete_rows"]:
@@ -413,6 +430,7 @@ def full_scan(
 
 
 def build_parser():
+    """构建 full 子命令参数解析器。"""
     parser = argparse.ArgumentParser(description="分阶段清洗 Raman audit")
     parser.add_argument("dataset", nargs="?", default="细菌", help="数据集名或 profile id")
     parser.add_argument("--stage", choices=("invalid", "anomalous-cosmic", "class-similarity"), default="invalid", help="本次执行的清洗阶段")
@@ -428,6 +446,7 @@ def build_parser():
 
 
 def main(argv=None):
+    """执行 full 子命令。"""
     args = build_parser().parse_args(argv)
     full_scan(
         args.dataset,

@@ -34,6 +34,8 @@ STAGE_DELETE_CATEGORY = {
 
 @dataclass
 class SpectrumRecord:
+    """单条光谱的审核评分记录"""
+
     path: Path
     rel_path: str
     group: str
@@ -105,6 +107,7 @@ class SpectrumRecord:
 
 
 def validate_stage(stage: str) -> str:
+    """校验并规范化 audit 阶段名。"""
     stage = str(stage or "").strip().lower()
     if stage not in VALID_STAGES:
         raise ValueError(f"Unsupported audit stage: {stage}. Choose one of: {', '.join(VALID_STAGES)}")
@@ -112,10 +115,12 @@ def validate_stage(stage: str) -> str:
 
 
 def prefix_scope(record: SpectrumRecord) -> str:
+    """返回属/前缀形式的参考池键。"""
     return f"{record.genus}/{prefix_of(record.folder)}"
 
 
 def fmt_value(value, digits=3):
+    """把有限数值格式化成 CSV 文本。"""
     try:
         value = float(value)
     except Exception:
@@ -126,6 +131,7 @@ def fmt_value(value, digits=3):
 
 
 def raw_coverage(wn, cut_min, cut_max):
+    """计算原始波数轴覆盖目标裁剪区间的比例。"""
     wn = np.asarray(wn, dtype=np.float32)
     if wn.size == 0:
         return np.nan
@@ -135,6 +141,7 @@ def raw_coverage(wn, cut_min, cut_max):
 
 
 def contiguous_index_ranges(wn):
+    """按波数轴大间隔拆成连续索引段。"""
     wn = np.asarray(wn, dtype=np.float32)
     if wn.size == 0:
         return []
@@ -146,6 +153,7 @@ def contiguous_index_ranges(wn):
 
 
 def longest_flat_points(wn, z, audit_cfg: AuditConfig):
+    """计算最长低变化平坦段点数。"""
     wn = np.asarray(wn, dtype=np.float32)
     z = np.asarray(z, dtype=np.float32)
     window = max(3, int(audit_cfg.invalid_flat_window_points))
@@ -165,40 +173,8 @@ def longest_flat_points(wn, z, audit_cfg: AuditConfig):
     return int(best_points)
 
 
-def positive_regions(wn, values, threshold, max_width_cm=None):
-    wn = np.asarray(wn, dtype=np.float32)
-    values = np.asarray(values, dtype=np.float32)
-    step = median_step_cm(wn)
-    regions = []
-    for start, end in contiguous_regions(values >= float(threshold)):
-        width = region_width_cm(wn, start, end)
-        if max_width_cm is not None and width > float(max_width_cm):
-            continue
-        segment = values[start:end]
-        if segment.size == 0:
-            continue
-        area = float(np.sum(np.maximum(segment, 0.0)) * step)
-        peak_idx = int(start + np.argmax(segment))
-        regions.append(
-            {
-                "start": start,
-                "end": end,
-                "center_cm": float(wn[peak_idx]),
-                "width_cm": width,
-                "max_z": float(np.max(segment)),
-                "area": area,
-            }
-        )
-    return regions
-
-
-def max_region(regions):
-    if not regions:
-        return None
-    return max(regions, key=lambda item: (item.get("edge_jump_z", 0.0), item["max_z"], item["area"], item["width_cm"]))
-
-
 def rolling_quantile(values, window_points, q=0.20):
+    """计算滚动分位数曲线。"""
     values = np.asarray(values, dtype=np.float32)
     window = max(3, int(window_points))
     if window % 2 == 0:
@@ -209,6 +185,7 @@ def rolling_quantile(values, window_points, q=0.20):
 
 
 def _diff_scale_by_segments(values, segments):
+    """按连续段计算一阶差分鲁棒尺度。"""
     diffs = []
     for start, end in segments:
         if end - start >= 2:
@@ -219,6 +196,7 @@ def _diff_scale_by_segments(values, segments):
 
 
 def _region_edge_jump_z(smooth_values, start, end, seg_start, seg_end, scale, window_points):
+    """估计宽异常段两侧边缘跳变强度。"""
     diffs = np.diff(np.asarray(smooth_values, dtype=np.float32))
     if diffs.size == 0:
         return 0.0, 0.0, 0.0
@@ -243,6 +221,7 @@ def _region_edge_jump_z(smooth_values, start, end, seg_start, seg_end, scale, wi
 
 
 def _wide_regions_by_points(wn, z_values, smooth_values, threshold, min_points, segments, edge_scale, edge_window_points):
+    """按点数阈值提取宽平台/阶梯候选段。"""
     regions = []
     for seg_start, seg_end in segments:
         mask = z_values[seg_start:seg_end] >= float(threshold)
@@ -283,6 +262,7 @@ def _wide_regions_by_points(wn, z_values, smooth_values, threshold, min_points, 
 
 
 def score_anomalous_wide_regions(records, cfg, audit_cfg: AuditConfig):
+    """为第二阶段宽上升平台/阶梯异常打分。"""
     wn_full = output_wn(cfg)
     segments_by_size = {}
     for record in records:
@@ -322,7 +302,7 @@ def score_anomalous_wide_regions(records, cfg, audit_cfg: AuditConfig):
         )
         edge_threshold = audit_cfg.anomalous_wide_review_edge_z_min
         regions = [region for region in regions if region["edge_jump_z"] >= edge_threshold]
-        best = max_region(regions)
+        best = max(regions, key=lambda item: (item.get("edge_jump_z", 0.0), item["max_z"], item["area"], item["width_cm"]), default=None)
 
         record.wide_z = wide_z.astype(np.float32, copy=False)
         record.wide_smooth = smooth
@@ -346,6 +326,7 @@ def score_anomalous_wide_regions(records, cfg, audit_cfg: AuditConfig):
 
 
 def _local_positive_regions(wn, z_values, audit_cfg: AuditConfig):
+    """提取类内参考残差里的局部正异常段。"""
     regions = []
     for start, end in contiguous_regions(z_values >= float(audit_cfg.class_local_z_min)):
         width_points = int(end - start)
@@ -369,13 +350,8 @@ def _local_positive_regions(wn, z_values, audit_cfg: AuditConfig):
     return regions
 
 
-def _best_local_region(regions):
-    if not regions:
-        return None
-    return max(regions, key=lambda item: (item["max_z"], item["area"], item["width_points"]))
-
-
 def score_class_similarity(records, cfg, audit_cfg: AuditConfig):
+    """为第三阶段同前缀类内相似性打分。"""
     wn_full = output_wn(cfg)
     by_scope: dict[str, list[SpectrumRecord]] = {}
     for record in records:
@@ -425,7 +401,7 @@ def score_class_similarity(records, cfg, audit_cfg: AuditConfig):
             record.local_pos_z = local_z.astype(np.float32, copy=False)
             wn = wn_full[: sample.size]
             regions = _local_positive_regions(wn, local_z, audit_cfg)
-            best = _best_local_region(regions)
+            best = max(regions, key=lambda item: (item["max_z"], item["area"], item["width_points"]), default=None)
             record.local_pos_count = len(regions)
             record.local_pos_positions = tuple(region["center_cm"] for region in regions)
             record.local_pos_ranges = tuple((int(region["start"]), int(region["end"])) for region in regions)
@@ -440,6 +416,7 @@ def score_class_similarity(records, cfg, audit_cfg: AuditConfig):
 
 
 def score_raw_and_basic(records, cfg, audit_cfg: AuditConfig):
+    """为第一阶段无效谱计算自身质量特征。"""
     wn = output_wn(cfg)
     for record in records:
         record.prefix_scope = prefix_scope(record)
@@ -467,6 +444,7 @@ def score_raw_and_basic(records, cfg, audit_cfg: AuditConfig):
 
 
 def score_stage(records, cfg, stage: str, audit_cfg: AuditConfig = DEFAULT_AUDIT_CONFIG):
+    """按阶段调度评分和分类规则。"""
     stage = validate_stage(stage)
     if stage == "invalid":
         from raman.audit.stage_invalid import classify_invalid
@@ -488,6 +466,7 @@ def score_stage(records, cfg, stage: str, audit_cfg: AuditConfig = DEFAULT_AUDIT
 
 
 def reason_labels(reasons, audit_cfg: AuditConfig = DEFAULT_AUDIT_CONFIG):
+    """把内部原因映射成 delete 分类标签。"""
     reasons = set(reasons or ())
     labels = []
     if any(reason.startswith("invalid_") for reason in reasons):
@@ -500,6 +479,7 @@ def reason_labels(reasons, audit_cfg: AuditConfig = DEFAULT_AUDIT_CONFIG):
 
 
 def record_to_row(record: SpectrumRecord):
+    """把谱记录转换成 CSV 行。"""
     labels = reason_labels(record.reasons)
     return {
         "stage": record.stage,
@@ -560,6 +540,7 @@ def record_to_row(record: SpectrumRecord):
 
 
 def stage_title(stage: str) -> str:
+    """返回阶段展示名称。"""
     stage = validate_stage(stage)
     if stage == "anomalous-cosmic":
         return "Anomalous Cosmic Rays"

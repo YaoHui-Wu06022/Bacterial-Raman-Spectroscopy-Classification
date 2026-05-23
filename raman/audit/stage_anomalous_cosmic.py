@@ -1,4 +1,4 @@
-"""第二阶段：清理宇宙射线去除后仍残留的宽上升平台 / 阶梯异常。"""
+"""第二阶段：清理宇宙射线去除后仍残留的宽上升平台 / 阶梯异常"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from raman.audit.scoring import STAGE_DELETE_CATEGORY
 
 
 def classify_anomalous_cosmic(records, audit_cfg: AuditConfig):
-    """只判断单谱自身是否存在宽于 peak 修复范围的残留异常。"""
+    """只判断单谱自身是否存在宽于 peak 修复范围的残留异常"""
     for record in records:
         record.stage = "anomalous-cosmic"
         if record.z is None:

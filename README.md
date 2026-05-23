@@ -240,7 +240,7 @@ python -m raman.data test 细菌       # 对测试数据进行一致的清洗
 
 1. 准备或还原原始数据到 `init/`
 2. 使用 `preview` 生成 `fig_init/` 和 `train_raw/`，先从均值谱层面检查原始数据质量
-3. 使用 `raman.audit single`、`raman.audit folder` 或 `raman.audit full` 对 `init/` 中的原始库做只读审核
+3. 使用 `raman.audit full --stage ...` 对 `init/` 中的原始库做分阶段只读审核，必要时先用 `raman.audit bad-band` 扫描系统性坏段
 4. 结合审核报告和复核图人工确认异常谱
 5. 使用 `raman.audit move` 将确认移除的原始 `.arc_data` 从 `init/` 移到 `delete/`
 6. 使用 `python -m raman.data train <数据集名>` 复用或重建 `train_raw/`，并生成最终 `train/`
@@ -262,335 +262,168 @@ python -m raman.data preview 细菌
 
 如果均值谱图已经明显异常，可以优先检查该文件夹的原始采集数据或直接进入审核流程
 
-如果均值谱图看起来基本正常，但怀疑某个小文件夹里混入了少数异常单谱，则更适合使用 `raman.audit single`、`raman.audit folder` 或 `raman.audit full` 做进一步审核
+如果均值谱图看起来基本正常，但怀疑某个小文件夹里混入了少数异常单谱，则进入 `raman.audit full` 的分阶段审核流程
 
 ### 4.6 原始库审核与人工移除
 
-#### 单谱离群审核
-
-如果均值谱图看起来基本正常，但怀疑某个小文件夹里混入了少数异常单谱，可以使用 `raman.audit single` 做文件夹内单谱审核：
+当前审核入口已经收敛为三个命令：
 
 ```bash
-python -m raman.audit single 细菌 --subdir init
-python -m raman.audit single 细菌 --folder Acinetobacter/AB01
-python -m raman.audit single 细菌 --folder SA03 --max-plots-per-group 30
-```
-
-默认情况下，审核结果会输出到：
-
-```text
-dataset/<数据集名>/audit_single/
-```
-
-如果指定 `--folder SA03` 这类末级文件夹名，程序会在 `init/<属名>/SA03` 中自动匹配
-
-若匹配唯一，结果会输出到 `dataset/<数据集名>/audit_single/<属名>/SA03/`
-
-输出文件包括：
-
-- `summary.csv`：记录每条谱的评分、相关系数、逐点异常比例和是否被标记
-- `figures/`：保存被标记单谱的复核图
-- 每张复核图包含原始谱、预处理后单谱与组内分布对比、逐点 robust z-score
-
-`raman.audit single` 的判定对象是同一个小文件夹内的单谱离群
-
-它会先对文件夹内每条谱执行当前离线预处理流程，包括宇宙射线去除、基线校正、裁剪、坏段剔除和插值；然后对处理后的光谱做 SNV 标准化，并以该文件夹内的中位谱作为中心参考
-
-设同一文件夹内标准化后的光谱为 $z_1,\dots,z_N$，组内中心谱为逐点中位谱：
-
-```math
-\bar{z}_i
-=
-\operatorname{median}_{m=1,\dots,N}
-\left(
-z_{m,i}
-\right),
-\qquad
-i=1,\dots,L
-```
-
-其中 $m$ 是在当前小文件夹内部做统计时使用的临时样本索引
-
-逐波数采样点的组内鲁棒尺度用 MAD 估计
-
-```math
-\sigma_i
-=
-\max
-\left(
-1.4826\cdot
-\operatorname{median}_{m=1,\dots,N}
-\left(
-\left|
-z_{m,i}-\bar{z}_{i}
-\right|
-\right),
-\sigma_{\min}
-\right)
-```
-
-其中 $\sigma_{\min}$ 是尺度下限，用来避免某些波数点组内差异过小导致 z-score 被无限放大
-
-单谱整体形状差异先用 RMSE 衡量：
-
-```math
-\mathrm{RMSE}_n
-=
-\sqrt{
-\frac{1}{L}
-\sum_{i=1}^{L}
-\left(
-z_{n,i}
--
-\bar{z}_{i}
-\right)^2
-}
-```
-
-再把 RMSE 放到同文件夹内所有 RMSE 的鲁棒分布中：
-
-```math
-\mathrm{score}_n
-=
-\frac{
-\mathrm{RMSE}_n
--
-\operatorname{median}(\mathrm{RMSE})
-}{
-1.4826\cdot
-\operatorname{MAD}(\mathrm{RMSE})
-}
-```
-
-逐点异常比例为：
-
-```math
-\mathrm{bad\_point\_ratio}_{n}^{(\mathrm{group})}
-=
-\frac{1}{L}
-\sum_{i=1}^{L}
-\mathbf{1}
-\left(
-\left|
-\frac{
-z_{n,i}-\bar{z}_{i}
-}{
-\sigma_i
-}
-\right|
->
-\tau_z
-\right)
-```
-
-其中 $\tau_z$ 表示逐点 robust z-score 的判定阈值
-
-代码会从三个角度标记候选异常谱：
-
-- `score`：该谱相对组内中位谱的 RMSE 是否显著偏大
-- `corr`：该谱和组内中位谱的相关系数是否过低
-- `bad_point_ratio`：逐点 robust z-score 超过阈值的比例是否过高
-
-如果需要判断一个小文件夹整体是否像同前缀参考组，或者像 `AB01/AB03` 这种文件夹内存在两群谱，更适合使用 `raman.audit folder` 做跨文件夹参考评分
-
-#### 参考组离群审核
-
-`raman.audit folder` 用于审核某个小文件夹内的单谱是否接近同属、同前缀参考组
-
-它更适合检查“这个文件夹里是否混入了另一批谱”或“某几条谱是否明显不像同前缀数据”这类问题
-
-常用命令：
-
-```bash
-python -m raman.audit folder 细菌 --folder Acinetobacter/AB01
-python -m raman.audit folder 细菌 --folder AB01
-python -m raman.audit folder 细菌 --folder Enterobacter/ECL04
-python -m raman.audit folder 细菌 --folder Acinetobacter/AB01 --no-plot
-```
-
-和 `raman.audit single` 一样，`--folder` 可以写 `属名/小文件夹名`，也可以只写末级文件夹名
-
-输出文件包括：
-
-- `scores.csv`：记录每条谱相对参考组和本文件夹的评分
-- `summary.json`：记录参考文件夹、阈值和汇总结果
-- `review.png`：保存候选异常谱的复核图，使用 `--no-plot` 时不生成
-
-参考组的选择先看同属同前缀文件夹
-
-例如目标为 `Klebsiella/KAE03` 时，会优先使用同属下其他 `KAE*` 文件夹作为参考；如果同前缀参考谱数量不足，则退回使用同属下其他文件夹
-
-目标文件夹中 SNV 后的光谱仍记 $z_1,\dots,z_N$
-
-设参考组中 SNV 后的光谱为 $r_1,\dots,r_M$，参考中位谱为
-
-```math
-\bar{r}
-=
-\operatorname{median}
-\left(
-r_1,\dots,r_M
-\right)
-```
-
-参考组逐波数采样点的鲁棒尺度为
-
-```math
-\sigma_i^{(\mathrm{ref})}
-=
-\max
-\left(
-1.4826\cdot
-\operatorname{median}_{m=1,\dots,M}
-\left(
-\left|
-r_{m,i}-\bar{r}_{i}
-\right|
-\right),
-\sigma_{\min}^{(\mathrm{ref})}
-\right)
-```
-
-对目标文件夹中的第 $n$ 条光谱 $z_n$，计算其相对参考组的逐点异常比例：
-
-```math
-\mathrm{bad\_ratio}_{n}^{(\mathrm{ref})}
-=
-\frac{1}{L}
-\sum_{i=1}^{L}
-\mathbf{1}
-\left(
-\left|
-\frac{
-z_{n,i}-\bar{r}_{i}
-}{
-\sigma_i^{(\mathrm{ref})}
-}
-\right|
->
-\tau_z
-\right)
-```
-
-其中 $\tau_z$ 表示参考组逐点 robust z-score 的判定阈值
-
-同时会计算目标谱和参考中位谱的相关系数，以及目标谱和所有参考单谱之间的最高相关系数：
-
-```math
-\mathrm{corr\_ref}_n
-=
-\rho(z_n,\bar{r}),
-\qquad
-\mathrm{nearest\_ref\_corr}_n
-=
-\max_{m=1,\dots,M} \rho(z_n,r_m)
+python -m raman.audit full 细菌 --stage invalid
+python -m raman.audit bad-band 细菌
+python -m raman.audit move 细菌 --from-list <delete_candidates.csv>
 ```
 
 其中：
 
-- $\mathrm{corr\_ref}_n$ 衡量目标谱 $z_n$ 和参考中位谱 $\bar{r}$ 的整体相似度
-- $\mathrm{nearest\_ref\_corr}_n$ 衡量目标谱 $z_n$ 和参考组中最相近单谱的相似度
-- $\rho(\cdot,\cdot)$ 表示相关系数
+- `full`：主审核流程，按阶段扫描 `init/` 中的原始光谱
+- `bad-band`：可选的系统性下凹坏段只读扫描，不移动文件
+- `move`：把人工确认或阶段扫描确认的候选从 `init/` 移到 `delete/`
 
-参考组审核的阈值不是固定写死，而是从参考谱自身分布中自适应生成
+单谱异常、类内参考组异常和局部残留突起都放进 `full --stage ...` 的阶段流程里处理
 
-例如相关系数阈值会参考参考谱与参考中位谱相关系数的低分位数，逐点异常比例和 RMSE 阈值会参考参考组自身的高分位数
+#### 推荐审核顺序
 
-这样不同属、不同前缀之间峰形差异较大时，阈值不会被另一类数据强行套用
-
-主要判读字段：
-
-- `corr_ref`：该谱和同属、同前缀参考中位谱的相关系数
-- `nearest_ref_corr`：该谱和参考谱中最相近单谱的相关系数
-- `corr_folder`：该谱和当前文件夹中位谱的相关系数
-- `bad_ratio_z6` / `bad_ratio_z8`：目标谱相对参考组逐点 robust z-score 超过阈值 6 或 8 的比例
-- `rmse_to_ref`：该谱和参考中位谱之间的均方根误差
-- `cosmic_total`：当前预处理流程中宇宙射线替换点总数
-- `decision` / `reasons`：是否建议复核移除，以及触发原因
-
-如果一条谱同时触发多个参考组证据，例如参考相似度低、参考组逐点异常比例高、相对参考中位谱 RMSE 偏大、宇宙射线替换点异常偏多等，才会被标为 `decision=remove`
-
-`decision=remove` 表示“建议人工复核的候选异常谱”，不是自动剔除结论
-
-#### 全库只读复查
-
-如果需要一次性扫描 `init/` 下所有小文件夹，可以使用 `raman.audit full`
-
-它按“同属同前缀”先合并成种简称池，再做两阶段清理：先用前缀均值谱筛明显额外凸起、阶梯样异常和完全不贴合的无效噪声谱，再排除这些强异常后做前缀池强离群清洗。默认只写报告和复核图；加 `--move-strong` 时只自动移动强异常，`review_candidate` 不会自动移动。
-
-常用命令：
+建议按“先排除明显无效，再处理宇宙射线残留，最后做类内相似性”的顺序执行：
 
 ```bash
-python -m raman.audit full 细菌
-python -m raman.audit full 细菌 --max-spectrum-figures 80
-python -m raman.audit full 细菌 --move-strong --max-spectrum-figures 80
+python -m raman.audit full 细菌 --stage invalid --max-spectrum-figures 200
+python -m raman.audit full 细菌 --stage invalid --move --max-spectrum-figures 200
+
+python -m raman.audit full 细菌 --stage anomalous-cosmic --max-spectrum-figures 200
+python -m raman.audit full 细菌 --stage anomalous-cosmic --move --max-spectrum-figures 200
+
+python -m raman.audit full 细菌 --stage class-similarity --max-spectrum-figures 200
+python -m raman.audit full 细菌 --stage class-similarity --move --max-spectrum-figures 200
 ```
 
-默认输出到带时间戳的目录：
+实际操作时可以先不加 `--move` 只看报告和图
+
+确认 `delete_candidates.csv` 没问题后，再用同一阶段加 `--move` 执行移动
+
+每移动一批后，建议再跑下一阶段。这样后续阶段的参考池不会被前一阶段已经确认的异常谱污染
+
+#### 三个主审核阶段
+
+##### invalid
+
+只判断单谱自身是否已经失去有效光谱形态
+
+主要证据包括：
+
+- `invalid_missing_region`：原始波数覆盖不足，有长段缺失
+- `invalid_flat_region`：连续平坦区过长，或全谱过多点贴近中位数
+- `invalid_noise`：高频粗糙度高，同时平滑结构相对弱
+
+##### anomalous-cosmic
+
+检查宇宙射线去除和 baseline 扣除后仍残留、且宽于 peak 可修复范围的宽上升平台或阶梯异常
+
+是用离线预处理得到的基线校正谱 `sp`
+
+关注 `cosmic_ray_peak_width_max_points` 之外的宽异常区域
+
+强证据包括宽异常区域的 `wide_bump_max_z`、`wide_bump_area` 和边缘突跳 `wide_edge_jump_z` 同时过线，边界情况进入 `review_candidate`
+
+##### class-similarity
+
+用同属同前缀参考池判断单谱是否偏离本类
+
+参考池数量不足时不自动判定
+
+主要证据包括：
+
+- `corr_ref`：目标谱和同前缀参考中位谱的相关系数
+- `nearest_ref_corr`：目标谱和参考池中最相近单谱的最高相关系数
+- `rmse_to_ref`：目标谱和参考中位谱的 RMSE
+- `local_pos_*`：目标谱相对参考池的局部正残差异常
+- `folder_candidate_count` / `folder_candidate_fraction`：同一小文件夹内候选是否过度集中
+
+第三阶段有一个保护逻辑：如果同一小文件夹里候选数量或比例过高，程序倾向于把它标成 `review_candidate`，并输出文件夹级复核图，而不是直接把整批都当作单谱离群删除
+
+这类情况通常需要判断是整批采集偏移、标签/前缀问题，还是确实混入异常谱
+
+#### 阶段输出
+
+每次 `full` 会输出到带阶段和时间戳的目录：
 
 ```text
-dataset/细菌/audit_full_scan/<时间戳>/
+dataset/<数据集名>/audit_full_scan/<时间戳>_<stage>_<dry_run|move>/
 ```
 
-主要输出文件包括：
+输出文件包括：
 
 - `summary.md`：中文总结报告，列出强异常移除候选、仅复核候选和阶段统计
-- `spectrum_candidates.csv`：单谱级候选清单，包含路径、异常原因、评分和推荐动作
+- `summary.json`：记录数据目录、阶段、阈值配置、候选数量和是否执行移动
 - `delete_candidates.csv`：只包含强异常 `remove_candidate`
 - `review_candidates.csv`：只包含边界复核候选，不自动移动
 - `delete_manifest.txt`：一行一个建议移除路径，便于人工快速浏览
 - `all_spectra_scores.csv`：所有光谱的审核评分，便于后续排序筛选
-- `figures/`：候选谱复核图，数量由 `--max-spectrum-figures` 控制
+- `figures/delete/`：删除候选复核图
+- `figures/review/`：复核候选复核图
+- `figures/folder_review/`：第三阶段中文件夹集中命中时的文件夹均值对照图
 
-`raman.audit full` 的评估对象是全库单谱，判定时主要看以下几个维度：
+`decision` 字段有四种常见取值：
 
-- 前缀均值谱预筛：按 `属/前缀` 合并所有小文件夹，例如 `Enterobacter/ECL01..ECL03` 合并为 `Enterobacter/ECL`，用前缀均值谱和逐点 residual z-score 判断 `species_extra_bump`、`species_step_like`、`species_invalid_noise`
+- `keep`：当前阶段未发现需要处理的问题
+- `review_candidate`：建议看图确认，但 `full --move` 不会自动移动
+- `remove_candidate`：强删除候选，`full --move` 会移动这部分
+- `skip`：预处理失败或输入不可用，原因写在 `reasons`
 
-- 前缀池强离群：第一阶段强异常先排除，再按同一个前缀池重新计算中心谱；只有低相关、形态分数高、逐点异常比例高等强证据同时成立时，才进入 `remove_candidate`
+#### 系统性坏段扫描
 
-- 阶梯状异常：对预处理后的 SNV 光谱做低频平滑，再看一阶差分的鲁棒尺度，寻找持续的台阶突变；明显台阶标为 `species_step_like`
+如果怀疑某一段波数在大量样本中系统性下凹，可以先跑只读坏段扫描：
 
-- 残留宇宙射线样突起：在单谱相对前缀均值谱的正向 residual z-score 中寻找窄到中等宽度的连续高突起；对应 `species_extra_bump`
+```bash
+python -m raman.audit bad-band 细菌
+python -m raman.audit bad-band 细菌 --folder Klebsiella/KAE03
+python -m raman.audit bad-band 细菌 --max-files 1000
+```
 
-`full_scan` 会把候选分成两层：
+输出目录默认为：
 
-- `remove_candidate`：明显额外凸起、明显阶梯谱、完全不贴合的无效噪声谱、强前缀池离群
-- `review_candidate`：前缀池边界离群或粗糙噪声等需要看图确认的谱
+```text
+dataset/<数据集名>/audit_bad_band/<时间戳>/
+```
 
-`--move-strong` 只会移动 `delete_candidates.csv` 中的强异常；`review_candidates.csv` 永远只供人工复核，不会被自动移动。
+主要文件：
 
-`single`、`folder`、`full` 三个命令共用 `raman/audit/config.py` 中的 `AuditConfig` 阈值配置，避免不同审核入口使用不同参数。`single` 已改为按指定文件夹所属前缀池查看候选，不再按小文件夹内部独立清洗。
+- `summary.md`：候选坏段摘要和判读说明
+- `candidate_bands.csv`：候选波段、覆盖率、深度和分数
+- `candidate_folder_summary.csv`：候选波段在各文件夹中的命中比例
+- `dip_candidates.png`：候选坏段复核图
+- `scan_config.json`：扫描参数和输入范围
+
+坏段扫描不会修改 `COMMON_BAD_BANDS` 或任何原始文件；是否把候选波段加入离线坏段配置，仍需要结合复核图人工判断
 
 #### 审核后移动
 
-最终移除仍建议先结合复核图确认，再用 `raman.audit move` 执行
+`full --move` 会把当前阶段的 `delete_candidates.csv` 移到对应分类目录：
 
-对应数据集下创建 `delete/`
+```text
+dataset/<数据集名>/delete/Invalid Spectrum/
+dataset/<数据集名>/delete/Anomalous_Cosmic_Rays/
+dataset/<数据集名>/delete/Class_Similarity_Outliers/
+```
+
+也可以先 dry-run，再用 `move` 手动执行：
 
 ```bash
-python -m raman.audit move 细菌 --from-list dataset/细菌/audit_full_scan/<时间戳>/delete_candidates.csv --dry-run
-python -m raman.audit move 细菌 --from-list dataset/细菌/audit_full_scan/<时间戳>/delete_candidates.csv
-python -m raman.audit move 细菌 Burkholderia/BCC01 --reason 组内离群 --dry-run
-python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_data --reason 阶梯谱
+python -m raman.audit move 细菌 --from-list dataset/细菌/audit_full_scan/<时间戳>_<stage>_dry_run/delete_candidates.csv --dry-run
+python -m raman.audit move 细菌 --from-list dataset/细菌/audit_full_scan/<时间戳>_<stage>_dry_run/delete_candidates.csv
+python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_data --reason Anomalous_Cosmic_Rays --category Anomalous_Cosmic_Rays --dry-run
 ```
 
 移动规则为：
 
-- 源路径来自 `dataset/<数据集名>/init/<属名>/<小文件夹>/...`
-- 目标路径为 `dataset/<数据集名>/delete/<属名>/<小文件夹>/...`
-- 目标路径不带 `init` 层
+- 源路径必须来自 `dataset/<数据集名>/init/<属名>/<小文件夹>/...`
+- 目标路径位于 `dataset/<数据集名>/delete/` 下；带 `--category` 时会进入对应分类目录
 - 默认不覆盖已有文件
-- 移动后会在 `dataset/<数据集名>/delete/<属名>/移除记录.txt` 中按小文件夹记录文件名和移除原因
+- CSV 清单优先使用 `reason_labels` 和 `delete_category` 列
+- TXT 清单没有原因列，必须额外传 `--reason`
+- 手动移动整属目录默认被拒绝，确实需要时才使用 `--allow-genus`
 
-手动删除记录中的原因标签由 `raman/audit/config.py` 的 `AuditConfig.delete_reason_labels` 控制
-
-当前默认标签包括：
-
-- 残留宇宙射线
-- 阶梯谱
-- 粗糙噪声
-- 参考组离群
-- 组内离群
+阶段阈值和删除分类统一在 `raman/audit/config.py` 的 `AuditConfig` 中维护。
 
 ### 4.7 构建训练集
 

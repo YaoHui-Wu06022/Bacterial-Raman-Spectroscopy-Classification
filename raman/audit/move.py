@@ -1,4 +1,4 @@
-"""按路径或 audit 清单移动异常数据到 delete。"""
+"""按路径或 audit 清单移动异常数据到 delete"""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ from raman.audit.config import DEFAULT_AUDIT_CONFIG
 
 @dataclass(frozen=True)
 class MoveItem:
+    """待移动文件和目标信息"""
+
     source: Path
     destination: Path
     relative: Path
@@ -22,6 +24,7 @@ class MoveItem:
 
 
 def is_relative_to(path: Path, parent: Path) -> bool:
+    """兼容旧 Python 的路径包含判断"""
     try:
         path.relative_to(parent)
         return True
@@ -29,11 +32,8 @@ def is_relative_to(path: Path, parent: Path) -> bool:
         return False
 
 
-def normalize_input(text: str) -> Path:
-    return Path(str(text).strip().strip('"').strip("'"))
-
-
 def normalize_category(category: str | None) -> str:
+    """校验 delete 分类目录名称"""
     category = str(category or "").strip().strip("/\\")
     if not category:
         return ""
@@ -44,6 +44,7 @@ def normalize_category(category: str | None) -> str:
 
 
 def find_unique_folder_by_name(init_root: Path, name: str) -> Path | None:
+    """按末级文件夹名查找唯一 init 子文件夹"""
     matches = sorted(path for path in init_root.glob(f"*/{name}") if path.is_dir())
     if not matches:
         return None
@@ -54,6 +55,7 @@ def find_unique_folder_by_name(init_root: Path, name: str) -> Path | None:
 
 
 def source_from_input(raw: Path, dataset_dir: Path, init_root: Path, allow_genus: bool) -> tuple[Path, Path]:
+    """解析待移动源路径及其相对 init 路径"""
     if raw.is_absolute():
         source = raw.resolve(strict=True)
     else:
@@ -99,6 +101,7 @@ def source_from_input(raw: Path, dataset_dir: Path, init_root: Path, allow_genus
 
 
 def normalize_reason(reason: str) -> str:
+    """校验并规范化移除原因标签"""
     reason = str(reason or "").strip()
     if not reason:
         raise ValueError("Move reason is required")
@@ -119,7 +122,9 @@ def build_item(
     delete_root: Path,
     allow_genus: bool,
 ) -> MoveItem:
-    source, rel = source_from_input(normalize_input(text), dataset_dir, init_root, allow_genus)
+    """根据输入路径构造一次移动任务"""
+    raw = Path(str(text).strip().strip('"').strip("'"))
+    source, rel = source_from_input(raw, dataset_dir, init_root, allow_genus)
     category = normalize_category(category)
     destination_root = (delete_root / category).resolve() if category else delete_root.resolve()
     destination = (destination_root / rel).resolve()
@@ -131,6 +136,7 @@ def build_item(
 
 
 def read_items_from_list(path: Path, fallback_reason: str | None = None, fallback_category: str | None = None) -> list[tuple[str, str, str]]:
+    """从 CSV 或 TXT 清单读取移动条目"""
     path = path.resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Missing list file: {path}")
@@ -152,6 +158,7 @@ def read_items_from_list(path: Path, fallback_reason: str | None = None, fallbac
 
 
 def _append_category_record(delete_root: Path, items: list[MoveItem]):
+    """写入分类 delete 目录的移除记录"""
     by_category: dict[str, list[MoveItem]] = {}
     for item in items:
         if item.category:
@@ -167,6 +174,7 @@ def _append_category_record(delete_root: Path, items: list[MoveItem]):
 
 
 def _append_legacy_records(delete_root: Path, items: list[MoveItem]):
+    """兼容旧结构写入属目录移除记录"""
     grouped: dict[Path, list[tuple[str, str, str]]] = {}
     for item in items:
         if item.category or len(item.relative.parts) < 2:
@@ -191,12 +199,8 @@ def _append_legacy_records(delete_root: Path, items: list[MoveItem]):
         record_path.write_text("\n".join(chunks).rstrip() + "\n", encoding="utf-8")
 
 
-def append_delete_records(delete_root: Path, items: list[MoveItem]):
-    _append_category_record(delete_root, items)
-    _append_legacy_records(delete_root, items)
-
-
 def execute_items(delete_root: Path, items: list[MoveItem], dry_run: bool):
+    """打印并执行移动任务"""
     print("Dry-run move plan:" if dry_run else "Move plan:")
     for item in items:
         category = f" | category={item.category}" if item.category else ""
@@ -207,11 +211,13 @@ def execute_items(delete_root: Path, items: list[MoveItem], dry_run: bool):
     for item in items:
         item.destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(item.source), str(item.destination))
-    append_delete_records(delete_root, items)
+    _append_category_record(delete_root, items)
+    _append_legacy_records(delete_root, items)
     print(f"Moved {len(items)} item(s).")
 
 
 def move_items(dataset, paths=None, from_list=None, reason=None, dry_run=False, allow_genus=False, category=None):
+    """移动指定路径或清单中的 init 数据到 delete"""
     profile, dataset_dir = resolve_dataset(dataset, PROJECT_ROOT)
     init_root = dataset_dir / profile.root_init
     delete_root = dataset_dir / "delete"
@@ -238,6 +244,7 @@ def move_items(dataset, paths=None, from_list=None, reason=None, dry_run=False, 
 
 
 def build_parser():
+    """构建 move 子命令参数解析器"""
     parser = argparse.ArgumentParser(description="把 init 下的数据移动到 dataset/<数据集>/delete")
     parser.add_argument("dataset", nargs="?", default="细菌", help="数据集名或 profile id")
     parser.add_argument("paths", nargs="*", help="要移动的文件夹或文件路径")
@@ -251,6 +258,7 @@ def build_parser():
 
 
 def main(argv=None):
+    """执行 move 子命令"""
     args = build_parser().parse_args(argv)
     paths = list(args.paths) + list(args.path)
     move_items(

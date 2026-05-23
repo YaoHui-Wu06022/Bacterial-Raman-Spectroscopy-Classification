@@ -1,76 +1,43 @@
-"""下凹坏段扫描工具。
-
-该脚本用于发现采集过程里可能出现的系统性下凹波段。它只读扫描数据，
-输出候选波段、类别/文件夹覆盖率和复核图，不修改原始光谱。
-"""
+"""给定区间内扫描系统性下凹坏段"""
 
 from __future__ import annotations
 
 import argparse
-import csv
-import json
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 
 from raman.audit.common import (
-    contiguous_regions,
+    median_step_cm,
     moving_average,
     preprocess_spectrum_for_audit,
-    region_width_cm,
     resolve_audit_input,
     resolve_dataset,
+    robust_mad_scale,
+    write_csv,
 )
 from raman.data.build import DEFAULT_PIPELINE_CONFIG
 
 
 @dataclass(frozen=True)
 class BadBandScanConfig:
-    """下凹坏段扫描参数。"""
+    """区间下凹扫描参数"""
 
+    scan_min: float = 850.0
+    scan_max: float = 1000.0
     smooth_points: int = 9
-    side_cm: float = 18.0
-    min_width_cm: float = 20.0
-    max_width_cm: float = 80.0
-    width_step_cm: float = 10.0
-    stride_cm: float = 2.0
-    sample_depth_threshold: float = 0.35
-    min_fraction: float = 0.35
-    min_median_depth: float = 0.20
-    min_q80_depth: float = 0.45
-    overlap_ratio: float = 0.50
-    max_candidates: int = 12
-
-
-@dataclass(frozen=True)
-class BandCandidate:
-    """一个候选坏段窗口的摘要。"""
-
-    score: float
-    start_idx: int
-    end_idx: int
-    band_min: float
-    band_max: float
-    width_cm: float
-    sample_fraction: float
-    median_depth: float
-    q80_depth: float
-    mean_depth: float
-
-
-def _step_cm(wn):
-    diffs = np.abs(np.diff(np.asarray(wn, dtype=np.float32)))
-    diffs = diffs[np.isfinite(diffs) & (diffs > 1e-8)]
-    return float(np.median(diffs)) if diffs.size else 1.0
-
-
-def _points_for_cm(wn, cm, minimum):
-    return max(int(minimum), int(round(float(cm) / _step_cm(wn))))
+    side_points: int = 15
+    min_width_points: int = 8
+    max_width_points: int = 60
+    width_step_points: int = 4
+    stride_points: int = 2
+    depth_threshold: float = 0.35
 
 
 def _sample_files(files, max_files, seed):
+    """按固定随机种子抽样文件"""
     if max_files is None or max_files <= 0 or max_files >= len(files):
         return files
     rng = np.random.RandomState(int(seed))
@@ -78,283 +45,216 @@ def _sample_files(files, max_files, seed):
     return [files[int(i)] for i in sorted(indices)]
 
 
-def _preprocess_files(files, profile, cfg, input_root, progress_every=500):
+def _load_spectra(dataset, subdir, folder, max_files, seed):
+    """读取并预处理待扫描光谱，强制不使用 bad_bands mask"""
+    profile, dataset_dir = resolve_dataset(dataset)
+    input_root, _ = resolve_audit_input(dataset_dir, profile, subdir=subdir, folder=folder)
+    input_root = input_root.resolve()
+    files_all = sorted(input_root.rglob("*.arc_data"))
+    files = _sample_files(files_all, max_files, seed)
+    if not files:
+        raise FileNotFoundError(f"No .arc_data files found under {input_root}")
+
+    cfg = replace(DEFAULT_PIPELINE_CONFIG, bad_bands=())
     wn_ref = cfg.build_wn_ref()
     spectra = []
-    rel_paths = []
-    skipped = []
-
+    skipped_count = 0
     for idx, path in enumerate(files, start=1):
-        if progress_every > 0 and idx % progress_every == 0:
+        if idx % 500 == 0:
             print(f"[bad-band] preprocessed {idx}/{len(files)}")
-
-        payload = preprocess_spectrum_for_audit(
-            path,
-            profile,
-            cfg=cfg,
-            wn_ref=wn_ref,
-        )
+        payload = preprocess_spectrum_for_audit(path, profile, cfg=cfg, wn_ref=wn_ref)
         reason = payload.get("skip_reason", "")
         if reason:
-            skipped.append((path, reason))
+            skipped_count += 1
             continue
-
         spectra.append(np.asarray(payload["z"], dtype=np.float32))
-        rel_paths.append(Path(path).resolve().relative_to(input_root))
 
     if not spectra:
-        return None, np.empty((0, 0), dtype=np.float32), rel_paths, skipped
+        raise RuntimeError("No valid spectra after preprocessing")
 
-    return payload["wn"], np.asarray(spectra, dtype=np.float32), rel_paths, skipped
-
-
-def _smooth_spectra(spectra, smooth_points):
-    return np.asarray(
-        [moving_average(row, smooth_points) for row in spectra],
-        dtype=np.float32,
-    )
+    return {
+        "profile": profile,
+        "dataset_dir": dataset_dir,
+        "input_root": input_root,
+        "total_files": len(files_all),
+        "scanned_files": len(files),
+        "wn": np.asarray(payload["wn"], dtype=np.float32),
+        "spectra": np.asarray(spectra, dtype=np.float32),
+        "skipped_count": skipped_count,
+    }
 
 
 def _window_depths(spectra, start, end, side_points):
+    """计算窗口相对左右肩部的下凹深度"""
     left = spectra[:, start - side_points : start].mean(axis=1)
     right = spectra[:, end : end + side_points].mean(axis=1)
     center = spectra[:, start:end].mean(axis=1)
-    # 两侧都高于窗口内部时，才视作局部下凹；这样可减少单侧斜坡误判。
-    return np.minimum(left - center, right - center)
+    return np.minimum(left, right) - center
 
 
-def _build_candidate(wn, start, end, depths, cfg):
-    flagged = depths > cfg.sample_depth_threshold
-    fraction = float(flagged.mean())
-    median_depth = float(np.quantile(depths, 0.50))
+def _window_row(wn, start, end, depths, cfg):
+    """把一个候选窗口整理成结果行"""
+    flags = depths >= cfg.depth_threshold
+    width_cm = abs(float(wn[end - 1]) - float(wn[start])) + median_step_cm(wn)
+    median_depth = float(np.median(depths))
     q80_depth = float(np.quantile(depths, 0.80))
-    mean_depth = float(np.mean(depths))
+    fraction = float(np.mean(flags))
     score = fraction * max(median_depth, 0.0) * max(q80_depth, 0.0)
-    return BandCandidate(
-        score=float(score),
-        start_idx=int(start),
-        end_idx=int(end),
-        band_min=float(wn[start]),
-        band_max=float(wn[end - 1]),
-        width_cm=region_width_cm(wn, start, end),
-        sample_fraction=fraction,
-        median_depth=median_depth,
-        q80_depth=q80_depth,
-        mean_depth=mean_depth,
-    )
+    return {
+        "band_min": f"{float(wn[start]):.3f}",
+        "band_max": f"{float(wn[end - 1]):.3f}",
+        "width_points": int(end - start),
+        "width_cm": f"{width_cm:.3f}",
+        "score": f"{score:.6f}",
+        "flagged": int(np.sum(flags)),
+        "total": int(depths.size),
+        "fraction": f"{fraction:.6f}",
+        "median_depth": f"{median_depth:.6f}",
+        "q80_depth": f"{q80_depth:.6f}",
+        "mean_depth": f"{float(np.mean(depths)):.6f}",
+    }
 
 
-def _scan_candidates(wn, spectra, cfg):
-    side_points = _points_for_cm(wn, cfg.side_cm, minimum=5)
-    stride_points = _points_for_cm(wn, cfg.stride_cm, minimum=1)
-    max_step = _step_cm(wn) * 1.8
-    candidates = []
+def _scan_windows(wn, spectra, cfg):
+    """在给定区间内扫描下凹核心窗口"""
+    scan_idx = np.where((wn >= cfg.scan_min) & (wn <= cfg.scan_max))[0]
+    if scan_idx.size < cfg.min_width_points:
+        raise ValueError("Scan range has too few points")
 
-    width_values = np.arange(
-        cfg.min_width_cm,
-        cfg.max_width_cm + cfg.width_step_cm * 0.5,
-        cfg.width_step_cm,
-    )
-    for width_cm in width_values:
-        width_points = _points_for_cm(wn, width_cm, minimum=5)
-        last_start = spectra.shape[1] - width_points - side_points
-        for start in range(side_points, max(side_points, last_start), stride_points):
-            end = start + width_points
-            window_wn = wn[start - side_points : end + side_points]
-            if window_wn.size >= 2 and np.max(np.abs(np.diff(window_wn))) > max_step:
+    best = None
+    first = int(scan_idx[0])
+    last = int(scan_idx[-1]) + 1
+    min_width = max(2, int(cfg.min_width_points))
+    max_width = max(min_width, int(cfg.max_width_points))
+    width_step = max(1, int(cfg.width_step_points))
+    stride = max(1, int(cfg.stride_points))
+    side = max(1, int(cfg.side_points))
+
+    for width in range(min_width, max_width + 1, width_step):
+        for start in range(first, last - width + 1, stride):
+            end = start + width
+            if start - side < 0 or end + side > spectra.shape[1]:
                 continue
-            depths = _window_depths(spectra, start, end, side_points)
-            candidate = _build_candidate(wn, start, end, depths, cfg)
-            if (
-                candidate.sample_fraction >= cfg.min_fraction
-                and candidate.median_depth >= cfg.min_median_depth
-                and candidate.q80_depth >= cfg.min_q80_depth
-            ):
-                candidates.append(candidate)
+            depths = _window_depths(spectra, start, end, side)
+            row = _window_row(wn, start, end, depths, cfg)
+            if best is None or float(row["score"]) > float(best["score"]):
+                best = row
 
-    return sorted(candidates, key=lambda item: item.score, reverse=True)
+    if best is None:
+        raise RuntimeError("No candidate windows were generated")
+    return best
 
 
-def _overlap_ratio(a, b):
-    overlap = max(0, min(a.end_idx, b.end_idx) - max(a.start_idx, b.start_idx))
-    if overlap <= 0:
-        return 0.0
-    shorter = min(a.end_idx - a.start_idx, b.end_idx - b.start_idx)
-    return float(overlap) / float(max(shorter, 1))
+def _expand_to_fast_edges(wn, spectra, core_row, cfg):
+    """从谷底核心扩展到两侧快速下跌和回升边界"""
+    scan_idx = np.where((wn >= cfg.scan_min) & (wn <= cfg.scan_max))[0]
+    first = int(scan_idx[0])
+    last = int(scan_idx[-1]) + 1
+    core_start = int(np.argmin(np.abs(wn - float(core_row["band_min"]))))
+    core_end = int(np.argmin(np.abs(wn - float(core_row["band_max"])))) + 1
+    trace = moving_average(np.median(spectra, axis=0), max(3, int(cfg.smooth_points)))
+    valley = core_start + int(np.argmin(trace[core_start:core_end]))
+    search = max(int(cfg.side_points) * 2, int(cfg.max_width_points) // 2)
+    left_lo = max(first, valley - search)
+    right_hi = min(last, valley + search + 1)
 
+    diff = np.diff(trace, prepend=trace[0])
+    local_diff = diff[left_lo:right_hi]
+    threshold = max(robust_mad_scale(local_diff) * 1.2, float(np.quantile(np.abs(local_diff), 0.60)), 1e-6)
 
-def _select_candidates(candidates, cfg):
-    selected = []
-    for candidate in candidates:
-        if any(_overlap_ratio(candidate, old) >= cfg.overlap_ratio for old in selected):
-            continue
-        selected.append(candidate)
-        if len(selected) >= cfg.max_candidates:
+    left = None
+    start = None
+    for idx in range(left_lo + 1, valley + 1):
+        if diff[idx] <= -threshold:
+            if start is None:
+                start = idx
+        elif start is not None:
+            left = max(first, start - 1)
+            start = None
+    if start is not None:
+        left = max(first, start - 1)
+    if left is None or left >= core_start:
+        left = left_lo + int(np.argmax(trace[left_lo : core_start + 1]))
+
+    right = None
+    start = None
+    for idx in range(valley + 1, right_hi):
+        if diff[idx] >= threshold:
+            if start is None:
+                start = idx
+        elif start is not None:
+            right = min(last, idx + 1)
             break
-    return selected
+    if start is not None and right is None:
+        right = min(last, right_hi)
+    if right is None or right <= core_end:
+        right = core_end - 1 + int(np.argmax(trace[core_end - 1 : right_hi])) + 1
+
+    depths = _window_depths(spectra, left, right, cfg.side_points)
+    return _window_row(wn, left, right, depths, cfg)
 
 
-def _group_key(rel_path):
-    parts = Path(rel_path).parts
-    if len(parts) >= 2:
-        return str(Path(parts[0]) / parts[1])
-    if len(parts) == 1:
-        return "."
-    return "."
-
-
-def _class_key(rel_path):
-    parts = Path(rel_path).parts
-    return parts[0] if parts else "."
-
-
-def _fraction_text(values):
-    pieces = []
-    for name in sorted(values):
-        total, flagged = values[name]
-        frac = flagged / total if total else 0.0
-        pieces.append(f"{name}:{flagged}/{total}={frac:.3f}")
-    return "; ".join(pieces)
-
-
-def _class_fractions(rel_paths, flags):
-    by_class = {}
-    for rel, flag in zip(rel_paths, flags):
-        key = _class_key(rel)
-        total, flagged = by_class.get(key, (0, 0))
-        by_class[key] = (total + 1, flagged + int(bool(flag)))
-    return by_class
-
-
-def _folder_rows(rank, candidate, depths, rel_paths, cfg):
-    flags = depths > cfg.sample_depth_threshold
-    stats = {}
-    for rel, flag, depth in zip(rel_paths, flags, depths):
-        key = _group_key(rel)
-        item = stats.setdefault(key, {"total": 0, "flagged": 0, "depths": []})
-        item["total"] += 1
-        item["flagged"] += int(bool(flag))
-        item["depths"].append(float(depth))
-
-    rows = []
-    for folder, item in stats.items():
-        total = item["total"]
-        flagged = item["flagged"]
-        if flagged <= 0:
-            continue
-        rows.append(
-            {
-                "rank": rank,
-                "band_min": f"{candidate.band_min:.3f}",
-                "band_max": f"{candidate.band_max:.3f}",
-                "folder": folder,
-                "flagged": flagged,
-                "total": total,
-                "fraction": f"{flagged / total:.6f}",
-                "mean_depth": f"{np.mean(item['depths']):.6f}",
-            }
-        )
-    rows.sort(key=lambda row: (float(row["fraction"]), int(row["flagged"])), reverse=True)
-    return rows
-
-
-def _write_csv(path, rows, fieldnames):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8-sig", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def _write_plot(out_path, wn, spectra, selected, cfg):
+def _plot_overview(out_path, wn, spectra, cfg, best_row):
+    """绘制坏段扫描示意图"""
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    band_min = float(best_row["band_min"])
+    band_max = float(best_row["band_max"])
+    plot_mask = (wn >= cfg.scan_min - 60.0) & (wn <= cfg.scan_max + 60.0)
     median = np.median(spectra, axis=0)
     q10 = np.quantile(spectra, 0.10, axis=0)
     q90 = np.quantile(spectra, 0.90, axis=0)
 
     fig, axes = plt.subplots(2, 1, figsize=(12, 7))
-    ax = axes[0]
-    ax.fill_between(wn, q10, q90, color="#9ecae1", alpha=0.35, label="q10-q90")
-    ax.plot(wn, median, color="#08519c", linewidth=1.2, label="median SNV")
-    for rank, item in enumerate(selected, start=1):
-        ax.axvspan(item.band_min, item.band_max, alpha=0.18, label=f"#{rank}")
-    ax.set_ylabel("SNV")
-    ax.legend(loc="best", fontsize=8)
+    axes[0].fill_between(wn[plot_mask], q10[plot_mask], q90[plot_mask], color="#9ecae1", alpha=0.35, label="q10-q90")
+    axes[0].plot(wn[plot_mask], median[plot_mask], color="#08519c", linewidth=1.2, label="median SNV")
+    axes[0].axvspan(cfg.scan_min, cfg.scan_max, color="#fdd0a2", alpha=0.16, label="scan range")
+    axes[0].axvspan(band_min, band_max, color="#cb181d", alpha=0.22, label="best bad band")
+    axes[0].set_ylabel("SNV")
+    axes[0].legend(loc="best", fontsize=8)
 
-    ax = axes[1]
-    for rank, item in enumerate(selected, start=1):
-        depths = _window_depths(
-            spectra,
-            item.start_idx,
-            item.end_idx,
-            _points_for_cm(wn, cfg.side_cm, minimum=5),
-        )
-        flags = depths > cfg.sample_depth_threshold
-        ax.bar(
-            [rank],
-            [item.sample_fraction],
-            color="#31a354" if rank == 1 else "#756bb1",
-        )
-        ax.text(
-            rank,
-            item.sample_fraction + 0.02,
-            f"{item.band_min:.0f}-{item.band_max:.0f}\n{flags.sum()}/{flags.size}",
-            ha="center",
-            va="bottom",
-            fontsize=8,
-        )
-    ax.set_ylim(0, 1.05)
-    ax.set_ylabel("flagged fraction")
-    ax.set_xlabel("candidate rank")
-    ax.set_xticks(range(1, len(selected) + 1))
+    start = int(np.argmin(np.abs(wn - band_min)))
+    end = int(np.argmin(np.abs(wn - band_max))) + 1
+    depths = _window_depths(spectra, start, end, cfg.side_points)
+    axes[1].hist(depths, bins=40, color="#756bb1", alpha=0.85)
+    axes[1].axvline(cfg.depth_threshold, color="#cb181d", linestyle="--", linewidth=1.2, label="depth threshold")
+    axes[1].set_xlabel("dip depth")
+    axes[1].set_ylabel("spectra count")
+    axes[1].legend(loc="best", fontsize=8)
+    axes[1].set_title(f"flagged={best_row['flagged']}/{best_row['total']} fraction={best_row['fraction']}")
+
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=160)
     plt.close(fig)
 
 
-def _write_summary(path, dataset, input_root, out_dir, total_files, valid_count, skipped, selected, cfg, use_config_bad_bands):
+def _write_summary(path, prepared, cfg, best_row):
+    """写入最优坏段摘要"""
     lines = [
-        f"# {dataset} 下凹坏段扫描报告",
+        "# 坏段区间扫描报告",
         "",
-        "## 总体",
+        f"- 输入目录：`{prepared['input_root']}`",
+        f"- 总光谱数：{prepared['total_files']}",
+        f"- 扫描光谱数：{prepared['scanned_files']}",
+        f"- 有效光谱数：{prepared['spectra'].shape[0]}",
+        f"- 跳过光谱数：{prepared['skipped_count']}",
+        f"- 扫描区间：`{cfg.scan_min:.1f}-{cfg.scan_max:.1f} cm^-1`",
+        f"- 离线 bad_bands mask：未使用",
         "",
-        f"- 输入目录：`{input_root}`",
-        f"- 输出目录：`{out_dir}`",
-        f"- 总光谱数：{total_files}",
-        f"- 有效光谱数：{valid_count}",
-        f"- 跳过光谱数：{len(skipped)}",
-        f"- 预处理是否沿用当前 bad_bands 遮罩：{bool(use_config_bad_bands)}",
-        f"- 单谱下凹阈值：{cfg.sample_depth_threshold:.3f}",
-        f"- 候选筛选：覆盖率 >= {cfg.min_fraction:.2f}, 中位深度 >= {cfg.min_median_depth:.2f}, q80 >= {cfg.min_q80_depth:.2f}",
+        "## 最合适坏段",
         "",
-        "## 候选波段",
-        "",
+        f"- 区间：`{float(best_row['band_min']):.1f}-{float(best_row['band_max']):.1f} cm^-1`",
+        f"- 宽度：{best_row['width_points']} 点，{float(best_row['width_cm']):.1f} cm^-1",
+        f"- 命中：{best_row['flagged']}/{best_row['total']}，比例 {float(best_row['fraction']):.3f}",
+        f"- 中位下凹深度：{float(best_row['median_depth']):.3f}",
+        f"- q80 下凹深度：{float(best_row['q80_depth']):.3f}",
+        f"- score：{float(best_row['score']):.6f}",
     ]
-    if not selected:
-        lines.append("- 未发现满足阈值的系统性下凹候选波段")
-    for rank, item in enumerate(selected, start=1):
-        lines.append(
-            f"- #{rank}: `{item.band_min:.1f}-{item.band_max:.1f} cm^-1`, "
-            f"score={item.score:.3f}, 覆盖率={item.sample_fraction:.3f}, "
-            f"中位深度={item.median_depth:.3f}, q80={item.q80_depth:.3f}"
-        )
-    lines.extend(
-        [
-            "",
-            "## 判读说明",
-            "",
-            "- 分数只用于排序，最终是否加入离线 `bad_bands` 仍建议结合复核图确认。",
-            "- 默认扫描时不遮罩已有坏段，目的是允许脚本重新发现已经怀疑的区域。",
-            "- 下凹深度在 SNV 后计算，表示候选窗口相对左右肩部的整体负向偏离。",
-        ]
-    )
-    with open(path, "w", encoding="utf-8") as file:
-        file.write("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def run_bad_band_scan(
@@ -367,132 +267,39 @@ def run_bad_band_scan(
     max_files=0,
     seed=42,
     no_plot=False,
-    use_config_bad_bands=False,
     scan_config=None,
 ):
-    profile, dataset_dir = resolve_dataset(dataset)
-    input_root, rel_base = resolve_audit_input(dataset_dir, profile, subdir=subdir, folder=folder)
-    input_root = input_root.resolve()
-
-    files = sorted(input_root.rglob("*.arc_data"))
-    total_files = len(files)
-    files = _sample_files(files, max_files=max_files, seed=seed)
-    if not files:
-        raise FileNotFoundError(f"No .arc_data files found under {input_root}")
-
-    cfg = DEFAULT_PIPELINE_CONFIG if use_config_bad_bands else replace(DEFAULT_PIPELINE_CONFIG, bad_bands=())
-    scan_cfg = scan_config or BadBandScanConfig()
+    """运行给定区间的坏段扫描"""
+    cfg = scan_config or BadBandScanConfig()
+    prepared = _load_spectra(dataset, subdir, folder, max_files, seed)
+    spectra = np.asarray([moving_average(row, cfg.smooth_points) for row in prepared["spectra"]], dtype=np.float32)
+    core = _scan_windows(prepared["wn"], spectra, cfg)
+    best = _expand_to_fast_edges(prepared["wn"], spectra, core, cfg)
 
     stamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_root = Path(output_root) if output_root is not None else dataset_dir / "audit_bad_band"
+    out_root = Path(output_root) if output_root is not None else prepared["dataset_dir"] / "audit_bad_band"
     out_dir = out_root / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[bad-band] input={input_root}")
-    print(f"[bad-band] files={len(files)} sampled_from={total_files}")
-    wn, spectra, rel_paths, skipped = _preprocess_files(files, profile, cfg, input_root)
-    if spectra.size == 0:
-        raise RuntimeError("No valid spectra after preprocessing")
+    write_csv(out_dir / "best_bad_band.csv", [best], list(best.keys()))
+    _write_summary(out_dir / "summary.md", prepared, cfg, best)
+    if not no_plot:
+        _plot_overview(out_dir / "bad_band_overview.png", prepared["wn"], spectra, cfg, best)
 
-    smoothed = _smooth_spectra(spectra, scan_cfg.smooth_points)
-    candidates = _scan_candidates(wn, smoothed, scan_cfg)
-    selected = _select_candidates(candidates, scan_cfg)
-
-    band_rows = []
-    folder_rows = []
-    side_points = _points_for_cm(wn, scan_cfg.side_cm, minimum=5)
-    for rank, item in enumerate(selected, start=1):
-        depths = _window_depths(smoothed, item.start_idx, item.end_idx, side_points)
-        flags = depths > scan_cfg.sample_depth_threshold
-        class_fractions = _class_fractions(rel_paths, flags)
-        band_rows.append(
-            {
-                "rank": rank,
-                "band_min": f"{item.band_min:.3f}",
-                "band_max": f"{item.band_max:.3f}",
-                "width_cm": f"{item.width_cm:.3f}",
-                "score": f"{item.score:.6f}",
-                "sample_fraction": f"{item.sample_fraction:.6f}",
-                "median_depth": f"{item.median_depth:.6f}",
-                "q80_depth": f"{item.q80_depth:.6f}",
-                "mean_depth": f"{item.mean_depth:.6f}",
-                "flagged": int(flags.sum()),
-                "total": int(flags.size),
-                "class_fraction": _fraction_text(class_fractions),
-            }
-        )
-        folder_rows.extend(_folder_rows(rank, item, depths, rel_paths, scan_cfg))
-
-    _write_csv(
-        out_dir / "candidate_bands.csv",
-        band_rows,
-        [
-            "rank",
-            "band_min",
-            "band_max",
-            "width_cm",
-            "score",
-            "sample_fraction",
-            "median_depth",
-            "q80_depth",
-            "mean_depth",
-            "flagged",
-            "total",
-            "class_fraction",
-        ],
+    print(f"[bad-band] input={prepared['input_root']}")
+    print(f"[bad-band] valid={prepared['spectra'].shape[0]} skipped={prepared['skipped_count']}")
+    print(
+        "[bad-band] best: "
+        f"{float(best['band_min']):.1f}-{float(best['band_max']):.1f} cm^-1 "
+        f"flagged={best['flagged']}/{best['total']} fraction={float(best['fraction']):.3f}"
     )
-    _write_csv(
-        out_dir / "candidate_folder_summary.csv",
-        folder_rows,
-        ["rank", "band_min", "band_max", "folder", "flagged", "total", "fraction", "mean_depth"],
-    )
-    with open(out_dir / "scan_config.json", "w", encoding="utf-8") as file:
-        json.dump(
-            {
-                "dataset": dataset,
-                "input_root": str(input_root),
-                "rel_base": str(rel_base),
-                "total_files": total_files,
-                "scanned_files": len(files),
-                "valid_files": int(spectra.shape[0]),
-                "skipped_files": len(skipped),
-                "use_config_bad_bands": bool(use_config_bad_bands),
-                "scan_config": asdict(scan_cfg),
-            },
-            file,
-            ensure_ascii=False,
-            indent=2,
-        )
-    _write_summary(
-        out_dir / "summary.md",
-        dataset,
-        input_root,
-        out_dir,
-        total_files,
-        int(spectra.shape[0]),
-        skipped,
-        selected,
-        scan_cfg,
-        use_config_bad_bands,
-    )
-    if not no_plot and selected:
-        _write_plot(out_dir / "dip_candidates.png", wn, smoothed, selected, scan_cfg)
-
-    if selected:
-        best = selected[0]
-        print(
-            "[bad-band] top candidate: "
-            f"{best.band_min:.1f}-{best.band_max:.1f} cm^-1 "
-            f"fraction={best.sample_fraction:.3f} score={best.score:.3f}"
-        )
-    else:
-        print("[bad-band] no candidate bands passed thresholds")
     print(f"[bad-band] output={out_dir}")
     return out_dir
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="扫描系统性下凹坏段")
+    """构建 bad-band 子命令参数解析器"""
+    parser = argparse.ArgumentParser(description="扫描给定区间内最可能的系统性下凹坏段")
     parser.add_argument("dataset", help="数据集名称或 profile id，例如 MN_IgA / 细菌")
     parser.add_argument("--subdir", default=None, help="输入阶段目录，默认 init")
     parser.add_argument("--folder", default=None, help="只扫描某个文件夹，支持 属名/文件夹名")
@@ -500,16 +307,21 @@ def build_parser():
     parser.add_argument("--timestamp", default=None, help="固定输出目录名")
     parser.add_argument("--max-files", type=int, default=0, help="抽样扫描数量；0 表示全量")
     parser.add_argument("--seed", type=int, default=42, help="抽样随机种子")
-    parser.add_argument("--no-plot", action="store_true", help="不输出复核图")
-    parser.add_argument(
-        "--use-config-bad-bands",
-        action="store_true",
-        help="沿用当前离线配置中的 bad_bands 遮罩；默认不遮罩，便于发现坏段",
-    )
+    parser.add_argument("--no-plot", action="store_true", help="不输出示意图")
+    parser.add_argument("--scan-min", type=float, default=850.0, help="扫描区间起点")
+    parser.add_argument("--scan-max", type=float, default=1000.0, help="扫描区间终点")
+    parser.add_argument("--min-width-points", type=int, default=8, help="候选坏段最小点数")
+    parser.add_argument("--max-width-points", type=int, default=60, help="候选坏段最大点数")
+    parser.add_argument("--width-step-points", type=int, default=4, help="候选宽度步长")
+    parser.add_argument("--stride-points", type=int, default=2, help="滑窗步长")
+    parser.add_argument("--side-points", type=int, default=15, help="左右肩部点数")
+    parser.add_argument("--smooth-points", type=int, default=9, help="检测前平滑点数")
+    parser.add_argument("--depth-threshold", type=float, default=0.35, help="单谱下凹命中阈值")
     return parser
 
 
 def main(argv=None):
+    """执行 bad-band 命令入口"""
     args = build_parser().parse_args(argv)
     run_bad_band_scan(
         args.dataset,
@@ -520,7 +332,17 @@ def main(argv=None):
         max_files=args.max_files,
         seed=args.seed,
         no_plot=args.no_plot,
-        use_config_bad_bands=args.use_config_bad_bands,
+        scan_config=BadBandScanConfig(
+            scan_min=args.scan_min,
+            scan_max=args.scan_max,
+            min_width_points=args.min_width_points,
+            max_width_points=args.max_width_points,
+            width_step_points=args.width_step_points,
+            stride_points=args.stride_points,
+            side_points=args.side_points,
+            smooth_points=args.smooth_points,
+            depth_threshold=args.depth_threshold,
+        ),
     )
     return 0
 

@@ -26,7 +26,7 @@ from raman.data.spectrum import (
 CUT_MIN = 600
 CUT_MAX = 1800
 TARGET_POINTS = 896
-COMMON_BAD_BANDS = ((890.0, 950.0),)
+COMMON_BAD_BANDS = ((895.0, 940.0),)
 
 BASELINE_METHOD = "airPLS"
 BASELINE_LAM = 1e5  # 基线平滑强度；越大，估计基线越平滑
