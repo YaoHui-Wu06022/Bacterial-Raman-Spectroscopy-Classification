@@ -77,7 +77,7 @@ def build_parser():
         ("unpack", run_unpack, "Unpack init.npz into init"),
         ("preview", run_preview, "Generate per-folder preview figures from init"),
         ("train", run_train, "Build reusable train_raw, then build train"),
-        ("test", run_test, "Build test from test_raw"),
+        ("test", run_test, "Build test from init_test"),
         ("count", run_count, "Count arc_data files in a dataset subdir"),
     ):
         sub = subparsers.add_parser(command, help=help_text)

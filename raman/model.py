@@ -327,8 +327,8 @@ class RamanClassifier1D(nn.Module):
         self.layer1 = self._make_stage(64, num_blocks=2, pool_first=False)
         self.layer2 = self._make_stage(128, num_blocks=2, pool_first=True)
         self.layer3 = self._make_stage(256, num_blocks=2, pool_first=True)
-        self.layer4 = self._make_stage(384, num_blocks=2, pool_first=True)
-        self.proj = nn.Conv1d(384, self.proj_dim, kernel_size=1, bias=False)
+        self.layer4 = self._make_stage(512, num_blocks=2, pool_first=True)
+        self.proj = nn.Conv1d(512, self.proj_dim, kernel_size=1, bias=False)
 
     def _split_channels(self, total_channels, num_branches):
         """把 stem 总通道尽量均匀分配到多个卷积分支"""

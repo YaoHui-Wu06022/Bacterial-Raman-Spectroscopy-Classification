@@ -26,7 +26,7 @@ from raman.data.spectrum import (
 CUT_MIN = 600
 CUT_MAX = 1800
 TARGET_POINTS = 896
-COMMON_BAD_BANDS = ((895.0, 940.0),)
+COMMON_BAD_BANDS = ((890.0, 950.0),)
 
 BASELINE_METHOD = "airPLS"
 BASELINE_LAM = 1e5  # 基线平滑强度；越大，估计基线越平滑
@@ -35,7 +35,7 @@ BASELINE_MAX_ITER = 15  # 基线迭代次数上限
 BASELINE_FIT_MIN = 400  # 基线拟合下限，保留训练范围外缓冲区以稳定边缘基线
 BASELINE_FIT_MAX = 2000  # 基线拟合上限，避免更远端异常尖峰污染基线
 
-COSMIC_RAY_ENABLED_PROFILE_IDS = ("bacteria","Enterobacteriaceae","MN_IgA")
+COSMIC_RAY_ENABLED_PROFILE_IDS = ("MICRO","ENT","NENT","GP", "FUNG")
 COSMIC_RAY_NARROW_WINDOW_POINTS = 7  # narrow 阶段局部 median/MAD 窗口宽度，单位点
 COSMIC_RAY_THRESHOLD = 7.0  # narrow 阶段正残差 z 阈值
 COSMIC_RAY_MAX_ITER = 2  # narrow 阶段最大迭代次数
@@ -893,7 +893,7 @@ def build_test(
     input_dir = (
         Path(input_dir)
         if input_dir is not None
-        else resolve_path(base_dir, profile.root_test_raw)
+        else resolve_path(base_dir, profile.root_init_test)
     )
     output_dir = (
         Path(output_dir)

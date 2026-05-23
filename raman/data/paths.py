@@ -5,7 +5,8 @@ DATASET_BUNDLE_STAGE_MAP = {
     "test": ("test",),
     "raw": ("train_raw",),
     "init": ("init",),
-    "predict_input": ("test_raw", "test"),
+    "init_test": ("init_test",),
+    "predict_input": ("test",),
     "train_fig": ("fig_train",),
     "test_fig": ("fig_test",),
 }

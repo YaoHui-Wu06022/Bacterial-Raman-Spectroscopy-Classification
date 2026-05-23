@@ -38,9 +38,11 @@
 拉曼光谱分类/
 ├─ train.py                          # 训练入口，只负责手动覆盖项与 run_training 调用
 ├─ evaluate.py                       # 独立测试集评估入口
+├─ infer_test.py                     # 独立测试集推理入口，手动改顶部配置后运行
+├─ import_test_samples_to_train.py    # 把确认可用的测试样本导入训练原始目录
 ├─ pca_svm_baseline.py               # PCA + SVM 基线评估入口
 ├─ analyze.py                        # 分析入口，支持 single / aggregate 两种模式
-├─ independent_test.py               # 独立测试集形态、分类分布与 embedding 近邻诊断
+└─ README.md                         # 项目流程、参数和方法说明
 ```
 
 ### 2.2 核心模型与配置
@@ -70,7 +72,24 @@ raman/data/
 └─ __main__.py                       # 支持 python -m raman.data
 ```
 
-### 2.4 训练层
+### 2.4 审核层
+
+```text
+raman/audit/
+├─ cli.py                            # 审核 CLI：full / bad-band / move
+├─ full_scan.py                      # 分阶段全库审核入口与报告、复核图输出
+├─ config.py                         # AuditConfig：各阶段阈值、删除分类与原因标签
+├─ scoring.py                        # 审核公共评分、候选字段整理与阶段调度
+├─ common.py                         # 审核共用预处理、绘图、路径解析与 CSV 工具
+├─ stage_invalid.py                  # 第一阶段：无效谱、长平坦段、强噪声判定
+├─ stage_anomalous_cosmic.py         # 第二阶段：基线扣除谱上的宽宇宙射线残留/阶梯异常
+├─ stage_class_similarity.py         # 第三阶段：同属同前缀参考池类内相似性审核
+├─ bad_band.py                       # 系统性下凹坏段只读扫描
+├─ move.py                           # 按路径或候选清单移动到 delete
+└─ __main__.py                       # 支持 python -m raman.audit
+```
+
+### 2.5 训练层
 
 ```text
 raman/training/
@@ -83,7 +102,7 @@ raman/training/
 └─ session.py                        # 输出目录、日志、随机种子与配置快照
 ```
 
-### 2.5 评估与推理层
+### 2.6 评估与推理层
 
 ```text
 raman/eval/
@@ -96,10 +115,13 @@ raman/eval/
 
 raman/infer/
 ├─ core.py                           # 层级级联推理核心
-└─ folder.py                         # 批量目录预测，也可通过 PREDICT_ONE_FOLDER 跑单个文件夹
+├─ folder.py                         # 文件夹逐谱预测与旧版文本格式输出
+├─ test.py                           # 独立测试集推理、谱线对照图与 summary 汇总
+├─ cli.py                            # infer CLI：test
+└─ __main__.py                       # 支持 python -m raman.infer
 ```
 
-### 2.6 分析层 
+### 2.7 分析层
 
 ```text
 raman/analysis/
@@ -113,21 +135,26 @@ raman/analysis/
 └─ se.py                             # 读取训练期 SE sidecar 并输出 SEBlock 缩放统计
 ```
 
-### 2.7 Notebook 与数据目录
+### 2.8 Notebook 与数据目录
 
 ```text
 colab/
 └─ colab_unified.ipynb               # Colab 一体化 notebook：解压库、数据处理、训练、评估、分析、打包
 notebooks/
-└─ single_process_AsLS_cut_SNV.ipynb # 单条光谱从原始输入到模型通道构建的可视化 notebook
+├─ Cosmic_Ray_and_Baseline_Correction.ipynb # 单谱宇宙射线去除与 baseline 对照入口
+├─ augmentation_effect_viewer.ipynb         # 在线增强效果查看
+└─ preprocess_viewer.py                     # 预处理对照 notebook 的绘图与处理 helper
 dataset/
 └─ <数据集名>/
    ├─ init/                          # 原始归档解包后的初始数据
    ├─ init.npz                       # init 的压缩归档
    ├─ train_raw/                     # 可复用清洗中间层，保留小文件夹结构
    ├─ train/                         # 训练用清洗后数据
-   ├─ test_raw/                      # 测试原始数据
+   ├─ init_test/                     # 独立测试原始数据
    ├─ test/                          # 测试用清洗后数据
+   ├─ audit_full_scan/               # full 分阶段审核报告、候选表和复核图
+   ├─ audit_bad_band/                # 系统性坏段扫描输出
+   ├─ delete/                        # 人工确认移除后的原始文件
    ├─ fig_init/                      # init 预览图
    ├─ fig_train/                     # 训练集均值图与高层级均值图
    └─ fig_test/                      # 测试集均值图
@@ -225,7 +252,7 @@ python -m raman.data test 细菌       # 对测试数据进行一致的清洗
 - `init.npz`：`init/` 的打包版本
 - `train_raw/`：从 `init/` 生成的可复用清洗中间层，保留小文件夹结构
 - `train/`：训练集离线清洗结果
-- `test_raw/`：测试集原始输入目录
+- `init_test/`：独立测试集原始输入目录
 - `test/`：测试集离线清洗结果
 - `fig_init/`：原始数据预览图
 - `fig_train/`：训练集均值谱图与高层级均值谱图
@@ -2650,95 +2677,49 @@ y_pred = svm.predict(x_test_pca)
 
 这条基线更接近“标准化后的静态光谱特征 + 传统分类器”的能力上限，而不是层级级联模型的直接替代物
 
-### 8.6 独立测试集分析
+### 8.6 独立测试集推理
 
-根目录下`independent_test.py` 面向 `test/` 的独立测试集做评估
+独立测试集原始数据放在 `dataset/<数据集>/init_test/`，先运行 `python -m raman.data test <数据集>` 生成处理后的 `test/`
 
-从文件夹级别判断外部测试样本与训练分布之间的接近程度
+推理入口统一放在 `raman.infer`：
 
-对每个测试文件夹，从“模型预测”、“embedding 最近邻投票”、“类别质心相似度”三个角度交叉分析当前测试文件夹更像哪一类
+```powershell
+python -m raman.infer test --exp-dir "output/肠杆菌/五分类去除K/20260523_070649_92.1%" --level level_1
+```
 
-在分析测试文件夹之前，脚本会先用训练集建立一个对照用的 embedding bank
-
-1. 读取当前实验目录对应的训练切分 `train_indices`
-
-2. 用训练好的模型提取训练样本在 `COMPARE_LEVEL` 下的特征
-
-3. 对特征做 L2 归一化
-
-   ```python
-   _, feat = model(xs, return_feat=True)
-   feat = _l2_normalize_rows(feat).cpu()
-   ```
-
-4. 保存训练 embedding 及其类别标签
-
-   ```python
-   center = train_feats[mask].mean(dim=0, keepdim=True)
-   centroids[class_id] = _l2_normalize_rows(center)[0]
-   ```
-
-   把训练集中每个类别在特征空间中的“代表方向”提取出来
-
-**模型投票（Model Vote）**
-
-统计该文件夹中每条光谱被模型预测成各类别的次数，并形成投票分布
-
-反映的是：模型直接把这个文件夹中的样本整体看成哪一类
-
-**embedding 最近邻投票**
-
-看测试样本在 embedding 空间中最接近哪些训练样本
-
-先计算测试 embedding 与训练 embedding bank 的相似度矩阵
+如果不想用命令行，可以直接改根目录 `infer_test.py` 顶部配置后运行：
 
 ```python
-similarity = torch.matmul(folder_feats, train_feats_t)
-nearest_indices = torch.argmax(similarity, dim=1).cpu().numpy()
-neighbor_preds = train_labels[nearest_indices].astype(np.int64)
+EXP_DIR = r"output/肠杆菌/五分类去除K/20260523_070649_92.1%"
+LEVEL = "level_1"
+BUILD_TEST_FIRST = False
+FOLDER = None
 ```
 
-由于训练 embedding 已经做过 L2 归一化，这里的点积就是余弦相似度
+`infer_test.py` 会从 `EXP_DIR/config.yaml` 自动读取数据集；`BUILD_TEST_FIRST = True` 时会先从 `init_test` 生成 `test`，再执行独立测试推理
 
-对每个测试样本找到相似度最高的训练样本，把该训练样本的类别当作最近邻类别
+常用参数：
 
-反映的是：只看特征空间中的最近邻结构，这个测试文件夹更像训练集中的哪一类
+- `--test-root`：覆盖默认 `dataset/<数据集>/test`
+- `--folder CS01KP`：只测试单个独立测试文件夹
+- `--top-k 3`：控制逐谱明细里的 top-k 数量
+- `--cpu`：强制使用 CPU
 
-**类别质心相似度**
-
-对一个测试文件夹内部所有样本的 embedding 求均值，再做 L2 归一化，得到该文件夹的平均特征中心
-
-再去与各类别质心计算余弦相似度
-
-反映的是：从整个文件夹的平均特征来看，它整体更接近训练集中的哪个类别原型
-
-输出目录为：
+输出目录固定在模型目录下：
 
 ```text
-<EXP_DIR>/embedding_compare/
+<EXP_DIR>/test_results_level_1/
+├─ summary.txt
+└─ CS01KP/
+   ├─ CS01KP_file.txt
+   └─ spectra.png
 ```
 
-其中每个测试文件夹会单独保存：
+`CS01KP_file.txt` 保留旧版文件夹推理的逐谱 top-k 格式，并在开头增加该文件夹的实际类别、多数投票结果、正确谱数和正确比例
 
-- `spectra.png`：测试谱形与期望训练均值谱的对照图
-- `model_vote.png`：模型预测投票分布
-- `neighbor_vote.png`：embedding 最近邻投票分布
-- `centroid_similarity.png`：文件夹平均 embedding 与各类别质心的相似度条形图
+`spectra.png` 显示该测试文件夹的所有测试谱、`Test Mean`、实际类别 `Train Mean`；如果多数投票误判，会额外显示误判类别的训练均值线
 
-可能的结果：
-
-1. 模型投票错，但最近邻和质心接近期望类
-
-   说明分类头可能更容易受边界细节影响，而 embedding 本身仍较接近期望类
-
-2. 模型投票、最近邻投票和质心相似度都偏向同一个错误类
-
-   该文件夹整体在特征空间里已经更像另一个类别，可能是分布偏移或标签问题
-
-3. 均值谱明显偏离期望类训练均值谱
-
-   不仅是分类边界问题，还可能存在数据采集条件差异、预处理不一致或样本本身差异
-
+`summary.txt` 逐文件夹汇总 `expected_label`、`expected_in_model`、`predicted_label`、`majority_count`、`total_count`、`correct_count`、`correct_ratio` 和 `folder_correct`
 ## 9. 分析
 
 ### 9.1 模式

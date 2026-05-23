@@ -91,6 +91,20 @@ def _compute_severity_weights(prob, targets):
     severity_w[high_conf_wrong & (rank >= 3)] = 1.35
     return severity_w
 
+
+def _loss_value_for_log(loss):
+    """安全地把 loss 张量转换成日志用的浮点数。"""
+    if not isinstance(loss, torch.Tensor):
+        return float(loss)
+    value = loss.detach()
+    if value.numel() != 1:
+        value = value.mean()
+    return float(value.cpu())
+
+
+def _model_parameters_are_finite(model):
+    return all(torch.isfinite(p).all().item() for p in model.parameters())
+
 @dataclass
 class ModelTrainContext:
     """单模型训练所需的共享上下文，避免训练入口传递过长参数列表"""
@@ -290,6 +304,11 @@ def train_model(
             )
             if restored_ema_class_ce is not None:
                 train_state.ema_class_ce = restored_ema_class_ce
+            if not _model_parameters_are_finite(model):
+                raise ValueError(
+                    f"Restored checkpoint contains non-finite model parameters: {checkpoint_path}. "
+                    "Delete this checkpoint or run with resume_training=False."
+                )
 
         if start_epoch > config.epochs:
             model_log(
@@ -309,6 +328,11 @@ def train_model(
             model.train()
             # 到达起始轮后，用 EMA 类别 CE 调整静态类别权重
             if config.use_ema and epoch >= ema_start_epoch:
+                if not torch.isfinite(train_state.ema_class_ce).all().item():
+                    model_log(
+                        "[Warn] ema_class_ce contains non-finite values; reset to ones"
+                    )
+                    train_state.ema_class_ce = torch.ones_like(train_state.ema_class_ce)
                 raw_diff = train_state.ema_class_ce / (train_state.ema_class_ce.mean() + 1e-12)
                 diff_factor = 1.0 + lambda_diff * (raw_diff - 1.0)
                 ema_class_weights = base_class_weights * diff_factor
@@ -318,6 +342,7 @@ def train_model(
             running_loss, running_correct, running_total = 0, 0, 0
             running_align_loss = 0.0
             running_supcon_loss = 0.0
+            skipped_batches = 0
 
             # 辅助损失先线性启用，再在后期共同衰减
             align_w = get_linear_weight(epoch,
@@ -341,12 +366,18 @@ def train_model(
             supcon_w = supcon_w * decay_ratio
             loader_iter = tqdm(train_loader, desc=f"Epoch {epoch}/{config.epochs}")
 
-            for _, (x, y, _) in enumerate(loader_iter):
+            for batch_idx, (x, y, _) in enumerate(loader_iter):
 
                 x = x.to(device)
                 y = y.to(device)
 
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)
+                if not torch.isfinite(x).all().item():
+                    skipped_batches += 1
+                    model_log(
+                        f"[Warn] skipped non-finite input at epoch={epoch}, batch={batch_idx}"
+                    )
+                    continue
 
                 logits, feat = model(x, return_feat=True)
 
@@ -391,12 +422,44 @@ def train_model(
                 else:
                     loss_cls = torch.tensor(0.0, device=device)
 
-                loss_align = align_loss_fn(feat, hier_labels)
-                loss_supcon = supcon_loss_fn(feat, hier_labels)
+                loss_align = align_loss_fn(feat, hier_labels) if align_w > 0 else zero_loss(feat)
+                loss_supcon = supcon_loss_fn(feat, hier_labels) if supcon_w > 0 else zero_loss(feat)
 
-                loss_total = loss_cls + align_w * loss_align + supcon_w * loss_supcon
+                loss_total = loss_cls
+                if align_w > 0:
+                    loss_total = loss_total + align_w * loss_align
+                if supcon_w > 0:
+                    loss_total = loss_total + supcon_w * loss_supcon
+
+                if not torch.isfinite(loss_total).all().item():
+                    skipped_batches += 1
+                    model_log(
+                        f"[Warn] skipped non-finite loss at epoch={epoch}, batch={batch_idx}: "
+                        f"cls={_loss_value_for_log(loss_cls):.6g}, "
+                        f"align={_loss_value_for_log(loss_align):.6g}, "
+                        f"supcon={_loss_value_for_log(loss_supcon):.6g}, "
+                        f"align_w={align_w:.6g}, supcon_w={supcon_w:.6g}"
+                    )
+                    optimizer.zero_grad(set_to_none=True)
+                    continue
 
                 loss_total.backward()
+
+                grad_clip_norm = float(getattr(config, "grad_clip_norm", 0.0) or 0.0)
+                if grad_clip_norm > 0:
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        model.parameters(),
+                        max_norm=grad_clip_norm,
+                    )
+                    if not torch.isfinite(grad_norm).all().item():
+                        skipped_batches += 1
+                        model_log(
+                            f"[Warn] skipped non-finite gradients at epoch={epoch}, "
+                            f"batch={batch_idx}, grad_norm={_loss_value_for_log(grad_norm):.6g}"
+                        )
+                        optimizer.zero_grad(set_to_none=True)
+                        continue
+
                 optimizer.step()
 
                 running_align_loss += loss_align.item()
@@ -408,7 +471,7 @@ def train_model(
                     running_total += valid.sum().item()
 
                 postfix = {
-                    "cls": f"{running_loss / len(train_loader):.4f}",
+                    "cls": f"{running_loss / max(batch_idx + 1 - skipped_batches, 1):.4f}",
                     "acc": f"{100 * running_correct / max(running_total, 1):.2f}%"
                 }
                 loader_iter.set_postfix(postfix)
@@ -417,18 +480,21 @@ def train_model(
                 if config.use_ema and valid.any():
                     with torch.no_grad():
                         ce_each = F.cross_entropy(logits_valid, y_valid, reduction="none")
+                        finite_ce = torch.isfinite(ce_each)
                         for c in range(num_classes):
-                            class_mask_c = (y_valid == c)
+                            class_mask_c = (y_valid == c) & finite_ce
                             if class_mask_c.any():
                                 mean_ce_c = ce_each[class_mask_c].mean()
-                                train_state.ema_class_ce[c] = (
-                                    ema_alpha * train_state.ema_class_ce[c]
-                                    + (1.0 - ema_alpha) * mean_ce_c
-                                )
+                                if torch.isfinite(mean_ce_c).all().item():
+                                    train_state.ema_class_ce[c] = (
+                                        ema_alpha * train_state.ema_class_ce[c]
+                                        + (1.0 - ema_alpha) * mean_ce_c
+                                    )
 
-            train_loss = running_loss / len(train_loader)
-            train_align_loss = align_w * running_align_loss / max(len(train_loader), 1)
-            train_supcon_loss = supcon_w * running_supcon_loss / max(len(train_loader), 1)
+            effective_batches = max(len(train_loader) - skipped_batches, 1)
+            train_loss = running_loss / effective_batches
+            train_align_loss = align_w * running_align_loss / effective_batches
+            train_supcon_loss = supcon_w * running_supcon_loss / effective_batches
             train_acc = running_correct / max(running_total, 1)
             test_loss, test_acc, test_metrics, se_stats = evaluate_validation_loader(
                 model,

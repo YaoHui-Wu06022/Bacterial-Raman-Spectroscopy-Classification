@@ -1,178 +1,112 @@
-#  预测文件夹（批量，基于实验目录）
-
 import os
-import torch
-from tqdm import tqdm
-from raman.infer import load_predictor, predict_one
 import re
-from raman.data import resolve_dataset_stage
-from raman.eval.experiment import load_experiment_with_dataset
+from pathlib import Path
+from collections import Counter
 
-# 项目根目录解析（支持子目录运行）
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def resolve_path(path):
+    """把相对路径解析到项目根目录"""
     if path is None:
-        return path
-    if os.path.isabs(path):
-        return path
-    return os.path.abspath(os.path.join(BASE_DIR, path))
+        return None
+    path = Path(path)
+    return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
+
 
 def get_cell_number(fname):
-    """
-    从文件名中提取 cell 后的数字编号
-    兼容 cell / Cell / CELL
-    用于排序，保证 batch 输出的物理顺序一致
-    """
-    m = re.search(r"cell(\d+)", fname, re.IGNORECASE)
-    if m is not None:
-        return int(m.group(1))
-
-    # fallback：异常命名文件统一放到最后
-    return int(1e9)
-
-
-def predict_directory(folder_path, output_dir, predictor, top_k=3, parent_mask=None):
-    """预测一个文件夹内所有光谱，并写出文件级明细和投票汇总"""
-
-    folder_path = resolve_path(folder_path)
-    output_dir = resolve_path(output_dir)
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    folder_name = os.path.basename(folder_path.rstrip("/"))
-    output_file_txt = os.path.join(output_dir, f"{folder_name}_file.txt")
-
-    files = sorted(
-        (f for f in os.listdir(folder_path) if f.endswith(".arc_data")),
-        key=get_cell_number
-    )
-
-    if not files:
-        print("No .arc_data files found.")
-        return
-
-    summary_counter = {}
-    details_lines = []
-
-    for fname in tqdm(files, desc="Predicting"):
-        fp = os.path.join(folder_path, fname)
-
-        results = predict_one(fp, predictor, top_k=top_k, parent_mask=parent_mask)
-
-        top1 = results[0]
-        summary_counter[top1["label"]] = summary_counter.get(
-            top1["label"], 0
-        ) + 1
-
-        details_lines.append(f"########## File: {fname} ##########\n")
-        details_lines.append(
-            f"Top-1 → {top1['label']} ({top1['prob'] * 100:.2f}%)\n"
-        )
-        details_lines.append("Top-k predictions:\n")
-
-        for i, r in enumerate(results, 1):
-            details_lines.append(
-                f"   {i}) {r['label']:20s}  {r['prob'] * 100:.2f}%\n"
-            )
-
-        details_lines.append("\n===============================================\n\n")
-
-    summary_lines = []
-    summary_lines.append("===== FILE-LEVEL SUMMARY =====\n\n")
-
-    for k, v in sorted(summary_counter.items(), key=lambda x: -x[1]):
-        summary_lines.append(f"{k:20s} : {v}\n")
-
-    summary_lines.append("\n===============================================\n\n")
-
-    with open(output_file_txt, "w", encoding="utf-8") as f:
-        f.writelines(summary_lines)
-        f.writelines(details_lines)
-
-    print(f"[Saved] file-level → {output_file_txt}")
+    """从文件名中提取 cell 编号用于稳定排序"""
+    match = re.search(r"cell(\d+)", fname, re.IGNORECASE)
+    return int(match.group(1)) if match else int(1e9)
 
 
 def iter_predict_folders(predict_root, one_folder=None):
-    """解析本次需要预测的文件夹列表，支持只跑一个子文件夹"""
+    """列出本次需要预测的测试文件夹"""
+    predict_root = Path(resolve_path(predict_root))
     if one_folder:
-        folder_path = one_folder
-        if not os.path.isabs(folder_path):
-            folder_path = os.path.join(predict_root, folder_path)
-        if not os.path.isdir(folder_path):
+        folder_path = Path(one_folder)
+        if not folder_path.is_absolute():
+            folder_path = predict_root / folder_path
+        if not folder_path.is_dir():
             raise FileNotFoundError(f"Input folder not found: {folder_path}")
         return [folder_path]
 
+    return sorted(path for path in predict_root.iterdir() if path.is_dir())
+
+
+def list_arc_files(folder_path):
+    """列出单个文件夹中的光谱文件"""
+    folder_path = Path(folder_path)
     return sorted(
-        os.path.join(predict_root, name)
-        for name in os.listdir(predict_root)
-        if os.path.isdir(os.path.join(predict_root, name))
+        (path for path in folder_path.iterdir() if path.suffix.lower() == ".arc_data"),
+        key=lambda path: get_cell_number(path.name),
     )
 
 
-def resolve_predict_root(exp_dir):
-    """从实验配置推断 test 阶段目录"""
-    _, config = load_experiment_with_dataset(exp_dir)
-    train_root = resolve_path(config.dataset_root)
-    dataset_root = os.path.dirname(train_root)
-    return os.fspath(
-        resolve_dataset_stage(
-            dataset_root,
-            stage="test",
-            project_root=BASE_DIR,
-            must_exist=True,
+def format_prediction_report(folder_name, predictions, folder_summary=None):
+    """生成逐谱 top-k 预测文本"""
+    counter = Counter(item["top1_label"] for item in predictions)
+    lines = []
+    if folder_summary:
+        lines.extend(
+            [
+                "===== FOLDER SUMMARY =====\n\n",
+                f"Expected label      : {folder_summary['expected_label']}\n",
+                f"Expected in model   : {folder_summary['expected_in_model']}\n",
+                f"Majority prediction : {folder_summary['predicted_label']}\n",
+                f"Correct spectra     : {folder_summary['correct_count']}/{folder_summary['total_count']} ({folder_summary['correct_ratio'] * 100:.2f}%)\n",
+                f"Folder correct      : {folder_summary['folder_correct']}\n",
+                "\n===============================================\n\n",
+            ]
         )
+
+    lines.append("===== FILE-LEVEL SUMMARY =====\n\n")
+    for label, count in counter.most_common():
+        lines.append(f"{label:20s} : {count}\n")
+    lines.append("\n===============================================\n\n")
+
+    for item in predictions:
+        lines.append(f"########## File: {item['file']} ##########\n")
+        top1 = item["results"][0]
+        lines.append(f"Top-1 -> {top1['label']} ({top1['prob'] * 100:.2f}%)\n")
+        lines.append("Top-k predictions:\n")
+        for idx, result in enumerate(item["results"], 1):
+            lines.append(f"   {idx}) {result['label']:20s}  {result['prob'] * 100:.2f}%\n")
+        lines.append("\n===============================================\n\n")
+    return lines
+
+
+def predict_directory(folder_path, output_dir, predictor, top_k=3, parent_mask=None):
+    """预测单个文件夹并写出旧版逐谱文本"""
+    from tqdm import tqdm
+    from raman.infer.core import predict_one
+
+    folder_path = Path(resolve_path(folder_path))
+    output_dir = Path(resolve_path(output_dir))
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    files = list_arc_files(folder_path)
+    if not files:
+        print("No .arc_data files found.")
+        return []
+
+    predictions = []
+    for path in tqdm(files, desc=f"Predicting {folder_path.name}"):
+        results = predict_one(path, predictor, top_k=top_k, parent_mask=parent_mask)
+        predictions.append(
+            {
+                "file": path.name,
+                "path": path,
+                "results": results,
+                "top1_label": results[0]["label"],
+            }
+        )
+
+    output_file = output_dir / f"{folder_path.name}_file.txt"
+    output_file.write_text(
+        "".join(format_prediction_report(folder_path.name, predictions)),
+        encoding="utf-8",
     )
-
-
-if __name__ == "__main__":
-
-    # 指定实验输出目录（必须包含 config_.yaml + *_model.pt）
-    EXP_DIR = resolve_path("output/厌氧菌/20260506_075855_95.42%")
-    # 手动设置预测层级，必须显式设置为业务层
-    PREDICT_LEVEL = "level_1"
-
-    # 可选：人工指定上层遮罩（例如在 level_1 先验已知大类）
-    # 例如：{"level_1": ["baoman", "dachang"]}
-    # 也支持索引：{"level_1": [0, 2]}
-    # MANUAL_PARENT_MASK = {
-    #     "level_1":["feike"]
-    # }
-    MANUAL_PARENT_MASK = None
-
-    # 待预测数据目录：从 EXP_DIR/config.yaml 的 dataset_root 自动推断到 test
-    PREDICT_ROOT = resolve_predict_root(EXP_DIR)
-
-    TOP_K = 3
-    PREDICT_ONE_FOLDER = None
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # 构建 predictor
-    predictor = load_predictor(EXP_DIR, device, predict_level=PREDICT_LEVEL)
-
-    # 输出目录：统一放到实验目录下
-    out_root = os.path.join(EXP_DIR, f"predict_results_{PREDICT_LEVEL}")
-    os.makedirs(out_root, exist_ok=True)
-
-    folders = iter_predict_folders(PREDICT_ROOT, PREDICT_ONE_FOLDER)
-
-    if not folders:
-        print("No sub-folders found in predict root.")
-        exit(0)
-
-    print("\n>>> Batch prediction started ...\n")
-
-    for inp in folders:
-        sub = os.path.basename(inp.rstrip("/\\"))
-        out = os.path.join(out_root, sub)
-
-        print("\n---------------------------------------")
-        print(f"Input folder : {inp}")
-        print(f"Output file  : {out}")
-        print("---------------------------------------")
-
-        predict_directory(inp, out, predictor, top_k=TOP_K, parent_mask=MANUAL_PARENT_MASK)
-
-    print("\n===== All folders processed =====\n")
+    print(f"[Saved] file-level -> {os.fspath(output_file)}")
+    return predictions

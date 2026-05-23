@@ -14,24 +14,32 @@ class DatasetProfile:
     root_test_clean: str = "test"
     root_train_fig: str = "fig_train"
     root_test_fig: str = "fig_test"
-    root_test_raw: str = "test_raw"
+    root_init_test: str = "init_test"
     root_init_fig: str = "fig_init"
     pca_log_name: str = "pca_log.txt"
     cosmic_ray_log_name: str = "cosmic_ray_removal_log.txt"
 
 
 PROFILES = {
-    "bacteria": DatasetProfile(
-        profile_id="bacteria",
-        dataset_name="细菌",
+    "MICRO": DatasetProfile(
+        profile_id="MICRO",
+        dataset_name="微生物",
     ),
-    "Enterobacteriaceae": DatasetProfile(
-        profile_id="Enterobacteriaceae",
+    "ENT": DatasetProfile(
+        profile_id="ENT",
         dataset_name="肠杆菌",
     ),
-    "Non_Enterobacterale": DatasetProfile(
-        profile_id="Non_Enterobacterale",
+    "NENT": DatasetProfile(
+        profile_id="NENT",
         dataset_name="非肠杆菌",
+    ),
+    "GP": DatasetProfile(
+        profile_id="GP",
+        dataset_name="阳性菌",
+    ),
+    "FUNG": DatasetProfile(
+        profile_id="FUNG",
+        dataset_name="真菌"
     ),
     "MN_IgA": DatasetProfile(
         profile_id="MN_IgA",
@@ -45,6 +53,10 @@ PROFILES = {
         profile_id="anaerobe",
         dataset_name="厌氧菌",
     ),
+    "test": DatasetProfile(
+        profile_id="test",
+        dataset_name="测试菌",
+    )
 }
 
 PROFILE_LOOKUP = {}

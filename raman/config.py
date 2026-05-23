@@ -28,7 +28,7 @@ class Config:
 
     # 数据集设置
     # 只需要改这里的数据集名称，预处理设置来源于 raman.data
-    dataset_name = "肠杆菌"
+    dataset_name = "微生物"
 
     @property
     def dataset_root(self):
@@ -114,9 +114,9 @@ class Config:
     # encoder_type: "transformer" | "lstm" | "none"
     encoder_type = "transformer"
     # transformer
-    transformer_nhead = 6
-    transformer_dim = 192
-    transformer_ffn_dim = 384 
+    transformer_nhead = 8
+    transformer_dim = 256
+    transformer_ffn_dim = 512
     transformer_layers = 2
     transformer_dropout = 0.2
     # lstm
@@ -128,11 +128,11 @@ class Config:
     # 池化
     # - "attn": 注意力池化
     # - "stat": 统计池化(mean+std)
-    pooling_type = "stat"
+    pooling_type = "attn"
     # 分类头
     # - True : 余弦分类头
     # - False: 线性分类头
-    cosine_head = True
+    cosine_head = False
     cosine_scale = 25
 
     # stem_kernel_sizes:
@@ -143,14 +143,15 @@ class Config:
     # 训练相关
     epochs = 80
     batch_size = 64
-    train_loader_num_workers = 4
-    eval_loader_num_workers = 4
+    train_loader_num_workers = 2
+    eval_loader_num_workers = 2
     loader_pin_memory = True
     loader_persistent_workers = True
     loader_prefetch_factor = 2
     learning_rate = 4e-4
+    grad_clip_norm = 5.0
     train_split = 0.8
-    patience = 40
+    patience = 30  # 早停
     use_gpu = True
     scheduler_Tmax = int(epochs)
     scheduler_eta_min = 1e-5

@@ -2,6 +2,7 @@ from pathlib import Path
 import random
 import sys
 
+from matplotlib import font_manager
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
@@ -31,10 +32,37 @@ from raman.data.profiles import get_dataset_dir, get_profile
 from raman.data.spectrum import build_valid_mask, read_arc_data
 
 
-sns.set_theme(style="whitegrid", context="talk", font="Microsoft YaHei")
-plt.rcParams["axes.unicode_minus"] = False
-plt.rcParams["font.family"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
-plt.rcParams["figure.figsize"] = (11, 5)
+CHINESE_FONT_FILES = (
+    ("Microsoft YaHei", Path("C:/Windows/Fonts/msyh.ttc")),
+    ("SimHei", Path("C:/Windows/Fonts/simhei.ttf")),
+    ("SimSun", Path("C:/Windows/Fonts/simsun.ttc")),
+    ("DengXian", Path("C:/Windows/Fonts/Deng.ttf")),
+)
+
+
+def _configure_plot_style():
+    """配置绘图风格并自动注册本机中文字体"""
+    for _, font_path in CHINESE_FONT_FILES:
+        if font_path.is_file():
+            try:
+                font_manager.fontManager.addfont(str(font_path))
+            except RuntimeError:
+                pass
+
+    available_fonts = {item.name for item in font_manager.fontManager.ttflist}
+    chinese_font = next((name for name, _ in CHINESE_FONT_FILES if name in available_fonts), None)
+
+    sns.set_theme(style="whitegrid", context="talk")
+    plt.rcParams["axes.unicode_minus"] = False
+    plt.rcParams["figure.figsize"] = (11, 5)
+    if chinese_font:
+        plt.rcParams["font.family"] = "sans-serif"
+        plt.rcParams["font.sans-serif"] = [chinese_font, "DejaVu Sans"]
+    else:
+        print("未找到可用中文字体，建议安装 Microsoft YaHei 或 SimHei")
+
+
+_configure_plot_style()
 
 
 def _resolve_sample_path(project_root, dataset_dir, profile, sample_path, sample_folder, sample_seed):
@@ -44,7 +72,8 @@ def _resolve_sample_path(project_root, dataset_dir, profile, sample_path, sample
 
     root = Path(sample_folder) if sample_folder else Path(profile.root_init)
     if not root.is_absolute():
-        root = dataset_dir / root
+        project_path = project_root / root
+        root = project_path if project_path.exists() or root.parts[:1] == ("dataset",) else dataset_dir / root
 
     matches = sorted(root.rglob("*.arc_data"))
     if not matches:
@@ -181,7 +210,7 @@ def show_preprocess(
     sample_seed=None,
     baseline_method=None,
     compare_baselines=True,
-    baseline_compare_methods=("arpls", "airpls"),
+    baseline_compare_methods=("airpls", "asls"),
     display_min=None,
     display_max=None,
     max_peak_segments=6,

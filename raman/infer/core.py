@@ -9,16 +9,26 @@ from raman.eval.experiment import load_hierarchy_meta, resolve_project_path
 from raman.eval.runtime import build_experiment_runtime
 
 
+def normalize_level_name(level):
+    """把 1、level1、level_1 统一成 level_1"""
+    text = str(level).strip()
+    if text.startswith("level_"):
+        return text
+    if text.startswith("level"):
+        suffix = text[5:].lstrip("_")
+        return f"level_{suffix}"
+    if text.isdigit():
+        return f"level_{text}"
+    raise ValueError(f"Invalid level: {level}")
+
+
 def load_predictor(exp_dir, device, predict_level=None):
     """读取实验目录并构建单条光谱预测所需的运行时上下文"""
     exp_dir = os.fspath(resolve_project_path(exp_dir))
     config = load_experiment(exp_dir)
     if not predict_level:
         raise ValueError("predict_level must be provided explicitly.")
-    if not isinstance(predict_level, str) or not predict_level.startswith("level_"):
-        raise ValueError(
-            f"predict_level must be a business level like level_n, got: {predict_level}"
-        )
+    predict_level = normalize_level_name(predict_level)
 
     meta = load_hierarchy_meta(exp_dir)
     if meta is None:
@@ -52,13 +62,12 @@ def load_predictor(exp_dir, device, predict_level=None):
         "preprocessor": preprocessor,
         "config": config,
         "exp_dir": exp_dir,
+        "meta": meta,
     }
 
 
-def predict_one(path, predictor, top_k=3, parent_mask=None):
-    """对单条光谱执行级联预测并返回 top-k 类别概率"""
-    x = predictor["preprocessor"](path)
-
+def predict_tensor(x, predictor, top_k=3, parent_mask=None):
+    """对已经构建好的模型输入执行级联预测"""
     runtime = predictor["runtime"]
     class_names_by_level = runtime.class_names_by_level
     level_order = predictor["level_order"]
@@ -90,3 +99,9 @@ def predict_one(path, predictor, top_k=3, parent_mask=None):
     k = min(top_k, len(probs))
     idx = probs.argsort()[::-1][:k]
     return [{"label": class_names[i], "prob": float(probs[i])} for i in idx]
+
+
+def predict_one(path, predictor, top_k=3, parent_mask=None):
+    """对单条光谱执行级联预测并返回 top-k 类别概率"""
+    x = predictor["preprocessor"](path)
+    return predict_tensor(x, predictor, top_k=top_k, parent_mask=parent_mask)
