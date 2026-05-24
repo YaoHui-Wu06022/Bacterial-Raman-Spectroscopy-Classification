@@ -37,13 +37,14 @@ def run_aggregate_analysis(
     head_index,
     tasks,
     train_idx_all,
-    test_idx_all,
+    val_idx_all,
     base_train_dataset,
-    base_test_dataset,
+    base_val_dataset,
     runtime=None,
     device=None,
     meta=None,
     heatmap_cfg=None,
+    analysis_dir=None,
 ):
     """跨 parent 聚合分析：用样本数加权合并结果"""
     inherit_missing = getattr(config, "inherit_missing_levels", False)
@@ -58,7 +59,7 @@ def run_aggregate_analysis(
         global_name_to_idx = None
 
     # 输出目录
-    analysis_dir = os.path.join(exp_dir, f"{analysis_level}_aggregate_analysis")
+    analysis_dir = analysis_dir or os.path.join(exp_dir, "analysis_result")
     fig_dir = os.path.join(analysis_dir, "figures")
     log_dir = os.path.join(analysis_dir, "logs")
     os.makedirs(fig_dir, exist_ok=True)
@@ -108,16 +109,16 @@ def run_aggregate_analysis(
         parent_idx = task["parent_idx"]
         log(f"--- Parent {parent_idx} ---")
 
-        train_loader, test_loader, train_subset, _ = build_task_loaders(
+        train_loader, val_loader, train_subset, _ = build_task_loaders(
             task,
             config,
             full_dataset,
             analysis_level,
             head_index,
             train_idx_all,
-            test_idx_all,
+            val_idx_all,
             base_train_dataset,
-            base_test_dataset,
+            base_val_dataset,
         )
         if len(train_subset) == 0:
             log(f"Skip parent {parent_idx}: no samples after filtering.")
@@ -135,7 +136,7 @@ def run_aggregate_analysis(
         sample_x = sample_x.to(device)
         _ = model(sample_x)
 
-        heatmap_loader = train_loader if heatmap_cfg.use_train_loader else test_loader
+        heatmap_loader = train_loader if heatmap_cfg.use_train_loader else val_loader
 
         # IG 先生成原始归因结果，再分别汇总通道和波段重要性
         band_num_classes = global_num_classes if inherit_missing else task["num_classes"]
@@ -240,19 +241,19 @@ def run_aggregate_analysis(
                 num_parent_classes = full_dataset.num_classes_by_level[parent_level]
 
                 dummy_task = {"parent_idx": None, "child_ids": None}
-                parent_train_loader, parent_test_loader, _, _ = build_task_loaders(
+                parent_train_loader, parent_val_loader, _, _ = build_task_loaders(
                     dummy_task,
                     config,
                     full_dataset,
                     parent_level,
                     parent_head_index,
                     train_idx_all,
-                    test_idx_all,
+                    val_idx_all,
                     base_train_dataset,
-                    base_test_dataset,
+                    base_val_dataset,
                 )
                 parent_loader = (
-                    parent_train_loader if heatmap_cfg.use_train_loader else parent_test_loader
+                    parent_train_loader if heatmap_cfg.use_train_loader else parent_val_loader
                 )
 
                 parent_model = runtime.get_level_model(
@@ -303,9 +304,9 @@ def run_aggregate_analysis(
         missing_mask = mean_counts == 0
         if missing_mask.any():
             full_train_subset = Subset(base_train_dataset, train_idx_all)
-            full_test_subset = Subset(base_test_dataset, test_idx_all)
+            full_val_subset = Subset(base_val_dataset, val_idx_all)
             full_loader = DataLoader(
-                full_train_subset if heatmap_cfg.use_train_loader else full_test_subset,
+                full_train_subset if heatmap_cfg.use_train_loader else full_val_subset,
                 batch_size=config.batch_size,
                 shuffle=False
             )
@@ -376,19 +377,19 @@ def run_aggregate_analysis(
                                     continue
 
                                 task = {"parent_idx": int(p_idx), "child_ids": child_ids}
-                                parent_train_loader, parent_test_loader, _, _ = build_task_loaders(
+                                parent_train_loader, parent_val_loader, _, _ = build_task_loaders(
                                     task,
                                     config,
                                     full_dataset,
                                     parent_level,
                                     parent_level_idx,
                                     train_idx_all,
-                                    test_idx_all,
+                                    val_idx_all,
                                     base_train_dataset,
-                                    base_test_dataset,
+                                    base_val_dataset,
                                 )
                                 parent_loader = (
-                                    parent_train_loader if heatmap_cfg.use_train_loader else parent_test_loader
+                                    parent_train_loader if heatmap_cfg.use_train_loader else parent_val_loader
                                 )
 
                                 parent_model = runtime.get_parent_model(

@@ -36,21 +36,17 @@ PROFILES = {
             },
         },
     ),
-    "ENT": DatasetProfile(
-        profile_id="ENT",
-        dataset_name="肠杆菌",
-    ),
-    "NENT": DatasetProfile(
-        profile_id="NENT",
-        dataset_name="非肠杆菌",
+    "GN": DatasetProfile(
+        profile_id="GN",
+        dataset_name="GN",
     ),
     "GP": DatasetProfile(
         profile_id="GP",
-        dataset_name="阳性菌",
+        dataset_name="GP",
     ),
     "FUNG": DatasetProfile(
         profile_id="FUNG",
-        dataset_name="真菌",
+        dataset_name="FUNG",
         cosmic_ray_overrides={
             "*": {
                 "peak_prominence_z": 12.0,

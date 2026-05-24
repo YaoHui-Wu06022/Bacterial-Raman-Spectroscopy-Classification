@@ -12,11 +12,18 @@ import numpy as np
 
 from raman.data import resolve_dataset_stage
 from raman.data.spectrum import build_valid_mask, get_config_bad_bands
+from raman.eval.experiment import (
+    collect_used_runs,
+    is_run_result_dir,
+    resolve_result_dir,
+    write_used_runs,
+)
 from raman.infer.folder import (
     format_prediction_report,
     iter_predict_folders,
     list_arc_files,
 )
+from raman.training.split import TRAIN_SPLIT_NAME
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -52,7 +59,7 @@ def _validate_input_length(signal_length, config, source):
     if int(signal_length) != int(expected):
         raise ValueError(
             f"Input length mismatch for {source}: got {signal_length}, expected {expected}. "
-            f"请用该模型的 config.yaml 重新从 init_test 生成 test，或在 infer_test.py 中保持 BUILD_TEST_FIRST=True"
+            f"请用该模型 run 的配置重新从 init_test 生成 test，或在 infer_test.py 中保持 BUILD_TEST_FIRST=True"
         )
 
 
@@ -169,8 +176,8 @@ def _build_expected_lookup(exp_dir, train_roots, level_name):
 
 
 def _load_train_file_list(exp_dir):
-    """读取模型目录保存的训练文件清单"""
-    path = Path(exp_dir) / "train_files.json"
+    """读取实验根保存的训练文件清单"""
+    path = Path(exp_dir) / TRAIN_SPLIT_NAME
     if not path.is_file():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
@@ -429,21 +436,37 @@ def run_independent_test(
 ):
     """运行独立测试集推理并输出逐谱明细、谱线图和汇总报表"""
     import torch
-    from raman.config_io import load_experiment
     from raman.infer.core import load_predictor, normalize_level_name
 
     level_name = normalize_level_name(level)
-    exp_dir = Path(_resolve_project_path(exp_dir))
-    config = load_experiment(exp_dir)
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     predictor = load_predictor(exp_dir, device, predict_level=level_name)
-    class_names = predictor["runtime"].class_names_by_level.get(level_name, [])
+    input_context = predictor["input_context"]
+    exp_dir = Path(input_context.exp_dir)
+    config = predictor["config"]
+    runtime = predictor["runtime"]
+    class_names = list(predictor.get("class_names") or runtime.class_names_by_level.get(level_name, []))
+
+    target_parent_idx = None
+    if (
+        input_context.is_single_run
+        and input_context.input_level == level_name
+        and input_context.input_parent_idx is not None
+    ):
+        target_parent_idx = int(input_context.input_parent_idx)
+        runtime.ensure_parent_models(level_name)
+        entry = runtime.parent_models.get(level_name, {}).get(target_parent_idx, {})
+        child_ids = [int(item) for item in entry.get("child_ids", [])]
+        if child_ids and not predictor.get("class_names"):
+            class_names = [class_names[child_id] for child_id in child_ids]
+
+    split_source_dir = exp_dir
 
     test_root = Path(_resolve_test_root(config, test_root))
     train_roots = _candidate_train_roots(config.dataset_root)
-    expected_lookup = _build_expected_lookup(exp_dir, train_roots, level_name)
+    expected_lookup = _build_expected_lookup(split_source_dir, train_roots, level_name)
     train_mean_bank = _build_train_mean_bank(
-        exp_dir,
+        split_source_dir,
         config.dataset_root,
         level_name,
         predictor["preprocessor"],
@@ -451,10 +474,32 @@ def run_independent_test(
     )
     wavenumbers = _expected_wavenumbers(config)
 
-    out_root = exp_dir / f"test_results_{level_name}"
+    out_root = resolve_result_dir(
+        exp_dir,
+        "infer",
+        level_name,
+        input_context=input_context,
+        runtime=runtime,
+        target_parent_idx=target_parent_idx,
+        prefer_run_dir=(input_context.is_single_run or len(predictor["level_order"]) == 1),
+    )
     if out_root.exists():
         shutil.rmtree(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
+    used_runs = collect_used_runs(
+        exp_dir,
+        runtime,
+        level_order=predictor["level_order"],
+        target_level=level_name,
+        target_parent_idx=target_parent_idx,
+    )
+    write_used_runs(
+        out_root,
+        mode="single_run" if is_run_result_dir(out_root) else "cascade",
+        target_level=level_name,
+        target_parent=target_parent_idx,
+        runs=used_runs,
+    )
     folders = iter_predict_folders(test_root, folder)
     if not folders:
         raise FileNotFoundError(f"No test folders found under {test_root}")

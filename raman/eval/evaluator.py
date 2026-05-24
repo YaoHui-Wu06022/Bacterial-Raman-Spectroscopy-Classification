@@ -1,6 +1,4 @@
 import os
-from collections import defaultdict
-from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -9,9 +7,14 @@ from sklearn.metrics import classification_report, confusion_matrix
 
 from .common import compute_classification_metrics, run_cascade_inference, select_logits
 from .experiment import (
-    load_experiment_with_dataset,
+    collect_used_runs,
+    load_experiment_context_with_dataset,
     load_hierarchy_meta,
-    resolve_head_level_name,
+    resolve_mode_result_dir,
+    resolve_mode_result_root,
+    resolve_split_dir,
+    validate_parent_split_hashes,
+    write_used_runs,
 )
 from .report import (
     format_classification_report_text,
@@ -24,152 +27,32 @@ from raman.data import InputPreprocessor, RamanDataset
 from raman.training import load_split_files
 
 
-@dataclass
-class EvaluationContext:
-    """收拢一次测试集评估所需的运行上下文"""
-
-    exp_dir: str
-    config: object
-    dataset_root: str
-    eval_level: str | None
-    inherit_missing_levels: bool
-    eval_only_level: str | None
-    eval_only_parent: int | None
-
-
-@dataclass
-class EvaluateOverrides:
-    """统一收拢 Colab 或脚本侧传入的评估覆盖项"""
-
-    exp_dir: str | None = None
-    eval_level: str | None = None
-    inherit_missing_levels: bool | None = True
-    eval_only_level: str | None = None
-    eval_only_parent: int | None = None
-
-
-def configure_evaluation(overrides=None):
-    """按覆盖项构建测试集评估上下文"""
-    overrides = overrides or EvaluateOverrides()
-    if not overrides.exp_dir:
-        raise ValueError("evaluate_test_set 需要显式传入 exp_dir")
-
-    exp_dir, config = load_experiment_with_dataset(overrides.exp_dir)
-    return EvaluationContext(
-        exp_dir=exp_dir,
-        config=config,
-        dataset_root=config.dataset_root,
-        eval_level=overrides.eval_level,
-        inherit_missing_levels=bool(overrides.inherit_missing_levels),
-        eval_only_level=overrides.eval_only_level,
-        eval_only_parent=overrides.eval_only_parent,
-    )
-
-
-def resolve_level_order(dataset, target_level, config):
+def _resolve_level_order(dataset, target_level):
     """解析目标层级，并返回从顶层到该层的顺序列表"""
-    target_level = resolve_head_level_name(dataset, target_level)
+    target_level = dataset._resolve_level_name(target_level, field_name="target_level")
     if target_level not in dataset.level_names:
         raise ValueError(
-            f"Unknown eval_level: {target_level}. Available: {dataset.level_names}"
+            f"未知 target_level: {target_level}，可选值：{dataset.level_names}"
         )
     stop_idx = dataset.level_names.index(target_level) + 1
-    level_order = list(dataset.level_names[:stop_idx])
-    return target_level, level_order
+    return target_level, list(dataset.level_names[:stop_idx])
 
 
-def _effective_label_name(dataset, idx, target_level):
-    if hasattr(dataset, "_resolve_level_name"):
-        target_level = dataset._resolve_level_name(target_level)
-    hier = dataset.hier_names[idx]
-    return hier.get(target_level)
+def _load_eval_context(exp_dir, target_level=None):
+    """加载验证评估所需的通用上下文"""
+    input_context, config = load_experiment_context_with_dataset(exp_dir)
+    dataset = RamanDataset(config.dataset_root, augment=False, config=config)
+    target_level = target_level or input_context.input_level
+    target_level, level_order = _resolve_level_order(dataset, target_level)
 
+    split_dir = resolve_split_dir(input_context.exp_dir)
+    split = load_split_files(dataset, split_dir) if split_dir else None
+    if split is None:
+        raise FileNotFoundError(
+            f"实验根缺少 train_split.json/val_split.json，无法进行验证集评估：{input_context.exp_dir}"
+        )
+    _, val_idx = split
 
-def _pred_id_to_name(dataset, level_name, pred_id):
-    level_idx = dataset.head_name_to_idx[level_name]
-    return dataset.inv_label_maps_by_level[level_idx].get(int(pred_id))
-
-
-def _build_display_classes(dataset, eval_level, parent_models):
-    """构建展示用类别顺序"""
-    eval_idx = dataset.head_name_to_idx[eval_level]
-    parent_level = dataset.get_parent_level(eval_level)
-    if parent_level is None:
-        return list(dataset.class_names_by_level[eval_idx])
-
-    parent_idx = dataset.head_name_to_idx[parent_level]
-    parent_names = dataset.class_names_by_level[parent_idx]
-    parent_label_map = dataset.label_maps_by_level[parent_idx]
-    child_inv = dataset.inv_label_maps_by_level[eval_idx]
-    children_by_parent = dataset.parent_to_children.get(eval_level, {})
-    parent_entries = parent_models.get(eval_level, {})
-    has_parent_model = any(
-        entry.get("model_path") is not None
-        for entry in parent_entries.values()
-    )
-    if not has_parent_model:
-        return list(dataset.class_names_by_level[eval_idx])
-
-    classes = []
-    for parent_name in parent_names:
-        parent_id = parent_label_map.get(parent_name)
-        child_ids = children_by_parent.get(parent_id)
-        entry = parent_entries.get(parent_id)
-        has_model = entry is not None and entry.get("model_path") is not None
-
-        if child_ids and (has_model or len(child_ids) == 1):
-            for child_id in child_ids:
-                child_name = child_inv.get(int(child_id))
-                if child_name is not None:
-                    classes.append(child_name)
-        else:
-            classes.append(parent_name)
-
-    return classes
-
-
-def _sample_effective_level(dataset, idx, target_level):
-    level = target_level
-    while True:
-        level_idx = dataset.head_name_to_idx[level]
-        if dataset.level_labels[idx, level_idx] >= 0:
-            return level
-        parent = dataset.get_parent_level(level)
-        if parent is None:
-            return level
-        level = parent
-
-
-def _build_fallback_test_split(dataset, cfg):
-    """缺少切分清单时，按 split_level 重新构造测试集索引"""
-    split_level = getattr(cfg, "split_level", None) or "leaf"
-    group_keys = [dataset.get_split_key(i, split_level) for i in range(len(dataset))]
-
-    group_to_indices = defaultdict(list)
-    for idx, group_key in enumerate(group_keys):
-        group_to_indices[group_key].append(idx)
-
-    rng = np.random.RandomState(seed=cfg.seed)
-    test_idx = []
-    for idxs in group_to_indices.values():
-        idxs = list(idxs)
-        rng.shuffle(idxs)
-
-        n = len(idxs)
-        if n == 1:
-            continue
-
-        n_train = int(round(n * cfg.train_split))
-        n_train = max(1, min(n - 1, n_train))
-        test_idx.extend(idxs[n_train:])
-
-    return np.array(sorted(test_idx))
-
-
-def evaluate_test_set(context):
-    """按实验目录中的层级模型对测试集进行评估并输出结果文件"""
-    config = context.config
-    exp_dir = context.exp_dir
     use_cuda = config.use_gpu and torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
     print(
@@ -177,252 +60,54 @@ def evaluate_test_set(context):
         f"cuda_available={torch.cuda.is_available()})"
     )
 
-    dataset = RamanDataset(context.dataset_root, augment=False, config=config)
-
-    eval_level = context.eval_only_level or context.eval_level
-    eval_level, level_order = resolve_level_order(dataset, eval_level, config)
-    eval_idx = dataset.head_name_to_idx[eval_level]
-
-    result_dir = os.path.join(exp_dir, f"{eval_level}_test_result")
-    os.makedirs(result_dir, exist_ok=True)
-    out_csv = os.path.join(result_dir, "test_eval_results.csv")
-    out_cm_png = os.path.join(result_dir, "confusion_matrix.png")
-    out_cm_raw = os.path.join(result_dir, "confusion_matrix_raw.csv")
-    out_report = os.path.join(result_dir, "classification_report.txt")
-
-    labels = dataset.level_labels[:, eval_idx]
-    inv_label_map = dataset.inv_label_maps_by_level[eval_idx]
-
-    split = load_split_files(dataset, exp_dir)
-    if split is not None:
-        _, test_idx = split
-    else:
-        test_idx = _build_fallback_test_split(dataset, config)
-
-    print(f"\n[Test Split] Test samples: {len(test_idx)}")
-
-    meta = load_hierarchy_meta(exp_dir) or {}
-    runtime = build_experiment_runtime(exp_dir, device, config=config, meta=meta)
+    meta = load_hierarchy_meta(input_context.exp_dir) or {}
+    runtime = build_experiment_runtime(
+        input_context.exp_dir,
+        device,
+        config=config,
+        meta=meta,
+        run_selection=input_context.run_selection,
+    )
     if not runtime.parent_to_children:
         runtime.parent_to_children = dataset.parent_to_children
-    parent_to_children = runtime.parent_to_children
-    runtime.build_level_model_paths(level_order)
-    target_model_path = runtime.level_model_paths.get(eval_level)
-    missing_upper_model = any(
-        not os.path.exists(runtime.level_model_paths.get(level_name, ""))
-        for level_name in level_order
-        if level_name != eval_level
-    )
-    if (
-        target_model_path
-        and os.path.exists(target_model_path)
-        and missing_upper_model
-    ):
-        level_order = [eval_level]
-        runtime.build_level_model_paths(level_order)
 
-    for level_name in level_order:
-        model_path = runtime.level_model_paths.get(level_name)
-        if model_path and os.path.exists(model_path):
-            continue
-        runtime.ensure_parent_models(level_name, parent_to_children)
-    runtime.ensure_parent_models(eval_level, parent_to_children)
-    parent_models = runtime.parent_models
-
-    if context.inherit_missing_levels:
-        classes = _build_display_classes(dataset, eval_level, parent_models)
-        num_classes = len(classes)
-        train_name_to_idx = {name: idx for idx, name in enumerate(classes)}
-    else:
-        train_class_names_by_level = meta.get("class_names_by_level", {})
-        classes = None
-        if isinstance(train_class_names_by_level, dict):
-            classes = train_class_names_by_level.get(eval_level)
-        if not classes:
-            classes = [
-                inv_label_map[idx]
-                for idx in range(dataset.num_classes_by_level[eval_level])
-            ]
-        num_classes = len(classes)
-        train_name_to_idx = {name: idx for idx, name in enumerate(classes)}
-
-    target_parent_idx = None
-    if context.eval_only_parent is not None:
-        target_parent_idx = int(context.eval_only_parent)
-
-    if target_parent_idx is not None:
-        runtime.ensure_parent_models(eval_level, parent_to_children)
-        level_parent_models = runtime.parent_models.get(eval_level, {})
-        entry = level_parent_models.get(target_parent_idx)
-        if not entry or entry.get("model_path") is None:
-            raise FileNotFoundError(
-                f"No parent model for {eval_level}, parent={target_parent_idx}"
-            )
-        runtime.parent_models[eval_level] = {target_parent_idx: entry}
-        parent_models = runtime.parent_models
-
-        child_ids = entry.get("child_ids", [])
-        if child_ids and (entry.get("model_path") is not None or len(child_ids) == 1):
-            allowed_names = [inv_label_map[child_id] for child_id in child_ids]
-        else:
-            parent_level_name = dataset.get_parent_level(eval_level)
-            parent_inv = None
-            if parent_level_name is not None:
-                parent_idx = dataset.head_name_to_idx[parent_level_name]
-                parent_inv = dataset.inv_label_maps_by_level[parent_idx]
-            allowed_names = []
-            if parent_inv is not None:
-                parent_name = parent_inv.get(int(target_parent_idx))
-                if parent_name is not None:
-                    allowed_names = [parent_name]
-        classes = [name for name in classes if name in allowed_names]
-        num_classes = len(classes)
-        train_name_to_idx = {name: idx for idx, name in enumerate(classes)}
-
-    print(f"\n[Evaluate] level = {eval_level}, num_classes = {num_classes}")
-    print("[Evaluate] Label Mapping (train order):")
-    for idx in range(num_classes):
-        print(f"{idx:2d} -> {classes[idx]}")
-
-    def _map_pred_to_display(pred_level, pred_id, x):
-        if pred_id < 0:
-            return None
-        if pred_level == eval_level:
-            return pred_level, pred_id
-
-        parent_level = dataset.get_parent_level(eval_level)
-        if parent_level is None or pred_level != parent_level:
-            return pred_level, pred_id
-
-        entry = parent_models.get(eval_level, {}).get(int(pred_id))
-        if entry is None:
-            return pred_level, pred_id
-
-        child_ids = entry.get("child_ids", [])
-        model_path = entry.get("model_path")
-        if not child_ids:
-            return pred_level, pred_id
-
-        if model_path is None:
-            if len(child_ids) == 1:
-                return eval_level, child_ids[0]
-            return pred_level, pred_id
-
-        logits = select_logits(
-            runtime.get_parent_model(
-                eval_level,
-                int(pred_id),
-                child_ids=child_ids,
-                model_path=model_path,
-            )(x)
-        )
-        probs = torch.softmax(logits, dim=1)
-        pred_local = probs.argmax(1).item()
-        pred_global = child_ids[pred_local]
-        return eval_level, pred_global
-
-    preprocessor = InputPreprocessor(config, device)
-    num_classes_by_level = {
-        level_name: dataset.num_classes_by_level[level_name]
-        for level_name in level_order
-    }
-    class_names_by_level = {
-        level_name: dataset.class_names_by_level[dataset.head_name_to_idx[level_name]]
-        for level_name in level_order
+    return {
+        "input_context": input_context,
+        "config": config,
+        "dataset": dataset,
+        "target_level": target_level,
+        "level_order": level_order,
+        "val_idx": np.array(sorted(val_idx)),
+        "device": device,
+        "runtime": runtime,
     }
 
-    all_preds, all_labels, all_paths = [], [], []
-    skipped = 0
-    invalid_pred = 0
 
-    print("\n>>> Running TEST SET evaluation\n")
+def _class_names(dataset, level_name):
+    """取出某一层的类别名列表"""
+    level_idx = dataset.head_name_to_idx[level_name]
+    return list(dataset.class_names_by_level[level_idx])
 
-    parent_level_for_eval = dataset.get_parent_level(eval_level)
 
-    for idx in test_idx:
-        sample_level = eval_level
-        if context.inherit_missing_levels:
-            sample_level = _sample_effective_level(dataset, idx, eval_level)
-            true_name = _effective_label_name(dataset, idx, sample_level)
-            if true_name is None:
-                skipped += 1
-                continue
-            if true_name not in train_name_to_idx:
-                skipped += 1
-                continue
-            true_label_mapped = train_name_to_idx[true_name]
-        else:
-            true_label = labels[idx]
-            if true_label < 0:
-                skipped += 1
-                continue
-
-            true_name = inv_label_map.get(int(true_label))
-            if true_name not in train_name_to_idx:
-                skipped += 1
-                continue
-            true_label_mapped = train_name_to_idx[true_name]
-
-        if context.eval_only_parent is not None and parent_level_for_eval is not None:
-            parent_label = dataset.level_labels[
-                idx, dataset.head_name_to_idx[parent_level_for_eval]
-            ]
-            if parent_label < 0 or int(parent_label) != int(context.eval_only_parent):
-                invalid_pred += 1
-                continue
-
-        path = dataset.samples[idx]
-        x = preprocessor(path)
-
-        with torch.no_grad():
-            result = run_cascade_inference(
-                runtime,
-                x,
-                level_order=level_order,
-                target_level=sample_level,
-                num_classes_by_level=num_classes_by_level,
-                class_names_by_level=class_names_by_level,
-                parent_to_children=parent_to_children,
-                fallback_to_previous=False,
-            )
-            pred = -1 if result is None else int(result["pred_global"])
-
-        if context.inherit_missing_levels:
-            mapped = _map_pred_to_display(sample_level, pred, x)
-            if mapped is None:
-                invalid_pred += 1
-                continue
-            pred_level_name, pred_id = mapped
-            pred_name = _pred_id_to_name(dataset, pred_level_name, pred_id)
-        else:
-            pred_name = inv_label_map.get(int(pred))
-        if pred_name not in train_name_to_idx:
-            invalid_pred += 1
-            continue
-        pred_mapped = train_name_to_idx[pred_name]
-
-        all_preds.append(pred_mapped)
-        all_labels.append(true_label_mapped)
-        all_paths.append(path)
+def _write_eval_outputs(result_dir, classes, all_paths, all_labels, all_preds):
+    """写出验证集明细、混淆矩阵和分类报告"""
+    result_dir = os.fspath(result_dir)
+    os.makedirs(result_dir, exist_ok=True)
 
     if not all_labels:
         print("No valid samples for this level.")
-        return
+        return result_dir
 
-    all_preds = np.array(all_preds)
-    all_labels = np.array(all_labels)
-
-    metrics = compute_classification_metrics(
-        all_labels,
-        all_preds,
-        labels=range(num_classes),
-    )
+    all_labels = np.asarray(all_labels)
+    all_preds = np.asarray(all_preds)
+    labels = list(range(len(classes)))
+    metrics = compute_classification_metrics(all_labels, all_preds, labels=labels)
     acc = metrics["accuracy"]
     macro_f1 = metrics["macro_f1"]
     macro_recall = metrics["macro_recall"]
 
     print("\n=====================================")
-    print(f" Test Set Accuracy: {acc * 100:.4f}%")
+    print(f" Val Set Accuracy:  {acc * 100:.4f}%")
     print(f" Macro F1-score:    {macro_f1 * 100:.4f}%")
     print(f" Macro Recall:      {macro_recall * 100:.4f}%")
     print("=====================================\n")
@@ -431,7 +116,7 @@ def evaluate_test_set(context):
         all_labels,
         all_preds,
         target_names=classes,
-        labels=list(range(num_classes)),
+        labels=labels,
         output_dict=True,
         zero_division=0,
     )
@@ -442,20 +127,274 @@ def evaluate_test_set(context):
         macro_f1,
         macro_recall,
     )
-    write_text(out_report, report_text)
+    write_text(os.path.join(result_dir, "classification_report.txt"), report_text)
 
-    cm = confusion_matrix(all_labels, all_preds, labels=list(range(num_classes)))
-    save_confusion_matrix_csv(cm, classes, out_cm_raw)
-    save_confusion_matrix_figure(cm, classes, out_cm_png, show=True)
+    cm = confusion_matrix(all_labels, all_preds, labels=labels)
+    save_confusion_matrix_csv(cm, classes, os.path.join(result_dir, "confusion_matrix_raw.csv"))
+    save_confusion_matrix_figure(
+        cm,
+        classes,
+        os.path.join(result_dir, "confusion_matrix.png"),
+    )
 
-    df = pd.DataFrame({"path": all_paths, "label_true": all_labels, "label_pred": all_preds})
-    df.to_csv(out_csv, index=False)
-
-    print("All TEST SET results saved to:", result_dir)
+    df = pd.DataFrame(
+        {"path": all_paths, "label_true": all_labels, "label_pred": all_preds}
+    )
+    df.to_csv(os.path.join(result_dir, "val_eval_results.csv"), index=False)
+    print("All VAL SET results saved to:", result_dir)
     return result_dir
 
 
-def run_evaluate_test_set(overrides=None):
-    """先应用覆盖项，再执行测试集评估"""
-    context = configure_evaluation(overrides)
-    return evaluate_test_set(context)
+def _eval_global_model(ctx, result_dir):
+    """评估某一层的全局单模型"""
+    dataset = ctx["dataset"]
+    runtime = ctx["runtime"]
+    level_name = ctx["target_level"]
+    level_idx = dataset.head_name_to_idx[level_name]
+    classes = _class_names(dataset, level_name)
+    runtime.build_level_model_paths([level_name])
+    model = runtime.get_level_model(level_name, num_classes=len(classes))
+    preprocessor = InputPreprocessor(ctx["config"], ctx["device"])
+
+    all_paths, all_labels, all_preds = [], [], []
+    labels = dataset.level_labels[:, level_idx]
+    for idx in ctx["val_idx"]:
+        true_label = int(labels[idx])
+        if true_label < 0:
+            continue
+        x = preprocessor(dataset.samples[idx])
+        with torch.no_grad():
+            logits = select_logits(model(x), head_name=level_name)
+            pred = int(torch.softmax(logits, dim=1).argmax(1).item())
+        all_paths.append(dataset.samples[idx])
+        all_labels.append(true_label)
+        all_preds.append(pred)
+
+    return _write_eval_outputs(result_dir, classes, all_paths, all_labels, all_preds)
+
+
+def _eval_parent_model(ctx, result_dir, parent_idx):
+    """评估某个 parent 对应的单个子模型"""
+    dataset = ctx["dataset"]
+    runtime = ctx["runtime"]
+    level_name = ctx["target_level"]
+    level_idx = dataset.head_name_to_idx[level_name]
+    parent_level = dataset.get_parent_level(level_name)
+    if parent_level is None:
+        raise ValueError(f"{level_name} 没有父层，不能按 parent 单测")
+    parent_level_idx = dataset.head_name_to_idx[parent_level]
+
+    runtime.ensure_parent_models(level_name, runtime.parent_to_children)
+    entry = runtime.parent_models.get(level_name, {}).get(int(parent_idx))
+    if entry is None or entry.get("model_path") is None:
+        raise FileNotFoundError(f"No parent model for {level_name}, parent={parent_idx}")
+
+    child_ids = [int(item) for item in entry.get("child_ids", [])]
+    if not child_ids:
+        raise ValueError(f"缺少 child_ids：level={level_name}, parent={parent_idx}")
+    classes_all = _class_names(dataset, level_name)
+    classes = [classes_all[child_id] for child_id in child_ids]
+    child_to_local = {child_id: local_idx for local_idx, child_id in enumerate(child_ids)}
+    model = runtime.get_parent_model(
+        level_name,
+        int(parent_idx),
+        child_ids=child_ids,
+        model_path=entry.get("model_path"),
+    )
+    preprocessor = InputPreprocessor(ctx["config"], ctx["device"])
+
+    all_paths, all_labels, all_preds = [], [], []
+    labels = dataset.level_labels
+    for idx in ctx["val_idx"]:
+        if int(labels[idx, parent_level_idx]) != int(parent_idx):
+            continue
+        true_global = int(labels[idx, level_idx])
+        if true_global not in child_to_local:
+            continue
+        x = preprocessor(dataset.samples[idx])
+        with torch.no_grad():
+            logits = select_logits(model(x), head_name=level_name)
+            pred_local = int(torch.softmax(logits, dim=1).argmax(1).item())
+        all_paths.append(dataset.samples[idx])
+        all_labels.append(child_to_local[true_global])
+        all_preds.append(pred_local)
+
+    return _write_eval_outputs(result_dir, classes, all_paths, all_labels, all_preds)
+
+
+def run_eval_single_model(run_dir, level=None):
+    """只使用传入 run_* 目录中的单个模型做验证集评估"""
+    ctx = _load_eval_context(run_dir, target_level=level)
+    input_context = ctx["input_context"]
+    if not input_context.is_single_run:
+        raise ValueError("run_eval_single_model 必须传入具体 run_* 或 best/run_* 目录")
+
+    result_dir = os.path.join(input_context.input_run_dir, "val_result")
+    print(f"\n[Val Split] Val samples: {len(ctx['val_idx'])}")
+    if input_context.input_parent_idx is not None:
+        return _eval_parent_model(ctx, result_dir, input_context.input_parent_idx)
+    return _eval_global_model(ctx, result_dir)
+
+
+def run_eval_level_only(exp_dir, target_level):
+    """只使用目标层模型，按真实父类分发 parent 子模型"""
+    ctx = _load_eval_context(exp_dir, target_level=target_level)
+    dataset = ctx["dataset"]
+    runtime = ctx["runtime"]
+    level_name = ctx["target_level"]
+    result_root = resolve_mode_result_root(ctx["input_context"].exp_dir, level_name, "level_only")
+    result_dir = resolve_mode_result_dir(ctx["input_context"].exp_dir, "val", level_name, "level_only")
+
+    print(f"\n[Val Split] Val samples: {len(ctx['val_idx'])}")
+    parent_level = dataset.get_parent_level(level_name)
+    if parent_level is None:
+        result = _eval_global_model(ctx, result_dir)
+    else:
+        runtime.ensure_parent_models(level_name, runtime.parent_to_children)
+        parent_entries = runtime.parent_models.get(level_name, {})
+        has_parent_model = any(entry.get("model_path") is not None for entry in parent_entries.values())
+        all_single_child = bool(parent_entries) and all(
+            len(entry.get("child_ids", [])) <= 1 for entry in parent_entries.values()
+        )
+        if has_parent_model or all_single_child:
+            validate_parent_split_hashes(ctx["input_context"].exp_dir, level_name, parent_entries)
+            result = _eval_level_parent_routed(ctx, result_dir)
+        else:
+            result = _eval_global_model(ctx, result_dir)
+
+    used_runs = collect_used_runs(
+        ctx["input_context"].exp_dir,
+        runtime,
+        level_order=[level_name],
+        target_level=level_name,
+    )
+    write_used_runs(
+        result_root,
+        mode="level_only",
+        target_level=level_name,
+        runs=used_runs,
+    )
+    return result
+
+
+def _eval_level_parent_routed(ctx, result_dir):
+    """单层多模型评估：按真实 parent 把样本分发给对应子模型"""
+    dataset = ctx["dataset"]
+    runtime = ctx["runtime"]
+    level_name = ctx["target_level"]
+    level_idx = dataset.head_name_to_idx[level_name]
+    parent_level = dataset.get_parent_level(level_name)
+    parent_level_idx = dataset.head_name_to_idx[parent_level]
+    classes = _class_names(dataset, level_name)
+    preprocessor = InputPreprocessor(ctx["config"], ctx["device"])
+
+    all_paths, all_labels, all_preds = [], [], []
+    labels = dataset.level_labels
+    parent_entries = runtime.parent_models.get(level_name, {})
+    for idx in ctx["val_idx"]:
+        true_label = int(labels[idx, level_idx])
+        parent_idx = int(labels[idx, parent_level_idx])
+        if true_label < 0 or parent_idx < 0:
+            continue
+        entry = parent_entries.get(parent_idx)
+        if entry is None:
+            continue
+        child_ids = [int(item) for item in entry.get("child_ids", [])]
+        if not child_ids:
+            continue
+
+        model_path = entry.get("model_path")
+        if model_path is None:
+            if len(child_ids) != 1:
+                continue
+            pred_global = child_ids[0]
+        else:
+            x = preprocessor(dataset.samples[idx])
+            model = runtime.get_parent_model(
+                level_name,
+                parent_idx,
+                child_ids=child_ids,
+                model_path=model_path,
+            )
+            with torch.no_grad():
+                logits = select_logits(model(x), head_name=level_name)
+                pred_local = int(torch.softmax(logits, dim=1).argmax(1).item())
+            pred_global = child_ids[pred_local]
+
+        all_paths.append(dataset.samples[idx])
+        all_labels.append(true_label)
+        all_preds.append(int(pred_global))
+
+    return _write_eval_outputs(result_dir, classes, all_paths, all_labels, all_preds)
+
+
+def run_eval_cascade(exp_dir, target_level):
+    """从顶层到目标层执行多层多模型级联验证集评估"""
+    ctx = _load_eval_context(exp_dir, target_level=target_level)
+    dataset = ctx["dataset"]
+    runtime = ctx["runtime"]
+    level_name = ctx["target_level"]
+    level_order = ctx["level_order"]
+    level_idx = dataset.head_name_to_idx[level_name]
+    result_root = resolve_mode_result_root(ctx["input_context"].exp_dir, level_name, "cascade")
+    result_dir = resolve_mode_result_dir(ctx["input_context"].exp_dir, "val", level_name, "cascade")
+
+    runtime.build_level_model_paths(level_order)
+    for item in level_order:
+        runtime.ensure_parent_models(item, runtime.parent_to_children)
+        validate_parent_split_hashes(
+            ctx["input_context"].exp_dir,
+            item,
+            runtime.parent_models.get(item, {}),
+        )
+
+    classes = _class_names(dataset, level_name)
+    num_classes_by_level = {
+        item: dataset.num_classes_by_level[item]
+        for item in level_order
+    }
+    class_names_by_level = {
+        item: _class_names(dataset, item)
+        for item in level_order
+    }
+    preprocessor = InputPreprocessor(ctx["config"], ctx["device"])
+
+    print(f"\n[Val Split] Val samples: {len(ctx['val_idx'])}")
+    all_paths, all_labels, all_preds = [], [], []
+    labels = dataset.level_labels[:, level_idx]
+    for idx in ctx["val_idx"]:
+        true_label = int(labels[idx])
+        if true_label < 0:
+            continue
+        x = preprocessor(dataset.samples[idx])
+        with torch.no_grad():
+            result = run_cascade_inference(
+                runtime,
+                x,
+                level_order=level_order,
+                target_level=level_name,
+                num_classes_by_level=num_classes_by_level,
+                class_names_by_level=class_names_by_level,
+                parent_to_children=runtime.parent_to_children,
+                fallback_to_previous=False,
+            )
+        if result is None:
+            continue
+        all_paths.append(dataset.samples[idx])
+        all_labels.append(true_label)
+        all_preds.append(int(result["pred_global"]))
+
+    out = _write_eval_outputs(result_dir, classes, all_paths, all_labels, all_preds)
+    used_runs = collect_used_runs(
+        ctx["input_context"].exp_dir,
+        runtime,
+        level_order=level_order,
+        target_level=level_name,
+    )
+    write_used_runs(
+        result_root,
+        mode="cascade",
+        target_level=level_name,
+        runs=used_runs,
+    )
+    return out

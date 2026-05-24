@@ -1,13 +1,21 @@
 import json
 import os
 import random
+from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import torch
 from raman.data.profiles import get_profile
-from raman.config_io import dump_config_to_yaml
+from raman.config_io import (
+    SHARED_CONFIG_NAME,
+    assert_shared_compatible,
+    dump_model_config_to_yaml,
+    dump_resolved_config_to_yaml,
+    dump_shared_config_to_yaml,
+    load_config_from_yaml,
+)
 
 
 def _sanitize_log_name(name):
@@ -16,6 +24,47 @@ def _sanitize_log_name(name):
     if not text:
         return "unnamed"
     return text.replace("\\", "_").replace("/", "_").replace(" ", "_")
+
+
+def _config_group_to_dict(group):
+    """把配置分组转换成逐字段字典"""
+    if group is None:
+        return {}
+    if is_dataclass(group):
+        return asdict(group)
+    if hasattr(group, "to_dict"):
+        return group.to_dict()
+    return {
+        key: value
+        for key, value in vars(group).items()
+        if not key.startswith("_")
+    }
+
+
+def _write_config_section(config_log, title, data):
+    """写入一个配置分组，避免 dataclass 挤成一行"""
+    config_log(f"\n===== {title} =====")
+    if not data:
+        config_log("  <empty>")
+        return
+    for key in data:
+        config_log(f"  {key}: {data[key]}")
+
+
+def _write_readable_config_dump(config_log, config):
+    """按 shared/model/runtime 分组写入配置"""
+    _write_config_section(
+        config_log,
+        "Derived Values",
+        {
+            "dataset_root": getattr(config, "dataset_root", None),
+            "in_channels": getattr(config, "in_channels", None),
+            "delta": getattr(config, "delta", None),
+        },
+    )
+    _write_config_section(config_log, "Shared Input Config", _config_group_to_dict(getattr(config, "shared", None)))
+    _write_config_section(config_log, "Model Run Config", _config_group_to_dict(getattr(config, "model", None)))
+    _write_config_section(config_log, "Runtime Config", _config_group_to_dict(getattr(config, "runtime", None)))
 
 
 def set_seed(seed, deterministic=True):
@@ -38,12 +87,13 @@ def set_seed(seed, deterministic=True):
 
 def prepare_output_dirs(config):
     """
-    创建训练输出目录及其日志子目录
+    创建实验根目录
+
+    具体训练日志由每个 run_xxx/logs 独立保存，实验根不再创建 logs
     """
     base = config.output_dir
     dirs = {
         "base": base,
-        "logs": os.path.join(base, "logs"),
     }
     for path in dirs.values():
         os.makedirs(path, exist_ok=True)
@@ -51,28 +101,53 @@ def prepare_output_dirs(config):
 
 
 def prepare_training_runtime(config):
-    """
-    准备实验目录、日志文件和配置快照
-    """
+    """准备实验根目录和 shared_config.yaml"""
     if config.timestamp is None:
         config.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     if config.output_dir is None:
         dataset_name = get_profile(config.dataset_name).dataset_name
         config.output_dir = os.fspath(Path("output") / dataset_name / config.timestamp)
+    config.experiment_dir = config.output_dir
 
     dirs = prepare_output_dirs(config=config)
-    dump_config_to_yaml(config, os.path.join(config.output_dir, "config.yaml"))
+    shared_path = os.path.join(config.output_dir, SHARED_CONFIG_NAME)
+    if os.path.exists(shared_path):
+        existing_shared = load_config_from_yaml(shared_path)
+        assert_shared_compatible(existing_shared, config, context="current_config")
+    else:
+        dump_shared_config_to_yaml(config, shared_path)
+
+    def log(msg):
+        print(msg)
+
+    def config_log(_msg):
+        return None
+
+    return dirs, log, config_log, None, None
+
+
+def prepare_run_runtime(config, run_dir):
+    """准备单次模型训练 run 的目录、日志和配置快照"""
+    run_dir = os.fspath(run_dir)
+    os.makedirs(run_dir, exist_ok=True)
+    logs_dir = os.path.join(run_dir, "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    config.run_dir = run_dir
 
     log_file = open(
-        os.path.join(dirs["logs"], "run.log"),
+        os.path.join(logs_dir, "run.log"),
         "w",
         buffering=1,
+        encoding="utf-8",
     )
     config_log_file = open(
-        os.path.join(dirs["logs"], "config.txt"),
+        os.path.join(logs_dir, "config.txt"),
         "w",
         buffering=1,
+        encoding="utf-8",
     )
+    dump_model_config_to_yaml(config, os.path.join(run_dir, "model_config.yaml"))
+    dump_resolved_config_to_yaml(config, os.path.join(run_dir, "resolved_config.yaml"))
 
     def log(msg):
         print(msg)
@@ -82,22 +157,12 @@ def prepare_training_runtime(config):
         config_log_file.write(msg + "\n")
 
     config_log("===== Run Meta =====")
-    config_log(f"Output dir: {config.output_dir}")
+    config_log(f"Experiment dir: {getattr(config, 'experiment_dir', config.output_dir)}")
+    config_log(f"Run dir: {run_dir}")
     config_log("=====================\n")
-    config_log("===== Full Config Dump =====")
+    _write_readable_config_dump(config_log, config)
 
-    for key in sorted(dir(config)):
-        if key.startswith("_"):
-            continue
-        try:
-            value = getattr(config, key)
-        except Exception:
-            continue
-        if callable(value):
-            continue
-        config_log(f"{key}: {value}")
-
-    return dirs, log, config_log, log_file, config_log_file
+    return {"base": run_dir, "logs": logs_dir}, log, config_log, log_file, config_log_file
 
 
 def create_model_logger(logs_dir, model_tag, shared_log):
@@ -158,6 +223,7 @@ def save_hierarchy_meta(
         old_parent_models = (
             old_meta.get("parent_models", {}) if isinstance(old_meta, dict) else {}
         )
+        old_runs = old_meta.get("runs", {}) if isinstance(old_meta, dict) else {}
 
         merged_level_models = {
             level: model_path
@@ -175,6 +241,22 @@ def save_hierarchy_meta(
             merged_parent_models.setdefault(level, {})
             merged_parent_models[level].update(mapping)
         parent_models_json = merged_parent_models
+    else:
+        old_runs = {}
+
+    runs_json = dict(old_runs)
+    for level, entry in level_models_json.items():
+        if isinstance(entry, dict) and entry.get("run_dir"):
+            runs_json.setdefault(level, [])
+            if entry not in runs_json[level]:
+                runs_json[level].append(entry)
+    for level, mapping in parent_models_json.items():
+        for parent_idx, entry in mapping.items():
+            if isinstance(entry, dict) and entry.get("run_dir"):
+                key = f"{level}_{parent_idx}"
+                runs_json.setdefault(key, [])
+                if entry not in runs_json[key]:
+                    runs_json[key].append(entry)
 
     with open(hier_meta_path, "w", encoding="utf-8") as file:
         json.dump(
@@ -191,6 +273,7 @@ def save_hierarchy_meta(
                 "current_train_level": current_train_level,
                 "level_models": level_models_json,
                 "parent_models": parent_models_json,
+                "runs": runs_json,
             },
             file,
             indent=2,

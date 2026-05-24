@@ -78,7 +78,7 @@ def format_prediction_report(folder_name, predictions, folder_summary=None):
 
 
 def predict_directory(folder_path, output_dir, predictor, top_k=3, parent_mask=None):
-    """预测单个文件夹并写出旧版逐谱文本"""
+    """预测单个文件夹并写出逐谱文本"""
     from tqdm import tqdm
     from raman.infer.core import predict_one
 

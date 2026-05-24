@@ -32,7 +32,7 @@ from raman.training.validation import evaluate_validation_loader
 def _build_loader_kwargs(config, device, train=True):
     """按当前配置构造 DataLoader 参数"""
     num_workers = int(
-        config.train_loader_num_workers if train else config.eval_loader_num_workers
+        config.train_loader_num_workers if train else config.val_loader_num_workers
     )
     num_workers = max(num_workers, 0)
     kwargs = {
@@ -114,7 +114,7 @@ class ModelTrainContext:
     runtime_dirs: dict
     device: object
     train_dataset: object
-    test_dataset: object
+    val_dataset: object
     full_dataset: object
     head_names: list
     use_align_loss: bool
@@ -130,7 +130,7 @@ def train_model(
     level_name,
     level_idx,
     train_indices,
-    test_indices,
+    val_indices,
     num_classes,
     parent_level_idx=None,
     parent_to_children=None,
@@ -143,7 +143,7 @@ def train_model(
     runtime_dirs = ctx.runtime_dirs
     device = ctx.device
     train_dataset = ctx.train_dataset
-    test_dataset = ctx.test_dataset
+    val_dataset = ctx.val_dataset
     full_dataset = ctx.full_dataset
     head_names = ctx.head_names
     USE_ALIGN_LOSS = ctx.use_align_loss
@@ -164,20 +164,20 @@ def train_model(
         return None
 
     train_subset = Subset(train_dataset, train_indices)
-    test_subset = Subset(test_dataset, test_indices) if len(test_indices) > 0 else None
+    val_subset = Subset(val_dataset, val_indices) if len(val_indices) > 0 else None
 
     train_loader = DataLoader(
         train_subset,
         **_build_loader_kwargs(config, device, train=True),
     )
 
-    test_loader = None
-    if test_subset is not None and len(test_subset) > 0:
-        test_loader = DataLoader(
-            test_subset,
+    val_loader = None
+    if val_subset is not None and len(val_subset) > 0:
+        val_loader = DataLoader(
+            val_subset,
             **_build_loader_kwargs(config, device, train=False),
         )
-    if test_loader is None:
+    if val_loader is None:
         raise ValueError(
             f"{model_tag} 没有可用的验证样本，当前实现要求每个参与训练的 leaf "
             "在切分后都能为验证集提供样本"
@@ -496,9 +496,9 @@ def train_model(
             train_align_loss = align_w * running_align_loss / effective_batches
             train_supcon_loss = supcon_w * running_supcon_loss / effective_batches
             train_acc = running_correct / max(running_total, 1)
-            test_loss, test_acc, test_metrics, se_stats = evaluate_validation_loader(
+            val_loss, val_acc, val_metrics, se_stats = evaluate_validation_loader(
                 model,
-                test_loader,
+                val_loader,
                 device,
                 head_index=level_idx,
                 head_name=level_name,
@@ -506,8 +506,8 @@ def train_model(
                 parent_index=parent_level_idx if use_parent_mask else None,
                 parent_to_children=parent_to_children if use_parent_mask else None,
             )
-            macro_f1 = test_metrics["macro_f1"]
-            macro_recall = test_metrics["macro_recall"]
+            macro_f1 = val_metrics["macro_f1"]
+            macro_recall = val_metrics["macro_recall"]
             scheduler.step()
             if epoch % 10 == 0:
                 model_log(f"  base_class_weights = {base_class_weights.detach().cpu().numpy()}")
@@ -518,17 +518,17 @@ def train_model(
                 f"[Epoch {epoch}] TrainLoss(cls)={train_loss:.4f}, "
                 f"AlignLossW={train_align_loss:.4f}, "
                 f"SupConLossW={train_supcon_loss:.4f}, "
-                f"TestLoss={test_loss:.4f}\n"
+                f"ValLoss={val_loss:.4f}\n"
                 f"TrainAcc={train_acc * 100:.2f}%, "
-                f"TestAcc={test_acc * 100:.2f}%, "
-                f"TestMacroF1={macro_f1 * 100:.2f}%, "
-                f"TestMacroRecall={macro_recall * 100:.2f}%, "
+                f"ValAcc={val_acc * 100:.2f}%, "
+                f"ValMacroF1={macro_f1 * 100:.2f}%, "
+                f"ValMacroRecall={macro_recall * 100:.2f}%, "
                 f"LR={optimizer.param_groups[0]['lr']:.2e}, "
             )
             # Early Stop 只看宏 F1 与 accuracy 的加权分数
             score = (
                 config.early_stop_w_f1 * macro_f1
-                + config.early_stop_w_acc * test_acc
+                + config.early_stop_w_acc * val_acc
             )
             model_log(
                 f"EarlyStop score = "

@@ -5,13 +5,14 @@ from pathlib import Path
 
 import torch
 
-from raman.config_io import load_experiment
+from raman.config_io import assert_input_compatible, load_experiment, load_run_config
 from raman.model import RamanClassifier1D
 
 from .experiment import (
     load_hierarchy_meta,
-    resolve_model_sidecar_path,
+    resolve_level_model_entry,
     resolve_level_model_path,
+    resolve_model_sidecar_path,
     resolve_project_path,
     scan_parent_model_files,
 )
@@ -26,19 +27,15 @@ class ExperimentRuntime:
     device: torch.device
     meta: dict
     level_model_paths: dict[str, str] = field(default_factory=dict)
+    level_model_entries: dict[str, dict] = field(default_factory=dict)
     parent_models: dict[str, dict] = field(default_factory=dict)
     class_names_by_level: dict[str, list] = field(default_factory=dict)
     parent_to_children: dict[str, dict] = field(default_factory=dict)
     level_model_cache: dict[str, object] = field(default_factory=dict)
     parent_model_cache: dict[tuple[str, int], object] = field(default_factory=dict)
+    run_config_cache: dict[str, object] = field(default_factory=dict)
     se_stats_cache: dict[str, object] = field(default_factory=dict)
-
-    def _load_model(self, model_path, num_classes):
-        model = RamanClassifier1D(num_classes=num_classes, config=self.config).to(self.device)
-        state = torch.load(model_path, map_location=self.device)
-        model.load_state_dict(state)
-        model.eval()
-        return model
+    run_selection: dict[str, str] | None = None
 
     def _resolve_model_path(self, model_path):
         full_path = Path(model_path)
@@ -46,14 +43,45 @@ class ExperimentRuntime:
             full_path = Path(self.exp_dir) / full_path
         return full_path
 
+    def _load_run_config_for_model(self, model_path):
+        run_dir = Path(model_path).parent
+        if not run_dir.name.startswith("run_"):
+            return self.config
+
+        cache_key = os.fspath(run_dir)
+        if cache_key in self.run_config_cache:
+            return self.run_config_cache[cache_key]
+
+        run_config = load_run_config(run_dir, exp_dir=self.exp_dir)
+        assert_input_compatible(self.config, run_config, context=os.fspath(run_dir))
+        self.run_config_cache[cache_key] = run_config
+        return run_config
+
+    def _load_model(self, model_path, num_classes):
+        full_path = self._resolve_model_path(model_path)
+        run_config = self._load_run_config_for_model(full_path)
+        model = RamanClassifier1D(num_classes=num_classes, config=run_config).to(self.device)
+        state = torch.load(full_path, map_location=self.device)
+        model.load_state_dict(state)
+        model.eval()
+        return model
+
     def build_level_model_paths(self, level_order):
         """为给定层级顺序补齐全局模型路径"""
         level_models_meta = self.meta.get("level_models", {})
         for level_name in level_order:
-            self.level_model_paths[level_name] = resolve_level_model_path(
+            entry = resolve_level_model_entry(
                 self.exp_dir,
                 level_name,
                 level_models_meta,
+                run_selection=self.run_selection,
+            )
+            self.level_model_entries[level_name] = entry
+            self.level_model_paths[level_name] = resolve_level_model_path(
+                self.exp_dir,
+                level_name,
+                {level_name: entry},
+                run_selection=self.run_selection,
             )
         return {level_name: self.level_model_paths[level_name] for level_name in level_order}
 
@@ -61,15 +89,25 @@ class ExperimentRuntime:
         """确保某层 parent 模型映射完整，并在缺失时扫描实验目录补齐"""
         current = self.parent_models.setdefault(level_name, {})
         fallback = fallback_parent_to_children if fallback_parent_to_children is not None else self.parent_to_children
-        scanned = scan_parent_model_files(self.exp_dir, level_name, fallback)
+        scanned = scan_parent_model_files(
+            self.exp_dir,
+            level_name,
+            fallback,
+            run_selection=self.run_selection,
+        )
 
         class_names = self.class_names_by_level.get(level_name, [])
         for parent_idx, scanned_entry in scanned.items():
             entry = dict(current.get(parent_idx, {}))
             if not entry.get("child_ids"):
                 entry["child_ids"] = list(scanned_entry.get("child_ids", []))
-            if entry.get("model_path") is None:
+
+            # 目录中的 best/latest run 优先于 meta 中已有记录
+            if scanned_entry.get("run_dir"):
+                entry.update(scanned_entry)
+            elif entry.get("model_path") is None:
                 entry["model_path"] = scanned_entry.get("model_path")
+
             if "child_names" not in entry and class_names and entry.get("child_ids"):
                 entry["child_names"] = [
                     class_names[child_id]
@@ -92,12 +130,8 @@ class ExperimentRuntime:
 
         model_path = self.level_model_paths.get(level_name)
         if not model_path:
-            model_path = resolve_level_model_path(
-                self.exp_dir,
-                level_name,
-                self.meta.get("level_models", {}),
-            )
-            self.level_model_paths[level_name] = model_path
+            self.build_level_model_paths([level_name])
+            model_path = self.level_model_paths.get(level_name)
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model not found for level '{level_name}': {model_path}")
 
@@ -222,7 +256,7 @@ class ExperimentRuntime:
         return se_stats
 
 
-def build_experiment_runtime(exp_dir, device, config=None, meta=None):
+def build_experiment_runtime(exp_dir, device, config=None, meta=None, run_selection=None):
     """构建统一的实验运行时上下文"""
     exp_dir = os.fspath(resolve_project_path(exp_dir))
     if config is None:
@@ -236,10 +270,13 @@ def build_experiment_runtime(exp_dir, device, config=None, meta=None):
         device=device,
         meta=meta,
         level_model_paths={},
+        level_model_entries={},
         parent_models=deepcopy(meta.get("parent_models", {})),
         class_names_by_level=deepcopy(meta.get("class_names_by_level", {})),
         parent_to_children=deepcopy(meta.get("parent_to_children", {})),
         level_model_cache={},
         parent_model_cache={},
+        run_config_cache={},
         se_stats_cache={},
+        run_selection=run_selection,
     )

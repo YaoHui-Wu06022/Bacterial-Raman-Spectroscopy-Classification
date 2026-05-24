@@ -16,6 +16,8 @@ from .session import (
     set_seed,
 )
 from .split import (
+    TRAIN_SPLIT_NAME,
+    VAL_SPLIT_NAME,
     apply_train_filter,
     build_label_map_np,
     load_split_files,
@@ -32,6 +34,8 @@ __all__ = [
     "AlignLoss",
     "FocalLoss",
     "SupConLoss",
+    "TRAIN_SPLIT_NAME",
+    "VAL_SPLIT_NAME",
     "apply_train_filter",
     "build_class_weights",
     "build_label_map_np",

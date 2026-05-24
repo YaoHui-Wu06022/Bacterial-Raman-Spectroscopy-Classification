@@ -96,7 +96,6 @@ def compute_input_channel_importance_IG(
         plt.grid(alpha=0.3)
         plt.tight_layout()
         plt.savefig(os.path.join(save_dir, "channel_importance_IG.png"), dpi=300)
-        plt.show()
         plt.close()
 
     return channel_importance
@@ -546,7 +545,6 @@ def plot_band_importance_heatmap(
     ax.set_xlim(wavenumbers[0], wavenumbers[-1])
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
-    plt.show()
     plt.close()
 
 def save_topk_bands_csv(

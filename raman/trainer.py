@@ -3,25 +3,32 @@ from copy import deepcopy
 import json
 import os
 from dataclasses import dataclass
+from datetime import datetime
 import torch
 
 from raman.config import config as default_config
 from raman.data import RamanDataset
 from raman.training.checkpoint import build_relpath
 from raman.training.session import (
+    prepare_run_runtime,
     prepare_training_runtime,
     save_hierarchy_meta,
     set_seed,
 )
 from raman.training.model_loop import ModelTrainContext, train_model
 from raman.training.split import (
+    TRAIN_SPLIT_NAME,
+    VAL_SPLIT_NAME,
     apply_train_filter,
     build_label_map_np,
+    load_split_files,
     log_split_summary,
     resolve_level_order,
     resolve_levels_to_train,
     resolve_train_scope,
-    resolve_train_split,
+    save_split_files,
+    split_by_lowest_level_ratio,
+    split_files_hash,
 )
 
 @dataclass
@@ -73,11 +80,68 @@ def _load_existing_hierarchy_meta(exp_dir):
 
 def _resolve_saved_model_path(exp_dir, model_path):
     """把层级元数据中的模型路径解析成绝对路径"""
+    if isinstance(model_path, dict):
+        model_path = model_path.get("model_path")
     if not model_path:
         return None
     if os.path.isabs(model_path):
         return model_path
     return os.path.join(exp_dir, model_path)
+
+
+def _run_timestamp():
+    return datetime.now().strftime("run_%Y%m%d_%H%M%S")
+
+
+def _model_tag(level_name, parent_idx=None):
+    if parent_idx is None:
+        return level_name
+    return f"{level_name}_{int(parent_idx)}"
+
+
+def _run_dir(exp_dir, level_name, run_name, parent_idx=None):
+    if parent_idx is None:
+        return os.path.join(exp_dir, level_name, run_name)
+    return os.path.join(exp_dir, level_name, _model_tag(level_name, parent_idx), run_name)
+
+
+def _parent_name(full_dataset, parent_level_idx, parent_idx):
+    if parent_level_idx is None:
+        return None
+    inv = full_dataset.inv_label_maps_by_level[parent_level_idx]
+    return inv.get(int(parent_idx))
+
+
+def _relative_entry_path(exp_dir, path):
+    return build_relpath(exp_dir, path) if path else None
+
+
+def _run_entry(exp_dir, run_dir, result, *, child_ids=None, child_names=None, status="trained"):
+    model_path = result.get("best_model_path") if result else None
+    entry = {
+        "run_dir": _relative_entry_path(exp_dir, run_dir),
+        "config_path": _relative_entry_path(exp_dir, os.path.join(run_dir, "model_config.yaml")),
+        "resolved_config_path": _relative_entry_path(exp_dir, os.path.join(run_dir, "resolved_config.yaml")),
+        "model_path": _relative_entry_path(exp_dir, model_path),
+        "train_split_path": TRAIN_SPLIT_NAME,
+        "val_split_path": VAL_SPLIT_NAME,
+        "split_hash": split_files_hash(exp_dir),
+        "log_path": _relative_entry_path(exp_dir, os.path.join(run_dir, "logs", "run.log")),
+        "trained_at": os.path.basename(os.path.normpath(run_dir)).replace("run_", ""),
+        "status": status,
+    }
+    if child_ids is not None:
+        entry["child_ids"] = list(child_ids)
+    if child_names is not None:
+        entry["child_names"] = list(child_names)
+    return entry
+
+
+def _close_run_files(log_file, config_log_file):
+    if config_log_file is not None:
+        config_log_file.close()
+    if log_file is not None:
+        log_file.close()
 
 
 
@@ -173,7 +237,7 @@ def _log_missing_upper_level_hint(full_dataset, current_train_level, train_per_p
         f"{upper_level_name} 的完整模型记录"
     )
     log(
-        f"[Hint] 若后续需要在同一 EXP_DIR 中继续向下训练、级联预测或测试评估，"
+        f"[Hint] 若后续需要在同一 EXP_DIR 中继续向下训练、级联预测或验证评估，"
         f"建议先训练 current_train_level={upper_level_name}"
     )
 
@@ -198,6 +262,7 @@ def run_training(config_obj=None, overrides=None):
     config.decay_start_ratio = decay_start_ratio
 
     runtime_dirs, log, _, log_file, config_log_file = prepare_training_runtime(config)
+    exp_dir = config.output_dir
 
     # 设备与随机种子
     use_cuda = (config.use_gpu and torch.cuda.is_available())
@@ -230,22 +295,36 @@ def run_training(config_obj=None, overrides=None):
         config.output_dir,
         log,
     )
-    train_idx, test_idx = resolve_train_split(full_dataset, config)
+    existing_split = load_split_files(full_dataset, exp_dir)
+    if existing_split is not None:
+        train_idx, val_idx = existing_split
+        log(f"[Split] reuse {TRAIN_SPLIT_NAME}/{VAL_SPLIT_NAME} from {exp_dir}")
+    else:
+        train_idx, val_idx = split_by_lowest_level_ratio(
+            full_dataset,
+            lowest_level=config.split_level or "leaf",
+            train_ratio=config.train_split,
+            seed=config.seed,
+        )
+        train_idx = torch.as_tensor(train_idx, dtype=torch.long).numpy()
+        val_idx = torch.as_tensor(val_idx, dtype=torch.long).numpy()
+        save_split_files(full_dataset, train_idx, val_idx, exp_dir)
+        log(f"[Split] saved {TRAIN_SPLIT_NAME}/{VAL_SPLIT_NAME} to {exp_dir}")
     only_parent = resolve_train_scope(
         full_dataset,
         config,
         current_train_level,
         head_name_to_idx,
     )
-    train_idx, test_idx = apply_train_filter(
+    train_idx, val_idx = apply_train_filter(
         full_dataset,
         train_idx,
-        test_idx,
+        val_idx,
         config,
         head_name_to_idx,
     )
 
-    log_split_summary(full_dataset, train_idx, test_idx, current_train_level, head_name_to_idx)
+    log_split_summary(full_dataset, train_idx, val_idx, current_train_level, head_name_to_idx)
 
     # 构建训练和验证数据集，并保持层级映射一致
     train_dataset = RamanDataset(
@@ -253,7 +332,7 @@ def run_training(config_obj=None, overrides=None):
         augment=True,
         config=config
     )
-    test_dataset = RamanDataset(
+    val_dataset = RamanDataset(
         config.dataset_root,
         augment=False,
         config=config
@@ -264,22 +343,25 @@ def run_training(config_obj=None, overrides=None):
 
     level_models = {}
     parent_models = {}
-    train_context = ModelTrainContext(
-        config=config,
-        log=log,
-        runtime_dirs=runtime_dirs,
-        device=device,
-        train_dataset=train_dataset,
-        test_dataset=test_dataset,
-        full_dataset=full_dataset,
-        head_names=head_names,
-        use_align_loss=USE_ALIGN_LOSS,
-        use_supcon_loss=USE_SUPCON_LOSS,
-        align_loss_weight=ALIGN_LOSS_WEIGHT,
-        supcon_loss_weight=SUPCON_LOSS_WEIGHT,
-        decay_start_ratio=decay_start_ratio,
-        zero_loss=zero_loss,
-    )
+    run_name = _run_timestamp()
+
+    def build_train_context(run_config, run_dirs, run_log):
+        return ModelTrainContext(
+            config=run_config,
+            log=run_log,
+            runtime_dirs=run_dirs,
+            device=device,
+            train_dataset=train_dataset,
+            val_dataset=val_dataset,
+            full_dataset=full_dataset,
+            head_names=head_names,
+            use_align_loss=USE_ALIGN_LOSS,
+            use_supcon_loss=USE_SUPCON_LOSS,
+            align_loss_weight=ALIGN_LOSS_WEIGHT,
+            supcon_loss_weight=SUPCON_LOSS_WEIGHT,
+            decay_start_ratio=decay_start_ratio,
+            zero_loss=zero_loss,
+        )
 
     for level_name in levels_to_train:
         log(f"[{level_name}] ==================== LEVEL START ====================")
@@ -289,22 +371,33 @@ def run_training(config_obj=None, overrides=None):
         parent_to_children = full_dataset.parent_to_children.get(level_name, {})
         # 顶层或非按父类训练：训练全局单模型
         if (parent_name is None) or (not TRAIN_PER_PARENT):
+            run_dir = _run_dir(exp_dir, level_name, run_name, parent_idx=None)
+            run_config = deepcopy(config)
+            run_config.output_dir = run_dir
+            run_config.experiment_dir = exp_dir
+            run_config.run_dir = run_dir
+            run_dirs, run_log, _, run_log_file, run_config_log_file = prepare_run_runtime(
+                run_config,
+                run_dir,
+            )
+            run_log(f"[{level_name}] run_dir = {run_dir}")
             result = train_model(
-                train_context,
+                build_train_context(run_config, run_dirs, run_log),
                 model_tag=level_name,
                 level_name=level_name,
                 level_idx=level_idx,
                 train_indices=train_idx,
-                test_indices=test_idx,
+                val_indices=val_idx,
                 num_classes=full_dataset.num_classes_by_level[level_name],
                 parent_level_idx=parent_level_idx,
                 parent_to_children=parent_to_children,
                 label_map_np=None,
                 use_parent_mask=False,
             )
+            _close_run_files(run_log_file, run_config_log_file)
             if result is None:
                 continue
-            level_models[level_name] = build_relpath(config.output_dir, result["best_model_path"])
+            level_models[level_name] = _run_entry(exp_dir, run_dir, result)
         else:
             # 父类内子类独立模型
             parent_models[level_name] = {}
@@ -321,32 +414,61 @@ def run_training(config_obj=None, overrides=None):
                     full_dataset.class_names_by_level[level_idx][cid]
                     for cid in child_ids
                 ]
-                # 只有一个子类时不需要训练
-                if len(child_ids) <= 1:
-                    log(f"parent={parent_idx} only one child, skip training")
-                    parent_models[level_name][parent_idx] = {
-                        "model_path": None,
-                        "child_ids": child_ids,
-                        "child_names": child_names
-                    }
-                    continue
-
                 labels_train = full_dataset.level_labels[train_idx]
-                labels_test = full_dataset.level_labels[test_idx]
-
+                labels_val = full_dataset.level_labels[val_idx]
                 train_mask = (labels_train[:, parent_level_idx] == parent_idx) & (
                     labels_train[:, level_idx] >= 0
                 )
-                test_mask = (labels_test[:, parent_level_idx] == parent_idx) & (
-                    labels_test[:, level_idx] >= 0
+                val_mask = (labels_val[:, parent_level_idx] == parent_idx) & (
+                    labels_val[:, level_idx] >= 0
+                )
+                train_indices = train_idx[train_mask]
+                val_indices = val_idx[val_mask]
+                parent_label = _parent_name(full_dataset, parent_level_idx, parent_idx)
+
+                # 只有一个子类时不需要训练
+                if len(child_ids) <= 1:
+                    log(
+                        f"[{level_name}] parent={parent_idx} name={parent_label} "
+                        f"only one child={child_names}, skip training without run_dir"
+                    )
+                    parent_models[level_name][parent_idx] = {
+                        "model_path": None,
+                        "child_ids": child_ids,
+                        "child_names": child_names,
+                        "status": "skipped_single_child",
+                    }
+                    continue
+
+                run_dir = _run_dir(exp_dir, level_name, run_name, parent_idx=parent_idx)
+                run_config = deepcopy(config)
+                run_config.output_dir = run_dir
+                run_config.experiment_dir = exp_dir
+                run_config.run_dir = run_dir
+                run_config.train_only_parent = int(parent_idx)
+                run_dirs, run_log, _, run_log_file, run_config_log_file = prepare_run_runtime(
+                    run_config,
+                    run_dir,
                 )
 
-                train_indices = train_idx[train_mask]
-                test_indices = test_idx[test_mask]
-
-                log(
-                    f"parent={parent_idx} train={len(train_indices)} "
-                    f"test={len(test_indices)} child={child_ids}"
+                local_train_labels = full_dataset.level_labels[train_indices, level_idx]
+                local_val_labels = full_dataset.level_labels[val_indices, level_idx]
+                run_log(
+                    f"[{level_name}] parent={parent_idx} name={parent_label} "
+                    f"child_names={child_names}"
+                )
+                run_log(f"[{level_name}] run_dir = {run_dir}")
+                run_log(
+                    f"[{level_name}] train={len(train_indices)} val={len(val_indices)} "
+                    f"child_ids={child_ids}"
+                )
+                run_log(
+                    f"[{level_name}] local train counts = "
+                    f"{torch.bincount(torch.as_tensor(local_train_labels), minlength=full_dataset.num_classes_by_level[level_name]).numpy()[child_ids]}"
+                )
+                run_log(
+                    f"[{level_name}] local val counts = "
+                    f"{torch.bincount(torch.as_tensor(local_val_labels), minlength=full_dataset.num_classes_by_level[level_name]).numpy()[child_ids]}"
                 )
 
                 label_map_np = build_label_map_np(
@@ -355,27 +477,30 @@ def run_training(config_obj=None, overrides=None):
                 )
 
                 result = train_model(
-                    train_context,
-                    model_tag=f"{level_name}_parent_{parent_idx}",
+                    build_train_context(run_config, run_dirs, run_log),
+                    model_tag=_model_tag(level_name, parent_idx),
                     level_name=level_name,
                     level_idx=level_idx,
                     train_indices=train_indices,
-                    test_indices=test_indices,
+                    val_indices=val_indices,
                     num_classes=len(child_ids),
                     parent_level_idx=None,
                     parent_to_children=None,
                     label_map_np=label_map_np,
                     use_parent_mask=False,
                 )
+                _close_run_files(run_log_file, run_config_log_file)
 
                 if result is None:
                     continue
 
-                parent_models[level_name][parent_idx] = {
-                    "model_path": build_relpath(config.output_dir, result["best_model_path"]),
-                    "child_ids": child_ids,
-                    "child_names": child_names
-                }
+                parent_models[level_name][parent_idx] = _run_entry(
+                    exp_dir,
+                    run_dir,
+                    result,
+                    child_ids=child_ids,
+                    child_names=child_names,
+                )
 
     save_hierarchy_meta(
         config,
@@ -386,13 +511,22 @@ def run_training(config_obj=None, overrides=None):
         parent_models,
     )
 
-    config_log_file.close()
-    log_file.close()
+    _close_run_files(log_file, config_log_file)
 
     return {
-        "output_dir": config.output_dir,
+        "output_dir": exp_dir,
         "current_train_level": current_train_level,
         "levels_to_train": levels_to_train,
+        "run_dirs": [
+            entry.get("run_dir")
+            for entry in level_models.values()
+            if isinstance(entry, dict) and entry.get("run_dir")
+        ] + [
+            entry.get("run_dir")
+            for mapping in parent_models.values()
+            for entry in mapping.values()
+            if isinstance(entry, dict) and entry.get("run_dir")
+        ],
     }
 
 

@@ -1,24 +1,36 @@
-from raman.analysis import AnalysisOverrides, HeatmapConfig, run_analysis_pipeline
+"""训练结果分析入口"""
+
+from raman.analysis import (
+    HeatmapConfig,
+    run_analysis_cascade,
+    run_analysis_level_only,
+    run_analysis_single_model,
+)
 
 
-# 手动配置
-EXP_DIR = ""  # 训练输出目录（含模型与层级元数据）
-ANALYSIS_MODE = "single"  # single / aggregate
-ANALYSIS_LEVEL = "level_1"  # 分析层级
-PARENT_IDX = None  # single: None / 指定 id / "all"；aggregate: 通常用 "all"
-FALLBACK_TO_SINGLE = True  # 聚合模式下没有 parent 子模型时，是否退化为单模型分析
-INHERIT_MISSING_LEVELS = True  # 缺失层级时向最低级继承（便于展示）
+# 可选模式：single_model / level_only / cascade
+ANALYSIS_MODE = "single_model"
 
-HEATMAP_NUM_BATCHES = 10  # 采样多少个 batch 计算热图
-HEATMAP_STEPS = 32  # IG 积分步数（越大越稳但更慢）
-HEATMAP_MAX_PER_CLASS = 50  # 每类最多使用的样本数上限
-HEATMAP_ROW_NORM = "max"  # 行归一化方式：max / sum / none
-HEATMAP_USE_TRAIN_LOADER = True  # True 用训练集，False 用测试集
-HEATMAP_TOPK_PER_CLASS = 5  # 每类导出 top-k 波段
+# single_model 模式填具体 run_* 或 best/run_* 目录
+RUN_DIR = ""
+
+# level_only / cascade 模式填实验根目录
+EXP_DIR = ""
+
+TARGET_LEVEL = "level_1"
+PARENT_IDX = None
+INHERIT_MISSING_LEVELS = False
+
+HEATMAP_NUM_BATCHES = 10
+HEATMAP_STEPS = 32
+HEATMAP_MAX_PER_CLASS = 50
+HEATMAP_ROW_NORM = "max"
+HEATMAP_USE_TRAIN_LOADER = True
+HEATMAP_TOPK_PER_CLASS = 5
 
 
-def main():
-    heatmap_cfg = HeatmapConfig(
+def _heatmap_config():
+    return HeatmapConfig(
         num_batches=HEATMAP_NUM_BATCHES,
         steps=HEATMAP_STEPS,
         max_per_class=HEATMAP_MAX_PER_CLASS,
@@ -26,17 +38,44 @@ def main():
         use_train_loader=HEATMAP_USE_TRAIN_LOADER,
         topk_per_class=HEATMAP_TOPK_PER_CLASS,
     )
-    run_analysis_pipeline(
-        overrides=AnalysisOverrides(
-            exp_dir=EXP_DIR,
-            mode=ANALYSIS_MODE,
-            analysis_level=ANALYSIS_LEVEL,
+
+
+def main():
+    heatmap_cfg = _heatmap_config()
+    if ANALYSIS_MODE == "single_model":
+        if not RUN_DIR:
+            raise ValueError("single_model 模式请先填写 RUN_DIR")
+        result_dir = run_analysis_single_model(
+            RUN_DIR,
+            level=TARGET_LEVEL,
             parent_idx=PARENT_IDX,
             inherit_missing_levels=INHERIT_MISSING_LEVELS,
-            fallback_to_single=FALLBACK_TO_SINGLE,
-        ),
-        heatmap_cfg=heatmap_cfg,
-    )
+            heatmap_cfg=heatmap_cfg,
+        )
+    elif ANALYSIS_MODE == "level_only":
+        if not EXP_DIR:
+            raise ValueError("level_only 模式请先填写 EXP_DIR")
+        result_dir = run_analysis_level_only(
+            EXP_DIR,
+            TARGET_LEVEL,
+            parent_idx=PARENT_IDX if PARENT_IDX is not None else "all",
+            inherit_missing_levels=INHERIT_MISSING_LEVELS,
+            heatmap_cfg=heatmap_cfg,
+        )
+    elif ANALYSIS_MODE == "cascade":
+        if not EXP_DIR:
+            raise ValueError("cascade 模式请先填写 EXP_DIR")
+        result_dir = run_analysis_cascade(
+            EXP_DIR,
+            TARGET_LEVEL,
+            parent_idx=PARENT_IDX if PARENT_IDX is not None else "all",
+            inherit_missing_levels=INHERIT_MISSING_LEVELS,
+            heatmap_cfg=heatmap_cfg,
+        )
+    else:
+        raise ValueError("ANALYSIS_MODE 只能是 single_model / level_only / cascade")
+
+    print("analysis_result_dir =", result_dir)
 
 
 if __name__ == "__main__":

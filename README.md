@@ -39,9 +39,11 @@
 ├─ train.py                          # 训练入口，只负责手动覆盖项与 run_training 调用
 ├─ evaluate.py                       # 独立测试集评估入口
 ├─ infer_test.py                     # 独立测试集推理入口，手动改顶部配置后运行
-├─ import_test_samples_to_train.py    # 把确认可用的测试样本导入训练原始目录
+├─ import_test_samples_to_train.py    # 从测试菌抽样复制少量谱到初始数据 init
 ├─ pca_svm_baseline.py               # PCA + SVM 基线评估入口
 ├─ analyze.py                        # 分析入口，支持 single / aggregate 两种模式
+├─ AGENTS.md                         # 本仓库给 coding agent 的协作约束
+├─ LICENSE                           # 项目许可证
 └─ README.md                         # 项目流程、参数和方法说明
 ```
 
@@ -52,7 +54,8 @@ raman/
 ├─ config.py                         # 训练配置定义：输入、模型、损失、增强概率、优化器参数
 ├─ config_io.py                      # config.yaml 读写与实验配置回载
 ├─ model.py                          # 主模型实现：多尺度 stem + 1D CNN + encoder + pooling + head
-└─ trainer.py                        # 训练总调度：数据集、层级任务、模型循环与 hierarchy meta
+├─ trainer.py                        # 训练总调度：数据集、层级任务、模型循环与 hierarchy meta
+└─ __init__.py                       # raman 包标记
 ```
 
 ### 2.3 数据层
@@ -79,7 +82,7 @@ raman/audit/
 ├─ cli.py                            # 审核 CLI：full / bad-band / move
 ├─ full_scan.py                      # 分阶段全库审核入口与报告、复核图输出
 ├─ config.py                         # AuditConfig：各阶段阈值、删除分类与原因标签
-├─ scoring.py                        # 审核公共评分、候选字段整理与阶段调度
+├─ scoring.py                        # 审核公共评分、SpectrumRecord 字段整理与阶段调度
 ├─ common.py                         # 审核共用预处理、绘图、路径解析与 CSV 工具
 ├─ stage_invalid.py                  # 第一阶段：无效谱、长平坦段、强噪声判定
 ├─ stage_anomalous_cosmic.py         # 第二阶段：基线扣除谱上的宽宇宙射线残留/阶梯异常
@@ -115,8 +118,8 @@ raman/eval/
 
 raman/infer/
 ├─ core.py                           # 层级级联推理核心
-├─ folder.py                         # 文件夹逐谱预测与旧版文本格式输出
-├─ test.py                           # 独立测试集推理、谱线对照图与 summary 汇总
+├─ folder.py                         # 文件夹逐谱预测、top-k 文本报告与文件枚举
+├─ test.py                           # 独立测试集推理、谱线对照图、summary 与 used_runs 汇总
 ├─ cli.py                            # infer CLI：test
 └─ __main__.py                       # 支持 python -m raman.infer
 ```

@@ -21,9 +21,12 @@ class TrainingState:
 
 def build_model_artifact_paths(output_dir, level_name, model_tag):
     """构造按层子目录组织的模型与 sidecar 路径"""
-    level_dir = os.path.join(output_dir, level_name)
-    os.makedirs(level_dir, exist_ok=True)
-    model_path = os.path.join(level_dir, f"{model_tag}_model.pt")
+    if os.path.basename(os.path.normpath(output_dir)).startswith("run_"):
+        model_dir = output_dir
+    else:
+        model_dir = os.path.join(output_dir, level_name)
+    os.makedirs(model_dir, exist_ok=True)
+    model_path = os.path.join(model_dir, f"{model_tag}_model.pt")
     se_stats_path = resolve_model_sidecar_path(model_path)
     return model_path, se_stats_path
 

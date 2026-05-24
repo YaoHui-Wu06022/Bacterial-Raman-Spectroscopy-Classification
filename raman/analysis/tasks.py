@@ -3,7 +3,6 @@ import os
 import numpy as np
 from torch.utils.data import DataLoader, Dataset, Subset
 
-from raman.eval.experiment import resolve_level_model_path
 from raman.training import build_label_map_np
 
 
@@ -57,8 +56,8 @@ def build_analysis_tasks(
     auto_all = False
 
     if parent_idx_setting is None:
-        model_path = resolve_level_model_path(exp_dir, analysis_level, level_models)
-        if os.path.exists(model_path):
+        model_path = level_models.get(analysis_level)
+        if model_path and os.path.exists(model_path):
             num_classes = full_dataset.num_classes_by_level[analysis_level]
             class_names = full_dataset.class_names_by_level[head_index]
             tasks.append(
@@ -158,9 +157,9 @@ def build_task_loaders(
     analysis_level,
     head_index,
     train_idx_all,
-    test_idx_all,
+    val_idx_all,
     base_train_dataset,
-    base_test_dataset,
+    base_val_dataset,
 ):
     """按 parent 过滤样本并构建 DataLoader"""
     parent_idx = task["parent_idx"]
@@ -168,7 +167,7 @@ def build_task_loaders(
     inherit_missing = getattr(config, "inherit_missing_levels", False)
 
     train_idx = train_idx_all
-    test_idx = test_idx_all
+    val_idx = val_idx_all
 
     if parent_idx is not None:
         parent_level = full_dataset.get_parent_level(analysis_level)
@@ -177,16 +176,16 @@ def build_task_loaders(
         parent_level_idx = full_dataset.head_name_to_idx[parent_level]
 
         labels_train = full_dataset.level_labels[train_idx]
-        labels_test = full_dataset.level_labels[test_idx]
+        labels_val = full_dataset.level_labels[val_idx]
 
         train_mask = (labels_train[:, parent_level_idx] == parent_idx)
-        test_mask = (labels_test[:, parent_level_idx] == parent_idx)
+        val_mask = (labels_val[:, parent_level_idx] == parent_idx)
         if not inherit_missing:
             train_mask = train_mask & (labels_train[:, head_index] >= 0)
-            test_mask = test_mask & (labels_test[:, head_index] >= 0)
+            val_mask = val_mask & (labels_val[:, head_index] >= 0)
 
         train_idx = train_idx[train_mask]
-        test_idx = test_idx[test_mask]
+        val_idx = val_idx[val_mask]
 
         label_map_np = build_label_map_np(
             child_ids,
@@ -194,13 +193,13 @@ def build_task_loaders(
         )
 
         train_dataset = LabelMapDataset(base_train_dataset, head_index, label_map_np)
-        test_dataset = LabelMapDataset(base_test_dataset, head_index, label_map_np)
+        val_dataset = LabelMapDataset(base_val_dataset, head_index, label_map_np)
     else:
         train_dataset = base_train_dataset
-        test_dataset = base_test_dataset
+        val_dataset = base_val_dataset
 
     train_subset = Subset(train_dataset, train_idx)
-    test_subset = Subset(test_dataset, test_idx)
+    val_subset = Subset(val_dataset, val_idx)
 
     train_loader = DataLoader(
         train_subset,
@@ -209,14 +208,14 @@ def build_task_loaders(
         num_workers=2
     )
 
-    test_loader = DataLoader(
-        test_subset,
+    val_loader = DataLoader(
+        val_subset,
         batch_size=config.batch_size,
         shuffle=False
     )
 
-    if len(test_subset) == 0:
-        test_loader = train_loader
+    if len(val_subset) == 0:
+        val_loader = train_loader
 
-    return train_loader, test_loader, train_subset, test_subset
+    return train_loader, val_loader, train_subset, val_subset
 

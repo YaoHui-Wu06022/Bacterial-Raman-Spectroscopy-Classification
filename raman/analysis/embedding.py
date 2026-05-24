@@ -18,16 +18,16 @@ def _fill_missing_labels(hier, level_names, missing_tag):
         out[name] = filled
     return out
 
-def collect_embeddings_train_test(
+def collect_embeddings_train_val(
     model,
     train_loader,
-    test_loader,
+    val_loader,
     device,
     dataset,
     level_names=None,
     return_label_names=False,
 ):
-    """收集 train/test 的模型 embedding，并保留业务层级标签用于联合可视化"""
+    """收集 train/val 的模型 embedding，并保留业务层级标签用于联合可视化"""
     model.eval()
 
     feats_all = []
@@ -72,8 +72,8 @@ def collect_embeddings_train_test(
                 else:
                     labels_all[k].append(hier_labels[k].numpy())
 
-        # 测试集样本标记为 split=1
-        for x, _, hier in test_loader:
+        # 验证集样本标记为 split=1
+        for x, _, hier in val_loader:
             x = x.to(device)
             if inherit_missing:
                 hier_filled = _fill_missing_labels(hier, level_names, missing_tag)
@@ -248,7 +248,7 @@ def plot_embedding_hierarchical(
         )
         plot_specs = [
             ("Train", split == 0, 0.85),
-            ("Test", split == 1, 0.85),
+            ("Val", split == 1, 0.85),
         ]
         for ax, (split_name, sample_mask, alpha) in zip(axes, plot_specs):
             _scatter_subset(ax, sample_mask, alpha=alpha)
@@ -281,5 +281,4 @@ def plot_embedding_hierarchical(
         cbar.set_ticklabels(unique_parents)
 
     plt.savefig(save_path, dpi=300)
-    plt.show()
     plt.close()

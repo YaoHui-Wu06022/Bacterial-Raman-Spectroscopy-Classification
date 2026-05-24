@@ -35,17 +35,17 @@ BASELINE_MAX_ITER = 15  # 基线迭代次数上限
 BASELINE_FIT_MIN = 400  # 基线拟合下限，保留训练范围外缓冲区以稳定边缘基线
 BASELINE_FIT_MAX = 2000  # 基线拟合上限，避免更远端异常尖峰污染基线
 
-COSMIC_RAY_ENABLED_PROFILE_IDS = ("MICRO","ENT","NENT","GP", "FUNG")
+COSMIC_RAY_ENABLED_PROFILE_IDS = ("MICRO","GN","GP", "FUNG")
 COSMIC_RAY_NARROW_WINDOW_POINTS = 7  # narrow 阶段局部 median/MAD 窗口宽度，单位点
 COSMIC_RAY_THRESHOLD = 7.0  # narrow 阶段正残差 z 阈值
 COSMIC_RAY_MAX_ITER = 2  # narrow 阶段最大迭代次数
 
 COSMIC_RAY_PEAK_PROMINENCE_Z = 9.6  # peak 阶段局部 median 正残差 z 阈值
 COSMIC_RAY_PEAK_WINDOW_POINTS = 31  # peak 阶段局部 median 窗口宽度
-COSMIC_RAY_PEAK_EXPAND_Z = 4.5  # peak 阶段从高阈值核心向外扩展的低 z 阈值
+COSMIC_RAY_PEAK_EXPAND_Z = 4  # peak 阶段从高阈值核心向外扩展的低 z 阈值
 COSMIC_RAY_PEAK_EXPAND_GAP_POINTS = 6  # peak 阶段合并扩展段时允许跨过的断点数
 COSMIC_RAY_PEAK_WIDTH_MAX_POINTS = 15  # peak 阶段可替换正异常段宽度上限
-COSMIC_RAY_PEAK_MEAN_Z_MIN = 6.5  # peak 阶段扩展段平均 z 下限
+COSMIC_RAY_PEAK_MEAN_Z_MIN = 6  # peak 阶段扩展段平均 z 下限
 COSMIC_RAY_PEAK_PAD_POINTS = 2  # peak 阶段替换异常段时左右额外扩展宽度
 
 MIN_SAMPLES_PER_CLASS = 8
@@ -54,7 +54,7 @@ PLOT_NORM_METHOD = "snv"
 PCA_ENABLED = True
 PCA_COMPONENTS = 0.95
 PCA_CENTER = True
-PCA_OUTLIER_RATIO = 0.03
+PCA_OUTLIER_RATIO = 0.015
 
 TRAIN_RAW_CONFIG_NAME = "config.json"
 

@@ -5,7 +5,7 @@ import torch
 from raman.eval.runtime import build_experiment_runtime
 from raman.data.spectrum import build_wavenumber_axis
 
-from .embedding import collect_embeddings_train_test, plot_embedding_hierarchical
+from .embedding import collect_embeddings_train_val, plot_embedding_hierarchical
 from .gradcam import (
     LayerGradCAMAnalyzer,
     collect_analyzable_layers,
@@ -34,12 +34,13 @@ def run_level_analysis(
     head_index,
     task,
     train_idx_all,
-    test_idx_all,
+    val_idx_all,
     base_train_dataset,
-    base_test_dataset,
+    base_val_dataset,
     runtime=None,
     device=None,
     heatmap_cfg=None,
+    analysis_dir=None,
 ):
     """单模型分析：Grad-CAM / IG / embedding / 波段热图"""
     parent_idx = task["parent_idx"]
@@ -49,7 +50,7 @@ def run_level_analysis(
     tag = task["tag"]
 
     # 输出目录
-    analysis_dir = os.path.join(exp_dir, f"{tag}_analysis")
+    analysis_dir = analysis_dir or os.path.join(exp_dir, "analysis_result", tag)
     fig_dir = os.path.join(analysis_dir, "figures")
     log_dir = os.path.join(analysis_dir, "logs")
     os.makedirs(fig_dir, exist_ok=True)
@@ -67,16 +68,16 @@ def run_level_analysis(
     else:
         log(f"Analysis target: {analysis_level} (parent={parent_idx})")
 
-    train_loader, test_loader, _, _ = build_task_loaders(
+    train_loader, val_loader, _, _ = build_task_loaders(
         task,
         config,
         full_dataset,
         analysis_level,
         head_index,
         train_idx_all,
-        test_idx_all,
+        val_idx_all,
         base_train_dataset,
-        base_test_dataset,
+        base_val_dataset,
     )
 
     # 模型加载
@@ -122,7 +123,7 @@ def run_level_analysis(
     log(f"Using channel names: {channel_names}")
 
     # 波段热图使用哪一侧数据，这里也同步决定通道重要性的统计样本
-    heatmap_loader = train_loader if heatmap_cfg.use_train_loader else test_loader
+    heatmap_loader = train_loader if heatmap_cfg.use_train_loader else val_loader
     inherit_missing = getattr(config, "inherit_missing_levels", False)
 
     if inherit_missing:
@@ -191,7 +192,7 @@ def run_level_analysis(
     if config.se_use:
         log_seblock_summary(runtime, model_path, log)
 
-    # train/test 联合 UMAP 可视化
+    # train/val 联合 UMAP 可视化
     embed_levels = [analysis_level]
     if full_dataset.head_names:
         top_level = full_dataset.head_names[0]
@@ -199,20 +200,20 @@ def run_level_analysis(
             embed_levels.append(top_level)
 
     if inherit_missing:
-        feats, hier_labels, label_names = collect_embeddings_train_test(
+        feats, hier_labels, label_names = collect_embeddings_train_val(
             model,
             train_loader,
-            test_loader,
+            val_loader,
             device,
             dataset=full_dataset,
             level_names=embed_levels,
             return_label_names=True,
         )
     else:
-        feats, hier_labels = collect_embeddings_train_test(
+        feats, hier_labels = collect_embeddings_train_val(
             model,
             train_loader,
-            test_loader,
+            val_loader,
             device,
             dataset=full_dataset,
             level_names=embed_levels,
@@ -222,7 +223,7 @@ def run_level_analysis(
     plot_embedding_hierarchical(
         feats,
         hier_labels=hier_labels,
-        save_path=os.path.join(fig_dir, "umap_hier_train_test.png"),
+        save_path=os.path.join(fig_dir, "umap_hier_train_val.png"),
         n_neighbors=config.umap_neighbors,
         min_dist=config.umap_min_dist,
         label_names=label_names,

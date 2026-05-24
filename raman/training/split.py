@@ -1,7 +1,12 @@
+import hashlib
 import json
 import os
 
 import numpy as np
+
+
+TRAIN_SPLIT_NAME = "train_split.json"
+VAL_SPLIT_NAME = "val_split.json"
 
 
 def _norm_relpath(path):
@@ -11,9 +16,16 @@ def _norm_relpath(path):
     return os.path.normpath(path).replace("\\", "/")
 
 
-def save_split_files(dataset, train_idx, test_idx, out_dir):
+def save_split_files(
+    dataset,
+    train_idx,
+    val_idx,
+    out_dir,
+    train_name=TRAIN_SPLIT_NAME,
+    val_name=VAL_SPLIT_NAME,
+):
     """
-    将 train/test 切分保存为相对 `dataset.root_dir` 的文件路径列表
+    将 train/val 切分保存为相对 `dataset.root_dir` 的文件路径列表
     """
     os.makedirs(out_dir, exist_ok=True)
     root = dataset.root_dir
@@ -21,14 +33,29 @@ def save_split_files(dataset, train_idx, test_idx, out_dir):
     train_files = [
         _norm_relpath(os.path.relpath(samples[i], root)) for i in train_idx
     ]
-    test_files = [
-        _norm_relpath(os.path.relpath(samples[i], root)) for i in test_idx
+    val_files = [
+        _norm_relpath(os.path.relpath(samples[i], root)) for i in val_idx
     ]
 
-    with open(os.path.join(out_dir, "train_files.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(out_dir, train_name), "w", encoding="utf-8") as f:
         json.dump(train_files, f, indent=2, ensure_ascii=False)
-    with open(os.path.join(out_dir, "test_files.json"), "w", encoding="utf-8") as f:
-        json.dump(test_files, f, indent=2, ensure_ascii=False)
+    with open(os.path.join(out_dir, val_name), "w", encoding="utf-8") as f:
+        json.dump(val_files, f, indent=2, ensure_ascii=False)
+
+
+def split_files_hash(split_dir):
+    """返回某个目录下 train/val split 文件的稳定哈希"""
+    digest = hashlib.sha256()
+    for name in (TRAIN_SPLIT_NAME, VAL_SPLIT_NAME):
+        path = os.path.join(split_dir, name)
+        if not os.path.exists(path):
+            return None
+        with open(path, "rb") as file:
+            digest.update(name.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(file.read())
+            digest.update(b"\n")
+    return digest.hexdigest()
 
 
 def load_split_files(dataset, split_dir):
@@ -37,15 +64,15 @@ def load_split_files(dataset, split_dir):
 
     若切分文件不存在，返回 `None`
     """
-    train_path = os.path.join(split_dir, "train_files.json")
-    test_path = os.path.join(split_dir, "test_files.json")
-    if not (os.path.exists(train_path) and os.path.exists(test_path)):
+    train_path = os.path.join(split_dir, TRAIN_SPLIT_NAME)
+    val_path = os.path.join(split_dir, VAL_SPLIT_NAME)
+    if not (os.path.exists(train_path) and os.path.exists(val_path)):
         return None
 
     with open(train_path, "r", encoding="utf-8") as f:
         train_files = json.load(f)
-    with open(test_path, "r", encoding="utf-8") as f:
-        test_files = json.load(f)
+    with open(val_path, "r", encoding="utf-8") as f:
+        val_files = json.load(f)
 
     root = dataset.root_dir
     rel_to_idx = {}
@@ -70,8 +97,8 @@ def load_split_files(dataset, split_dir):
         return np.array(sorted(mapped_idx))
 
     train_idx = map_list(train_files, "train")
-    test_idx = map_list(test_files, "test")
-    return train_idx, test_idx
+    val_idx = map_list(val_files, "val")
+    return train_idx, val_idx
 
 
 def split_by_lowest_level_ratio(
@@ -86,7 +113,7 @@ def split_by_lowest_level_ratio(
 
     返回：
     - `train_indices`
-    - `test_indices`
+    - `val_indices`
     """
     rng = np.random.RandomState(seed)
     group_to_indices = {}
@@ -103,7 +130,7 @@ def split_by_lowest_level_ratio(
         group_to_indices.setdefault(key, []).append(i)
 
     train_idx = []
-    test_idx = []
+    val_idx = []
 
     for indices in group_to_indices.values():
         indices = np.array(indices)
@@ -118,9 +145,9 @@ def split_by_lowest_level_ratio(
         n_train = min(n_train, len(indices) - 1)
 
         train_idx.extend(indices[:n_train])
-        test_idx.extend(indices[n_train:])
+        val_idx.extend(indices[n_train:])
 
-    return train_idx, test_idx
+    return train_idx, val_idx
 
 
 def resolve_level_order(dataset, target_level):
@@ -135,25 +162,26 @@ def resolve_level_order(dataset, target_level):
     return target_level, list(dataset.level_names[:stop_idx])
 
 
-def resolve_train_split(full_dataset, config):
+def resolve_train_split(full_dataset, config, split_dir=None, reuse_existing=True):
     """
     生成或复用训练/验证切分
     """
     split_level = config.split_level or "leaf"
-    train_idx, test_idx = split_by_lowest_level_ratio(
+    train_idx, val_idx = split_by_lowest_level_ratio(
         full_dataset,
         lowest_level=split_level,
         train_ratio=config.train_split,
         seed=config.seed,
     )
 
-    existing_split = load_split_files(full_dataset, config.output_dir)
+    split_dir = split_dir or config.output_dir
+    existing_split = load_split_files(full_dataset, split_dir) if reuse_existing else None
     if existing_split is None:
-        save_split_files(full_dataset, train_idx, test_idx, config.output_dir)
+        save_split_files(full_dataset, train_idx, val_idx, split_dir)
     else:
-        train_idx, test_idx = existing_split
+        train_idx, val_idx = existing_split
 
-    return np.array(sorted(train_idx)), np.array(sorted(test_idx))
+    return np.array(sorted(train_idx)), np.array(sorted(val_idx))
 
 
 def _normalize_filter_values(value):
@@ -213,14 +241,14 @@ def resolve_train_scope(full_dataset, config, current_train_level, head_name_to_
     return only_parent
 
 
-def apply_train_filter(full_dataset, train_idx, test_idx, config, head_name_to_idx):
+def apply_train_filter(full_dataset, train_idx, val_idx, config, head_name_to_idx):
     """
     在切分完成后，按指定层级和取值过滤样本
     """
     filter_level = getattr(config, "train_filter_level", None)
     filter_value = getattr(config, "train_filter_value", None)
     if not filter_level or filter_value is None:
-        return train_idx, test_idx
+        return train_idx, val_idx
 
     filter_level = full_dataset._resolve_level_name(filter_level)
     if filter_level not in head_name_to_idx:
@@ -249,25 +277,25 @@ def apply_train_filter(full_dataset, train_idx, test_idx, config, head_name_to_i
     labels_filter = full_dataset.level_labels[:, filter_level_idx]
     mask = np.isin(labels_filter, list(desired_ids))
     train_idx = train_idx[mask[train_idx]]
-    test_idx = test_idx[mask[test_idx]]
+    val_idx = val_idx[mask[val_idx]]
 
     print(
         f"[Filter] level={filter_level}, values={values} -> "
-        f"Train {len(train_idx)}, Test {len(test_idx)}"
+        f"Train {len(train_idx)}, Val {len(val_idx)}"
     )
-    return train_idx, test_idx
+    return train_idx, val_idx
 
 
-def log_split_summary(full_dataset, train_idx, test_idx, stats_level, head_name_to_idx):
+def log_split_summary(full_dataset, train_idx, val_idx, stats_level, head_name_to_idx):
     """
-    输出当前训练层级对应的 train/test 样本分布摘要
+    输出当前训练层级对应的 train/val 样本分布摘要
     """
     stats_level_idx = head_name_to_idx[stats_level]
     labels = full_dataset.level_labels[:, stats_level_idx]
 
     print(
         f"[Sample-level Split] Train samples: {len(train_idx)}, "
-        f"Test samples: {len(test_idx)}"
+        f"Val samples: {len(val_idx)}"
     )
     print(
         f"Train {stats_level} counts:",
@@ -277,9 +305,9 @@ def log_split_summary(full_dataset, train_idx, test_idx, stats_level, head_name_
         ),
     )
     print(
-        f"Test  {stats_level} counts:",
+        f"Val   {stats_level} counts:",
         np.bincount(
-            labels[test_idx][labels[test_idx] >= 0],
+            labels[val_idx][labels[val_idx] >= 0],
             minlength=full_dataset.num_classes_by_level[stats_level],
         ),
     )
