@@ -2,7 +2,7 @@
 
 ## 1. 项目目标
 
-本项目面向细菌拉曼光谱识别任务，构建一套完整的层级分类实验系统
+本项目面向微生物拉曼光谱识别任务，构建一套完整的层级分类实验系统
 
 当前代码已经覆盖：
 
@@ -204,12 +204,12 @@ dataset/
 ### 4.1 常用命令
 
 ```
-python -m raman.data pack 细菌       # 打包init数据集
-python -m raman.data unpack 细菌     # 还原init数据集
-python -m raman.data preview 细菌    # 对init每个文件夹做均值谱图输出，并同步生成train_raw
-python -m raman.data count 细菌      # 统计数据集
-python -m raman.data train 细菌      # 先构建可复用train_raw，再合并类别、执行PCA清洗并生成train
-python -m raman.data test 细菌       # 对测试数据进行一致的清洗
+python -m raman.data pack 微生物       # 打包init数据集
+python -m raman.data unpack 微生物     # 还原init数据集
+python -m raman.data preview 微生物    # 对init每个文件夹做均值谱图输出，并同步生成train_raw
+python -m raman.data count 微生物      # 统计数据集
+python -m raman.data train 微生物      # 先构建可复用train_raw，再合并类别、执行PCA清洗并生成train
+python -m raman.data test 微生物       # 对测试数据进行一致的清洗
 ```
 
 离线处理顺序：
@@ -280,7 +280,7 @@ python -m raman.data test 细菌       # 对测试数据进行一致的清洗
 原始数据预览用于在正式清洗和训练前，先从均值谱层面观察原始数据质量，并同步写出可复用的 `train_raw/`
 
 ```bash
-python -m raman.data preview 细菌
+python -m raman.data preview 微生物
 ```
 
 先检查原始数据质量，看是否需要将某个文件夹移除，或部分光谱移除
@@ -296,9 +296,9 @@ python -m raman.data preview 细菌
 当前审核入口已经收敛为三个命令：
 
 ```bash
-python -m raman.audit full 细菌 --stage invalid
-python -m raman.audit bad-band 细菌
-python -m raman.audit move 细菌 --from-list <delete_candidates.csv>
+python -m raman.audit full 微生物 --stage invalid
+python -m raman.audit bad-band 微生物
+python -m raman.audit move 微生物 --from-list <delete_candidates.csv>
 ```
 
 其中：
@@ -314,14 +314,14 @@ python -m raman.audit move 细菌 --from-list <delete_candidates.csv>
 建议按“先排除明显无效，再处理宇宙射线残留，最后做类内相似性”的顺序执行：
 
 ```bash
-python -m raman.audit full 细菌 --stage invalid --max-spectrum-figures 200
-python -m raman.audit full 细菌 --stage invalid --move --max-spectrum-figures 200
+python -m raman.audit full 微生物 --stage invalid --max-spectrum-figures 200
+python -m raman.audit full 微生物 --stage invalid --move --max-spectrum-figures 200
 
-python -m raman.audit full 细菌 --stage anomalous-cosmic --max-spectrum-figures 200
-python -m raman.audit full 细菌 --stage anomalous-cosmic --move --max-spectrum-figures 200
+python -m raman.audit full 微生物 --stage anomalous-cosmic --max-spectrum-figures 200
+python -m raman.audit full 微生物 --stage anomalous-cosmic --move --max-spectrum-figures 200
 
-python -m raman.audit full 细菌 --stage class-similarity --max-spectrum-figures 200
-python -m raman.audit full 细菌 --stage class-similarity --move --max-spectrum-figures 200
+python -m raman.audit full 微生物 --stage class-similarity --max-spectrum-figures 200
+python -m raman.audit full 微生物 --stage class-similarity --move --max-spectrum-figures 200
 ```
 
 实际操作时可以先不加 `--move` 只看报告和图
@@ -402,9 +402,9 @@ dataset/<数据集名>/audit_full_scan/<时间戳>_<stage>_<dry_run|move>/
 如果怀疑某一段波数在大量样本中系统性下凹，可以先跑只读坏段扫描：
 
 ```bash
-python -m raman.audit bad-band 细菌
-python -m raman.audit bad-band 细菌 --folder Klebsiella/KAE03
-python -m raman.audit bad-band 细菌 --max-files 1000
+python -m raman.audit bad-band 微生物
+python -m raman.audit bad-band 微生物 --folder Klebsiella/KAE03
+python -m raman.audit bad-band 微生物 --max-files 1000
 ```
 
 输出目录默认为：
@@ -436,9 +436,9 @@ dataset/<数据集名>/delete/Class_Similarity_Outliers/
 也可以先 dry-run，再用 `move` 手动执行：
 
 ```bash
-python -m raman.audit move 细菌 --from-list dataset/细菌/audit_full_scan/<时间戳>_<stage>_dry_run/delete_candidates.csv --dry-run
-python -m raman.audit move 细菌 --from-list dataset/细菌/audit_full_scan/<时间戳>_<stage>_dry_run/delete_candidates.csv
-python -m raman.audit move 细菌 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_data --reason Anomalous_Cosmic_Rays --category Anomalous_Cosmic_Rays --dry-run
+python -m raman.audit move 微生物 --from-list dataset/微生物/audit_full_scan/<时间戳>_<stage>_dry_run/delete_candidates.csv --dry-run
+python -m raman.audit move 微生物 --from-list dataset/微生物/audit_full_scan/<时间戳>_<stage>_dry_run/delete_candidates.csv
+python -m raman.audit move 微生物 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_data --reason Anomalous_Cosmic_Rays --category Anomalous_Cosmic_Rays --dry-run
 ```
 
 移动规则为：

@@ -110,22 +110,19 @@ def _label_from_parts(parts, level_name):
     if not parts:
         return None
     level_no = _level_number(level_name)
-    genus = parts[0]
-    if level_no <= 1:
-        return genus
-    if len(parts) < 2:
+    if len(parts) < level_no:
         return None
-    prefix = _normalize_folder_prefix(parts[1])
-    if level_no == 2:
-        return f"{genus}/{prefix}"
-    normalized = [genus, prefix] + list(parts[2:level_no])
-    return "/".join(normalized[:level_no])
+    return "/".join(parts[:level_no])
 
 
 def _candidate_train_roots(dataset_root):
-    """列出可用的训练侧光谱目录"""
+    """列出可用的训练侧光谱目录，优先使用最终 train"""
     dataset_root = _bundle_root(_resolve_project_path(dataset_root))
-    return [path for path in (dataset_root / "train", dataset_root / "train_raw") if path.is_dir()]
+    train_root = dataset_root / "train"
+    if train_root.is_dir():
+        return [train_root]
+    train_raw_root = dataset_root / "train_raw"
+    return [train_raw_root] if train_raw_root.is_dir() else []
 
 
 def _iter_labeled_train_files(train_root, level_name):
@@ -137,12 +134,30 @@ def _iter_labeled_train_files(train_root, level_name):
             continue
         label = _label_from_parts(rel.parts[:-1], level_name)
         if label:
-            yield path, label, _normalize_folder_prefix(rel.parts[1])
+            yield path, label, _normalize_folder_prefix(rel.parts[-2])
 
 
-def _build_expected_lookup(train_roots, level_name):
-    """由训练侧目录建立测试简称到实际类别的映射"""
+def _build_expected_lookup(exp_dir, train_roots, level_name):
+    """由模型训练清单建立测试简称到各级真实标签的映射"""
     counters: dict[str, Counter] = {}
+    train_files = _load_train_file_list(exp_dir)
+    if train_files:
+        for rel in train_files:
+            parts = Path(rel).parts[:-1]
+            if not parts:
+                continue
+            label = _label_from_parts(parts, level_name)
+            prefix = _normalize_folder_prefix(parts[-1])
+            if label and prefix:
+                counters.setdefault(prefix, Counter())[label] += 1
+
+    if counters:
+        return {
+            prefix: counter.most_common(1)[0][0]
+            for prefix, counter in counters.items()
+            if counter
+        }
+
     for train_root in train_roots:
         for _, label, prefix in _iter_labeled_train_files(train_root, level_name):
             counters.setdefault(prefix, Counter())[label] += 1
@@ -426,7 +441,7 @@ def run_independent_test(
 
     test_root = Path(_resolve_test_root(config, test_root))
     train_roots = _candidate_train_roots(config.dataset_root)
-    expected_lookup = _build_expected_lookup(train_roots, level_name)
+    expected_lookup = _build_expected_lookup(exp_dir, train_roots, level_name)
     train_mean_bank = _build_train_mean_bank(
         exp_dir,
         config.dataset_root,
@@ -506,7 +521,7 @@ def build_parser():
     parser.add_argument("--top-k", type=int, default=3, help="逐谱输出 top-k 数量")
     parser.add_argument("--cpu", action="store_true", help="强制使用 CPU")
     parser.add_argument("--skip-transferred", action="store_true", help="跳过已迁移进训练集的测试谱")
-    parser.add_argument("--transfer-manifest", default="dataset/细菌/test_transfer_manifest.csv", help="测试谱迁移 manifest")
+    parser.add_argument("--transfer-manifest", default="dataset/初始数据/test_transfer_manifest.csv", help="测试谱迁移 manifest")
     return parser
 
 

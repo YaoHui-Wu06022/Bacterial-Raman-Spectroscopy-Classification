@@ -42,10 +42,10 @@ COSMIC_RAY_MAX_ITER = 2  # narrow 阶段最大迭代次数
 
 COSMIC_RAY_PEAK_PROMINENCE_Z = 9.6  # peak 阶段局部 median 正残差 z 阈值
 COSMIC_RAY_PEAK_WINDOW_POINTS = 31  # peak 阶段局部 median 窗口宽度
-COSMIC_RAY_PEAK_EXPAND_Z = 4  # peak 阶段从高阈值核心向外扩展的低 z 阈值
+COSMIC_RAY_PEAK_EXPAND_Z = 4.5  # peak 阶段从高阈值核心向外扩展的低 z 阈值
 COSMIC_RAY_PEAK_EXPAND_GAP_POINTS = 6  # peak 阶段合并扩展段时允许跨过的断点数
 COSMIC_RAY_PEAK_WIDTH_MAX_POINTS = 15  # peak 阶段可替换正异常段宽度上限
-COSMIC_RAY_PEAK_MEAN_Z_MIN = 6.0  # peak 阶段扩展段平均 z 下限
+COSMIC_RAY_PEAK_MEAN_Z_MIN = 6.5  # peak 阶段扩展段平均 z 下限
 COSMIC_RAY_PEAK_PAD_POINTS = 2  # peak 阶段替换异常段时左右额外扩展宽度
 
 MIN_SAMPLES_PER_CLASS = 8
@@ -157,6 +157,7 @@ def _train_raw_config_payload(profile, cfg, input_path):
     """生成 train_raw 中间层的参数指纹"""
     return {
         "profile_id": profile.profile_id,
+        "profile_cosmic_ray_overrides": _json_ready(profile.cosmic_ray_overrides or {}),
         "cosmic_ray_bad_band_masked": False,
         "pipeline_config": _json_ready(asdict(cfg)),
         "source_signature": _input_signature(input_path),
@@ -193,9 +194,63 @@ def _cosmic_ray_enabled(profile, cfg):
     """判断当前数据集是否启用宇宙射线去除"""
     return profile.profile_id in set(cfg.cosmic_ray_enabled_profile_ids)
 
-def _cosmic_ray_kwargs(profile, cfg):
+COSMIC_RAY_OVERRIDE_KEY_MAP = {
+    "enabled": "cosmic_ray_remove",
+    "narrow_window_points": "cosmic_ray_window_points",
+    "threshold": "cosmic_ray_threshold",
+    "max_iter": "cosmic_ray_max_iter",
+    "peak_prominence_z": "cosmic_ray_peak_prominence_z",
+    "peak_window_points": "cosmic_ray_peak_window_points",
+    "peak_expand_z": "cosmic_ray_peak_expand_z",
+    "peak_expand_gap_points": "cosmic_ray_peak_expand_gap_points",
+    "peak_width_max_points": "cosmic_ray_peak_width_max_points",
+    "peak_mean_z_min": "cosmic_ray_peak_mean_z_min",
+    "peak_pad_points": "cosmic_ray_peak_pad_points",
+    "COSMIC_RAY_PEAK_PROMINENCE_Z": "cosmic_ray_peak_prominence_z",
+    "COSMIC_RAY_PEAK_WINDOW_POINTS": "cosmic_ray_peak_window_points",
+    "COSMIC_RAY_PEAK_EXPAND_Z": "cosmic_ray_peak_expand_z",
+    "COSMIC_RAY_PEAK_EXPAND_GAP_POINTS": "cosmic_ray_peak_expand_gap_points",
+    "COSMIC_RAY_PEAK_WIDTH_MAX_POINTS": "cosmic_ray_peak_width_max_points",
+    "COSMIC_RAY_PEAK_MEAN_Z_MIN": "cosmic_ray_peak_mean_z_min",
+    "COSMIC_RAY_PEAK_PAD_POINTS": "cosmic_ray_peak_pad_points",
+}
+
+def _matching_cosmic_ray_overrides(profile, label_display=None):
+    """按 profile 覆盖表找到当前分组需要叠加的参数"""
+    overrides = profile.cosmic_ray_overrides or {}
+    label = str(label_display or "").replace("\\", "/").strip("/")
+    matched = []
+    for scope, values in overrides.items():
+        scope_key = str(scope).replace("\\", "/").strip("/")
+        if scope_key in {"", "*"}:
+            matched.append((0, values))
+        elif label == scope_key or label.startswith(f"{scope_key}/"):
+            matched.append((scope_key.count("/") + 1, values))
+    return [values for _, values in sorted(matched, key=lambda item: item[0])]
+
+def _cast_cosmic_ray_override(current, value):
+    """按默认参数类型转换 profile 覆盖值"""
+    if isinstance(current, bool):
+        return bool(value)
+    if isinstance(current, int) and not isinstance(current, bool):
+        return int(value)
+    if isinstance(current, float):
+        return float(value)
+    return value
+
+def _apply_cosmic_ray_overrides(options, profile, label_display=None):
+    """把 profile 中匹配当前路径的覆盖参数叠加到默认参数上"""
+    for overrides in _matching_cosmic_ray_overrides(profile, label_display):
+        for key, value in (overrides or {}).items():
+            target_key = COSMIC_RAY_OVERRIDE_KEY_MAP.get(key, key)
+            if target_key not in options:
+                raise KeyError(f"Unknown cosmic ray override key: {key}")
+            options[target_key] = _cast_cosmic_ray_override(options[target_key], value)
+    return options
+
+def _cosmic_ray_kwargs(profile, cfg, label_display=None):
     """构造单谱宇宙射线去除参数"""
-    return {
+    options = {
         "cosmic_ray_remove": _cosmic_ray_enabled(profile, cfg),
         "cosmic_ray_window_points": int(cfg.cosmic_ray_narrow_window_points),
         "cosmic_ray_threshold": float(cfg.cosmic_ray_threshold),
@@ -208,6 +263,7 @@ def _cosmic_ray_kwargs(profile, cfg):
         "cosmic_ray_peak_mean_z_min": float(cfg.cosmic_ray_peak_mean_z_min),
         "cosmic_ray_peak_pad_points": int(cfg.cosmic_ray_peak_pad_points),
     }
+    return _apply_cosmic_ray_overrides(options, profile, label_display)
 
 
 def _resolve_merged_class_dir(root_output, rel_dir, leaf_name):
@@ -504,7 +560,7 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
     """执行小文件夹内物理清洗，不做 PCA"""
     wn_ref = cfg.build_wn_ref()
     spectra, wn_list, filenames = [], [], []
-    cosmic_ray_options = _cosmic_ray_kwargs(profile, cfg)
+    cosmic_ray_options = _cosmic_ray_kwargs(profile, cfg, label_display)
     cosmic_single_spectra = 0
     cosmic_single_replaced = 0
     cosmic_single_narrow_replaced = 0

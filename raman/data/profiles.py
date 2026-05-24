@@ -18,12 +18,23 @@ class DatasetProfile:
     root_init_fig: str = "fig_init"
     pca_log_name: str = "pca_log.txt"
     cosmic_ray_log_name: str = "cosmic_ray_removal_log.txt"
+    cosmic_ray_overrides: dict | None = None
 
 
 PROFILES = {
     "MICRO": DatasetProfile(
         profile_id="MICRO",
         dataset_name="微生物",
+        cosmic_ray_overrides={
+            "FUNG": {
+                "peak_prominence_z": 12.0,
+                "peak_expand_z": 8,
+                "peak_expand_gap_points": 6,
+                "peak_width_max_points": 8,
+                "peak_mean_z_min": 10,
+                "peak_pad_points": 1,
+            },
+        },
     ),
     "ENT": DatasetProfile(
         profile_id="ENT",
@@ -39,7 +50,17 @@ PROFILES = {
     ),
     "FUNG": DatasetProfile(
         profile_id="FUNG",
-        dataset_name="真菌"
+        dataset_name="真菌",
+        cosmic_ray_overrides={
+            "*": {
+                "peak_prominence_z": 12.0,
+                "peak_expand_z": 8,
+                "peak_expand_gap_points": 6,
+                "peak_width_max_points": 8,
+                "peak_mean_z_min": 10,
+                "peak_pad_points": 1,
+            },
+        },
     ),
     "MN_IgA": DatasetProfile(
         profile_id="MN_IgA",

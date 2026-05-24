@@ -1,4 +1,4 @@
-"""从测试菌抽样复制少量谱到细菌训练 init"""
+"""从测试菌抽样复制少量谱到初始数据 init"""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 SOURCE_ROOT = PROJECT_ROOT / "dataset" / "测试菌"
-TARGET_INIT = PROJECT_ROOT / "dataset" / "细菌" / "init"
-MANIFEST_PATH = PROJECT_ROOT / "dataset" / "细菌" / "test_transfer_manifest.csv"
-SUMMARY_PATH = PROJECT_ROOT / "dataset" / "细菌" / "test_transfer_summary.md"
+TARGET_INIT = PROJECT_ROOT / "dataset" / "初始数据" / "init"
+MANIFEST_PATH = PROJECT_ROOT / "dataset" / "初始数据" / "test_transfer_manifest.csv"
+SUMMARY_PATH = PROJECT_ROOT / "dataset" / "初始数据" / "test_transfer_summary.md"
 
 SAMPLES_PER_FOLDER = 8
 RANDOM_SEED = 42
@@ -46,7 +46,7 @@ def _folder_number(folder_name, prefix):
 
 
 def _build_prefix_map(target_init):
-    """扫描细菌 init，建立种前缀到属和目标 t 文件夹的映射"""
+    """扫描初始数据 init，建立种前缀到属和目标 t 文件夹的映射"""
     prefix_map = {}
     by_prefix = defaultdict(list)
     for genus_dir in sorted(path for path in target_init.iterdir() if path.is_dir()):
@@ -166,7 +166,7 @@ def _write_summary(rows, skipped):
 
 
 def main():
-    """执行测试菌到细菌 init 的抽样复制"""
+    """执行测试菌到初始数据 init 的抽样复制"""
     if not SOURCE_ROOT.is_dir():
         raise FileNotFoundError(f"Missing source root: {SOURCE_ROOT}")
     if not TARGET_INIT.is_dir():

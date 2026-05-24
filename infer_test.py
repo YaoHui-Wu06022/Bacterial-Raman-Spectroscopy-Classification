@@ -21,7 +21,7 @@ FOLDER = None  # 例如 "CS01KP"，None 表示运行全部测试文件夹
 TOP_K = 3
 USE_CPU = False
 SKIP_TRANSFERRED_TEST_SAMPLES = True
-TRANSFER_MANIFEST = "dataset/细菌/test_transfer_manifest.csv"
+TRANSFER_MANIFEST = "dataset/初始数据/test_transfer_manifest.csv"
 
 
 def _pipeline_config_from_model(config):
