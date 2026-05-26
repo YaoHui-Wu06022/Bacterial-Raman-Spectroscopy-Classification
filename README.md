@@ -68,11 +68,16 @@ raman/data/
 ├─ spectrum.py                       # 光谱文件读写、波数轴、坏波段 mask 与通用归一化
 ├─ offline.py                        # 离线基线校正、宇宙射线去除、单谱清洗与均值谱绘图
 ├─ archive.py                        # init.npz 打包/解包与 init 输入解析
-├─ build.py                          # 离线构建主流程：preview、build_train、build_test
+├─ build.py                          # 离线构建主流程：build_train、build_test
 ├─ count.py                          # 数据集文件数量统计与树形输出
 ├─ profiles.py                       # 各数据集的目录布局、数据集名称与别名
-├─ cli.py                            # 离线数据处理 CLI：pack/unpack/preview/train/test/count
+├─ cli.py                            # 离线数据处理 CLI：pack/unpack/train/test/count
 └─ __main__.py                       # 支持 python -m raman.data
+
+raman/shift/
+├─ cli.py                            # 原始谱 preview、单文件夹平移与平移前后对照 CLI
+├─ core.py                           # 同属同前缀 raw 中位谱总览、delta.txt 记录与波数列平移
+└─ __main__.py                       # 支持 python -m raman.shift
 ```
 
 ### 2.4 审核层
@@ -151,14 +156,13 @@ dataset/
 └─ <数据集名>/
    ├─ init/                          # 原始归档解包后的初始数据
    ├─ init.npz                       # init 的压缩归档
-   ├─ train_raw/                     # 可复用清洗中间层，保留小文件夹结构
    ├─ train/                         # 训练用清洗后数据
    ├─ init_test/                     # 独立测试原始数据
    ├─ test/                          # 测试用清洗后数据
    ├─ audit_full_scan/               # full 分阶段审核报告、候选表和复核图
    ├─ audit_bad_band/                # 系统性坏段扫描输出
    ├─ delete/                        # 人工确认移除后的原始文件
-   ├─ fig_init/                      # init 预览图
+   ├─ fig_init/                      # raman.shift preview / plot-shift 输出与 delta.txt
    ├─ fig_train/                     # 训练集均值图与高层级均值图
    └─ fig_test/                      # 测试集均值图
 ```
@@ -197,34 +201,15 @@ dataset/
 
 ## 4. 离线数据预处理
 
-离线数据预处理统一走 `raman.data`
-
-- `preview` 和 `audit` 的输入对象主要是 `init/` 或 `init.npz` 中的原始库
-- `audit` 虽然审核的是 `init/` 中的原始文件，但评分前会临时执行当前离线预处理流程
-- `preview` 会生成 `fig_init/`，并同步写出可复用的 `train_raw/`
-- 人工确认异常谱并移动到 `delete/` 后，`train` 会根据 `init` 输入指纹自动判断是否需要重建 `train_raw/`
-
 ### 4.1 常用命令
 
 ```
-python -m raman.data pack 微生物       # 打包init数据集
-python -m raman.data unpack 微生物     # 还原init数据集
-python -m raman.data preview 微生物    # 对init每个文件夹做均值谱图输出，并同步生成train_raw
-python -m raman.data count 微生物      # 统计数据集
-python -m raman.data train 微生物      # 先构建可复用train_raw，再合并类别、执行PCA清洗并生成train
-python -m raman.data test 微生物       # 对测试数据进行一致的清洗
+python -m raman.data pack <数据集名或profile>       # 打包init数据集
+python -m raman.data unpack <数据集名或profile>     # 还原init数据集
+python -m raman.data count <数据集名或profile>      # 统计数据集
+python -m raman.data train <数据集名或profile>      # 从init直接清洗、按类别前缀合并并生成train
+python -m raman.data test <数据集名或profile>       # 对测试数据进行一致的清洗
 ```
-
-离线处理顺序：
-
-1. 读取原始光谱
-2. 按数据集设置执行单谱宇宙射线去除，此阶段不屏蔽坏段，避免坏段边界尖峰漏修
-3. 在 `BASELINE_FIT_MIN` / `BASELINE_FIT_MAX` 范围内保留训练区间外缓冲波段，用于连续估计基线
-4. 做基线校正时，用坏段 valid_mask 忽略坏段对基线的影响
-5. 基线扣除后，再按 `CUT_MIN` / `CUT_MAX` 裁切到模型输入范围
-6. 在裁切后的源光谱里删除坏段
-7. 在目标统一波数轴 `wn_ref` 里也删除坏段
-8. 最后插值到统一波数轴
 
 ### 4.2 参数修改
 
@@ -253,55 +238,70 @@ python -m raman.data test 微生物       # 对测试数据进行一致的清洗
 
 - `init/`：原始按测量文件夹组织的数据
 - `init.npz`：`init/` 的打包版本
-- `train_raw/`：从 `init/` 生成的可复用清洗中间层，保留小文件夹结构
 - `train/`：训练集离线清洗结果
 - `init_test/`：独立测试集原始输入目录
 - `test/`：测试集离线清洗结果
-- `fig_init/`：原始数据预览图
+- `fig_init/`：`raman.shift preview`、`plot-shift` 输出和 `delta.txt`
 - `fig_train/`：训练集均值谱图与高层级均值谱图
 - `fig_test/`：测试集均值谱图
+- `audit_full_scan/`：分阶段审核报告、候选表和复核图
+- `audit_bad_band/`：系统性坏段扫描输出
 - `delete/`：人工确认移除后的原始 `.arc_data` 文件
-- `log.txt`：训练集 PCA 异常值剔除日志
-- `train_raw/config.json`：记录生成 `train_raw` 的清洗参数，参数不一致时会自动重建
+- `pca_log.txt`：训练集 PCA 异常值剔除日志
+- `cosmic_ray_removal_log.txt`：启用宇宙射线清理的数据集对应的替换统计日志
 
 ### 4.4 数据分析流程
 
 离线阶段建议按以下顺序处理：
 
 1. 准备或还原原始数据到 `init/`
-2. 使用 `preview` 生成 `fig_init/` 和 `train_raw/`，先从均值谱层面检查原始数据质量
-3. 使用 `raman.audit full --stage ...` 对 `init/` 中的原始库做分阶段只读审核，必要时先用 `raman.audit bad-band` 扫描系统性坏段
-4. 结合审核报告和复核图人工确认异常谱
-5. 使用 `raman.audit move` 将确认移除的原始 `.arc_data` 从 `init/` 移到 `delete/`
-6. 使用 `python -m raman.data train <数据集名>` 复用或重建 `train_raw/`，并生成最终 `train/`
-7. 使用 `python -m raman.data test <数据集名>` 对独立测试集生成一致的 `test/`
+2. 先用 `python -m raman.shift preview <数据集名或profile>` 查看原始 raw 中位谱总览，重点对比同属同前缀不同文件夹的谱形和峰位是否整体对齐
+3. 如果发现同前缀不同文件夹存在系统性峰位偏移，先用 `raman.shift apply` 做平移修正，并用 `raman.shift plot-shift` 复核，再进入后续异常谱审核
+4. 使用 `raman.audit full --stage ...` 对 `init/` 中的原始库做分阶段扫描，必要时先用 `raman.audit bad-band` 扫描系统性坏段
+5. 结合审核报告和复核图人工确认异常谱
+6. 使用 `raman.audit move` 将确认移除的原始 `.arc_data` 从 `init/` 移到 `delete/`
+7. 使用 `python -m raman.data train <数据集名>` 从当前 `init` 或 `init.npz` 直接生成最终 `train/`
+8. 使用 `python -m raman.data test <数据集名>` 对独立测试集生成一致的 `test/`
 
 审核命令的输入仍然是 `init/` 中的原始文件，但评分前会临时执行当前离线预处理流程，包括宇宙射线去除、基线校正、裁剪、坏段剔除和统一波数轴插值
 
-### 4.5 原始数据预览
+### 4.5 原始谱与平移审核
 
-原始数据预览用于在正式清洗和训练前，先从均值谱层面观察原始数据质量，并同步写出可复用的 `train_raw/`
+先用 `raman.shift preview` 看 `init/` 里的原始谱形态：
 
 ```bash
-python -m raman.data preview 微生物
+python -m raman.shift preview <数据集名或profile>
 ```
 
-先检查原始数据质量，看是否需要将某个文件夹移除，或部分光谱移除
+读取 raw 强度谱，按“属名 + 文件夹前缀”分组，绘制同组不同小文件夹的 raw 中位谱总览图，输出到 `dataset/<数据集名>/fig_init/`
 
-如果预览后又把原始谱移到 `delete/`，后续 `train` 会检测到 `init` 输入指纹变化，并自动重建 `train_raw/`
+同一属下同前缀小文件夹，主要峰位应该大体对齐，如果某个文件夹整体向左或向右偏移，应该先做平移审核，而不是直接交给异常谱审核
 
-如果均值谱图已经明显异常，可以优先检查该文件夹的原始采集数据或直接进入审核流程
+平移修正使用：
 
-如果均值谱图看起来基本正常，但怀疑某个小文件夹里混入了少数异常单谱，则进入 `raman.audit full` 的分阶段审核流程
+```bash
+python -m raman.shift apply <数据集名或profile> --folder <属名>/<小文件夹> --delta <平移量>
+python -m raman.shift plot-shift <数据集名或profile> --folder <属名>/<小文件夹>
+```
+
+`--delta` 的单位是 `cm^-1`，正值向右平移，负值向左平移；累计平移量记录在 `fig_init/delta.txt``
+
+``plot-shift` 会输出单个文件夹平移前后的 raw 中位谱对照图，方便复核
+
+平移审核完成后，再运行 `raman.audit full --stage ...` 做分阶段异常谱扫描
+
+这样可以避免把系统性峰位偏移误判成类内相似性离群，也能让第三阶段的同前缀参考池更可靠
+
+如果 preview 中已经能看到明显坏段或整体下凹区域，可以先运行 `raman.audit bad-band` 做只读坏段扫描；如果主要问题是少数单谱无效、残留宽宇宙射线或类内离群，则进入 `raman.audit full` 的分阶段流程
 
 ### 4.6 原始库审核与人工移除
 
 当前审核入口已经收敛为三个命令：
 
 ```bash
-python -m raman.audit full 微生物 --stage invalid
-python -m raman.audit bad-band 微生物
-python -m raman.audit move 微生物 --from-list <delete_candidates.csv>
+python -m raman.audit full <数据集名或profile> --stage invalid
+python -m raman.audit bad-band <数据集名或profile>
+python -m raman.audit move <数据集名或profile> --from-list <delete_candidates.csv>
 ```
 
 其中：
@@ -317,14 +317,14 @@ python -m raman.audit move 微生物 --from-list <delete_candidates.csv>
 建议按“先排除明显无效，再处理宇宙射线残留，最后做类内相似性”的顺序执行：
 
 ```bash
-python -m raman.audit full 微生物 --stage invalid --max-spectrum-figures 200
-python -m raman.audit full 微生物 --stage invalid --move --max-spectrum-figures 200
+python -m raman.audit full <数据集名或profile> --stage invalid --max-spectrum-figures 200
+python -m raman.audit full <数据集名或profile> --stage invalid --move --max-spectrum-figures 200
 
-python -m raman.audit full 微生物 --stage anomalous-cosmic --max-spectrum-figures 200
-python -m raman.audit full 微生物 --stage anomalous-cosmic --move --max-spectrum-figures 200
+python -m raman.audit full <数据集名或profile> --stage anomalous-cosmic --max-spectrum-figures 200
+python -m raman.audit full <数据集名或profile> --stage anomalous-cosmic --move --max-spectrum-figures 200
 
-python -m raman.audit full 微生物 --stage class-similarity --max-spectrum-figures 200
-python -m raman.audit full 微生物 --stage class-similarity --move --max-spectrum-figures 200
+python -m raman.audit full <数据集名或profile> --stage class-similarity --max-spectrum-figures 200
+python -m raman.audit full <数据集名或profile> --stage class-similarity --move --max-spectrum-figures 200
 ```
 
 实际操作时可以先不加 `--move` 只看报告和图
@@ -405,9 +405,9 @@ dataset/<数据集名>/audit_full_scan/<时间戳>_<stage>_<dry_run|move>/
 如果怀疑某一段波数在大量样本中系统性下凹，可以先跑只读坏段扫描：
 
 ```bash
-python -m raman.audit bad-band 微生物
-python -m raman.audit bad-band 微生物 --folder Klebsiella/KAE03
-python -m raman.audit bad-band 微生物 --max-files 1000
+python -m raman.audit bad-band <数据集名或profile>
+python -m raman.audit bad-band <数据集名或profile> --folder Klebsiella/KAE03
+python -m raman.audit bad-band <数据集名或profile> --max-files 1000
 ```
 
 输出目录默认为：
@@ -439,9 +439,9 @@ dataset/<数据集名>/delete/Class_Similarity_Outliers/
 也可以先 dry-run，再用 `move` 手动执行：
 
 ```bash
-python -m raman.audit move 微生物 --from-list dataset/微生物/audit_full_scan/<时间戳>_<stage>_dry_run/delete_candidates.csv --dry-run
-python -m raman.audit move 微生物 --from-list dataset/微生物/audit_full_scan/<时间戳>_<stage>_dry_run/delete_candidates.csv
-python -m raman.audit move 微生物 Burkholderia/BCC01/CELL8_Area01_000_shift.arc_data --reason Anomalous_Cosmic_Rays --category Anomalous_Cosmic_Rays --dry-run
+python -m raman.audit move <数据集名或profile> --from-list dataset/<数据集名>/audit_full_scan/<时间戳>_<stage>_dry_run/delete_candidates.csv --dry-run
+python -m raman.audit move <数据集名或profile> --from-list dataset/<数据集名>/audit_full_scan/<时间戳>_<stage>_dry_run/delete_candidates.csv
+python -m raman.audit move <数据集名或profile> Burkholderia/BCC01/CELL8_Area01_000_shift.arc_data --reason Anomalous_Cosmic_Rays --category Anomalous_Cosmic_Rays --dry-run
 ```
 
 移动规则为：
@@ -457,31 +457,21 @@ python -m raman.audit move 微生物 Burkholderia/BCC01/CELL8_Area01_000_shift.a
 
 ### 4.7 构建训练集
 
-训练命令会优先复用 `preview` 或上一次训练生成的 `train_raw/`，再按类别前缀合并生成最终训练目录 `train/`
-
-#### 清洗中间层
+从 `init/` 或 `init.npz` 直接生成最终训练目录 `train/`
 
 由于采集数据按日期划分，原始数据集一般命名为 `类别+数字`
-
-`preview` 和训练命令都会把 `init/` 中每个叶子小文件夹独立清洗到 `train_raw/`
 
 处理逻辑：
 
 - 扫描 `init/` 或 `init.npz`
 
-- 每个小文件夹内部独立执行宇宙射线去除、基线校正、裁剪、坏段删除和插值
+- 每个叶子小文件夹内部先独立执行宇宙射线去除、基线校正、裁剪、坏段删除和统一波数轴插值
 
-- `train_raw/` 仍保留小文件夹结构，不在这一层按前缀合并类别
+- 按 `letters_sign` 规则提取类别前缀，把同一前缀的小文件夹合并成最终训练类别
 
-- 如果 `train_raw/` 已存在，且 `config.json` 与当前 `PipelineConfig` 和 `init` 输入指纹一致，会直接复用
+- 合并时会给文件名加上原小文件夹前缀，避免不同小文件夹内的同名光谱互相覆盖
 
-- 如果清洗参数或 `init` 原始数据改变，`train_raw/` 会自动重建，避免旧中间结果和新参数混用
-
-#### 最终生成
-
-最终生成 `train/` 时，才会按 `letters_sign` 规则提取类别前缀并合并小文件夹
-
-例如：`ABC12 -> ABC`，`ESBL+03 -> ESBL+`
+- 合并后的同一训练类别再按 PCA 重构误差做异常值过滤
 
 每条光谱执行：
 
@@ -514,7 +504,7 @@ python -m raman.audit move 微生物 Burkholderia/BCC01/CELL8_Area01_000_shift.a
 1. narrow 阶段：局部 median 和鲁棒 z-score 清理单点或极窄尖峰
 2. peak 阶段：在 narrow 后的局部 median 正残差上，用双阈值检测并扩展短正异常段
 
-宇宙射线清理发生在坏段删除之前，并且默认不使用坏段 mask 参与检测；坏段只在绘图遮挡、基线估计和后续裁切插值阶段使用。这样可以避免 890-950 `cm^-1` 坏段边界附近的宇宙射线因为 mask 断开而无法被修复。
+宇宙射线清理发生在坏段删除之前，并且默认不使用坏段 mask 参与检测，坏段只在绘图遮挡、基线估计和后续裁切插值阶段使用。这样可以避免 890-950 `cm^-1` 坏段边界附近的宇宙射线因为 mask 断开而无法被修复
 
 ##### narrow 阶段
 
