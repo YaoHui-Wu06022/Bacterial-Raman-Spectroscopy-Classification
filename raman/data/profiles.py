@@ -9,13 +9,11 @@ class DatasetProfile:
     dataset_name: str
     root_init: str = "init"
     root_init_pack: str = "init.npz"
-    root_process_raw: str = "train_raw"
     root_train_clean: str = "train"
     root_test_clean: str = "test"
     root_train_fig: str = "fig_train"
     root_test_fig: str = "fig_test"
     root_init_test: str = "init_test"
-    root_init_fig: str = "fig_init"
     pca_log_name: str = "pca_log.txt"
     cosmic_ray_log_name: str = "cosmic_ray_removal_log.txt"
     cosmic_ray_overrides: dict | None = None
@@ -24,17 +22,7 @@ class DatasetProfile:
 PROFILES = {
     "MICRO": DatasetProfile(
         profile_id="MICRO",
-        dataset_name="微生物",
-        cosmic_ray_overrides={
-            "FUNG": {
-                "peak_prominence_z": 12.0,
-                "peak_expand_z": 8,
-                "peak_expand_gap_points": 6,
-                "peak_width_max_points": 8,
-                "peak_mean_z_min": 10,
-                "peak_pad_points": 1,
-            },
-        },
+        dataset_name="MICRO",
     ),
     "GN": DatasetProfile(
         profile_id="GN",
@@ -47,20 +35,6 @@ PROFILES = {
     "FUNG": DatasetProfile(
         profile_id="FUNG",
         dataset_name="FUNG",
-        cosmic_ray_overrides={
-            "*": {
-                "peak_prominence_z": 12.0,
-                "peak_expand_z": 8,
-                "peak_expand_gap_points": 6,
-                "peak_width_max_points": 8,
-                "peak_mean_z_min": 10,
-                "peak_pad_points": 1,
-            },
-        },
-    ),
-    "MN_IgA": DatasetProfile(
-        profile_id="MN_IgA",
-        dataset_name="MN_IgA",
     ),
     "resistance": DatasetProfile(
         profile_id="resistance",
@@ -73,6 +47,18 @@ PROFILES = {
     "test": DatasetProfile(
         profile_id="test",
         dataset_name="测试菌",
+    ),
+    "original": DatasetProfile(
+        profile_id="original",
+        dataset_name="50种菌",
+    ),
+    "cos": DatasetProfile(
+        profile_id="cos",
+        dataset_name="50种菌cos",
+    ),
+    "MN_IgA": DatasetProfile(
+        profile_id="MN_IgA",
+        dataset_name="MN_IgA",
     )
 }
 

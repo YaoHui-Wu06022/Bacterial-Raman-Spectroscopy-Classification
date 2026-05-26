@@ -7,6 +7,7 @@ import numpy as np
 
 TRAIN_SPLIT_NAME = "train_split.json"
 VAL_SPLIT_NAME = "val_split.json"
+DEFAULT_SPLIT_LEVEL = "leaf"
 
 
 def _norm_relpath(path):
@@ -101,32 +102,39 @@ def load_split_files(dataset, split_dir):
     return train_idx, val_idx
 
 
-def split_by_lowest_level_ratio(
-    dataset,
-    lowest_level="leaf",
-    train_ratio=0.8,
-    seed=42,
-    min_train_samples=1,
-):
-    """
-    按指定层级分组后做样本切分，尽量避免同组样本泄漏到不同集合
+def _split_group_key(dataset, idx, lowest_level):
+    """按配置解析样本所属的 split-level 分组键"""
+    if "/" in str(lowest_level):
+        key = dataset.get_split_key(idx, lowest_level)
+    elif lowest_level == "leaf":
+        key = dataset.get_leaf_key(idx)
+    else:
+        key = dataset.get_level_key(idx, lowest_level)
+    if key is None:
+        key = dataset.get_leaf_key(idx)
+    return key
 
-    返回：
-    - `train_indices`
-    - `val_indices`
-    """
+
+def _source_prefix_from_sample(path):
+    """从转换后的文件名提取原子文件夹前缀，如 IgA01_xxx -> IgA01"""
+    filename = os.path.basename(os.fspath(path))
+    stem, _ = os.path.splitext(filename)
+    return stem.split("_", 1)[0] if "_" in stem else stem
+
+
+def _split_indices_sample_level(
+    dataset,
+    lowest_level,
+    train_ratio,
+    seed,
+    min_train_samples,
+):
+    """旧版样本级切分：每个 split-level 组内按样本随机切分"""
     rng = np.random.RandomState(seed)
     group_to_indices = {}
 
     for i in range(len(dataset)):
-        if "/" in str(lowest_level):
-            key = dataset.get_split_key(i, lowest_level)
-        elif lowest_level == "leaf":
-            key = dataset.get_leaf_key(i)
-        else:
-            key = dataset.get_level_key(i, lowest_level)
-        if key is None:
-            key = dataset.get_leaf_key(i)
+        key = _split_group_key(dataset, i, lowest_level)
         group_to_indices.setdefault(key, []).append(i)
 
     train_idx = []
@@ -150,6 +158,105 @@ def split_by_lowest_level_ratio(
     return train_idx, val_idx
 
 
+def _split_indices_source_prefix_level(dataset, lowest_level, train_ratio, seed):
+    """按原子文件夹前缀整组切分，避免同一前缀泄漏到 train/val 两侧"""
+    rng = np.random.RandomState(seed)
+    level_to_prefix_groups = {}
+
+    for i in range(len(dataset)):
+        level_key = _split_group_key(dataset, i, lowest_level)
+        source_prefix = _source_prefix_from_sample(dataset.samples[i])
+        prefix_groups = level_to_prefix_groups.setdefault(level_key, {})
+        prefix_groups.setdefault(source_prefix, []).append(i)
+
+    train_idx = []
+    val_idx = []
+
+    for level_key, prefix_groups in level_to_prefix_groups.items():
+        groups = [
+            (prefix, np.array(indices, dtype=np.int64))
+            for prefix, indices in prefix_groups.items()
+        ]
+        rng.shuffle(groups)
+
+        if len(groups) == 1:
+            prefix, indices = groups[0]
+            train_idx.extend(indices.tolist())
+            print(
+                "[Warn] split_by_source_prefix=True 时 "
+                f"{level_key!r} 只有一个 source prefix={prefix!r}，"
+                "无法无泄漏切出 val，已全部放入 train"
+            )
+            continue
+
+        total = sum(len(indices) for _, indices in groups)
+        target_train = total * float(train_ratio)
+        current_train = 0
+        group_train = []
+        group_val = []
+
+        for group_pos, (prefix, indices) in enumerate(groups):
+            if not group_train:
+                group_train.append((prefix, indices))
+                current_train += len(indices)
+                continue
+
+            is_last_group = group_pos == len(groups) - 1
+            if is_last_group and not group_val:
+                group_val.append((prefix, indices))
+                continue
+
+            current_error = abs(target_train - current_train)
+            add_error = abs(target_train - (current_train + len(indices)))
+            if add_error <= current_error:
+                group_train.append((prefix, indices))
+                current_train += len(indices)
+            else:
+                group_val.append((prefix, indices))
+
+        if not group_val:
+            group_val.append(group_train.pop())
+
+        for _, indices in group_train:
+            train_idx.extend(indices.tolist())
+        for _, indices in group_val:
+            val_idx.extend(indices.tolist())
+
+    return train_idx, val_idx
+
+
+def split_by_lowest_level_ratio(
+    dataset,
+    lowest_level="leaf",
+    train_ratio=0.8,
+    seed=42,
+    min_train_samples=1,
+    split_by_source_prefix=False,
+):
+    """
+    按指定层级分组后做 train/val 切分
+
+    返回：
+    - `train_indices`
+    - `val_indices`
+    """
+    if split_by_source_prefix:
+        return _split_indices_source_prefix_level(
+            dataset,
+            lowest_level=lowest_level,
+            train_ratio=train_ratio,
+            seed=seed,
+        )
+
+    return _split_indices_sample_level(
+        dataset,
+        lowest_level=lowest_level,
+        train_ratio=train_ratio,
+        seed=seed,
+        min_train_samples=min_train_samples,
+    )
+
+
 def resolve_level_order(dataset, target_level):
     """
     解析目标训练层级，并返回从顶层到该层的顺序列表
@@ -166,12 +273,12 @@ def resolve_train_split(full_dataset, config, split_dir=None, reuse_existing=Tru
     """
     生成或复用训练/验证切分
     """
-    split_level = config.split_level or "leaf"
     train_idx, val_idx = split_by_lowest_level_ratio(
         full_dataset,
-        lowest_level=split_level,
+        lowest_level=DEFAULT_SPLIT_LEVEL,
         train_ratio=config.train_split,
         seed=config.seed,
+        split_by_source_prefix=getattr(config, "split_by_source_prefix", False),
     )
 
     split_dir = split_dir or config.output_dir

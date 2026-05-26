@@ -36,6 +36,9 @@ class AuditConfig:
     anomalous_wide_max_z_min: float = 5.0  # 删除候选的宽异常峰值 z 下限
     anomalous_wide_review_edge_z_min: float = 3.75  # 宽异常进入复核候选的边缘突跳 z 下限
     anomalous_wide_delete_edge_z_min: float = 5.0  # 删除候选的边缘突跳 z 下限
+    anomalous_rising_min_points: int = 120  # 长上升尾段最少连续点数
+    anomalous_rising_z_min: float = 30.0  # 长上升尾段首尾差的一阶差分 z 下限
+    anomalous_rising_snv_min: float = 1.2  # 长上升尾段末端相对段中位数的 SNV 抬高下限
 
     # 第三阶段：同属同前缀类内相似性和局部正残差异常
     class_min_ref_samples: int = 8  # 参考池最少谱数，低于此值不自动判定

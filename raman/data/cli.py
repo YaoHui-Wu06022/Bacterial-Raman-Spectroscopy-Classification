@@ -1,7 +1,7 @@
 import argparse
 from pathlib import Path
 
-from raman.data.build import build_test, build_train, preview
+from raman.data.build import build_test, build_train
 from raman.data.archive import pack_init, unpack_init
 from raman.data.count import count_dataset, print_results
 from raman.data.profiles import get_dataset_dir, get_profile
@@ -38,17 +38,10 @@ def run_unpack(args):
 
 
 def run_train(args):
-    """复用或生成 train_raw，再构建最终训练集"""
+    """从 init 直接构建最终训练集"""
     profile = get_profile(args.dataset)
     dataset_dir = resolve_dataset_dir(profile)
     build_train(profile, dataset_dir)
-
-
-def run_preview(args):
-    """从 init 生成预览图"""
-    profile = get_profile(args.dataset)
-    dataset_dir = resolve_dataset_dir(profile)
-    preview(profile, dataset_dir)
 
 
 def run_test(args):
@@ -69,23 +62,22 @@ def run_count(args):
 
 def build_parser():
     """构造 raman.data 命令行参数解析器"""
-    parser = argparse.ArgumentParser(description="Unified data prep entrypoint.")
+    parser = argparse.ArgumentParser(description="数据集预处理和统计工具")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     for command, handler, help_text in (
-        ("pack", run_pack, "Pack init into init.npz"),
-        ("unpack", run_unpack, "Unpack init.npz into init"),
-        ("preview", run_preview, "Generate per-folder preview figures from init"),
-        ("train", run_train, "Build reusable train_raw, then build train"),
-        ("test", run_test, "Build test from init_test"),
-        ("count", run_count, "Count arc_data files in a dataset subdir"),
+        ("pack", run_pack, "把 init 打包成 init.npz"),
+        ("unpack", run_unpack, "把 init.npz 解包回 init"),
+        ("train", run_train, "从 init 直接构建 train"),
+        ("test", run_test, "从 init_test 构建 test"),
+        ("count", run_count, "统计指定数据阶段的 arc_data 数量"),
     ):
         sub = subparsers.add_parser(command, help=help_text)
-        sub.add_argument("dataset", help="Dataset name, such as 细菌 / 耐药菌 / 厌氧菌")
+        sub.add_argument("dataset", help="数据集 profile id、名称或 dataset 下的文件夹名")
         if command in {"pack", "unpack"}:
-            sub.add_argument("--quiet", action="store_true")
+            sub.add_argument("--quiet", action="store_true", help="减少打包/解包过程输出")
         if command == "count":
-            sub.add_argument("--subdir", default=None, help="Override counted subdir")
+            sub.add_argument("--subdir", default=None, help="指定要统计的子目录，默认 train")
         sub.set_defaults(func=handler)
 
     return parser

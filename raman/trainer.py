@@ -19,6 +19,7 @@ from raman.training.model_loop import ModelTrainContext, train_model
 from raman.training.split import (
     TRAIN_SPLIT_NAME,
     VAL_SPLIT_NAME,
+    DEFAULT_SPLIT_LEVEL,
     apply_train_filter,
     build_label_map_np,
     load_split_files,
@@ -300,11 +301,17 @@ def run_training(config_obj=None, overrides=None):
         train_idx, val_idx = existing_split
         log(f"[Split] reuse {TRAIN_SPLIT_NAME}/{VAL_SPLIT_NAME} from {exp_dir}")
     else:
+        log(
+            "[Split] generate "
+            f"split_level={DEFAULT_SPLIT_LEVEL}, "
+            f"split_by_source_prefix={getattr(config, 'split_by_source_prefix', False)}"
+        )
         train_idx, val_idx = split_by_lowest_level_ratio(
             full_dataset,
-            lowest_level=config.split_level or "leaf",
+            lowest_level=DEFAULT_SPLIT_LEVEL,
             train_ratio=config.train_split,
             seed=config.seed,
+            split_by_source_prefix=getattr(config, "split_by_source_prefix", False),
         )
         train_idx = torch.as_tensor(train_idx, dtype=torch.long).numpy()
         val_idx = torch.as_tensor(val_idx, dtype=torch.long).numpy()

@@ -1,8 +1,6 @@
-import hashlib
-import json
 import re
 import shutil
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -35,7 +33,7 @@ BASELINE_MAX_ITER = 15  # 基线迭代次数上限
 BASELINE_FIT_MIN = 400  # 基线拟合下限，保留训练范围外缓冲区以稳定边缘基线
 BASELINE_FIT_MAX = 2000  # 基线拟合上限，避免更远端异常尖峰污染基线
 
-COSMIC_RAY_ENABLED_PROFILE_IDS = ("MICRO","GN","GP", "FUNG")
+COSMIC_RAY_ENABLED_PROFILE_IDS = ("shift", "MN_IgA")
 COSMIC_RAY_NARROW_WINDOW_POINTS = 7  # narrow 阶段局部 median/MAD 窗口宽度，单位点
 COSMIC_RAY_THRESHOLD = 7.0  # narrow 阶段正残差 z 阈值
 COSMIC_RAY_MAX_ITER = 2  # narrow 阶段最大迭代次数
@@ -54,9 +52,7 @@ PLOT_NORM_METHOD = "snv"
 PCA_ENABLED = True
 PCA_COMPONENTS = 0.95
 PCA_CENTER = True
-PCA_OUTLIER_RATIO = 0.015
-
-TRAIN_RAW_CONFIG_NAME = "config.json"
+PCA_OUTLIER_RATIO = 0.03
 
 @dataclass(frozen=True)
 class PipelineConfig:
@@ -107,92 +103,24 @@ def resolve_pipeline_config(pipeline_config=None):
     """返回离线预处理配置；未传入时使用库内默认配置"""
     return pipeline_config or DEFAULT_PIPELINE_CONFIG
 
-def _json_ready(value):
-    """把 dataclass/tuple 等配置值转换成稳定 JSON 结构"""
-    return json.loads(json.dumps(value, ensure_ascii=False, sort_keys=True))
-
-def _input_signature(input_path):
-    """记录 init 输入状态，避免 init 变化后误复用旧 train_raw"""
-    input_path = Path(input_path)
-    digest = hashlib.sha256()
-    if input_path.is_dir():
-        count = 0
-        total_size = 0
-        max_mtime_ns = 0
-        for file_path in sorted(input_path.rglob("*.arc_data")):
-            stat = file_path.stat()
-            rel_path = file_path.relative_to(input_path).as_posix()
-            count += 1
-            total_size += int(stat.st_size)
-            max_mtime_ns = max(max_mtime_ns, int(stat.st_mtime_ns))
-            digest.update(rel_path.encode("utf-8", errors="surrogateescape"))
-            digest.update(b"\0")
-            digest.update(str(int(stat.st_size)).encode("ascii"))
-            digest.update(b"\0")
-            digest.update(str(int(stat.st_mtime_ns)).encode("ascii"))
-            digest.update(b"\n")
-        return {
-            "kind": "directory",
-            "count": count,
-            "total_size": total_size,
-            "max_mtime_ns": max_mtime_ns,
-            "sha256": digest.hexdigest(),
-        }
-
-    stat = input_path.stat()
-    digest.update(input_path.name.encode("utf-8", errors="surrogateescape"))
-    digest.update(b"\0")
-    digest.update(str(int(stat.st_size)).encode("ascii"))
-    digest.update(b"\0")
-    digest.update(str(int(stat.st_mtime_ns)).encode("ascii"))
-    return {
-        "kind": "file",
-        "count": 1,
-        "total_size": int(stat.st_size),
-        "max_mtime_ns": int(stat.st_mtime_ns),
-        "sha256": digest.hexdigest(),
-    }
-
-def _train_raw_config_payload(profile, cfg, input_path):
-    """生成 train_raw 中间层的参数指纹"""
-    return {
-        "profile_id": profile.profile_id,
-        "profile_cosmic_ray_overrides": _json_ready(profile.cosmic_ray_overrides or {}),
-        "cosmic_ray_bad_band_masked": False,
-        "pipeline_config": _json_ready(asdict(cfg)),
-        "source_signature": _input_signature(input_path),
-    }
-
-def _train_raw_config_path(root_process_raw):
-    return Path(root_process_raw) / TRAIN_RAW_CONFIG_NAME
-
-def _write_train_raw_config(root_process_raw, profile, cfg, input_path):
-    """在 train_raw 中记录生成该中间层的配置"""
-    config_path = _train_raw_config_path(root_process_raw)
-    config_path.write_text(
-        json.dumps(
-            _train_raw_config_payload(profile, cfg, input_path),
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
-
-def _train_raw_config_matches(root_process_raw, profile, cfg, input_path):
-    """判断现有 train_raw 是否由当前配置生成"""
-    config_path = _train_raw_config_path(root_process_raw)
-    if not config_path.is_file():
-        return False
-    try:
-        payload = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    return payload == _train_raw_config_payload(profile, cfg, input_path)
-
 def _cosmic_ray_enabled(profile, cfg):
     """判断当前数据集是否启用宇宙射线去除"""
     return profile.profile_id in set(cfg.cosmic_ray_enabled_profile_ids)
+
+def _profile_may_use_cosmic_ray(profile, cfg):
+    """判断当前 profile 是否可能输出宇宙射线日志"""
+    if _cosmic_ray_enabled(profile, cfg):
+        return True
+    for overrides in (profile.cosmic_ray_overrides or {}).values():
+        if bool((overrides or {}).get("enabled", False)):
+            return True
+    return False
+
+def _cosmic_log_path(profile, base_dir, cfg):
+    """只在启用宇宙射线时返回日志路径"""
+    if not _profile_may_use_cosmic_ray(profile, cfg):
+        return None
+    return resolve_path(base_dir, profile.cosmic_ray_log_name)
 
 COSMIC_RAY_OVERRIDE_KEY_MAP = {
     "enabled": "cosmic_ray_remove",
@@ -434,6 +362,7 @@ def _base_group_stats(input_count, valid_count):
         "pca_components": 0,
         "threshold": None,
         "skip_reason": None,
+        "cosmic_ray_enabled": False,
         "cosmic_single_spectra": 0,
         "cosmic_single_replaced": 0,
         "cosmic_single_narrow_replaced": 0,
@@ -506,11 +435,13 @@ def _print_processing_stats(stats, show_zero_cosmic=False):
             f"  PCA outlier removal: k={stats['pca_components']}, "
             f"threshold={stats['threshold']:.6f}, removed={stats['removed']}"
         )
-    if show_zero_cosmic or stats.get("cosmic_single_replaced", 0) > 0:
+    if stats.get("cosmic_ray_enabled") and (show_zero_cosmic or stats.get("cosmic_single_replaced", 0) > 0):
         print(f"  {_format_cosmic_ray_stats(stats)}")
 
 def _log_cosmic_ray_stats(label_display, stats, log_path, show_zero_cosmic=False):
     """把每个小文件夹的宇宙射线清理统计写入日志"""
+    if not stats.get("cosmic_ray_enabled"):
+        return
     if not show_zero_cosmic and stats.get("cosmic_single_replaced", 0) <= 0:
         return
     lines = [f"[{label_display}] {_format_cosmic_ray_stats(stats)}"]
@@ -561,6 +492,7 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
     wn_ref = cfg.build_wn_ref()
     spectra, wn_list, filenames = [], [], []
     cosmic_ray_options = _cosmic_ray_kwargs(profile, cfg, label_display)
+    cosmic_ray_enabled = bool(cosmic_ray_options.get("cosmic_ray_remove"))
     cosmic_single_spectra = 0
     cosmic_single_replaced = 0
     cosmic_single_narrow_replaced = 0
@@ -570,7 +502,8 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
         if wn.size == 0 or sp.size == 0:
             continue
 
-        cosmic_single_spectra += 1
+        if cosmic_ray_enabled:
+            cosmic_single_spectra += 1
         wn_u, sp_u, single_replaced = preprocess_single_spectrum(
             wn,
             sp,
@@ -586,9 +519,10 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
             baseline_fit_max=cfg.baseline_fit_max,
             **cosmic_ray_options,
         )
-        cosmic_single_replaced += int(single_replaced)
-        cosmic_single_narrow_replaced += int(getattr(single_replaced, "narrow", 0))
-        cosmic_single_peak_replaced += int(getattr(single_replaced, "peak", 0))
+        if cosmic_ray_enabled:
+            cosmic_single_replaced += int(single_replaced)
+            cosmic_single_narrow_replaced += int(getattr(single_replaced, "narrow", 0))
+            cosmic_single_peak_replaced += int(getattr(single_replaced, "peak", 0))
         if wn_u is None:
             continue
 
@@ -597,6 +531,7 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
         filenames.append(fname)
 
     stats = _base_group_stats(len(samples), len(spectra))
+    stats["cosmic_ray_enabled"] = cosmic_ray_enabled
     stats["cosmic_single_spectra"] = int(cosmic_single_spectra)
     stats["cosmic_single_replaced"] = int(cosmic_single_replaced)
     stats["cosmic_single_narrow_replaced"] = int(cosmic_single_narrow_replaced)
@@ -651,27 +586,14 @@ def finalize_clean_group_samples(
         log_path,
     )
 
-def _has_arc_data(root_dir):
-    """递归判断目录中是否已有可复用光谱文件"""
-    root_dir = Path(root_dir)
-    return root_dir.exists() and any(root_dir.rglob("*.arc_data"))
-
-def build_train_raw(profile, base_dir, pipeline_config=None, cosmic_log_path=None):
-    """从 init 生成按小文件夹保存的物理清洗中间层 train_raw"""
-    cfg = resolve_pipeline_config(pipeline_config)
-    base_dir = Path(base_dir)
-    input_path = resolve_init_input(base_dir, profile)
-    root_process_raw = resolve_path(base_dir, profile.root_process_raw)
-    _reset_generated_dir(root_process_raw)
-    reset_log_file(cosmic_log_path)
-
-    generated = 0
+def _collect_merged_init_groups(profile, input_path, root_process_clean, cfg, cosmic_log_path):
+    """从 init 直接物理清洗并按叶子名前缀合并为最终类别"""
+    groups = {}
     skipped = 0
-
     for rel_dir, leaf_name, samples in iter_init_groups(input_path):
         label = rel_dir.as_posix() if rel_dir != Path(".") else leaf_name
         label_display = label.replace("\\", "/")
-        print(f"\n=== Build train_raw: {label_display} ===")
+        print(f"\n=== Build train source: {label_display} ===")
 
         processed_group, stats = preprocess_physical_group(
             profile,
@@ -691,29 +613,6 @@ def build_train_raw(profile, base_dir, pipeline_config=None, cosmic_log_path=Non
         _print_processing_stats(stats)
         _log_cosmic_ray_stats(label_display, stats, cosmic_log_path)
 
-        save_dir = root_process_raw / rel_dir
-        _save_spectra_files(
-            save_dir,
-            processed_group["filenames"],
-            processed_group["wn_list"],
-            processed_group["spectra"],
-        )
-        generated += len(processed_group["filenames"])
-
-    print("\nTrain raw preprocessing finished:")
-    print(f"- Clean intermediate spectra: {root_process_raw}")
-    print(f"- Generated={generated}, Skipped groups={skipped}")
-    if cosmic_log_path is not None:
-        print(f"- Cosmic ray log: {cosmic_log_path}")
-    _write_train_raw_config(root_process_raw, profile, cfg, input_path)
-    print(f"- Config: {_train_raw_config_path(root_process_raw)}")
-
-def _collect_merged_train_groups(root_process_raw, root_process_clean):
-    """从 train_raw 小文件夹收集样本，并按叶子名前缀合并为最终类别"""
-    groups = {}
-    for leaf_dir, arc_files in iter_arc_dirs(root_process_raw):
-        rel_dir = leaf_dir.relative_to(root_process_raw)
-        leaf_name = leaf_dir.name
         target_dir = _resolve_merged_class_dir(
             root_process_clean,
             rel_dir,
@@ -729,12 +628,15 @@ def _collect_merged_train_groups(root_process_raw, root_process_clean):
             },
         )
 
-        for fname in arc_files:
-            wn, sp = read_arc_data(leaf_dir / fname)
+        for fname, wn, sp in zip(
+            processed_group["filenames"],
+            processed_group["wn_list"],
+            processed_group["spectra"],
+        ):
             out_name = _with_leaf_prefix(leaf_name, fname)
             group["samples"].append((out_name, wn, sp))
 
-    return groups
+    return groups, skipped
 
 def _read_arc_samples(root, arc_files, input_root):
     """读取一个小文件夹内的光谱，并统计读取失败数量"""
@@ -752,43 +654,26 @@ def _read_arc_samples(root, arc_files, input_root):
     return samples, errored
 
 def build_train(profile, base_dir, pipeline_config=None):
-    """复用 train_raw，按类别合并后执行 PCA 并生成最终 train"""
+    """从 init 直接清洗、按类别合并后执行 PCA 并生成最终 train"""
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
     input_path = resolve_init_input(base_dir, profile)
-    root_process_raw = resolve_path(base_dir, profile.root_process_raw)
     root_process_clean = resolve_path(base_dir, profile.root_train_clean)
     root_figure = resolve_path(base_dir, profile.root_train_fig)
     pca_log_path = resolve_path(base_dir, profile.pca_log_name)
-    cosmic_log_path = resolve_path(base_dir, profile.cosmic_ray_log_name)
+    cosmic_log_path = _cosmic_log_path(profile, base_dir, cfg)
     reset_log_file(pca_log_path)
-
-    if not _has_arc_data(root_process_raw):
-        print(f"No reusable train_raw found, build from init: {root_process_raw}")
-        build_train_raw(
-            profile,
-            base_dir,
-            pipeline_config=cfg,
-            cosmic_log_path=cosmic_log_path,
-        )
-    elif not _train_raw_config_matches(root_process_raw, profile, cfg, input_path):
-        print(f"train_raw config or init data changed, rebuild from init: {root_process_raw}")
-        build_train_raw(
-            profile,
-            base_dir,
-            pipeline_config=cfg,
-            cosmic_log_path=cosmic_log_path,
-        )
-    else:
-        print(f"Reuse existing train_raw: {root_process_raw}")
-
-    if not _has_arc_data(root_process_raw):
-        raise FileNotFoundError(f"No .arc_data files found in: {root_process_raw}")
 
     _reset_generated_dir(root_process_clean)
     _reset_generated_dir(root_figure)
     hierarchy_groups = {}
-    merged_groups = _collect_merged_train_groups(root_process_raw, root_process_clean)
+    merged_groups, skipped_sources = _collect_merged_init_groups(
+        profile,
+        input_path,
+        root_process_clean,
+        cfg,
+        cosmic_log_path,
+    )
 
     for group in sorted(merged_groups.values(), key=lambda item: item["rel_dir"].as_posix()):
         rel_dir = group["rel_dir"]
@@ -848,93 +733,13 @@ def build_train(profile, base_dir, pipeline_config=None):
     )
 
     print("\nTraining dataset preprocessing finished:")
-    print(f"- Reusable clean intermediate spectra: {root_process_raw}")
     print(f"- Final train spectra: {root_process_clean}")
     print(f"- Mean plots: {root_figure}")
     print(f"- Hierarchy mean plots: {generated_hierarchy_plots}")
     print(f"- PCA log: {pca_log_path}")
-    if cosmic_log_path.is_file():
+    print(f"- Skipped source groups: {skipped_sources}")
+    if cosmic_log_path is not None and cosmic_log_path.is_file() and cosmic_log_path.stat().st_size > 0:
         print(f"- Cosmic ray log: {cosmic_log_path}")
-
-def preview(profile, base_dir, pipeline_config=None):
-    """基于 init 生成预览图，并同步写出可复用 train_raw"""
-    cfg = resolve_pipeline_config(pipeline_config)
-    base_dir = Path(base_dir)
-    input_path = resolve_init_input(base_dir, profile)
-    root_init_fig = resolve_path(base_dir, profile.root_init_fig)
-    root_process_raw = resolve_path(base_dir, profile.root_process_raw)
-    cosmic_log_path = resolve_path(base_dir, profile.cosmic_ray_log_name)
-    root_init_fig.mkdir(parents=True, exist_ok=True)
-    _reset_generated_dir(root_process_raw)
-    reset_log_file(cosmic_log_path)
-
-    generated = 0
-    generated_raw = 0
-    skipped = 0
-
-    for rel_dir, leaf_name, samples in iter_init_groups(input_path):
-        label = rel_dir.as_posix() if rel_dir != Path(".") else leaf_name
-        label_display = label.replace("\\", "/")
-
-        print(f"\n=== Preview: {label_display} ===")
-
-        processed_group, stats = preprocess_physical_group(
-            profile,
-            cfg,
-            samples,
-            label_display,
-        )
-
-        if stats["skip_reason"] is not None:
-            print(
-                f"  Skip: no valid spectra after preprocessing "
-                f"({stats['valid_before_pca']}/{stats['input']})"
-            )
-            skipped += 1
-            continue
-
-        _print_processing_stats(stats, show_zero_cosmic=True)
-        _log_cosmic_ray_stats(
-            label_display,
-            stats,
-            cosmic_log_path,
-            show_zero_cosmic=True,
-        )
-
-        save_dir = root_process_raw / rel_dir
-        _save_spectra_files(
-            save_dir,
-            processed_group["filenames"],
-            processed_group["wn_list"],
-            processed_group["spectra"],
-        )
-        generated_raw += len(processed_group["filenames"])
-
-        title = " - ".join(rel_dir.parts) if rel_dir != Path(".") else leaf_name
-        title = (
-            f"{title} (mean, q10-q90, kept {stats['kept']}/{stats['input']})"
-        )
-
-        _save_mean_figure(
-            root_figure=root_init_fig,
-            rel_dir=rel_dir,
-            filename=f"{leaf_name}.png",
-            wn=processed_group["wn"],
-            spectra=processed_group["spectra"],
-            title=title,
-            cfg=cfg,
-        )
-        generated += 1
-
-    _write_train_raw_config(root_process_raw, profile, cfg, input_path)
-
-    print("\nDataset init preview finished:")
-    print(f"- Mean plots: {root_init_fig}")
-    print(f"- Clean intermediate spectra: {root_process_raw}")
-    print(f"- Train raw generated={generated_raw}")
-    print(f"- Config: {_train_raw_config_path(root_process_raw)}")
-    print(f"- Cosmic ray log: {cosmic_log_path}")
-    print(f"- Generated={generated}, Skipped={skipped}")
 
 def build_test(
     profile,

@@ -38,7 +38,7 @@ MODEL_CONFIG_FIELDS = (
     "train_filter_level",
     "train_filter_value",
     "train_per_parent",
-    "split_level",
+    "split_by_source_prefix",
     "train_split",
     "seed",
     "epochs",
@@ -179,7 +179,7 @@ class ModelRunConfig:
     train_per_parent: bool = True
 
     # 训练/验证划分
-    split_level: str = "leaf"
+    split_by_source_prefix: bool = False
     train_split: float = 0.8
     seed: int = 42
 

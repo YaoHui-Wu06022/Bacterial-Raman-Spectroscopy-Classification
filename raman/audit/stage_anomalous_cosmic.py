@@ -20,16 +20,25 @@ def classify_anomalous_cosmic(records, audit_cfg: AuditConfig):
             has_wide_region
             and record.wide_bump_max_z >= audit_cfg.anomalous_wide_max_z_min
             and record.wide_bump_area >= audit_cfg.anomalous_wide_area_z_min
-            and record.wide_edge_jump_z >= audit_cfg.anomalous_wide_delete_edge_z_min
+            and (
+                record.wide_edge_jump_z >= audit_cfg.anomalous_wide_delete_edge_z_min
+                or record.wide_region_kind == "rising"
+            )
         )
 
         if strong_wide_region:
             record.decision = "remove_candidate"
             record.delete_category = STAGE_DELETE_CATEGORY["anomalous-cosmic"]
-            record.reasons = ("anomalous_cosmic_wide_edge_jump",)
+            if record.wide_region_kind == "rising":
+                record.reasons = ("anomalous_cosmic_long_rising_tail",)
+            else:
+                record.reasons = ("anomalous_cosmic_wide_edge_jump",)
         elif has_wide_region:
             record.decision = "review_candidate"
-            record.reasons = ("anomalous_cosmic_wide_edge_review",)
+            if record.wide_region_kind == "rising":
+                record.reasons = ("anomalous_cosmic_long_rising_review",)
+            else:
+                record.reasons = ("anomalous_cosmic_wide_edge_review",)
         else:
             record.decision = "keep"
             record.reasons = ()

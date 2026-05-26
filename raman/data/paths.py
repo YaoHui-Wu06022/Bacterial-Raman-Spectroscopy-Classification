@@ -3,7 +3,6 @@ from pathlib import Path
 DATASET_BUNDLE_STAGE_MAP = {
     "train": ("train",),
     "test": ("test",),
-    "raw": ("train_raw",),
     "init": ("init",),
     "init_test": ("init_test",),
     "predict_input": ("test",),

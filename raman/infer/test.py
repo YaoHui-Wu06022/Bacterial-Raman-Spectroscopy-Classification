@@ -38,7 +38,7 @@ def _resolve_project_path(path):
 def _bundle_root(path):
     """把阶段目录还原到数据集根目录"""
     path = Path(path)
-    if path.name in {"train", "train_raw", "test", "init_test"}:
+    if path.name in {"train", "test", "init_test"}:
         return path.parent
     return path
 
@@ -123,13 +123,12 @@ def _label_from_parts(parts, level_name):
 
 
 def _candidate_train_roots(dataset_root):
-    """列出可用的训练侧光谱目录，优先使用最终 train"""
+    """列出可用的训练侧光谱目录"""
     dataset_root = _bundle_root(_resolve_project_path(dataset_root))
     train_root = dataset_root / "train"
     if train_root.is_dir():
         return [train_root]
-    train_raw_root = dataset_root / "train_raw"
-    return [train_raw_root] if train_raw_root.is_dir() else []
+    return []
 
 
 def _iter_labeled_train_files(train_root, level_name):
@@ -184,7 +183,7 @@ def _load_train_file_list(exp_dir):
 
 
 def _resolve_train_mean_files(exp_dir, dataset_root, level_name):
-    """优先使用模型训练清单，缺失时回退到当前 train_raw"""
+    """优先使用模型训练清单，缺失时回退到当前 train"""
     dataset_root = _bundle_root(_resolve_project_path(dataset_root))
     train_files = _load_train_file_list(exp_dir)
     train_root = dataset_root / "train"

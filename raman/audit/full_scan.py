@@ -181,29 +181,44 @@ def _plot_invalid_panels(axes, record, wn, cfg, audit_cfg):
 
 def _record_summary_text(record):
     """生成候选谱图底部的文本摘要。"""
-    return (
-        f"Stage: {record.stage}\n"
-        f"Decision: {record.decision}\n"
-        f"Reasons: {'; '.join(record.reasons)}\n"
-        f"Labels: {'; '.join(reason_labels(record.reasons))}\n"
-        f"raw_wn={record.raw_wn_min:.1f}-{record.raw_wn_max:.1f}, coverage={record.coverage_ratio:.3f}\n"
-        f"long_flat_points={record.long_flat_points}, flat_fraction={record.flat_fraction:.3f}, roughness={record.roughness:.4f}\n"
-        f"smooth_range={record.smooth_range:.4f}, detail_noise={record.detail_noise:.4f}, structure_ratio={record.structure_ratio:.3f}\n"
-        f"wide_bump_count={record.wide_bump_count}, z={record.wide_bump_max_z:.3f}, "
-        f"area={record.wide_bump_area:.3f}, width_points={record.wide_bump_width_points}, "
-        f"width_cm={record.wide_bump_width_cm:.1f}, center={record.wide_bump_center_cm:.1f}\n"
-        f"edge_jump_z={record.wide_edge_jump_z:.3f}, left={record.wide_left_edge_jump_z:.3f}, "
-        f"right={record.wide_right_edge_jump_z:.3f}\n"
-        f"rising_area={record.rising_region_area:.3f}, rising_width={record.rising_region_width_cm:.1f}\n"
-        f"ref_pool_size={record.ref_pool_size}, other_ref_pool_size={record.other_ref_pool_size}, "
-        f"corr_ref={record.corr_ref:.3f}, nearest_ref_corr={record.nearest_ref_corr:.3f}, rmse_to_ref={record.rmse_to_ref:.3f}\n"
-        f"local_pos_count={record.local_pos_count}, local_pos_max_z={record.local_pos_max_z:.3f}, "
-        f"local_pos_area={record.local_pos_area:.3f}, local_pos_width_points={record.local_pos_width_points}, "
-        f"local_pos_center={record.local_pos_center_cm:.1f}\n"
-        f"folder_candidate_count={record.folder_candidate_count}, folder_candidate_fraction={record.folder_candidate_fraction:.3f}\n"
-        f"cosmic_total={record.cosmic_total}, narrow={record.cosmic_narrow}, peak={record.cosmic_peak}\n"
-        f"risk_score={record.risk_score:.3f}"
-    )
+    lines = [
+        f"Stage: {record.stage}",
+        f"Decision: {record.decision}",
+        f"Reasons: {'; '.join(record.reasons)}",
+        f"Labels: {'; '.join(reason_labels(record.reasons))}",
+    ]
+
+    if record.stage == "invalid":
+        lines.extend(
+            [
+                f"raw_wn={record.raw_wn_min:.1f}-{record.raw_wn_max:.1f}, coverage={record.coverage_ratio:.3f}",
+                f"long_flat_points={record.long_flat_points}, flat_fraction={record.flat_fraction:.3f}, roughness={record.roughness:.4f}",
+                f"smooth_range={record.smooth_range:.4f}, detail_noise={record.detail_noise:.4f}, structure_ratio={record.structure_ratio:.3f}",
+            ]
+        )
+    elif record.stage == "anomalous-cosmic":
+        lines.extend(
+            [
+                f"cosmic_total={record.cosmic_total}, narrow={record.cosmic_narrow}, peak={record.cosmic_peak}",
+                f"wide_bump_count={record.wide_bump_count}, z={record.wide_bump_max_z:.3f}, area={record.wide_bump_area:.3f}",
+                f"width_points={record.wide_bump_width_points}, center={record.wide_bump_center_cm:.1f}",
+                f"edge_jump_z={record.wide_edge_jump_z:.3f}, left={record.wide_left_edge_jump_z:.3f}, right={record.wide_right_edge_jump_z:.3f}",
+                f"rising_area={record.rising_region_area:.3f}, rising_width={record.rising_region_width_cm:.1f}",
+            ]
+        )
+    elif record.stage == "class-similarity":
+        lines.extend(
+            [
+                f"ref_pool_size={record.ref_pool_size}, other_ref_pool_size={record.other_ref_pool_size}",
+                f"corr_ref={record.corr_ref:.3f}, nearest_ref_corr={record.nearest_ref_corr:.3f}, rmse_to_ref={record.rmse_to_ref:.3f}",
+                f"local_pos_count={record.local_pos_count}, local_pos_max_z={record.local_pos_max_z:.3f}, local_pos_area={record.local_pos_area:.3f}",
+                f"local_pos_width_points={record.local_pos_width_points}, local_pos_center={record.local_pos_center_cm:.1f}",
+                f"folder_candidate_count={record.folder_candidate_count}, folder_candidate_fraction={record.folder_candidate_fraction:.3f}",
+            ]
+        )
+
+    lines.append(f"risk_score={record.risk_score:.3f}")
+    return "\n".join(lines)
 
 
 def plot_stage_candidate(record, out_path, profile, cfg, prefix_stats, audit_cfg):

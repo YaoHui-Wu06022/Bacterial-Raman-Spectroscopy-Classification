@@ -10,7 +10,6 @@ from scipy.ndimage import percentile_filter
 
 from raman.audit.common import (
     contiguous_regions,
-    corr_many_to_one,
     median_step_cm,
     moving_average,
     output_wn,
@@ -18,7 +17,6 @@ from raman.audit.common import (
     region_width_cm,
     robust_mad_scale,
     robust_wave_stats,
-    spectral_corr,
 )
 from raman.audit.config import AuditConfig, DEFAULT_AUDIT_CONFIG
 from raman.data.spectrum import read_arc_data
@@ -74,6 +72,7 @@ class SpectrumRecord:
     wide_bump_width_points: int = 0
     wide_bump_width_cm: float = 0.0
     wide_bump_center_cm: float = 0.0
+    wide_region_kind: str = ""
     wide_edge_jump_z: float = 0.0
     wide_left_edge_jump_z: float = 0.0
     wide_right_edge_jump_z: float = 0.0
@@ -253,11 +252,58 @@ def _wide_regions_by_points(wn, z_values, smooth_values, threshold, min_points, 
                     "width_cm": region_width_cm(wn, start, end),
                     "max_z": float(np.max(segment)),
                     "area": float(np.sum(np.maximum(segment, 0.0))),
+                    "kind": "edge",
                     "edge_jump_z": float(edge_jump_z),
                     "left_edge_jump_z": float(left_edge_jump_z),
                     "right_edge_jump_z": float(right_edge_jump_z),
                 }
             )
+    return regions
+
+
+def _long_rising_regions(wn, z_values, audit_cfg: AuditConfig, segments):
+    """检测清理后仍存在的长上升尾段"""
+    regions = []
+    scale = _diff_scale_by_segments(z_values, segments)
+    for seg_start, seg_end in segments:
+        if seg_end - seg_start < int(audit_cfg.anomalous_rising_min_points):
+            continue
+        segment = moving_average(z_values[seg_start:seg_end], audit_cfg.anomalous_wide_smooth_points)
+        edge_points = max(25, int(segment.size // 5))
+        left = float(np.median(segment[:edge_points]))
+        right = float(np.median(segment[-edge_points:]))
+        center = float(np.median(segment))
+        rise_z = (right - left) / max(scale, 1e-8)
+        end_lift = right - center
+        if rise_z < float(audit_cfg.anomalous_rising_z_min) or end_lift < float(audit_cfg.anomalous_rising_snv_min):
+            continue
+
+        start_threshold = left + 0.30 * (right - left)
+        start_candidates = np.flatnonzero(segment >= start_threshold)
+        start = seg_start
+        if start_candidates.size:
+            start = seg_start + int(max(0, start_candidates[0] - audit_cfg.anomalous_wide_smooth_points))
+        end = seg_end
+        width_points = int(end - start)
+        if width_points < int(audit_cfg.anomalous_rising_min_points):
+            continue
+
+        center_idx = min(end - 1, max(start, start + width_points // 2))
+        regions.append(
+            {
+                "start": int(start),
+                "end": int(end),
+                "center_cm": float(wn[center_idx]),
+                "width_points": width_points,
+                "width_cm": region_width_cm(wn, start, end),
+                "max_z": float(rise_z),
+                "area": float(rise_z * width_points),
+                "kind": "rising",
+                "edge_jump_z": 0.0,
+                "left_edge_jump_z": 0.0,
+                "right_edge_jump_z": 0.0,
+            }
+        )
     return regions
 
 
@@ -290,7 +336,7 @@ def score_anomalous_wide_regions(records, cfg, audit_cfg: AuditConfig):
         residual = smooth - floor
         scale = _diff_scale_by_segments(values, segments)
         wide_z = residual / max(scale, 1e-8)
-        regions = _wide_regions_by_points(
+        edge_regions = _wide_regions_by_points(
             wn,
             wide_z,
             smooth,
@@ -301,8 +347,16 @@ def score_anomalous_wide_regions(records, cfg, audit_cfg: AuditConfig):
             edge_window_points=audit_cfg.anomalous_wide_smooth_points,
         )
         edge_threshold = audit_cfg.anomalous_wide_review_edge_z_min
-        regions = [region for region in regions if region["edge_jump_z"] >= edge_threshold]
-        best = max(regions, key=lambda item: (item.get("edge_jump_z", 0.0), item["max_z"], item["area"], item["width_cm"]), default=None)
+        edge_regions = [region for region in edge_regions if region["edge_jump_z"] >= edge_threshold]
+        rising_regions = []
+        if record.z is not None:
+            rising_regions = _long_rising_regions(wn, np.asarray(record.z, dtype=np.float32), audit_cfg, segments)
+        regions = edge_regions + rising_regions
+        best = max(
+            regions,
+            key=lambda item: (item["kind"] == "rising", item.get("edge_jump_z", 0.0), item["max_z"], item["area"], item["width_points"]),
+            default=None,
+        )
 
         record.wide_z = wide_z.astype(np.float32, copy=False)
         record.wide_smooth = smooth
@@ -316,13 +370,15 @@ def score_anomalous_wide_regions(records, cfg, audit_cfg: AuditConfig):
             record.wide_bump_width_points = best["width_points"]
             record.wide_bump_width_cm = best["width_cm"]
             record.wide_bump_center_cm = best["center_cm"]
+            record.wide_region_kind = best.get("kind", "")
             record.wide_edge_jump_z = best["edge_jump_z"]
             record.wide_left_edge_jump_z = best["left_edge_jump_z"]
             record.wide_right_edge_jump_z = best["right_edge_jump_z"]
-            record.rising_region_count = len(regions)
-            record.rising_region_area = best["area"]
-            record.rising_region_width_cm = best["width_cm"]
-            record.rising_region_center_cm = best["center_cm"]
+            record.rising_region_count = len(rising_regions)
+            if best.get("kind") == "rising":
+                record.rising_region_area = best["area"]
+                record.rising_region_width_cm = best["width_cm"]
+                record.rising_region_center_cm = best["center_cm"]
 
 
 def _local_positive_regions(wn, z_values, audit_cfg: AuditConfig):
@@ -348,6 +404,55 @@ def _local_positive_regions(wn, z_values, audit_cfg: AuditConfig):
             }
         )
     return regions
+
+
+def _row_corr_to_one(spectra, reference):
+    """计算多条谱到一条参考谱的相关系数"""
+    spectra = np.asarray(spectra, dtype=np.float32)
+    reference = np.asarray(reference, dtype=np.float32)
+    if spectra.size == 0 or reference.std() <= 1e-8:
+        return np.zeros(spectra.shape[0], dtype=np.float32)
+    x = spectra - spectra.mean(axis=1, keepdims=True)
+    y = reference - float(reference.mean())
+    denom = np.linalg.norm(x, axis=1) * float(np.linalg.norm(y))
+    corr = np.zeros(spectra.shape[0], dtype=np.float32)
+    ok = denom > 1e-8
+    if np.any(ok):
+        corr[ok] = (x[ok] @ y / denom[ok]).astype(np.float32, copy=False)
+    return corr
+
+
+def _nearest_other_folder_corr(spectra, folders, block_size=256):
+    """分块计算非同小文件夹最近邻相关性"""
+    spectra = np.asarray(spectra, dtype=np.float32)
+    folders = np.asarray(folders, dtype=object)
+    count = int(spectra.shape[0])
+    nearest = np.full(count, np.nan, dtype=np.float32)
+    other_counts = np.zeros(count, dtype=np.int32)
+    if count <= 1:
+        return nearest, other_counts
+
+    centered = spectra - spectra.mean(axis=1, keepdims=True)
+    norms = np.linalg.norm(centered, axis=1)
+    valid = norms > 1e-8
+    normed = np.zeros_like(centered, dtype=np.float32)
+    normed[valid] = centered[valid] / norms[valid, None]
+
+    folder_indices = {folder: np.flatnonzero(folders == folder) for folder in np.unique(folders)}
+    for indices in folder_indices.values():
+        other_counts[indices] = count - int(indices.size)
+
+    block_size = max(16, int(block_size))
+    for start in range(0, count, block_size):
+        end = min(start + block_size, count)
+        sim = normed[start:end] @ normed.T
+        sim[:, ~valid] = -np.inf
+        for row, idx in enumerate(range(start, end)):
+            sim[row, folder_indices[folders[idx]]] = -np.inf
+        best = np.max(sim, axis=1)
+        ok = np.isfinite(best)
+        nearest[start:end][ok] = best[ok].astype(np.float32, copy=False)
+    return nearest, other_counts
 
 
 def score_class_similarity(records, cfg, audit_cfg: AuditConfig):
@@ -378,26 +483,19 @@ def score_class_similarity(records, cfg, audit_cfg: AuditConfig):
                 record.ref_pool_size = max(len(scope_records) - 1, 0)
             continue
 
+        corr_ref = _row_corr_to_one(spectra, center_all)
+        rmse_to_ref = np.sqrt(np.mean((spectra - center_all) ** 2, axis=1))
+        nearest_ref, other_counts = _nearest_other_folder_corr(spectra, folders)
         for idx, record in enumerate(scope_records):
             sample = spectra[idx]
-            other_indices = np.arange(len(scope_records)) != idx
-            ref_spectra = spectra[other_indices]
-            ref_folders = folders[other_indices]
-            record.ref_pool_size = int(ref_spectra.shape[0])
-            if ref_spectra.shape[0] <= 0:
-                continue
+            record.ref_pool_size = int(len(scope_records) - 1)
+            record.other_ref_pool_size = int(other_counts[idx])
+            record.corr_ref = float(corr_ref[idx])
+            record.rmse_to_ref = float(rmse_to_ref[idx])
+            if np.isfinite(nearest_ref[idx]):
+                record.nearest_ref_corr = float(nearest_ref[idx])
 
-            center, wave_scale = robust_wave_stats(ref_spectra)
-            record.corr_ref = spectral_corr(sample, center)
-            record.rmse_to_ref = float(np.sqrt(np.mean((sample - center) ** 2)))
-
-            other_folder_mask = ref_folders != record.folder
-            other_folder_spectra = ref_spectra[other_folder_mask]
-            record.other_ref_pool_size = int(other_folder_spectra.shape[0])
-            if other_folder_spectra.shape[0] > 0:
-                record.nearest_ref_corr = float(np.max(corr_many_to_one(other_folder_spectra, sample)))
-
-            local_z = (sample - center) / np.maximum(wave_scale, 1e-8)
+            local_z = (sample - center_all) / np.maximum(scale_all, 1e-8)
             record.local_pos_z = local_z.astype(np.float32, copy=False)
             wn = wn_full[: sample.size]
             regions = _local_positive_regions(wn, local_z, audit_cfg)
@@ -509,6 +607,7 @@ def record_to_row(record: SpectrumRecord):
         "wide_bump_width_points": record.wide_bump_width_points,
         "wide_bump_width_cm": fmt_value(record.wide_bump_width_cm, 3),
         "wide_bump_center_cm": fmt_value(record.wide_bump_center_cm, 3),
+        "wide_region_kind": record.wide_region_kind,
         "wide_edge_jump_z": fmt_value(record.wide_edge_jump_z, 3),
         "wide_left_edge_jump_z": fmt_value(record.wide_left_edge_jump_z, 3),
         "wide_right_edge_jump_z": fmt_value(record.wide_right_edge_jump_z, 3),
