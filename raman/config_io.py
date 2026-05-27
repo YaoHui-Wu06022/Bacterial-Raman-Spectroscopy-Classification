@@ -82,11 +82,6 @@ def dump_yaml_dict(data, yaml_path, label="Config"):
     print(f"[{label}] saved to {path}")
 
 
-def dump_config_to_yaml(config, yaml_path):
-    """导出完整配置"""
-    dump_yaml_dict(config_to_dict(config), yaml_path, label="Config")
-
-
 def dump_shared_config_to_yaml(config, yaml_path):
     """导出实验根共享配置"""
     dump_yaml_dict(shared_config_dict(config), yaml_path, label="SharedConfig")

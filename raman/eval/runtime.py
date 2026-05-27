@@ -9,13 +9,13 @@ from raman.config_io import assert_input_compatible, load_experiment, load_run_c
 from raman.model import RamanClassifier1D
 
 from .experiment import (
-    load_hierarchy_meta,
     resolve_level_model_entry,
     resolve_level_model_path,
     resolve_model_sidecar_path,
     resolve_project_path,
     scan_parent_model_files,
 )
+from raman.tool.hierarchy import load_hierarchy_meta
 
 
 @dataclass

@@ -10,10 +10,10 @@ from sklearn.svm import SVC
 from .common import compute_classification_metrics
 from .experiment import (
     load_experiment_context_with_dataset,
-    load_hierarchy_meta,
     resolve_mode_result_dir,
     resolve_split_dir,
 )
+from raman.tool.hierarchy import load_hierarchy_meta
 from .report import (
     format_classification_report_text,
     save_confusion_matrix_csv,
@@ -60,12 +60,6 @@ def _load_baseline_context(exp_dir, target_level=None):
         "val_idx": np.array(sorted(val_idx)),
         "runtime": runtime,
     }
-
-
-def _class_names(dataset, level_name):
-    """取出某一层的类别名列表"""
-    return list(dataset.class_names_by_level[dataset.head_name_to_idx[level_name]])
-
 
 def _extract_features(dataset, indices, level_idx, use_all_channels, label_map=None, allowed_labels=None):
     """按索引提取特征和标签，并跳过无效标签样本"""
@@ -224,7 +218,7 @@ def _run_global_baseline(ctx, result_dir, **kwargs):
     """运行某一层全局类别空间的 PCA+SVM baseline"""
     dataset = ctx["dataset"]
     level_name = ctx["target_level"]
-    class_names = _class_names(dataset, level_name)
+    class_names = dataset.get_class_names(level_name)
     result = _fit_predict_svm(
         dataset,
         ctx["train_idx"],
@@ -248,7 +242,7 @@ def _run_parent_baseline(ctx, result_dir, parent_idx, **kwargs):
     if len(child_ids) <= 1:
         raise ValueError(f"Parent {parent_idx} has only one child; no baseline model needed.")
 
-    class_names_all = _class_names(dataset, level_name)
+    class_names_all = dataset.get_class_names(level_name)
     class_names = [class_names_all[child_id] for child_id in child_ids]
     label_map = {child_id: local_idx for local_idx, child_id in enumerate(child_ids)}
     train_idx = _filter_indices_by_parent(dataset, ctx["train_idx"], level_name, parent_idx)
@@ -304,7 +298,7 @@ def _run_level_parent_baseline(ctx, result_dir, **kwargs):
     level_idx = dataset.head_name_to_idx[level_name]
     parent_level = dataset.get_parent_level(level_name)
     parent_level_idx = dataset.head_name_to_idx[parent_level]
-    class_names = _class_names(dataset, level_name)
+    class_names = dataset.get_class_names(level_name)
 
     all_labels, all_preds = [], []
     parent_entries = runtime.parent_models.get(level_name, {})

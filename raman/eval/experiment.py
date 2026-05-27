@@ -10,11 +10,17 @@ from raman.config_io import (
     find_experiment_root,
     load_experiment,
 )
-from raman.data import resolve_dataset_stage
+from raman.tool.dataset import resolve_dataset_stage
+from raman.tool.path import (
+    PROJECT_ROOT,
+    exp_abspath,
+    exp_relpath,
+    normalize_relpath,
+    resolve_project_path,
+)
 from raman.training.split import TRAIN_SPLIT_NAME, VAL_SPLIT_NAME, split_files_hash
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RUN_SELECTION_ENV = "RAMAN_RUN_SELECTION"
 RESULT_DIR_NAMES = {
     "val": "val_result",
@@ -43,14 +49,6 @@ class ExperimentInputContext:
         return self.input_run_dir is not None
 
 
-def resolve_project_path(path):
-    """将相对路径解析到项目根目录，绝对路径保持不变"""
-    if path is None:
-        return None
-    path = Path(path)
-    return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
-
-
 def _parse_slot_identity(slot_dir):
     """从模型槽位目录推断 level 和 parent"""
     name = Path(slot_dir).name
@@ -73,7 +71,7 @@ def resolve_experiment_input(path):
             slot_dir = slot_dir.parent
         exp_dir = find_experiment_root(run_dir).resolve()
         level_name, parent_idx = _parse_slot_identity(slot_dir)
-        slot_key = _rel_to_exp(exp_dir, slot_dir)
+        slot_key = exp_relpath(exp_dir, slot_dir)
         selected = os.path.relpath(run_dir, slot_dir)
         return ExperimentInputContext(
             input_path=os.fspath(input_path),
@@ -82,7 +80,7 @@ def resolve_experiment_input(path):
             input_slot_dir=os.fspath(slot_dir),
             input_level=level_name,
             input_parent_idx=parent_idx,
-            run_selection={_norm_selection_key(slot_key): selected},
+            run_selection={normalize_relpath(slot_key).strip("/"): selected},
         )
 
     exp_dir = input_path
@@ -112,88 +110,6 @@ def load_experiment_context_with_dataset(exp_dir):
     return input_context, config
 
 
-def load_experiment_with_dataset(exp_dir):
-    """兼容旧调用，只返回实验根和配置"""
-    input_context, config = load_experiment_context_with_dataset(exp_dir)
-    return input_context.exp_dir, config
-
-
-def _normalize_parent_to_children(parent_to_children):
-    """把 parent_to_children 的 key 和 child id 统一转成 int"""
-    normalized = {}
-    for level_name, mapping in (parent_to_children or {}).items():
-        normalized[level_name] = {
-            int(parent_idx): [int(child_id) for child_id in child_ids]
-            for parent_idx, child_ids in mapping.items()
-        }
-    return normalized
-
-
-def _normalize_parent_models(parent_models):
-    """把 hierarchy_meta 里的 parent model 条目规整成统一字典"""
-    normalized = {}
-    for level_name, mapping in (parent_models or {}).items():
-        normalized[level_name] = {}
-        for parent_idx, entry in mapping.items():
-            item = dict(entry) if isinstance(entry, dict) else {"model_path": entry}
-            item["child_ids"] = [int(child_id) for child_id in item.get("child_ids", [])]
-            normalized[level_name][int(parent_idx)] = item
-    return normalized
-
-
-def load_hierarchy_meta(exp_dir):
-    """读取并规范化 hierarchy_meta.json"""
-    exp_dir = resolve_project_path(exp_dir)
-    meta_path = Path(exp_dir) / "hierarchy_meta.json"
-    if not meta_path.exists():
-        return None
-
-    with open(meta_path, "r", encoding="utf-8") as file:
-        meta = json.load(file)
-
-    meta["parent_to_children"] = _normalize_parent_to_children(meta.get("parent_to_children", {}))
-    meta["parent_models"] = _normalize_parent_models(meta.get("parent_models", {}))
-    meta["level_models"] = dict(meta.get("level_models", {}))
-    meta["class_names_by_level"] = dict(meta.get("class_names_by_level", {}))
-    meta["head_names"] = list(meta.get("head_names", []))
-    return meta
-
-
-def resolve_head_level_name(dataset, level_name):
-    """解析并校验业务层级名"""
-    return dataset._resolve_level_name(level_name, field_name="level_name")
-
-
-def _rel_to_exp(exp_dir, path):
-    """把绝对路径转换成相对实验根的路径"""
-    if path is None:
-        return None
-    path = Path(path)
-    if not path.is_absolute():
-        path = Path(exp_dir) / path
-    return os.path.relpath(path, exp_dir)
-
-
-def _abs_from_exp(exp_dir, path):
-    """把相对实验根的路径转换成绝对路径"""
-    if path is None:
-        return None
-    path = Path(path)
-    if not path.is_absolute():
-        path = Path(exp_dir) / path
-    return path
-
-
-def _is_run_dir(path):
-    """判断路径是否为 run_* 目录"""
-    return Path(path).is_dir() and Path(path).name.startswith("run_")
-
-
-def _norm_selection_key(value):
-    """统一 RUN_SELECTION 的 key 格式，避免 Windows 分隔符影响匹配"""
-    return str(value).replace("\\", "/").strip("/")
-
-
 def _load_run_selection():
     """从环境变量读取临时 run 选择配置"""
     raw = os.environ.get(RUN_SELECTION_ENV, "").strip()
@@ -206,7 +122,7 @@ def _load_run_selection():
     if not isinstance(data, dict):
         raise ValueError(f"{RUN_SELECTION_ENV} must be a JSON object")
     return {
-        _norm_selection_key(key): str(value)
+        normalize_relpath(key).strip("/"): str(value)
         for key, value in data.items()
         if value is not None and str(value).strip()
     }
@@ -216,14 +132,14 @@ def _selection_keys_for_slot(slot_dir):
     """为同一个模型槽位生成多种可匹配的 RUN_SELECTION key"""
     slot_dir = Path(slot_dir)
     keys = [
-        _norm_selection_key(slot_dir.name),
-        _norm_selection_key(slot_dir),
+        normalize_relpath(slot_dir.name).strip("/"),
+        normalize_relpath(slot_dir).strip("/"),
     ]
     parts = slot_dir.parts
     if len(parts) >= 2:
-        keys.append(_norm_selection_key(Path(parts[-2]) / parts[-1]))
+        keys.append(normalize_relpath(Path(parts[-2]) / parts[-1]).strip("/"))
     try:
-        keys.append(_norm_selection_key(slot_dir.resolve()))
+        keys.append(normalize_relpath(slot_dir.resolve()).strip("/"))
     except OSError:
         pass
     return keys
@@ -235,7 +151,7 @@ def _selected_run_dir(slot_dir, run_selection=None):
     if not selection:
         return None
     selection = {
-        _norm_selection_key(key): str(value)
+            normalize_relpath(key).strip("/"): str(value)
         for key, value in selection.items()
         if value is not None and str(value).strip()
     }
@@ -246,7 +162,7 @@ def _selected_run_dir(slot_dir, run_selection=None):
         run_dir = Path(selected)
         if not run_dir.is_absolute():
             run_dir = Path(slot_dir) / selected
-        if not _is_run_dir(run_dir):
+        if not (run_dir.is_dir() and run_dir.name.startswith("run_")):
             raise ValueError(f"{RUN_SELECTION_ENV} selected path is not a run_* dir: {run_dir}")
         return run_dir
     return None
@@ -264,7 +180,7 @@ def select_run_dir(slot_dir, run_selection=None):
 
     best_dir = slot_dir / "best"
     if best_dir.exists():
-        best_runs = sorted(path for path in best_dir.iterdir() if _is_run_dir(path))
+        best_runs = sorted(path for path in best_dir.iterdir() if path.is_dir() and path.name.startswith("run_"))
         if len(best_runs) > 1:
             raise ValueError(f"{best_dir} 内有多个 run_*，best 目录只允许保留一个")
         if len(best_runs) == 1:
@@ -273,7 +189,7 @@ def select_run_dir(slot_dir, run_selection=None):
     if not slot_dir.exists():
         return None, None
 
-    runs = sorted(path for path in slot_dir.iterdir() if _is_run_dir(path))
+    runs = sorted(path for path in slot_dir.iterdir() if path.is_dir() and path.name.startswith("run_"))
     if runs:
         return runs[-1], "latest"
     return None, None
@@ -295,10 +211,10 @@ def _run_entry(exp_dir, run_dir, model_path, source):
     """生成记录某个 run 模型、配置和 split 信息的条目"""
     run_dir = Path(run_dir)
     entry = {
-        "run_dir": _rel_to_exp(exp_dir, run_dir),
-        "config_path": _rel_to_exp(exp_dir, run_dir / MODEL_CONFIG_NAME),
-        "resolved_config_path": _rel_to_exp(exp_dir, run_dir / RESOLVED_CONFIG_NAME),
-        "model_path": _rel_to_exp(exp_dir, model_path),
+        "run_dir": exp_relpath(exp_dir, run_dir),
+        "config_path": exp_relpath(exp_dir, run_dir / MODEL_CONFIG_NAME),
+        "resolved_config_path": exp_relpath(exp_dir, run_dir / RESOLVED_CONFIG_NAME),
+        "model_path": exp_relpath(exp_dir, model_path),
         "train_split_path": TRAIN_SPLIT_NAME,
         "val_split_path": VAL_SPLIT_NAME,
         "split_hash": split_files_hash(exp_dir),
@@ -335,7 +251,7 @@ def resolve_level_model_entry(exp_dir, level_name, level_models_meta=None, run_s
         return meta_entry
 
     expected_path = exp_dir / level_name / f"{level_name}_model.pt"
-    return {"model_path": _rel_to_exp(exp_dir, expected_path)}
+    return {"model_path": exp_relpath(exp_dir, expected_path)}
 
 
 def resolve_level_model_path(exp_dir, level_name, level_models_meta, run_selection=None):
@@ -347,7 +263,7 @@ def resolve_level_model_path(exp_dir, level_name, level_models_meta, run_selecti
         level_models_meta,
         run_selection=run_selection,
     )
-    return os.fspath(_abs_from_exp(exp_dir, entry.get("model_path")))
+    return os.fspath(exp_abspath(exp_dir, entry.get("model_path")))
 
 
 def resolve_model_sidecar_path(model_path, sidecar_suffix=".se_stats.pt"):
@@ -405,7 +321,7 @@ def scan_parent_model_files(exp_dir, level_name, parent_to_children, run_selecti
         parent_idx = int(match.group(1))
         entry = mapping.get(parent_idx, {"child_ids": []})
         if entry.get("model_path") is None:
-            entry["model_path"] = _rel_to_exp(exp_dir, level_dir / name)
+            entry["model_path"] = exp_relpath(exp_dir, level_dir / name)
         mapping[parent_idx] = entry
 
     return mapping
@@ -416,7 +332,7 @@ def resolve_run_dir(exp_dir, entry):
     run_dir = (entry or {}).get("run_dir")
     if not run_dir:
         return None
-    path = _abs_from_exp(resolve_project_path(exp_dir), run_dir)
+    path = exp_abspath(resolve_project_path(exp_dir), run_dir)
     return path if path is not None and path.exists() else None
 
 
@@ -425,7 +341,7 @@ def _used_run_item(exp_dir, run_dir):
     run_dir = Path(run_dir)
     return {
         "run": run_dir.name,
-        "path": _rel_to_exp(exp_dir, run_dir),
+        "path": exp_relpath(exp_dir, run_dir),
     }
 
 

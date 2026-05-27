@@ -8,13 +8,13 @@ from raman.data import RamanDataset
 from raman.eval.experiment import (
     collect_used_runs,
     load_experiment_context_with_dataset,
-    load_hierarchy_meta,
     resolve_mode_result_dir,
     resolve_mode_result_root,
     resolve_split_dir,
     validate_parent_split_hashes,
     write_used_runs,
 )
+from raman.tool.hierarchy import load_hierarchy_meta, resolve_level_order
 from raman.eval.runtime import build_experiment_runtime
 from raman.training import load_split_files
 
@@ -34,18 +34,6 @@ class HeatmapConfig:
     use_train_loader: bool = True
     topk_per_class: int = 5
 
-
-def _resolve_level_order(dataset, target_level):
-    """解析目标层级，并返回从 level_1 到目标层的顺序"""
-    target_level = dataset._resolve_level_name(target_level, field_name="target_level")
-    if target_level not in dataset.level_names:
-        raise ValueError(
-            f"未知 target_level: {target_level}，可选值：{dataset.level_names}"
-        )
-    stop_idx = dataset.level_names.index(target_level) + 1
-    return target_level, list(dataset.level_names[:stop_idx])
-
-
 def _load_analysis_context(exp_dir, target_level=None, inherit_missing_levels=False):
     """加载分析入口共用的实验配置、数据集、split 和 runtime"""
     input_context, config = load_experiment_context_with_dataset(exp_dir)
@@ -53,7 +41,7 @@ def _load_analysis_context(exp_dir, target_level=None, inherit_missing_levels=Fa
 
     full_dataset = RamanDataset(config.dataset_root, augment=False, config=config)
     target_level = target_level or input_context.input_level
-    target_level, level_order = _resolve_level_order(full_dataset, target_level)
+    target_level, level_order = resolve_level_order(full_dataset, target_level)
     head_index = full_dataset.head_name_to_idx[target_level]
 
     split_dir = resolve_split_dir(input_context.exp_dir)

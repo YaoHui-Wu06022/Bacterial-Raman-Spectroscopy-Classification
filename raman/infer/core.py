@@ -6,10 +6,10 @@ from raman.data import InputPreprocessor
 from raman.eval.common import run_cascade_inference
 from raman.eval.experiment import (
     load_experiment_context_with_dataset,
-    load_hierarchy_meta,
     resolve_project_path,
 )
 from raman.eval.runtime import build_experiment_runtime
+from raman.tool.hierarchy import load_hierarchy_meta
 
 
 def normalize_level_name(level):

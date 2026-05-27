@@ -1,25 +1,44 @@
+"""数据文件读写、归档和离线构建输入源"""
+
 import os
 from pathlib import Path
 
 import numpy as np
 
-from raman.data.spectrum import read_arc_data, write_arc_data
+from raman.tool.dataset import iter_arc_dirs
+from raman.tool.path import resolve_under_base
 
 PACK_EXT = ".npz"
 
-def resolve_path(base_dir, path_value):
-    """将相对路径解析到当前数据集根目录下，统一得到绝对路径"""
-    return (Path(base_dir) / path_value).resolve()
 
-def iter_arc_dirs(root_dir):
-    """递归遍历目录树，只返回包含 .arc_data 文件的叶子目录"""
-    root_dir = os.fspath(root_dir)
-    for root, dirs, files in os.walk(root_dir):
-        dirs.sort()
-        files.sort()
-        arc_files = [name for name in files if name.lower().endswith(".arc_data")]
-        if arc_files:
-            yield Path(root), arc_files
+def read_arc_data(path):
+    """读取两列文本光谱文件，返回波数和强度数组"""
+    wn, sp = [], []
+    with open(path, "r", encoding="utf-8", errors="ignore") as file:
+        for line in file:
+            parts = line.strip().split()
+            if len(parts) != 2:
+                continue
+            try:
+                wn.append(float(parts[0]))
+                sp.append(float(parts[1]))
+            except Exception:
+                continue
+    return np.asarray(wn), np.asarray(sp)
+
+
+def load_arc_intensity(path):
+    """读取单个 .arc_data 文件的强度列"""
+    data = np.loadtxt(path, dtype=np.float32)
+    data = np.atleast_2d(data)
+    return data[:, 1].astype(np.float32, copy=False)
+
+
+def write_arc_data(path, wn, sp, fmt="%.8f"):
+    """把一条光谱写回两列文本格式"""
+    arr = np.column_stack([wn, sp])
+    np.savetxt(path, arr, fmt=[fmt, fmt])
+
 
 def is_packed_path(path):
     """判断一个路径是否是可读取的打包数据文件"""
@@ -56,54 +75,6 @@ class PackedArcDataset:
     def iter_samples(self):
         for index in range(len(self.paths)):
             yield self.get(index)
-
-def resolve_init_input(base_dir, profile):
-    """优先解析 init 目录，其次回退到打包后的 init.npz"""
-    root_init = resolve_path(base_dir, profile.root_init)
-    root_init_pack = resolve_path(base_dir, profile.root_init_pack)
-
-    if root_init.is_dir():
-        return root_init
-    if is_packed_path(root_init):
-        return root_init
-    if is_packed_path(root_init_pack):
-        return root_init_pack
-
-    raise FileNotFoundError(f"Missing input dir/file: {root_init}")
-
-def iter_init_groups(input_path):
-    """按叶子目录分组迭代原始样本，兼容目录输入和 npz 打包输入"""
-    input_path = Path(input_path)
-
-    if input_path.is_dir():
-        for leaf_dir, arc_files in iter_arc_dirs(input_path):
-            rel_dir = leaf_dir.relative_to(input_path)
-            samples = []
-            for fname in arc_files:
-                wn, sp = read_arc_data(leaf_dir / fname)
-                samples.append((fname, wn, sp))
-            yield rel_dir, leaf_dir.name, samples
-        return
-
-    packed = PackedArcDataset(input_path)
-    grouped = {}
-
-    for rel_path, wn, sp in packed.iter_samples():
-        normalized_rel_path = rel_path.replace("\\", "/")
-        rel_dir = Path(os.path.dirname(normalized_rel_path) or ".")
-        group_key = rel_dir.as_posix()
-        if group_key not in grouped:
-            grouped[group_key] = {
-                "rel_dir": rel_dir,
-                "leaf_name": packed.root_name if rel_dir == Path(".") else rel_dir.name,
-                "samples": [],
-            }
-        grouped[group_key]["samples"].append(
-            (os.path.basename(normalized_rel_path), wn, sp)
-        )
-
-    for group in grouped.values():
-        yield group["rel_dir"], group["leaf_name"], group["samples"]
 
 def pack_init(input_dir, output_path, verbose=True):
     """把 init 下的散落光谱打包成一个 npz，便于迁移和归档"""
@@ -173,4 +144,54 @@ def unpack_init(npz_path, output_dir, verbose=True):
 
     if verbose:
         print(f"[Unpack] samples={restored}, restored={output_dir}")
+
+
+def resolve_init_input(base_dir, profile):
+    """优先解析 init 目录，其次回退到打包后的 init.npz"""
+    root_init = resolve_under_base(base_dir, profile.root_init)
+    root_init_pack = resolve_under_base(base_dir, profile.root_init_pack)
+
+    if root_init.is_dir():
+        return root_init
+    if is_packed_path(root_init):
+        return root_init
+    if is_packed_path(root_init_pack):
+        return root_init_pack
+
+    raise FileNotFoundError(f"Missing input dir/file: {root_init}")
+
+
+def iter_init_groups(input_path):
+    """按叶子目录分组迭代原始样本，兼容目录输入和 npz 打包输入"""
+    input_path = Path(input_path)
+
+    if input_path.is_dir():
+        for leaf_dir, arc_files in iter_arc_dirs(input_path):
+            rel_dir = leaf_dir.relative_to(input_path)
+            samples = []
+            for fname in arc_files:
+                wn, sp = read_arc_data(leaf_dir / fname)
+                samples.append((fname, wn, sp))
+            yield rel_dir, leaf_dir.name, samples
+        return
+
+    packed = PackedArcDataset(input_path)
+    grouped = {}
+
+    for rel_path, wn, sp in packed.iter_samples():
+        normalized_rel_path = rel_path.replace("\\", "/")
+        rel_dir = Path(os.path.dirname(normalized_rel_path) or ".")
+        group_key = rel_dir.as_posix()
+        if group_key not in grouped:
+            grouped[group_key] = {
+                "rel_dir": rel_dir,
+                "leaf_name": packed.root_name if rel_dir == Path(".") else rel_dir.name,
+                "samples": [],
+            }
+        grouped[group_key]["samples"].append(
+            (os.path.basename(normalized_rel_path), wn, sp)
+        )
+
+    for group in grouped.values():
+        yield group["rel_dir"], group["leaf_name"], group["samples"]
 

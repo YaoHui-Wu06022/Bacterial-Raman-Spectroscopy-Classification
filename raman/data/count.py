@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from raman.data.archive import iter_arc_dirs
+from raman.tool.dataset import iter_arc_dirs
 
 def compute_totals(node):
     """递归回填每个目录节点的总样本数"""

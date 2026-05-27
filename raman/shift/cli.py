@@ -17,7 +17,7 @@ def run_apply(args) -> None:
 
 
 def run_preview(args) -> None:
-    """输出同前缀 raw 中位谱总览图"""
+    """输出同前缀 raw 和标准化后中位谱总览图"""
     outputs = plot_prefix_dataset(args.dataset)
     paths = resolve_dataset(args.dataset)
     print(f"Dataset: {paths.dataset_dir}")
@@ -35,7 +35,7 @@ def run_plot_shift(args) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     """构建 raman.shift 命令行入口"""
-    parser = argparse.ArgumentParser(description="手动波数平移和原始中位谱预览工具")
+    parser = argparse.ArgumentParser(description="手动波数平移和 init 中位谱预览工具")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # 举例: python -m raman.shift apply cos --folder Raoultella/RAL02 --delta -3
@@ -45,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("--delta", required=True, type=float, help="平移增量，单位 cm-1，右移为正，左移为负")
     apply.set_defaults(func=run_apply)
 
-    preview = subparsers.add_parser("preview", help="绘制每个属内同前缀小文件夹的 raw 中位谱总览图")
+    preview = subparsers.add_parser("preview", help="绘制每个属内同前缀小文件夹的 raw 和标准化后中位谱总览图")
     preview.add_argument("dataset", help="数据集 profile id、名称或 dataset 下的文件夹名")
     preview.set_defaults(func=run_preview)
 

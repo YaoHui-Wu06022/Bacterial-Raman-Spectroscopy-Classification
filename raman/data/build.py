@@ -1,25 +1,16 @@
-import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
 
-from raman.data.archive import (
-    iter_arc_dirs,
-    iter_init_groups,
-    resolve_init_input,
-    resolve_path,
-)
-from raman.data.offline import (
-    preprocess_single_spectrum,
-    save_mean_plot,
-)
-from raman.data.spectrum import (
-    build_wn_ref,
-    read_arc_data,
-    write_arc_data,
-)
+from raman.data.preprocess import preprocess_single_spectrum, save_mean_plot
+from raman.data.io import iter_init_groups, read_arc_data, resolve_init_input, write_arc_data
+from raman.tool.dataset import iter_arc_dirs
+from raman.tool.hierarchy import iter_ancestor_level_keys, safe_key_name
+from raman.tool.naming import ensure_name_prefix, extract_letters_prefix
+from raman.tool.path import resolve_under_base
+from raman.tool.spectrum import build_wn_ref
 
 CUT_MIN = 600
 CUT_MAX = 1800
@@ -47,7 +38,6 @@ COSMIC_RAY_PEAK_MEAN_Z_MIN = 6  # peak 阶段扩展段平均 z 下限
 COSMIC_RAY_PEAK_PAD_POINTS = 2  # peak 阶段替换异常段时左右额外扩展宽度
 
 MIN_SAMPLES_PER_CLASS = 8
-PLOT_NORM_METHOD = "snv"
 
 PCA_ENABLED = True
 PCA_COMPONENTS = 0.95
@@ -79,7 +69,7 @@ class PipelineConfig:
     cosmic_ray_peak_mean_z_min: float = COSMIC_RAY_PEAK_MEAN_Z_MIN
     cosmic_ray_peak_pad_points: int = COSMIC_RAY_PEAK_PAD_POINTS
     min_samples_per_class: int = MIN_SAMPLES_PER_CLASS
-    plot_norm_method: str = PLOT_NORM_METHOD
+    plot_norm_method: str | None = None
     pca_enabled: bool = PCA_ENABLED
     pca_components: float | int = PCA_COMPONENTS
     pca_center: bool = PCA_CENTER
@@ -92,16 +82,15 @@ class PipelineConfig:
 
 DEFAULT_PIPELINE_CONFIG = PipelineConfig()
 
-def get_prefix(name):
-    """统一按 letters_sign 规则提取类别前缀，兼容纯字母和字母后缀 +/-"""
-    matched = re.match(r"([A-Za-z]+)([+-])?", name)
-    if not matched:
-        return None
-    return f"{matched.group(1)}{matched.group(2) or ''}"
-
 def resolve_pipeline_config(pipeline_config=None):
-    """返回离线预处理配置；未传入时使用库内默认配置"""
-    return pipeline_config or DEFAULT_PIPELINE_CONFIG
+    """返回离线预处理配置，均值图标准化默认跟随运行配置"""
+    cfg = pipeline_config or DEFAULT_PIPELINE_CONFIG
+    if cfg.plot_norm_method:
+        return cfg
+
+    from raman.config import config as runtime_config
+
+    return replace(cfg, plot_norm_method=str(runtime_config.norm_method))
 
 def _cosmic_ray_enabled(profile, cfg):
     """判断当前数据集是否启用宇宙射线去除"""
@@ -120,7 +109,7 @@ def _cosmic_log_path(profile, base_dir, cfg):
     """只在启用宇宙射线时返回日志路径"""
     if not _profile_may_use_cosmic_ray(profile, cfg):
         return None
-    return resolve_path(base_dir, profile.cosmic_ray_log_name)
+    return resolve_under_base(base_dir, profile.cosmic_ray_log_name)
 
 COSMIC_RAY_OVERRIDE_KEY_MAP = {
     "enabled": "cosmic_ray_remove",
@@ -197,16 +186,11 @@ def _cosmic_ray_kwargs(profile, cfg, label_display=None):
 def _resolve_merged_class_dir(root_output, rel_dir, leaf_name):
     """根据叶子小文件夹名推断最终合并类别目录"""
     rel_parent = rel_dir.parent
-    prefix = get_prefix(leaf_name)
+    prefix = extract_letters_prefix(leaf_name, keep_sign=True)
     target_cls = prefix if prefix else leaf_name
     if rel_parent in (Path("."), Path("")):
         return root_output / target_cls
     return root_output / rel_parent / target_cls
-
-def _with_leaf_prefix(leaf_name, filename):
-    """合并多个小文件夹时避免文件名冲突"""
-    prefix = f"{leaf_name}_"
-    return filename if filename.startswith(prefix) else f"{prefix}{filename}"
 
 def _resolve_group_figure_dir(root_figure, rel_dir):
     """为一个分组解析均值谱图输出目录，避免多处重复拼接父目录"""
@@ -214,18 +198,6 @@ def _resolve_group_figure_dir(root_figure, rel_dir):
     if rel_parent in (Path("."), Path("")):
         return root_figure
     return root_figure / rel_parent
-
-def _iter_ancestor_level_keys(rel_dir):
-    """生成非叶子祖先层级 key，用于高层级均值图聚合"""
-    parts = tuple(rel_dir.parts)
-    if len(parts) <= 1:
-        return
-    for level_idx in range(1, len(parts)):
-        yield level_idx, parts[:level_idx]
-
-def _safe_plot_name(parts):
-    """把层级路径转换成稳定的图片文件名"""
-    return "__".join(parts)
 
 def _save_hierarchy_mean_plots(hierarchy_groups, root_figure, cfg):
     """输出 train 阶段聚合得到的高层级平均光谱图"""
@@ -241,7 +213,7 @@ def _save_hierarchy_mean_plots(hierarchy_groups, root_figure, cfg):
         level_dir.mkdir(parents=True, exist_ok=True)
 
         label = "/".join(parts)
-        fig_save_path = level_dir / f"{_safe_plot_name(parts)}.png"
+        fig_save_path = level_dir / f"{safe_key_name(parts)}.png"
         save_mean_plot(
             wn=payload["wn"],
             spectra=spectra_arr,
@@ -262,7 +234,7 @@ def _save_spectra_files(save_dir, filenames, wn_list, spectra_arr, fmt="%.3f"):
         write_arc_data(save_dir / fname, wn_u, sp_u, fmt=fmt)
 
 def _save_mean_figure(root_figure, rel_dir, filename, wn, spectra, title, cfg):
-    """统一保存均值谱图，SNV 只在这里用于展示"""
+    """统一保存均值谱图，标准化方式跟随配置"""
     fig_dir = _resolve_group_figure_dir(root_figure, rel_dir)
     fig_dir.mkdir(parents=True, exist_ok=True)
     fig_path = fig_dir / filename
@@ -633,7 +605,7 @@ def _collect_merged_init_groups(profile, input_path, root_process_clean, cfg, co
             processed_group["wn_list"],
             processed_group["spectra"],
         ):
-            out_name = _with_leaf_prefix(leaf_name, fname)
+            out_name = ensure_name_prefix(leaf_name, fname)
             group["samples"].append((out_name, wn, sp))
 
     return groups, skipped
@@ -658,9 +630,9 @@ def build_train(profile, base_dir, pipeline_config=None):
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
     input_path = resolve_init_input(base_dir, profile)
-    root_process_clean = resolve_path(base_dir, profile.root_train_clean)
-    root_figure = resolve_path(base_dir, profile.root_train_fig)
-    pca_log_path = resolve_path(base_dir, profile.pca_log_name)
+    root_process_clean = resolve_under_base(base_dir, profile.root_train_clean)
+    root_figure = resolve_under_base(base_dir, profile.root_train_fig)
+    pca_log_path = resolve_under_base(base_dir, profile.pca_log_name)
     cosmic_log_path = _cosmic_log_path(profile, base_dir, cfg)
     reset_log_file(pca_log_path)
 
@@ -717,7 +689,7 @@ def build_train(profile, base_dir, pipeline_config=None):
             cfg=cfg,
         )
 
-        for level_idx, parts in _iter_ancestor_level_keys(rel_dir):
+        for level_idx, parts in iter_ancestor_level_keys(rel_dir):
             key = (level_idx, parts)
             if key not in hierarchy_groups:
                 hierarchy_groups[key] = {
@@ -754,14 +726,14 @@ def build_test(
     input_dir = (
         Path(input_dir)
         if input_dir is not None
-        else resolve_path(base_dir, profile.root_init_test)
+        else resolve_under_base(base_dir, profile.root_init_test)
     )
     output_dir = (
         Path(output_dir)
         if output_dir is not None
-        else resolve_path(base_dir, profile.root_test_clean)
+        else resolve_under_base(base_dir, profile.root_test_clean)
     )
-    root_test_fig = resolve_path(base_dir, profile.root_test_fig)
+    root_test_fig = resolve_under_base(base_dir, profile.root_test_fig)
 
     if not input_dir.is_dir():
         raise FileNotFoundError(f"Missing input dir: {input_dir}")

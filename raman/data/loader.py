@@ -4,12 +4,12 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from collections import defaultdict
-from raman.data.paths import resolve_dataset_stage
-from raman.data.input import (
-    build_model_input,
-    build_sg_kernels,
-    load_arc_intensity,
-)
+from raman.data.input import build_model_input, build_sg_kernels
+from raman.data.io import load_arc_intensity
+from raman.tool.dataset import iter_arc_dirs, resolve_dataset_stage
+from raman.tool.hierarchy import MISSING_TAG as HIER_MISSING_TAG
+from raman.tool.hierarchy import ROOT_TAG as HIER_ROOT_TAG
+from raman.tool.hierarchy import parts_to_key
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -27,8 +27,8 @@ class RamanDataset(Dataset):
         - 维护父类 -> 子类映射，便于级联训练/推理
     """
 
-    ROOT_TAG = "__root__"
-    MISSING_TAG = "__missing__"
+    ROOT_TAG = HIER_ROOT_TAG
+    MISSING_TAG = HIER_MISSING_TAG
 
     def __init__(self, root_dir, augment=False, config=None):
         resolved_root = resolve_dataset_stage(
@@ -58,21 +58,6 @@ class RamanDataset(Dataset):
 
         # 扫描数据
         self._scan()
-
-    def _iter_leaf_dirs(self, root_dir):
-        # 遍历所有包含 .arc_data 的叶子目录
-        for root, dirs, files in os.walk(root_dir):
-            dirs.sort()
-            files.sort()
-            arc_files = [f for f in files if f.lower().endswith(".arc_data")]
-            if arc_files:
-                yield root, arc_files
-
-    def _parts_to_key(self, parts):
-        # 统一用路径前缀字符串作为层级节点键
-        if not parts:
-            return self.ROOT_TAG
-        return "/".join(parts)
 
     def _resolve_level_name(self, level_name, field_name="level_name"):
         valid_levels = ", ".join(self.level_names)
@@ -108,6 +93,11 @@ class RamanDataset(Dataset):
         # 各层类别名列表，顺序与对应的整数标签保持一致
         return [list(label_map.keys()) for label_map in self.label_maps_by_level]
 
+    def get_class_names(self, level_name):
+        """返回指定业务层级的类别名列表"""
+        level_name = self._resolve_level_name(level_name, field_name="level_name")
+        return list(self.class_names_by_level[self.head_name_to_idx[level_name]])
+
     @property
     def num_classes_by_level(self):
         # 各层类别数，键使用层级名而不是层级索引
@@ -136,9 +126,9 @@ class RamanDataset(Dataset):
         leaf_records = []
         max_depth = 0
 
-        for leaf_dir, arc_files in self._iter_leaf_dirs(self.root_dir):
+        for leaf_dir, arc_files in iter_arc_dirs(self.root_dir):
             rel_dir = os.path.relpath(leaf_dir, self.root_dir)
-            parts = [] if rel_dir == "." else rel_dir.split(os.sep)
+            parts = [] if rel_dir == "." else Path(rel_dir).parts
             max_depth = max(max_depth, len(parts))
             for fname in arc_files:
                 leaf_records.append((os.path.join(leaf_dir, fname), parts))
@@ -152,11 +142,11 @@ class RamanDataset(Dataset):
 
         # 建立层级节点映射
         for _, parts in leaf_records:
-            leaf_key = self._parts_to_key(parts)
+            leaf_key = parts_to_key(parts)
             if leaf_key not in leaf_map:
                 leaf_map[leaf_key] = len(leaf_map)
             for i in range(len(parts)):
-                key = self._parts_to_key(parts[: i + 1])
+                key = parts_to_key(parts[: i + 1])
                 if key not in level_maps[i]:
                     level_maps[i][key] = len(level_maps[i])
 
@@ -174,8 +164,8 @@ class RamanDataset(Dataset):
             for _, parts in leaf_records:
                 if len(parts) < idx + 1:
                     continue
-                parent_key = self._parts_to_key(parts[:idx])
-                child_key = self._parts_to_key(parts[: idx + 1])
+                parent_key = parts_to_key(parts[:idx])
+                child_key = parts_to_key(parts[: idx + 1])
                 parent_idx = self.label_maps_by_level[idx - 1][parent_key]
                 if child_key not in self.label_maps_by_level[idx]:
                     continue
@@ -192,11 +182,11 @@ class RamanDataset(Dataset):
             hier = {n: None for n in self.level_names}
 
             for i in range(len(parts)):
-                key = self._parts_to_key(parts[: i + 1])
+                key = parts_to_key(parts[: i + 1])
                 labels[i] = level_maps[i][key]
                 hier[self.level_names[i]] = key
 
-            leaf_key = self._parts_to_key(parts)
+            leaf_key = parts_to_key(parts)
             labels[self.head_name_to_idx["leaf"]] = leaf_map[leaf_key]
             self.samples.append(fpath)
             self.level_labels.append(labels)

@@ -16,6 +16,7 @@ from raman.config_io import (
     dump_shared_config_to_yaml,
     load_config_from_yaml,
 )
+from raman.tool.hierarchy import build_hierarchy_meta, save_json
 
 
 def _sanitize_log_name(name):
@@ -194,8 +195,7 @@ def save_hierarchy_meta(
         name: full_dataset.class_names_by_level[full_dataset.head_name_to_idx[name]]
         for name in head_names
     }
-    with open(class_names_path, "w", encoding="utf-8") as file:
-        json.dump(class_names_by_level, file, indent=2, ensure_ascii=False)
+    save_json(class_names_path, class_names_by_level)
 
     parent_to_children_json = {
         level: {str(key): value for key, value in mapping.items()}
@@ -258,24 +258,20 @@ def save_hierarchy_meta(
                 if entry not in runs_json[key]:
                     runs_json[key].append(entry)
 
-    with open(hier_meta_path, "w", encoding="utf-8") as file:
-        json.dump(
-            {
-                "head_names": head_names,
-                "level_names": head_names,
-                "class_names_by_level": class_names_by_level,
-                "parent_to_children": parent_to_children_json,
-                "parent_level_name": {
-                    level: parent
-                    for level, parent in full_dataset.parent_level_name.items()
-                    if level in head_names
-                },
-                "current_train_level": current_train_level,
-                "level_models": level_models_json,
-                "parent_models": parent_models_json,
-                "runs": runs_json,
+    save_json(
+        hier_meta_path,
+        build_hierarchy_meta(
+            head_names=head_names,
+            class_names_by_level=class_names_by_level,
+            parent_to_children=parent_to_children_json,
+            parent_level_name={
+                level: parent
+                for level, parent in full_dataset.parent_level_name.items()
+                if level in head_names
             },
-            file,
-            indent=2,
-            ensure_ascii=False,
-        )
+            current_train_level=current_train_level,
+            level_models=level_models_json,
+            parent_models=parent_models_json,
+            runs=runs_json,
+        ),
+    )

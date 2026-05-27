@@ -1,24 +1,14 @@
 import argparse
-from pathlib import Path
 
 from raman.data.build import build_test, build_train
-from raman.data.archive import pack_init, unpack_init
+from raman.data.io import pack_init, unpack_init
 from raman.data.count import count_dataset, print_results
-from raman.data.profiles import get_dataset_dir, get_profile
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-def resolve_dataset_dir(profile):
-    """只解析数据集根目录，不提前创建所有阶段目录"""
-    dataset_dir = get_dataset_dir(profile, PROJECT_ROOT)
-    dataset_dir.mkdir(parents=True, exist_ok=True)
-    return dataset_dir
+from raman.tool.dataset import resolve_dataset
 
 
 def run_pack(args):
     """执行 init 目录打包"""
-    profile = get_profile(args.dataset)
-    dataset_dir = resolve_dataset_dir(profile)
+    profile, dataset_dir = resolve_dataset(args.dataset, create=True)
     pack_init(
         dataset_dir / profile.root_init,
         dataset_dir / profile.root_init_pack,
@@ -28,8 +18,7 @@ def run_pack(args):
 
 def run_unpack(args):
     """执行 init.npz 解包"""
-    profile = get_profile(args.dataset)
-    dataset_dir = resolve_dataset_dir(profile)
+    profile, dataset_dir = resolve_dataset(args.dataset, create=True)
     unpack_init(
         dataset_dir / profile.root_init_pack,
         dataset_dir / profile.root_init,
@@ -39,22 +28,19 @@ def run_unpack(args):
 
 def run_train(args):
     """从 init 直接构建最终训练集"""
-    profile = get_profile(args.dataset)
-    dataset_dir = resolve_dataset_dir(profile)
+    profile, dataset_dir = resolve_dataset(args.dataset, create=True)
     build_train(profile, dataset_dir)
 
 
 def run_test(args):
     """构建测试集预处理结果"""
-    profile = get_profile(args.dataset)
-    dataset_dir = resolve_dataset_dir(profile)
+    profile, dataset_dir = resolve_dataset(args.dataset, create=True)
     build_test(profile, dataset_dir)
 
 
 def run_count(args):
     """统计某个数据阶段下的光谱文件数量"""
-    profile = get_profile(args.dataset)
-    dataset_dir = resolve_dataset_dir(profile)
+    _, dataset_dir = resolve_dataset(args.dataset, create=True)
     target_dir = dataset_dir / (args.subdir or "train")
     tree, total_files = count_dataset(target_dir)
     print_results(tree, total_files)

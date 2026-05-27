@@ -300,7 +300,7 @@ python -m raman.shift plot-shift <数据集名或profile> --folder <属名>/<小
 
 ```bash
 python -m raman.audit full <数据集名或profile> --stage invalid
-python -m raman.audit bad-band <数据集名或profile>
+python -m raman.audit bad-band <扫描目标>
 python -m raman.audit move <数据集名或profile> --from-list <delete_candidates.csv>
 ```
 
@@ -406,9 +406,11 @@ dataset/<数据集名>/audit_full_scan/<时间戳>_<stage>_<dry_run|move>/
 
 ```bash
 python -m raman.audit bad-band <数据集名或profile>
-python -m raman.audit bad-band <数据集名或profile> --folder Klebsiella/KAE03
-python -m raman.audit bad-band <数据集名或profile> --max-files 1000
+python -m raman.audit bad-band dataset/50种菌cos/init/Klebsiella/KAE03
+python -m raman.audit bad-band dataset/50种菌cos/init --no-plot
 ```
+
+`bad-band` 的命令行只保留扫描目标和是否画图；扫描区间、窗口宽度、抽样数量等参数在 `raman/audit/bad_band.py` 的配置里修改
 
 输出目录默认为：
 
@@ -419,10 +421,8 @@ dataset/<数据集名>/audit_bad_band/<时间戳>/
 主要文件：
 
 - `summary.md`：候选坏段摘要和判读说明
-- `candidate_bands.csv`：候选波段、覆盖率、深度和分数
-- `candidate_folder_summary.csv`：候选波段在各文件夹中的命中比例
-- `dip_candidates.png`：候选坏段复核图
-- `scan_config.json`：扫描参数和输入范围
+- `best_bad_band.csv`：当前配置下最合适的坏段区间
+- `bad_band_overview.png`：候选坏段复核图，使用 `--no-plot` 时不生成
 
 坏段扫描不会修改 `COMMON_BAD_BANDS` 或任何原始文件；是否把候选波段加入离线坏段配置，仍需要结合复核图人工判断
 
@@ -1087,7 +1087,7 @@ RAW 域会独立抽样这几类增强：
 
 ### 5.3 标准化方法
 
-在线输入中的 `Normalize(...)` 对应 `raman.data.input.normalize_spectrum`
+在线输入中的 `Normalize(...)` 对应 `raman.data.normalization.normalize_spectrum`
 
 标准化是逐条光谱独立完成的，不使用训练集全局均值或全局方差
 

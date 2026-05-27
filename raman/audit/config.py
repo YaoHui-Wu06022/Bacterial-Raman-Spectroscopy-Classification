@@ -16,11 +16,11 @@ class AuditConfig:
     # 第一阶段：无效谱
     invalid_raw_coverage_min: float = 0.9  # 原始波数覆盖比例下限，低于此值认为有长段缺失
     invalid_flat_window_points: int = 40  # 平坦段检测的滑动窗口点数
-    invalid_flat_range_max: float = 0.08  # 窗口内 SNV 极差低于此值时，认为该窗口近似无信息
+    invalid_flat_range_max: float = 0.08  # 窗口内标准化值极差低于此值时，认为该窗口近似无信息
     invalid_long_flat_points: int = 100  # 连续平坦点数达到此值，直接进入删除候选
     invalid_review_flat_points: int = 80  # 连续平坦点数达到此值但未到删除线，进入复核候选
     invalid_flat_fraction: float = 0.30  # 全谱贴近中位数的比例过高，认为整体有效峰结构弱
-    invalid_flat_near_median: float = 0.03  # 判断“贴近中位数”的 SNV 距离阈值
+    invalid_flat_near_median: float = 0.03  # 判断“贴近中位数”的标准化距离阈值
     invalid_noise_roughness_min: float = 0.80  # 谱自身一阶差分粗糙度下限，越高说明高频噪声越强
     invalid_noise_smooth_points: int = 31  # 平滑窗口点数，用于分离有效慢变结构和高频细节
     invalid_noise_structure_ratio_max: float = 1.50  # 平滑结构幅度 / 粗糙度过低，说明强噪声里缺少有效峰结构
@@ -38,7 +38,7 @@ class AuditConfig:
     anomalous_wide_delete_edge_z_min: float = 5.0  # 删除候选的边缘突跳 z 下限
     anomalous_rising_min_points: int = 120  # 长上升尾段最少连续点数
     anomalous_rising_z_min: float = 30.0  # 长上升尾段首尾差的一阶差分 z 下限
-    anomalous_rising_snv_min: float = 1.2  # 长上升尾段末端相对段中位数的 SNV 抬高下限
+    anomalous_rising_norm_min: float = 1.2  # 长上升尾段末端相对段中位数的标准化抬高下限
 
     # 第三阶段：同属同前缀类内相似性和局部正残差异常
     class_min_ref_samples: int = 8  # 参考池最少谱数，低于此值不自动判定

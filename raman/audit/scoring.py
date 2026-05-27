@@ -8,18 +8,20 @@ from pathlib import Path
 import numpy as np
 from scipy.ndimage import percentile_filter
 
-from raman.audit.common import (
+from raman.audit.config import AuditConfig, DEFAULT_AUDIT_CONFIG
+from raman.data.io import read_arc_data
+from raman.tool.array import (
     contiguous_regions,
-    median_step_cm,
     moving_average,
-    output_wn,
-    prefix_of,
-    region_width_cm,
     robust_mad_scale,
     robust_wave_stats,
 )
-from raman.audit.config import AuditConfig, DEFAULT_AUDIT_CONFIG
-from raman.data.spectrum import read_arc_data
+from raman.tool.naming import prefix_of
+from raman.tool.spectrum import (
+    contiguous_index_ranges,
+    output_wavenumbers as output_wn,
+    region_width_cm,
+)
 
 
 VALID_STAGES = ("invalid", "anomalous-cosmic", "class-similarity")
@@ -137,18 +139,6 @@ def raw_coverage(wn, cut_min, cut_max):
     low = max(float(np.min(wn)), float(cut_min))
     high = min(float(np.max(wn)), float(cut_max))
     return max(0.0, high - low) / max(float(cut_max) - float(cut_min), 1e-8)
-
-
-def contiguous_index_ranges(wn):
-    """按波数轴大间隔拆成连续索引段。"""
-    wn = np.asarray(wn, dtype=np.float32)
-    if wn.size == 0:
-        return []
-    step = median_step_cm(wn)
-    cuts = np.where(np.abs(np.diff(wn)) > step * 1.8)[0] + 1
-    starts = np.concatenate([[0], cuts])
-    ends = np.concatenate([cuts, [wn.size]])
-    return [(int(start), int(end)) for start, end in zip(starts, ends) if end > start]
 
 
 def longest_flat_points(wn, z, audit_cfg: AuditConfig):
@@ -275,7 +265,7 @@ def _long_rising_regions(wn, z_values, audit_cfg: AuditConfig, segments):
         center = float(np.median(segment))
         rise_z = (right - left) / max(scale, 1e-8)
         end_lift = right - center
-        if rise_z < float(audit_cfg.anomalous_rising_z_min) or end_lift < float(audit_cfg.anomalous_rising_snv_min):
+        if rise_z < float(audit_cfg.anomalous_rising_z_min) or end_lift < float(audit_cfg.anomalous_rising_norm_min):
             continue
 
         start_threshold = left + 0.30 * (right - left)

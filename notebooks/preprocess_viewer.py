@@ -21,15 +21,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from raman.data.build import COMMON_BAD_BANDS, DEFAULT_PIPELINE_CONFIG
-from raman.data.offline import (
-    _median_filter_1d,
-    _odd_window_points,
-    _residual_z_score,
-    estimate_baseline,
-    remove_cosmic_rays,
-)
+from raman.data.baseline import estimate_baseline
+from raman.data.cosmic import _residual_z_score, remove_cosmic_rays
 from raman.data.profiles import get_dataset_dir, get_profile
-from raman.data.spectrum import build_valid_mask, read_arc_data
+from raman.data.spectrum_io import read_arc_data
+from raman.tool.array import median_filter_1d, odd_window_points
+from raman.tool.spectrum import build_valid_mask
 
 
 CHINESE_FONT_FILES = (
@@ -127,10 +124,10 @@ def _run_cosmic_debug(raw, wn, cfg, bad_bands):
     valid_mask = np.ones_like(wn, dtype=bool)
     narrow_clean = np.asarray(raw, dtype=np.float32).copy()
     narrow_mask = np.zeros_like(narrow_clean, dtype=bool)
-    window = _odd_window_points(cfg.cosmic_ray_narrow_window_points)
+    window = odd_window_points(cfg.cosmic_ray_narrow_window_points)
 
     for _ in range(int(cfg.cosmic_ray_max_iter)):
-        local_median = _median_filter_1d(narrow_clean, window)
+        local_median = median_filter_1d(narrow_clean, window)
         residual = narrow_clean - local_median
         z_score = _residual_z_score(residual, valid_mask)
         if z_score is None:
@@ -157,8 +154,8 @@ def _run_cosmic_debug(raw, wn, cfg, bad_bands):
     )
 
     peak_mask = np.abs(final_clean - narrow_clean) > 1e-6
-    peak_window = _odd_window_points(cfg.cosmic_ray_peak_window_points)
-    peak_local_median = _median_filter_1d(narrow_clean, peak_window)
+    peak_window = odd_window_points(cfg.cosmic_ray_peak_window_points)
+    peak_local_median = median_filter_1d(narrow_clean, peak_window)
     peak_residual = narrow_clean - peak_local_median
     peak_residual_z = _residual_z_score(peak_residual, valid_mask)
     if peak_residual_z is None:

@@ -10,15 +10,14 @@ from pathlib import Path
 import numpy as np
 
 from raman.audit.common import (
-    median_step_cm,
-    moving_average,
     preprocess_spectrum_for_audit,
-    resolve_audit_input,
-    resolve_dataset,
-    robust_mad_scale,
     write_csv,
 )
 from raman.data.build import DEFAULT_PIPELINE_CONFIG
+from raman.tool.array import moving_average, robust_mad_scale
+from raman.tool.dataset import resolve_dataset
+from raman.tool.path import PROJECT_ROOT
+from raman.tool.spectrum import median_step_cm
 
 
 @dataclass(frozen=True)
@@ -36,6 +35,11 @@ class BadBandScanConfig:
     depth_threshold: float = 0.35
 
 
+BAD_BAND_MAX_FILES = 0
+BAD_BAND_SAMPLE_SEED = 42
+BAD_BAND_OUTPUT_DIR = "audit_bad_band"
+
+
 def _sample_files(files, max_files, seed):
     """按固定随机种子抽样文件"""
     if max_files is None or max_files <= 0 or max_files >= len(files):
@@ -45,11 +49,38 @@ def _sample_files(files, max_files, seed):
     return [files[int(i)] for i in sorted(indices)]
 
 
-def _load_spectra(dataset, subdir, folder, max_files, seed):
+def _resolve_scan_target(target):
+    """解析 profile 名、数据集名或 dataset 下的扫描目录"""
+    target_text = str(target).strip().strip('"').strip("'")
+    try:
+        profile, dataset_dir = resolve_dataset(target_text)
+        return profile, dataset_dir, (dataset_dir / profile.root_init).resolve()
+    except KeyError:
+        pass
+
+    path = Path(target_text)
+    if not path.is_absolute():
+        path = (PROJECT_ROOT / path).resolve()
+    else:
+        path = path.resolve()
+    if not path.is_dir():
+        raise FileNotFoundError(f"Bad-band scan target not found: {target}")
+
+    dataset_root = (PROJECT_ROOT / "dataset").resolve()
+    try:
+        rel = path.relative_to(dataset_root)
+    except ValueError as exc:
+        raise ValueError(f"Bad-band scan folder must be under dataset/: {path}") from exc
+    if not rel.parts:
+        raise ValueError(f"Bad-band scan folder must include dataset name: {path}")
+
+    profile, dataset_dir = resolve_dataset(rel.parts[0])
+    return profile, dataset_dir, path
+
+
+def _load_spectra(target, max_files=BAD_BAND_MAX_FILES, seed=BAD_BAND_SAMPLE_SEED):
     """读取并预处理待扫描光谱，强制不使用 bad_bands mask"""
-    profile, dataset_dir = resolve_dataset(dataset)
-    input_root, _ = resolve_audit_input(dataset_dir, profile, subdir=subdir, folder=folder)
-    input_root = input_root.resolve()
+    profile, dataset_dir, input_root = _resolve_scan_target(target)
     files_all = sorted(input_root.rglob("*.arc_data"))
     files = _sample_files(files_all, max_files, seed)
     if not files:
@@ -210,10 +241,10 @@ def _plot_overview(out_path, wn, spectra, cfg, best_row):
 
     fig, axes = plt.subplots(2, 1, figsize=(12, 7))
     axes[0].fill_between(wn[plot_mask], q10[plot_mask], q90[plot_mask], color="#9ecae1", alpha=0.35, label="q10-q90")
-    axes[0].plot(wn[plot_mask], median[plot_mask], color="#08519c", linewidth=1.2, label="median SNV")
+    axes[0].plot(wn[plot_mask], median[plot_mask], color="#08519c", linewidth=1.2, label="median standardized")
     axes[0].axvspan(cfg.scan_min, cfg.scan_max, color="#fdd0a2", alpha=0.16, label="scan range")
     axes[0].axvspan(band_min, band_max, color="#cb181d", alpha=0.22, label="best bad band")
-    axes[0].set_ylabel("SNV")
+    axes[0].set_ylabel("Standardized value")
     axes[0].legend(loc="best", fontsize=8)
 
     start = int(np.argmin(np.abs(wn - band_min)))
@@ -258,26 +289,20 @@ def _write_summary(path, prepared, cfg, best_row):
 
 
 def run_bad_band_scan(
-    dataset,
+    target,
     *,
-    subdir=None,
-    folder=None,
-    output_root=None,
-    timestamp=None,
-    max_files=0,
-    seed=42,
     no_plot=False,
     scan_config=None,
 ):
     """运行给定区间的坏段扫描"""
     cfg = scan_config or BadBandScanConfig()
-    prepared = _load_spectra(dataset, subdir, folder, max_files, seed)
+    prepared = _load_spectra(target)
     spectra = np.asarray([moving_average(row, cfg.smooth_points) for row in prepared["spectra"]], dtype=np.float32)
     core = _scan_windows(prepared["wn"], spectra, cfg)
     best = _expand_to_fast_edges(prepared["wn"], spectra, core, cfg)
 
-    stamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_root = Path(output_root) if output_root is not None else prepared["dataset_dir"] / "audit_bad_band"
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_root = prepared["dataset_dir"] / BAD_BAND_OUTPUT_DIR
     out_dir = out_root / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -300,23 +325,8 @@ def run_bad_band_scan(
 def build_parser():
     """构建 bad-band 子命令参数解析器"""
     parser = argparse.ArgumentParser(description="扫描给定区间内最可能的系统性下凹坏段")
-    parser.add_argument("dataset", help="数据集名称或 profile id，例如 MN_IgA / 细菌")
-    parser.add_argument("--subdir", default=None, help="输入阶段目录，默认 init")
-    parser.add_argument("--folder", default=None, help="只扫描某个文件夹，支持 属名/文件夹名")
-    parser.add_argument("--output-root", default=None, help="输出根目录，默认 dataset/<数据集>/audit_bad_band")
-    parser.add_argument("--timestamp", default=None, help="固定输出目录名")
-    parser.add_argument("--max-files", type=int, default=0, help="抽样扫描数量；0 表示全量")
-    parser.add_argument("--seed", type=int, default=42, help="抽样随机种子")
+    parser.add_argument("target", help="扫描目标：profile id、数据集名，或 dataset/<数据集>/... 下的文件夹")
     parser.add_argument("--no-plot", action="store_true", help="不输出示意图")
-    parser.add_argument("--scan-min", type=float, default=850.0, help="扫描区间起点")
-    parser.add_argument("--scan-max", type=float, default=1000.0, help="扫描区间终点")
-    parser.add_argument("--min-width-points", type=int, default=8, help="候选坏段最小点数")
-    parser.add_argument("--max-width-points", type=int, default=60, help="候选坏段最大点数")
-    parser.add_argument("--width-step-points", type=int, default=4, help="候选宽度步长")
-    parser.add_argument("--stride-points", type=int, default=2, help="滑窗步长")
-    parser.add_argument("--side-points", type=int, default=15, help="左右肩部点数")
-    parser.add_argument("--smooth-points", type=int, default=9, help="检测前平滑点数")
-    parser.add_argument("--depth-threshold", type=float, default=0.35, help="单谱下凹命中阈值")
     return parser
 
 
@@ -324,25 +334,8 @@ def main(argv=None):
     """执行 bad-band 命令入口"""
     args = build_parser().parse_args(argv)
     run_bad_band_scan(
-        args.dataset,
-        subdir=args.subdir,
-        folder=args.folder,
-        output_root=args.output_root,
-        timestamp=args.timestamp,
-        max_files=args.max_files,
-        seed=args.seed,
+        args.target,
         no_plot=args.no_plot,
-        scan_config=BadBandScanConfig(
-            scan_min=args.scan_min,
-            scan_max=args.scan_max,
-            min_width_points=args.min_width_points,
-            max_width_points=args.max_width_points,
-            width_step_points=args.width_step_points,
-            stride_points=args.stride_points,
-            side_points=args.side_points,
-            smooth_points=args.smooth_points,
-            depth_threshold=args.depth_threshold,
-        ),
     )
     return 0
 

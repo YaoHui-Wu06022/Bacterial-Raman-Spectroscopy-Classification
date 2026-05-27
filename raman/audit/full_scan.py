@@ -16,14 +16,8 @@ matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
 from raman.audit.common import (
-    PROJECT_ROOT,
     cosmic_clean_for_plot,
-    fill_between_segments_without_bad_bands,
     load_audit_records,
-    moving_average,
-    output_wn,
-    plot_segments_without_bad_bands,
-    resolve_dataset,
     write_csv,
 )
 from raman.audit.config import DEFAULT_AUDIT_CONFIG
@@ -37,7 +31,15 @@ from raman.audit.scoring import (
     validate_stage,
 )
 from raman.data.build import DEFAULT_PIPELINE_CONFIG
-from raman.data.spectrum import read_arc_data
+from raman.data.io import read_arc_data
+from raman.tool.array import moving_average
+from raman.tool.dataset import resolve_dataset
+from raman.tool.path import PROJECT_ROOT
+from raman.tool.plotting import (
+    fill_between_segments_without_bad_bands,
+    plot_segments_without_bad_bands,
+)
+from raman.tool.spectrum import output_wavenumbers as output_wn
 
 
 def _class_folder_review_targets(records, audit_cfg):
@@ -83,7 +85,7 @@ def plot_class_folder_review(record, out_path, profile, cfg, prefix_stats, audit
     plot_segments_without_bad_bands(axes[0], wn, other_mean, cfg.bad_bands, color="0.35", linewidth=1.0, label="same prefix other folders mean")
     plot_segments_without_bad_bands(axes[0], wn, folder_mean, cfg.bad_bands, color="C3", linewidth=1.1, label="this folder mean")
     axes[0].set_title("Folder concentration review")
-    axes[0].set_ylabel("SNV intensity")
+    axes[0].set_ylabel("Standardized intensity")
     axes[0].legend(loc="best")
 
     diff = folder_mean - other_mean
@@ -147,9 +149,9 @@ def _plot_class_panels(axes, record, wn, cfg, prefix_stats, audit_cfg):
     if stats is not None:
         fill_between_segments_without_bad_bands(axes[1], wn, stats["q10"], stats["q90"], cfg.bad_bands, color="0.85", alpha=0.55, label="reference q10-q90")
         plot_segments_without_bad_bands(axes[1], wn, stats["center"], cfg.bad_bands, color="0.35", linewidth=1.0, label="reference median")
-    plot_segments_without_bad_bands(axes[1], wn, record.z, cfg.bad_bands, color="C3", linewidth=1.0, label="sample SNV")
+    plot_segments_without_bad_bands(axes[1], wn, record.z, cfg.bad_bands, color="C3", linewidth=1.0, label="sample standardized")
     axes[1].set_title("Sample vs class reference pool")
-    axes[1].set_ylabel("SNV intensity")
+    axes[1].set_ylabel("Standardized intensity")
     axes[1].legend(loc="best")
 
     if record.local_pos_z is not None:
@@ -163,19 +165,19 @@ def _plot_class_panels(axes, record, wn, cfg, prefix_stats, audit_cfg):
 
 def _plot_invalid_panels(axes, record, wn, cfg, audit_cfg):
     """绘制第一阶段无效谱自身质量视图。"""
-    plot_segments_without_bad_bands(axes[1], wn, record.z, cfg.bad_bands, color="C3", linewidth=1.0, label="sample SNV")
+    plot_segments_without_bad_bands(axes[1], wn, record.z, cfg.bad_bands, color="C3", linewidth=1.0, label="sample standardized")
     axes[1].set_title("Preprocessed sample")
-    axes[1].set_ylabel("SNV intensity")
+    axes[1].set_ylabel("Standardized intensity")
     axes[1].legend(loc="best")
 
     smooth_window = audit_cfg.invalid_noise_smooth_points
     smooth = moving_average(record.z, smooth_window)
     detail = record.z - smooth
-    plot_segments_without_bad_bands(axes[2], wn, record.z, cfg.bad_bands, color="0.70", linewidth=0.7, label="SNV")
+    plot_segments_without_bad_bands(axes[2], wn, record.z, cfg.bad_bands, color="0.70", linewidth=0.7, label="standardized")
     plot_segments_without_bad_bands(axes[2], wn, smooth, cfg.bad_bands, color="C1", linewidth=1.1, label=f"smooth {smooth_window}pt")
     plot_segments_without_bad_bands(axes[2], wn, detail, cfg.bad_bands, color="C4", linewidth=0.7, label="detail")
     axes[2].set_title("Self noise / structure view")
-    axes[2].set_ylabel("SNV")
+    axes[2].set_ylabel("Standardized value")
     axes[2].legend(loc="best")
 
 

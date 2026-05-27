@@ -3,16 +3,7 @@ import re
 from pathlib import Path
 from collections import Counter
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def resolve_path(path):
-    """把相对路径解析到项目根目录"""
-    if path is None:
-        return None
-    path = Path(path)
-    return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
+from raman.tool.path import resolve_project_path
 
 
 def get_cell_number(fname):
@@ -23,7 +14,7 @@ def get_cell_number(fname):
 
 def iter_predict_folders(predict_root, one_folder=None):
     """列出本次需要预测的测试文件夹"""
-    predict_root = Path(resolve_path(predict_root))
+    predict_root = Path(resolve_project_path(predict_root))
     if one_folder:
         folder_path = Path(one_folder)
         if not folder_path.is_absolute():
@@ -82,8 +73,8 @@ def predict_directory(folder_path, output_dir, predictor, top_k=3, parent_mask=N
     from tqdm import tqdm
     from raman.infer.core import predict_one
 
-    folder_path = Path(resolve_path(folder_path))
-    output_dir = Path(resolve_path(output_dir))
+    folder_path = Path(resolve_project_path(folder_path))
+    output_dir = Path(resolve_project_path(output_dir))
     output_dir.mkdir(parents=True, exist_ok=True)
 
     files = list_arc_files(folder_path)

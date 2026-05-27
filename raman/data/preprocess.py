@@ -1,3 +1,10 @@
+"""离线预处理链路
+
+集中放置从原始光谱到清洗后光谱的离线处理逻辑：
+基线估计、宇宙射线处理、单谱预处理和均值图输出
+"""
+
+# ===== 基线估计 =====
 from dataclasses import dataclass
 
 import numpy as np
@@ -6,27 +13,16 @@ from matplotlib.patches import Patch
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
 
-from raman.data.spectrum import (
-    build_valid_mask,
-    minmax_normalize,
-    normalize_bad_bands,
-    snv,
+from raman.data.input import normalize_spectrum
+from raman.tool.array import (
+    iter_true_segments,
+    median_filter_1d,
+    nonnegative_points,
+    odd_window_points,
+    robust_finite_scale,
 )
-
-
-@dataclass(frozen=True)
-class CosmicRayStats:
-    """记录单谱宇宙射线最终归属替换点数，int(stats) 返回唯一替换点数"""
-
-    narrow: int = 0
-    peak: int = 0
-
-    @property
-    def total(self):
-        return int(self.narrow) + int(self.peak)
-
-    def __int__(self):
-        return self.total
+from raman.tool.plotting import insert_nan_gaps
+from raman.tool.spectrum import build_valid_mask, normalize_bad_bands
 
 
 def asls_baseline(spectrum, lam=1e5, p=0.01, niter=10, valid_mask=None):
@@ -168,43 +164,21 @@ def estimate_baseline(
     raise ValueError(f"Unknown baseline method: {method}")
 
 
-def normalize_for_plot(spectra, method):
-    """按指定方法对绘图用光谱做归一化"""
-    method = method.lower()
-    if method == "minmax":
-        return minmax_normalize(spectra)
-    if method == "snv":
-        return snv(spectra)
-    raise ValueError(f"Unknown norm method: {method}")
+# ===== 宇宙射线处理 =====
 
+@dataclass(frozen=True)
+class CosmicRayStats:
+    """记录单谱宇宙射线最终归属替换点数，int(stats) 返回唯一替换点数"""
 
-def _median_filter_1d(x, window):
-    """用边缘复制的局部中值估计正常谱形"""
-    window = int(window)
-    if window < 3:
-        window = 3
-    if window % 2 == 0:
-        window += 1
-    if x.size < window:
-        return x.copy()
+    narrow: int = 0
+    peak: int = 0
 
-    pad = window // 2
-    padded = np.pad(x, pad_width=pad, mode="edge")
-    windows = np.lib.stride_tricks.sliding_window_view(padded, window)
-    return np.median(windows, axis=1).astype(np.float32, copy=False)
+    @property
+    def total(self):
+        return int(self.narrow) + int(self.peak)
 
-
-def _odd_window_points(points, min_points=3):
-    """把点数窗口规整成局部 median 需要的奇数点数"""
-    points = max(int(min_points), int(round(float(points))))
-    if points % 2 == 0:
-        points += 1
-    return points
-
-
-def _pad_points(points):
-    """把边缘扩展点数规整成非负整数"""
-    return max(0, int(round(float(points))))
+    def __int__(self):
+        return self.total
 
 
 def _residual_z_score(residual, valid_mask):
@@ -227,18 +201,6 @@ def _residual_z_score(residual, valid_mask):
         return None
 
     return (residual - center) / scale
-
-
-def _iter_true_segments(mask):
-    start = None
-    for idx, enabled in enumerate(mask):
-        if enabled and start is None:
-            start = idx
-        elif not enabled and start is not None:
-            yield start, idx
-            start = None
-    if start is not None:
-        yield start, len(mask)
 
 
 def _collect_replacement_anchors(valid_mask, anchor_bad_mask, start, end, count):
@@ -273,24 +235,6 @@ def _linear_segment_replacement(cleaned, fallback, start, end, left_indices, rig
                 np.array([cleaned[left], cleaned[right]], dtype=np.float32),
             )
     return fallback[start:end]
-
-
-def _robust_local_scale(values):
-    values = np.asarray(values, dtype=np.float64)
-    values = values[np.isfinite(values)]
-    if values.size == 0:
-        return 0.0
-
-    center = float(np.median(values))
-    centered_abs = np.abs(values - center)
-    scale = 1.4826 * float(np.median(centered_abs))
-    if scale <= 1e-8:
-        nonzero_abs = centered_abs[centered_abs > 1e-8]
-        if nonzero_abs.size > 0:
-            scale = 1.4826 * float(np.median(nonzero_abs))
-    if scale <= 1e-8:
-        scale = float(np.std(values))
-    return max(scale, 0.0)
 
 
 def _segment_texture_seed(start, end, anchor_values):
@@ -334,7 +278,7 @@ def _neighbor_texture(left_values, right_values, size, target_scale, seed):
     if texture_pool.size == 0:
         return np.zeros(int(size), dtype=np.float64)
 
-    pool_scale = _robust_local_scale(texture_pool)
+    pool_scale = robust_finite_scale(texture_pool)
     if pool_scale <= 1e-8:
         return np.zeros(int(size), dtype=np.float64)
 
@@ -369,7 +313,7 @@ def _textured_linear_segment_replacement(cleaned, fallback, start, end, left_ind
         diff_parts.append(np.diff(left_values))
     if right_values.size >= 2:
         diff_parts.append(np.diff(right_values))
-    diff_scale = _robust_local_scale(np.concatenate(diff_parts)) if diff_parts else 0.0
+    diff_scale = robust_finite_scale(np.concatenate(diff_parts)) if diff_parts else 0.0
     anchor_level = float(np.median(np.abs(anchor_values)))
 
     texture_scale = max(
@@ -458,7 +402,7 @@ def _replace_segment(cleaned, fallback, start, end, valid_mask, anchor_bad_mask=
 
 
 def _merge_segments_with_small_gaps(mask, max_gap_points=1):
-    segments = list(_iter_true_segments(mask))
+    segments = list(iter_true_segments(mask))
     if not segments:
         return []
 
@@ -485,8 +429,8 @@ def _remove_peak_segments(
     pad_points,
     narrow_mask=None,
 ):
-    window = _odd_window_points(peak_window_points)
-    fallback = _median_filter_1d(cleaned, window)
+    window = odd_window_points(peak_window_points)
+    fallback = median_filter_1d(cleaned, window)
     residual = cleaned - fallback
     z_score = _residual_z_score(residual, valid_mask)
     if z_score is None:
@@ -500,8 +444,8 @@ def _remove_peak_segments(
     if not expand_mask.any():
         return 0, np.zeros(cleaned.shape, dtype=bool)
 
-    pad_points = _pad_points(pad_points)
-    expand_gap_points = _pad_points(expand_gap_points)
+    pad_points = nonnegative_points(pad_points)
+    expand_gap_points = nonnegative_points(expand_gap_points)
     if narrow_mask is None or np.asarray(narrow_mask).shape != cleaned.shape:
         narrow_mask = np.zeros(cleaned.shape, dtype=bool)
     else:
@@ -597,9 +541,9 @@ def remove_cosmic_rays(
             valid_mask = np.ones(cleaned.shape, dtype=bool)
 
     narrow_mask = np.zeros(cleaned.shape, dtype=bool)
-    narrow_window = _odd_window_points(window_points)
+    narrow_window = odd_window_points(window_points)
     for _ in range(int(max_iter)):
-        local_median = _median_filter_1d(cleaned, narrow_window)
+        local_median = median_filter_1d(cleaned, narrow_window)
         residual = cleaned - local_median
         z_score = _residual_z_score(residual, valid_mask)
         if z_score is None:
@@ -633,7 +577,7 @@ def remove_cosmic_rays(
     )
 
 
-
+# ===== 单谱离线预处理 =====
 def preprocess_single_spectrum(
     wn,
     sp,
@@ -725,44 +669,11 @@ def preprocess_single_spectrum(
     return wn_ref, sp_interp, cosmic_replaced
 
 
-def _insert_nan_gaps(wn, *values):
-    """在波数轴明显断开的地方插入 NaN，避免绘图跨坏段连线"""
-    wn = np.asarray(wn, dtype=np.float32)
-    value_arrays = [np.asarray(value, dtype=np.float32) for value in values]
-    if wn.size < 2:
-        return (wn, *value_arrays)
-
-    diffs = np.diff(wn)
-    positive = diffs[np.isfinite(diffs) & (diffs > 0)]
-    if positive.size == 0:
-        return (wn, *value_arrays)
-
-    normal_step = float(np.median(positive))
-    gap_mask = diffs > normal_step * 3.0
-    if not gap_mask.any():
-        return (wn, *value_arrays)
-
-    wn_out = []
-    values_out = [[] for _ in value_arrays]
-    for idx in range(wn.size):
-        wn_out.append(float(wn[idx]))
-        for out, arr in zip(values_out, value_arrays):
-            out.append(float(arr[idx]))
-        if idx < wn.size - 1 and gap_mask[idx]:
-            wn_out.append(float((wn[idx] + wn[idx + 1]) / 2.0))
-            for out in values_out:
-                out.append(np.nan)
-
-    return (
-        np.asarray(wn_out, dtype=np.float32),
-        *[np.asarray(out, dtype=np.float32) for out in values_out],
-    )
-
-
+# ===== 预处理结果绘图 =====
 def save_mean_plot(wn, spectra, out_path, norm_method, bad_bands, title):
     """保存一组光谱的均值谱图，并在图上标出坏波段区域"""
     bad_bands = normalize_bad_bands(bad_bands)
-    spectra_norm = normalize_for_plot(spectra, norm_method)
+    spectra_norm = normalize_spectrum(spectra, norm_method)
     mean_spec = np.mean(spectra_norm, axis=0)
     q10_spec = np.quantile(spectra_norm, 0.10, axis=0)
     q90_spec = np.quantile(spectra_norm, 0.90, axis=0)
@@ -771,7 +682,7 @@ def save_mean_plot(wn, spectra, out_path, norm_method, bad_bands, title):
         mean_spec = np.where(keep_mask, mean_spec, np.nan)
         q10_spec = np.where(keep_mask, q10_spec, np.nan)
         q90_spec = np.where(keep_mask, q90_spec, np.nan)
-    wn_plot, mean_plot, q10_plot, q90_plot = _insert_nan_gaps(
+    wn_plot, mean_plot, q10_plot, q90_plot = insert_nan_gaps(
         wn,
         mean_spec,
         q10_spec,
@@ -797,9 +708,10 @@ def save_mean_plot(wn, spectra, out_path, norm_method, bad_bands, title):
     plt.fill_between(wn_plot, q10_plot, q90_plot, alpha=0.3)
     plt.title(title)
     plt.xlabel("Wavenumber (cm$^{-1}$)")
-    plt.ylabel(f"{norm_method} intensity")
+    plt.ylabel("Normalized intensity")
     plt.xlim([wn.min(), wn.max()])
     plt.legend(handles=[std_proxy] + plt.gca().get_legend_handles_labels()[0])
     plt.tight_layout()
     plt.savefig(out_path, dpi=300)
     plt.close()
+

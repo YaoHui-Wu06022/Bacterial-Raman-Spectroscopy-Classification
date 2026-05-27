@@ -8,8 +8,9 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from raman.audit.common import PROJECT_ROOT, resolve_dataset
 from raman.audit.config import DEFAULT_AUDIT_CONFIG
+from raman.tool.dataset import resolve_dataset
+from raman.tool.path import PROJECT_ROOT, is_relative_to
 
 
 @dataclass(frozen=True)
@@ -21,15 +22,6 @@ class MoveItem:
     relative: Path
     reason: str
     category: str = ""
-
-
-def is_relative_to(path: Path, parent: Path) -> bool:
-    """兼容旧 Python 的路径包含判断"""
-    try:
-        path.relative_to(parent)
-        return True
-    except ValueError:
-        return False
 
 
 def normalize_category(category: str | None) -> str:

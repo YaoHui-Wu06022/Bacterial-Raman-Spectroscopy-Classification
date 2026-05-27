@@ -12,22 +12,26 @@ matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
 from raman.config import config
-from raman.data.build import get_prefix
-from raman.data.profiles import get_dataset_dir, get_profile
-from raman.data.spectrum import build_valid_mask, get_config_bad_bands, read_arc_data
+from raman.data.input import normalize_spectrum
+from raman.data.io import read_arc_data
+from raman.tool.dataset import resolve_dataset as resolve_profile_dataset
+from raman.tool.naming import extract_letters_prefix
+from raman.tool.path import PROJECT_ROOT
+from raman.tool.spectrum import build_valid_mask, get_config_bad_bands
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TARGET_CM = 1000.0
 GRID_STEP = 0.2
 DELTA_NAME = "delta.txt"
 PREFIX_PLOT_STATE_NAME = "prefix_plot_state.csv"
 DELTA_FIELDS = ("genus", "folder", "prefix", "delta")
+PLOT_STATE_FIELDS = (*DELTA_FIELDS, "plot_version")
+PREFIX_PLOT_VERSION = "raw_norm_v1"
 
 
 @dataclass(frozen=True)
 class DatasetPaths:
-    """数据集 shift 工具所需路径"""
+    """shift 工具需要的一组数据集路径"""
 
     dataset_dir: Path
     init_dir: Path
@@ -38,8 +42,7 @@ class DatasetPaths:
 def resolve_dataset(dataset: str) -> DatasetPaths:
     """优先按 profile 解析数据集，失败后按 dataset/<输入> 解析"""
     try:
-        profile = get_profile(dataset)
-        dataset_dir = get_dataset_dir(profile, PROJECT_ROOT)
+        profile, dataset_dir = resolve_profile_dataset(dataset, PROJECT_ROOT)
         init_dir = dataset_dir / profile.root_init
     except KeyError:
         dataset_dir = (PROJECT_ROOT / "dataset" / dataset).resolve()
@@ -55,7 +58,7 @@ def resolve_dataset(dataset: str) -> DatasetPaths:
 
 
 def build_plot_grid() -> np.ndarray:
-    """按当前裁切配置生成绘图波数轴"""
+    """按当前裁剪配置生成绘图波数轴"""
     cut_min = float(getattr(config, "cut_min", 600.0))
     cut_max = float(getattr(config, "cut_max", 1800.0))
     return np.arange(cut_min, cut_max + GRID_STEP * 0.5, GRID_STEP, dtype=np.float32)
@@ -71,7 +74,11 @@ def iter_init_folders(init_dir: Path) -> list[Path]:
     return folders
 
 
-def folder_raw_median_curve(folder: Path, wn_ref: np.ndarray, wn_offset: float = 0.0) -> tuple[np.ndarray | None, int]:
+def folder_raw_median_curve(
+    folder: Path,
+    wn_ref: np.ndarray,
+    wn_offset: float = 0.0,
+) -> tuple[np.ndarray | None, int]:
     """读取小文件夹 raw 强度谱并返回统一轴中位谱"""
     curves: list[np.ndarray] = []
     for path in sorted(folder.glob("*.arc_data")):
@@ -93,6 +100,45 @@ def folder_raw_median_curve(folder: Path, wn_ref: np.ndarray, wn_offset: float =
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         return np.nanmedian(np.vstack(curves), axis=0), len(curves)
+
+
+def normalize_preview_curve(curve: np.ndarray, norm_method: str) -> np.ndarray:
+    """按当前归一化方法处理单条预览曲线，保留缺失位置"""
+    curve = np.asarray(curve, dtype=np.float32)
+    return normalize_spectrum(curve, norm_method, preserve_nan=True)
+
+
+def folder_median_curves(
+    folder: Path,
+    wn_ref: np.ndarray,
+    norm_method: str,
+) -> tuple[np.ndarray | None, np.ndarray | None, int]:
+    """返回小文件夹 raw 中位谱和归一化后中位谱"""
+    raw_curves: list[np.ndarray] = []
+    norm_curves: list[np.ndarray] = []
+    for path in sorted(folder.glob("*.arc_data")):
+        wn, sp = read_arc_data(path)
+        if wn.size == 0 or sp.size == 0:
+            continue
+        order = np.argsort(wn)
+        wn = wn[order]
+        sp = sp[order]
+
+        curve = np.full_like(wn_ref, np.nan, dtype=np.float32)
+        inside = (wn_ref >= wn[0]) & (wn_ref <= wn[-1])
+        if not np.any(inside):
+            continue
+        curve[inside] = np.interp(wn_ref[inside], wn, sp).astype(np.float32)
+        raw_curves.append(curve)
+        norm_curves.append(normalize_preview_curve(curve, norm_method))
+
+    if not raw_curves:
+        return None, None, 0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        raw_median = np.nanmedian(np.vstack(raw_curves), axis=0)
+        norm_median = np.nanmedian(np.vstack(norm_curves), axis=0)
+    return raw_median, norm_median, len(raw_curves)
 
 
 def parse_delta(value: str | None) -> float:
@@ -152,7 +198,7 @@ def upsert_delta(rows: list[dict[str, str]], folder: Path, cumulative_delta: flo
             {
                 "genus": folder.parent.name,
                 "folder": folder.name,
-                "prefix": get_prefix(folder.name) or folder.name,
+                "prefix": extract_letters_prefix(folder.name, keep_sign=True, fallback=folder.name),
                 "delta": delta,
             }
         )
@@ -195,28 +241,49 @@ def plot_bad_bands(ax, wn_ref: np.ndarray) -> None:
         ax.axvspan(float(wn_ref[region[0]]), float(wn_ref[region[-1]]), color="gray", alpha=0.35)
 
 
-def plot_prefix_overview(curves: dict[str, np.ndarray], out_path: Path, title: str, wn_ref: np.ndarray) -> None:
-    """绘制同属同前缀 raw 中位谱总览图"""
-    fig, ax = plt.subplots(1, 1, figsize=(16, 6))
-    for name, curve in curves.items():
-        ax.plot(wn_ref, curve, lw=1.3, label=name)
-    plot_bad_bands(ax, wn_ref)
-    ax.axvline(TARGET_CM, color="black", ls="--", lw=0.8, alpha=0.35)
-    ax.set_title(title)
-    ax.set_xlabel("Wavenumber (cm$^{-1}$)")
-    ax.set_ylabel("Raw intensity")
-    ax.legend(loc="upper left", ncol=2, fontsize=8)
-    ax.grid(alpha=0.15)
+def plot_prefix_group(
+    raw_curves: dict[str, np.ndarray],
+    norm_curves: dict[str, np.ndarray],
+    out_path: Path,
+    title: str,
+    wn_ref: np.ndarray,
+    norm_method: str,
+) -> None:
+    """绘制同属同前缀 raw 和归一化后中位谱总览图"""
+    fig, axes = plt.subplots(2, 1, figsize=(16, 9), sharex=True)
+    for ax, curves, ylabel, subtitle in (
+        (axes[0], raw_curves, "Raw intensity", "raw median"),
+        (axes[1], norm_curves, f"{norm_method} intensity", f"{norm_method} median"),
+    ):
+        for name, curve in curves.items():
+            ax.plot(wn_ref, curve, lw=1.3, label=name)
+        plot_bad_bands(ax, wn_ref)
+        ax.axvline(TARGET_CM, color="black", ls="--", lw=0.8, alpha=0.35)
+        ax.set_ylabel(ylabel)
+        ax.set_title(subtitle)
+        ax.legend(loc="upper left", ncol=2, fontsize=8)
+        ax.grid(alpha=0.15)
+    fig.suptitle(title)
+    axes[1].set_xlabel("Wavenumber (cm$^{-1}$)")
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=160)
     plt.close(fig)
 
 
-def plot_shift_compare(before_curve: np.ndarray, after_curve: np.ndarray, out_path: Path, title: str, wn_ref: np.ndarray) -> None:
+def plot_shift_compare(
+    before_curve: np.ndarray,
+    after_curve: np.ndarray,
+    out_path: Path,
+    title: str,
+    wn_ref: np.ndarray,
+) -> None:
     """绘制平移前后 raw 中位谱对比图"""
     fig, axes = plt.subplots(2, 1, figsize=(16, 8), sharex=True)
-    for ax, curve, label in ((axes[0], before_curve, "Before shift"), (axes[1], after_curve, "After shift")):
+    for ax, curve, label in (
+        (axes[0], before_curve, "Before shift"),
+        (axes[1], after_curve, "After shift"),
+    ):
         ax.plot(wn_ref, curve, lw=1.4, label=label)
         plot_bad_bands(ax, wn_ref)
         ax.axvline(TARGET_CM, color="black", ls="--", lw=0.8, alpha=0.35)
@@ -237,7 +304,7 @@ def read_plot_state(path: Path) -> dict[tuple[str, str], dict[str, str]]:
         return {}
     with path.open("r", encoding="utf-8-sig", newline="") as file:
         reader = csv.DictReader(file, delimiter="\t")
-        if reader.fieldnames != list(DELTA_FIELDS):
+        if reader.fieldnames not in (list(DELTA_FIELDS), list(PLOT_STATE_FIELDS)):
             return {}
         return {(row["genus"], row["folder"]): row for row in reader}
 
@@ -247,7 +314,7 @@ def write_plot_state(path: Path, rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = sorted(rows, key=lambda row: (row["genus"], row["folder"]))
     with path.open("w", encoding="utf-8-sig", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=DELTA_FIELDS, delimiter="\t")
+        writer = csv.DictWriter(file, fieldnames=PLOT_STATE_FIELDS, delimiter="\t")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -257,22 +324,23 @@ def current_delta_state(paths: DatasetPaths, rows: list[dict[str, str]]) -> list
     deltas = delta_map(rows)
     state: list[dict[str, str]] = []
     for folder in iter_init_folders(paths.init_dir):
-        prefix = get_prefix(folder.name) or folder.name
         state.append(
             {
                 "genus": folder.parent.name,
                 "folder": folder.name,
-                "prefix": prefix,
+                "prefix": extract_letters_prefix(folder.name, keep_sign=True, fallback=folder.name),
                 "delta": format_delta(deltas.get((folder.parent.name, folder.name), 0.0)),
+                "plot_version": PREFIX_PLOT_VERSION,
             }
         )
     return state
 
 
 def plot_prefix_dataset(dataset: str) -> list[Path]:
-    """按 delta.txt 变化增量输出同前缀 raw 中位谱总览图"""
+    """按 delta.txt 变化增量输出同前缀 raw 和归一化后中位谱总览图"""
     paths = resolve_dataset(dataset)
     wn_ref = build_plot_grid()
+    norm_method = str(getattr(config, "norm_method", "snv")).lower()
     rows = ensure_delta_rows(paths)
     state = current_delta_state(paths, rows)
     old_state = read_plot_state(paths.output_dir / PREFIX_PLOT_STATE_NAME)
@@ -290,7 +358,7 @@ def plot_prefix_dataset(dataset: str) -> list[Path]:
     outputs: list[Path] = []
     folders_by_group: dict[tuple[str, str], list[Path]] = {}
     for folder in iter_init_folders(paths.init_dir):
-        prefix = get_prefix(folder.name) or folder.name
+        prefix = extract_letters_prefix(folder.name, keep_sign=True, fallback=folder.name)
         folders_by_group.setdefault((folder.parent.name, prefix), []).append(folder)
 
     for (genus, prefix), folders in sorted(folders_by_group.items()):
@@ -298,15 +366,24 @@ def plot_prefix_dataset(dataset: str) -> list[Path]:
         if out_path.is_file() and (genus, prefix) not in changed_groups:
             continue
 
-        curves: dict[str, np.ndarray] = {}
+        raw_curves: dict[str, np.ndarray] = {}
+        norm_curves: dict[str, np.ndarray] = {}
         for folder in folders:
-            curve, _ = folder_raw_median_curve(folder, wn_ref)
-            if curve is not None:
-                curves[folder.name] = curve
-        if not curves:
+            raw_curve, norm_curve, _ = folder_median_curves(folder, wn_ref, norm_method)
+            if raw_curve is not None and norm_curve is not None:
+                raw_curves[folder.name] = raw_curve
+                norm_curves[folder.name] = norm_curve
+        if not raw_curves:
             continue
 
-        plot_prefix_overview(curves, out_path, f"{genus} {prefix} raw median spectra", wn_ref)
+        plot_prefix_group(
+            raw_curves,
+            norm_curves,
+            out_path,
+            f"{genus} {prefix} median spectra",
+            wn_ref,
+            norm_method,
+        )
         outputs.append(out_path)
 
     write_plot_state(paths.output_dir / PREFIX_PLOT_STATE_NAME, state)
@@ -322,7 +399,7 @@ def plot_shift_folder(dataset: str, folder_arg: str) -> Path:
     if abs(cumulative_delta) < 1e-9:
         raise ValueError(f"Folder has no delta in delta.txt, run apply first: {folder.parent.name}/{folder.name}")
 
-    prefix = get_prefix(folder.name) or folder.name
+    prefix = extract_letters_prefix(folder.name, keep_sign=True, fallback=folder.name)
     before_raw, _ = folder_raw_median_curve(folder, wn_ref, wn_offset=-cumulative_delta)
     after_raw, _ = folder_raw_median_curve(folder, wn_ref)
     if before_raw is None or after_raw is None:
@@ -366,7 +443,7 @@ def apply_shift(dataset: str, folder_arg: str, delta: float) -> tuple[dict[str, 
     row = {
         "genus": folder.parent.name,
         "folder": folder.name,
-        "prefix": get_prefix(folder.name) or folder.name,
+        "prefix": extract_letters_prefix(folder.name, keep_sign=True, fallback=folder.name),
         "delta": format_delta(cumulative_delta),
     }
     return row, changed

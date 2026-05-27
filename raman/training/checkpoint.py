@@ -109,7 +109,4 @@ def remove_training_checkpoint(checkpoint_path, model_log):
     os.remove(checkpoint_path)
     model_log(f"[Checkpoint] removed finished checkpoint: {checkpoint_path}")
 
-def build_relpath(output_dir, path):
-    """将模型绝对路径转成相对实验目录的路径"""
-    return os.path.relpath(path, output_dir)
 

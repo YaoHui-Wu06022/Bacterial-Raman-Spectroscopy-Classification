@@ -8,7 +8,8 @@ import torch
 
 from raman.config import config as default_config
 from raman.data import RamanDataset
-from raman.training.checkpoint import build_relpath
+from raman.tool.hierarchy import resolve_level_order
+from raman.tool.path import relpath
 from raman.training.session import (
     prepare_run_runtime,
     prepare_training_runtime,
@@ -24,7 +25,6 @@ from raman.training.split import (
     build_label_map_np,
     load_split_files,
     log_split_summary,
-    resolve_level_order,
     resolve_levels_to_train,
     resolve_train_scope,
     save_split_files,
@@ -114,7 +114,7 @@ def _parent_name(full_dataset, parent_level_idx, parent_idx):
 
 
 def _relative_entry_path(exp_dir, path):
-    return build_relpath(exp_dir, path) if path else None
+    return relpath(path, exp_dir) if path else None
 
 
 def _run_entry(exp_dir, run_dir, result, *, child_ids=None, child_names=None, status="trained"):
@@ -286,7 +286,11 @@ def run_training(config_obj=None, overrides=None):
     business_head_names = full_dataset.level_names
     head_name_to_idx = full_dataset.head_name_to_idx
     # 解析当前训练层级
-    current_train_level, _ = resolve_level_order(full_dataset, current_train_level)
+    current_train_level, _ = resolve_level_order(
+        full_dataset,
+        current_train_level,
+        field_name="current_train_level",
+    )
     if current_train_level not in head_name_to_idx:
         raise ValueError(f"Unknown current_train_level: {current_train_level}")
     _log_missing_upper_level_hint(

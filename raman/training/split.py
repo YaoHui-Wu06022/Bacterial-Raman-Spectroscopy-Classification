@@ -4,17 +4,13 @@ import os
 
 import numpy as np
 
+from raman.tool.naming import source_prefix_from_filename
+from raman.tool.path import normalize_relpath
+
 
 TRAIN_SPLIT_NAME = "train_split.json"
 VAL_SPLIT_NAME = "val_split.json"
 DEFAULT_SPLIT_LEVEL = "leaf"
-
-
-def _norm_relpath(path):
-    """
-    统一路径分隔符，便于跨平台保存和重载切分文件
-    """
-    return os.path.normpath(path).replace("\\", "/")
 
 
 def save_split_files(
@@ -32,10 +28,10 @@ def save_split_files(
     root = dataset.root_dir
     samples = dataset.samples
     train_files = [
-        _norm_relpath(os.path.relpath(samples[i], root)) for i in train_idx
+        normalize_relpath(os.path.relpath(samples[i], root)) for i in train_idx
     ]
     val_files = [
-        _norm_relpath(os.path.relpath(samples[i], root)) for i in val_idx
+        normalize_relpath(os.path.relpath(samples[i], root)) for i in val_idx
     ]
 
     with open(os.path.join(out_dir, train_name), "w", encoding="utf-8") as f:
@@ -78,14 +74,14 @@ def load_split_files(dataset, split_dir):
     root = dataset.root_dir
     rel_to_idx = {}
     for idx, sample_path in enumerate(dataset.samples):
-        rel = _norm_relpath(os.path.relpath(sample_path, root))
+        rel = normalize_relpath(os.path.relpath(sample_path, root))
         rel_to_idx[rel] = idx
 
     def map_list(items, kind):
         mapped_idx = []
         missing = []
         for rel in items:
-            rel_norm = _norm_relpath(rel)
+            rel_norm = normalize_relpath(rel)
             if rel_norm not in rel_to_idx:
                 missing.append(rel)
             else:
@@ -113,13 +109,6 @@ def _split_group_key(dataset, idx, lowest_level):
     if key is None:
         key = dataset.get_leaf_key(idx)
     return key
-
-
-def _source_prefix_from_sample(path):
-    """从转换后的文件名提取原子文件夹前缀，如 IgA01_xxx -> IgA01"""
-    filename = os.path.basename(os.fspath(path))
-    stem, _ = os.path.splitext(filename)
-    return stem.split("_", 1)[0] if "_" in stem else stem
 
 
 def _split_indices_sample_level(
@@ -165,7 +154,7 @@ def _split_indices_source_prefix_level(dataset, lowest_level, train_ratio, seed)
 
     for i in range(len(dataset)):
         level_key = _split_group_key(dataset, i, lowest_level)
-        source_prefix = _source_prefix_from_sample(dataset.samples[i])
+        source_prefix = source_prefix_from_filename(dataset.samples[i])
         prefix_groups = level_to_prefix_groups.setdefault(level_key, {})
         prefix_groups.setdefault(source_prefix, []).append(i)
 
@@ -255,18 +244,6 @@ def split_by_lowest_level_ratio(
         seed=seed,
         min_train_samples=min_train_samples,
     )
-
-
-def resolve_level_order(dataset, target_level):
-    """
-    解析目标训练层级，并返回从顶层到该层的顺序列表
-    """
-    target_level = dataset._resolve_level_name(
-        target_level,
-        field_name="current_train_level",
-    )
-    stop_idx = dataset.level_names.index(target_level) + 1
-    return target_level, list(dataset.level_names[:stop_idx])
 
 
 def resolve_train_split(full_dataset, config, split_dir=None, reuse_existing=True):

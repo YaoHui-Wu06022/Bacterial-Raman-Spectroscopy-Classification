@@ -7,6 +7,8 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
 
+from raman.tool.spectrum import estimate_gap_indices, normalize_bad_bands
+
 def _ensure_dir(d):
     """保存结果前确保目录存在"""
     if d is None:
@@ -385,43 +387,6 @@ def compute_class_mean_spectrum(
     mean = sums / np.maximum(counts[:, None], 1)
     return mean, counts
 
-def _normalize_bad_bands(bad_bands):
-    # 统一坏段格式并保证区间有序
-    if not bad_bands:
-        return []
-    out = []
-    for band in bad_bands:
-        if band is None or len(band) < 2:
-            continue
-        b0 = float(band[0])
-        b1 = float(band[1])
-        if b1 < b0:
-            b0, b1 = b1, b0
-        out.append((b0, b1))
-    return out
-
-def _get_bad_bands(config):
-    # 兼容 BAD_BANDS / bad_bands 两种写法
-    if hasattr(config, "BAD_BANDS"):
-        return _normalize_bad_bands(config.BAD_BANDS)
-    if hasattr(config, "bad_bands"):
-        return _normalize_bad_bands(config.bad_bands)
-    return []
-
-def _estimate_gap_indices(wavenumbers, gap_factor=1.5):
-    # 通过相邻步长突变估计“坏段”缺口位置
-    if wavenumbers is None or len(wavenumbers) < 2:
-        return []
-    diffs = np.diff(wavenumbers)
-    diffs = diffs[diffs > 0]
-    if diffs.size == 0:
-        return []
-    step = np.median(diffs)
-    if step <= 0:
-        return []
-    gap_idx = np.where(np.diff(wavenumbers) > step * gap_factor)[0]
-    return gap_idx.tolist()
-
 def plot_band_importance_heatmap(
     importance,
     counts,
@@ -456,12 +421,12 @@ def plot_band_importance_heatmap(
     fig_height = max(8, 0.6 * len(class_names))
     fig, ax = plt.subplots(figsize=(12, fig_height))
 
-    gap_indices = _estimate_gap_indices(wavenumbers)
+    gap_indices = estimate_gap_indices(wavenumbers)
     gap_set = set(gap_indices)
 
     if bad_bands and use_wavenumber_axis:
         # 在波数坐标上用灰色阴影标记被剔除的坏段
-        for b0, b1 in _normalize_bad_bands(bad_bands):
+        for b0, b1 in normalize_bad_bands(bad_bands):
             ax.axvspan(b0, b1, color="gray", alpha=0.15, zorder=0)
 
     cmap = plt.get_cmap("Blues")

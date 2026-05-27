@@ -9,13 +9,13 @@ from .common import compute_classification_metrics, run_cascade_inference, selec
 from .experiment import (
     collect_used_runs,
     load_experiment_context_with_dataset,
-    load_hierarchy_meta,
     resolve_mode_result_dir,
     resolve_mode_result_root,
     resolve_split_dir,
     validate_parent_split_hashes,
     write_used_runs,
 )
+from raman.tool.hierarchy import load_hierarchy_meta, resolve_level_order
 from .report import (
     format_classification_report_text,
     save_confusion_matrix_csv,
@@ -27,23 +27,12 @@ from raman.data import InputPreprocessor, RamanDataset
 from raman.training import load_split_files
 
 
-def _resolve_level_order(dataset, target_level):
-    """解析目标层级，并返回从顶层到该层的顺序列表"""
-    target_level = dataset._resolve_level_name(target_level, field_name="target_level")
-    if target_level not in dataset.level_names:
-        raise ValueError(
-            f"未知 target_level: {target_level}，可选值：{dataset.level_names}"
-        )
-    stop_idx = dataset.level_names.index(target_level) + 1
-    return target_level, list(dataset.level_names[:stop_idx])
-
-
 def _load_eval_context(exp_dir, target_level=None):
     """加载验证评估所需的通用上下文"""
     input_context, config = load_experiment_context_with_dataset(exp_dir)
     dataset = RamanDataset(config.dataset_root, augment=False, config=config)
     target_level = target_level or input_context.input_level
-    target_level, level_order = _resolve_level_order(dataset, target_level)
+    target_level, level_order = resolve_level_order(dataset, target_level)
 
     split_dir = resolve_split_dir(input_context.exp_dir)
     split = load_split_files(dataset, split_dir) if split_dir else None
@@ -81,12 +70,6 @@ def _load_eval_context(exp_dir, target_level=None):
         "device": device,
         "runtime": runtime,
     }
-
-
-def _class_names(dataset, level_name):
-    """取出某一层的类别名列表"""
-    level_idx = dataset.head_name_to_idx[level_name]
-    return list(dataset.class_names_by_level[level_idx])
 
 
 def _write_eval_outputs(result_dir, classes, all_paths, all_labels, all_preds):
@@ -151,7 +134,7 @@ def _eval_global_model(ctx, result_dir):
     runtime = ctx["runtime"]
     level_name = ctx["target_level"]
     level_idx = dataset.head_name_to_idx[level_name]
-    classes = _class_names(dataset, level_name)
+    classes = dataset.get_class_names(level_name)
     runtime.build_level_model_paths([level_name])
     model = runtime.get_level_model(level_name, num_classes=len(classes))
     preprocessor = InputPreprocessor(ctx["config"], ctx["device"])
@@ -192,7 +175,7 @@ def _eval_parent_model(ctx, result_dir, parent_idx):
     child_ids = [int(item) for item in entry.get("child_ids", [])]
     if not child_ids:
         raise ValueError(f"缺少 child_ids：level={level_name}, parent={parent_idx}")
-    classes_all = _class_names(dataset, level_name)
+    classes_all = dataset.get_class_names(level_name)
     classes = [classes_all[child_id] for child_id in child_ids]
     child_to_local = {child_id: local_idx for local_idx, child_id in enumerate(child_ids)}
     model = runtime.get_parent_model(
@@ -285,7 +268,7 @@ def _eval_level_parent_routed(ctx, result_dir):
     level_idx = dataset.head_name_to_idx[level_name]
     parent_level = dataset.get_parent_level(level_name)
     parent_level_idx = dataset.head_name_to_idx[parent_level]
-    classes = _class_names(dataset, level_name)
+    classes = dataset.get_class_names(level_name)
     preprocessor = InputPreprocessor(ctx["config"], ctx["device"])
 
     all_paths, all_labels, all_preds = [], [], []
@@ -348,13 +331,13 @@ def run_eval_cascade(exp_dir, target_level):
             runtime.parent_models.get(item, {}),
         )
 
-    classes = _class_names(dataset, level_name)
+    classes = dataset.get_class_names(level_name)
     num_classes_by_level = {
         item: dataset.num_classes_by_level[item]
         for item in level_order
     }
     class_names_by_level = {
-        item: _class_names(dataset, item)
+        item: dataset.get_class_names(item)
         for item in level_order
     }
     preprocessor = InputPreprocessor(ctx["config"], ctx["device"])

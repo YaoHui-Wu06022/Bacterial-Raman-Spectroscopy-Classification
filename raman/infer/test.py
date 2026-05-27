@@ -3,15 +3,17 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import re
 import shutil
 from collections import Counter
 from pathlib import Path
 
 import numpy as np
 
-from raman.data import resolve_dataset_stage
-from raman.data.spectrum import build_valid_mask, get_config_bad_bands
+from raman.tool.dataset import dataset_bundle_root, resolve_dataset_stage
+from raman.tool.hierarchy import label_from_parts
+from raman.tool.naming import normalize_folder_prefix, test_folder_prefix
+from raman.tool.path import PROJECT_ROOT, resolve_project_path
+from raman.tool.spectrum import build_valid_mask, expected_wavenumbers, get_config_bad_bands
 from raman.eval.experiment import (
     collect_used_runs,
     is_run_result_dir,
@@ -26,36 +28,9 @@ from raman.infer.folder import (
 from raman.training.split import TRAIN_SPLIT_NAME
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _resolve_project_path(path):
-    """把项目相对路径解析为绝对路径"""
-    path = Path(path)
-    return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
-
-
-def _bundle_root(path):
-    """把阶段目录还原到数据集根目录"""
-    path = Path(path)
-    if path.name in {"train", "test", "init_test"}:
-        return path.parent
-    return path
-
-
-def _expected_wavenumbers(config):
-    """按模型配置生成严格匹配的波数轴"""
-    target_points = int(config.target_points)
-    wn = np.linspace(float(config.cut_min), float(config.cut_max), target_points)
-    keep_mask = build_valid_mask(wn, get_config_bad_bands(config))
-    if keep_mask is not None:
-        wn = wn[keep_mask]
-    return wn
-
-
 def _validate_input_length(signal_length, config, source):
     """确认测试谱长度和模型训练配置一致"""
-    expected = _expected_wavenumbers(config).shape[0]
+    expected = expected_wavenumbers(config).shape[0]
     if int(signal_length) != int(expected):
         raise ValueError(
             f"Input length mismatch for {source}: got {signal_length}, expected {expected}. "
@@ -66,7 +41,7 @@ def _validate_input_length(signal_length, config, source):
 def _preprocess_with_config_mask(path, preprocessor, config):
     """按模型 bad_bands 对齐已预处理光谱，再构建模型输入"""
     x = preprocessor(path)
-    expected = _expected_wavenumbers(config).shape[0]
+    expected = expected_wavenumbers(config).shape[0]
     if int(x.shape[-1]) == int(expected):
         return x
 
@@ -92,39 +67,9 @@ def _preprocess_with_config_mask(path, preprocessor, config):
     return x
 
 
-def _normalize_folder_prefix(name):
-    """把 KP02、CITF03 统一成 KP、CITF"""
-    match = re.match(r"^([A-Za-z]+)", str(name))
-    return match.group(1).upper() if match else str(name).upper()
-
-
-def _test_folder_prefix(name):
-    """把 CS01KP、CS5EC 统一成 KP、EC"""
-    text = str(name).strip()
-    match = re.match(r"^CS\d*(.+)$", text, re.IGNORECASE)
-    if match:
-        return match.group(1).upper()
-    return _normalize_folder_prefix(text)
-
-
-def _level_number(level_name):
-    """读取 level_1 里的数字"""
-    return int(str(level_name).split("_", 1)[1])
-
-
-def _label_from_parts(parts, level_name):
-    """按路径层级推断指定业务层标签"""
-    if not parts:
-        return None
-    level_no = _level_number(level_name)
-    if len(parts) < level_no:
-        return None
-    return "/".join(parts[:level_no])
-
-
 def _candidate_train_roots(dataset_root):
     """列出可用的训练侧光谱目录"""
-    dataset_root = _bundle_root(_resolve_project_path(dataset_root))
+    dataset_root = dataset_bundle_root(resolve_project_path(dataset_root))
     train_root = dataset_root / "train"
     if train_root.is_dir():
         return [train_root]
@@ -138,9 +83,9 @@ def _iter_labeled_train_files(train_root, level_name):
         rel = path.relative_to(train_root)
         if len(rel.parts) < 3:
             continue
-        label = _label_from_parts(rel.parts[:-1], level_name)
+        label = label_from_parts(rel.parts[:-1], level_name)
         if label:
-            yield path, label, _normalize_folder_prefix(rel.parts[-2])
+            yield path, label, normalize_folder_prefix(rel.parts[-2])
 
 
 def _build_expected_lookup(exp_dir, train_roots, level_name):
@@ -152,8 +97,8 @@ def _build_expected_lookup(exp_dir, train_roots, level_name):
             parts = Path(rel).parts[:-1]
             if not parts:
                 continue
-            label = _label_from_parts(parts, level_name)
-            prefix = _normalize_folder_prefix(parts[-1])
+            label = label_from_parts(parts, level_name)
+            prefix = normalize_folder_prefix(parts[-1])
             if label and prefix:
                 counters.setdefault(prefix, Counter())[label] += 1
 
@@ -184,7 +129,7 @@ def _load_train_file_list(exp_dir):
 
 def _resolve_train_mean_files(exp_dir, dataset_root, level_name):
     """优先使用模型训练清单，缺失时回退到当前 train"""
-    dataset_root = _bundle_root(_resolve_project_path(dataset_root))
+    dataset_root = dataset_bundle_root(resolve_project_path(dataset_root))
     train_files = _load_train_file_list(exp_dir)
     train_root = dataset_root / "train"
     if train_files and train_root.is_dir():
@@ -194,7 +139,7 @@ def _resolve_train_mean_files(exp_dir, dataset_root, level_name):
             if not path.is_file():
                 continue
             parts = Path(rel).parts[:-1]
-            label = _label_from_parts(parts, level_name)
+            label = label_from_parts(parts, level_name)
             if label:
                 rows.append((path, label))
         if rows:
@@ -231,9 +176,8 @@ def _build_train_mean_bank(exp_dir, dataset_root, level_name, preprocessor, conf
 def _resolve_test_root(config, override):
     """解析本次独立测试的已处理 test 目录"""
     if override:
-        path = Path(override)
-        return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
-    dataset_root = _bundle_root(_resolve_project_path(config.dataset_root))
+        return resolve_project_path(override)
+    dataset_root = dataset_bundle_root(resolve_project_path(config.dataset_root))
     return resolve_dataset_stage(
         dataset_root,
         stage="test",
@@ -246,7 +190,7 @@ def _load_transfer_skip_lookup(manifest_path):
     """读取测试样本迁移 manifest，返回需要跳过的源文件"""
     if not manifest_path:
         return {}
-    path = _resolve_project_path(manifest_path)
+    path = resolve_project_path(manifest_path)
     if not path.is_file():
         raise FileNotFoundError(f"Transfer manifest not found: {path}")
 
@@ -471,7 +415,7 @@ def run_independent_test(
         predictor["preprocessor"],
         config,
     )
-    wavenumbers = _expected_wavenumbers(config)
+    wavenumbers = expected_wavenumbers(config)
 
     out_root = resolve_result_dir(
         exp_dir,
@@ -509,7 +453,7 @@ def run_independent_test(
     skip_lookup = _load_transfer_skip_lookup(transfer_manifest) if skip_transferred else {}
     for folder_path in folders:
         folder_path = Path(folder_path)
-        expected_prefix = _test_folder_prefix(folder_path.name)
+        expected_prefix = test_folder_prefix(folder_path.name)
         expected_label = expected_lookup.get(expected_prefix)
         if expected_label not in class_name_set:
             print(

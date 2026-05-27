@@ -4,8 +4,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
 
-from raman.data.spectrum import build_wavenumber_axis
-from raman.eval.experiment import load_hierarchy_meta
+from raman.tool.spectrum import build_wavenumber_axis, get_config_bad_bands
+from raman.tool.hierarchy import load_hierarchy_meta
 from raman.eval.runtime import build_experiment_runtime
 
 from .gradcam import (
@@ -16,7 +16,6 @@ from .gradcam import (
 )
 from .ig import (
     _effective_label_names,
-    _get_bad_bands,
     _plot_channel_importance,
     compute_band_importance_from_ig,
     compute_channel_importance_from_ig,
@@ -460,7 +459,7 @@ def run_aggregate_analysis(
     mean_avg = mean_total / np.maximum(mean_counts[:, None], 1)
 
     wavenumbers = build_wavenumber_axis(band_avg.shape[1], config)
-    bad_bands = _get_bad_bands(config)
+    bad_bands = get_config_bad_bands(config)
     heatmap_path = os.path.join(fig_dir, "band_importance_heatmap_aggregate.png")
     plot_band_importance_heatmap(
         band_avg,

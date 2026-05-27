@@ -3,7 +3,7 @@ import os
 import torch
 
 from raman.eval.runtime import build_experiment_runtime
-from raman.data.spectrum import build_wavenumber_axis
+from raman.tool.spectrum import build_wavenumber_axis, get_config_bad_bands
 
 from .embedding import collect_embeddings_train_val, plot_embedding_hierarchical
 from .gradcam import (
@@ -13,7 +13,6 @@ from .gradcam import (
 )
 from .ig import (
     _effective_label_names,
-    _get_bad_bands,
     _plot_channel_importance,
     compute_band_importance_from_ig,
     compute_channel_importance_from_ig,
@@ -245,7 +244,7 @@ def run_level_analysis(
     )
 
     wavenumbers = build_wavenumber_axis(band_importance.shape[1], config)
-    bad_bands = _get_bad_bands(config)
+    bad_bands = get_config_bad_bands(config)
     heatmap_path = os.path.join(fig_dir, "band_importance_heatmap.png")
     plot_band_importance_heatmap(
         band_importance,

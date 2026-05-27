@@ -127,7 +127,7 @@ class SharedInputConfig:
     """同一实验根内必须保持一致的输入、预处理和增强配置。"""
 
     # 数据集
-    dataset_name: str = "MICRO"
+    dataset_name: str = "GN"
 
     # 输入波数范围和重采样点数
     cut_min: float = float(DEFAULT_PIPELINE_CONFIG.cut_min)
