@@ -40,10 +40,13 @@ def insert_nan_gaps(wn, *values):
     )
 
 
-def add_bad_band_spans(ax, bad_bands, alpha=0.14):
+def add_bad_band_spans(ax, bad_bands, alpha=0.14, label=None):
     """在图中标出坏段区间"""
+    labeled = False
     for band_min, band_max in bad_bands:
-        ax.axvspan(band_min, band_max, color="gray", alpha=alpha)
+        span_label = label if label and not labeled else None
+        ax.axvspan(band_min, band_max, color="gray", alpha=alpha, label=span_label)
+        labeled = True
 
 
 def keep_mask_without_bad_bands(wn, bad_bands):

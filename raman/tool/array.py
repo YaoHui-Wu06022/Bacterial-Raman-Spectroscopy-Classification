@@ -101,4 +101,3 @@ def robust_wave_stats(spectra, min_scale=0.05, floor_fraction=0.25):
     else:
         floor = float(min_scale)
     return center, np.maximum(scale, floor)
-

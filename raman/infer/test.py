@@ -13,6 +13,7 @@ from raman.tool.dataset import dataset_bundle_root, resolve_dataset_stage
 from raman.tool.hierarchy import label_from_parts
 from raman.tool.naming import normalize_folder_prefix, test_folder_prefix
 from raman.tool.path import PROJECT_ROOT, resolve_project_path
+from raman.tool.plotting import add_bad_band_spans, insert_nan_gaps
 from raman.tool.spectrum import build_valid_mask, expected_wavenumbers, get_config_bad_bands
 from raman.eval.experiment import (
     collect_used_runs,
@@ -264,34 +265,11 @@ def _plot_spectra(save_path, folder_name, test_signals, wavenumbers, expected_la
     import matplotlib.pyplot as plt
 
     def plot_line(ax, y, **kwargs):
-        label = kwargs.pop("label", None)
-        diffs = np.diff(wavenumbers)
-        step = float(np.median(np.abs(diffs))) if diffs.size else 0.0
-        gap_idx = np.where(np.abs(diffs) > max(step * 3.0, 1e-6))[0]
-        start = 0
-        labeled = False
-        for idx in gap_idx:
-            end = idx + 1
-            draw_kwargs = dict(kwargs)
-            if label and not labeled:
-                draw_kwargs["label"] = label
-                labeled = True
-            ax.plot(wavenumbers[start:end], y[start:end], **draw_kwargs)
-            start = end
-        draw_kwargs = dict(kwargs)
-        if label and not labeled:
-            draw_kwargs["label"] = label
-        ax.plot(wavenumbers[start:], y[start:], **draw_kwargs)
+        wn_plot, y_plot = insert_nan_gaps(wavenumbers, y)
+        ax.plot(wn_plot, y_plot, **kwargs)
 
     fig, ax = plt.subplots(figsize=(10, 5.5))
-    for idx, (band_min, band_max) in enumerate(bad_bands):
-        ax.axvspan(
-            band_min,
-            band_max,
-            color="gray",
-            alpha=0.18,
-            label="Removed Bad Band" if idx == 0 else None,
-        )
+    add_bad_band_spans(ax, bad_bands, alpha=0.18, label="Removed Bad Band")
     for signal in test_signals:
         plot_line(ax, signal, color="#9ECAE1", alpha=0.38, linewidth=0.9)
 
