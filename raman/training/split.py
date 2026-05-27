@@ -397,13 +397,6 @@ def log_split_summary(full_dataset, train_idx, val_idx, stats_level, head_name_t
     )
 
 
-def resolve_levels_to_train(current_train_level):
-    """
-    当前训练入口一次只训练一个层级
-    """
-    return [current_train_level]
-
-
 def build_label_map_np(child_ids, num_classes):
     """
     把全局类别索引映射成父类内子模型使用的局部类别索引

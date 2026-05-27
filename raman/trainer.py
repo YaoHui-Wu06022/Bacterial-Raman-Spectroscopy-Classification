@@ -25,7 +25,6 @@ from raman.training.split import (
     build_label_map_np,
     load_split_files,
     log_split_summary,
-    resolve_levels_to_train,
     resolve_train_scope,
     save_split_files,
     split_by_lowest_level_ratio,
@@ -350,7 +349,7 @@ def run_training(config_obj=None, overrides=None):
     )
 
     # 决定要训练哪些层级
-    levels_to_train = resolve_levels_to_train(current_train_level)
+    levels_to_train = [current_train_level]
 
     level_models = {}
     parent_models = {}

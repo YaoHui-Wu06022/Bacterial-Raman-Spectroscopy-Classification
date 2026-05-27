@@ -386,11 +386,6 @@ def resolve_single_result_run_dir(exp_dir, runtime, target_level, target_parent_
     return resolve_run_dir(exp_dir, entry)
 
 
-def is_run_result_dir(result_dir):
-    """判断结果目录是否挂在某个 run_* 目录下"""
-    return Path(result_dir).parent.name.startswith("run_")
-
-
 def resolve_result_dir(
     exp_dir,
     kind,

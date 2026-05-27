@@ -16,7 +16,6 @@ from raman.tool.path import PROJECT_ROOT, resolve_project_path
 from raman.tool.spectrum import build_valid_mask, expected_wavenumbers, get_config_bad_bands
 from raman.eval.experiment import (
     collect_used_runs,
-    is_run_result_dir,
     resolve_result_dir,
     write_used_runs,
 )
@@ -438,7 +437,7 @@ def run_independent_test(
     )
     write_used_runs(
         out_root,
-        mode="single_run" if is_run_result_dir(out_root) else "cascade",
+        mode="single_run" if out_root.parent.name.startswith("run_") else "cascade",
         target_level=level_name,
         target_parent=target_parent_idx,
         runs=used_runs,

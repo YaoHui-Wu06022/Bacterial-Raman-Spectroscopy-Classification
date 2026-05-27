@@ -102,20 +102,3 @@ def robust_wave_stats(spectra, min_scale=0.05, floor_fraction=0.25):
         floor = float(min_scale)
     return center, np.maximum(scale, floor)
 
-
-def spectral_corr(a, b):
-    """计算两条光谱的相关系数，近似常数谱返回 0"""
-    a = np.asarray(a, dtype=np.float32)
-    b = np.asarray(b, dtype=np.float32)
-    if a.std() <= 1e-8 or b.std() <= 1e-8:
-        return 0.0
-    return float(np.corrcoef(a, b)[0, 1])
-
-
-def corr_many_to_one(arr, spec):
-    """计算多条已标准化光谱和单条光谱的快速相关近似"""
-    arr = np.asarray(arr, dtype=np.float32)
-    spec = np.asarray(spec, dtype=np.float32)
-    if arr.size == 0:
-        return np.array([], dtype=np.float32)
-    return (arr @ spec / max(spec.size, 1)).astype(np.float32, copy=False)
