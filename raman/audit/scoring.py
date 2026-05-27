@@ -535,17 +535,17 @@ def score_stage(records, cfg, stage: str, audit_cfg: AuditConfig = DEFAULT_AUDIT
     """按阶段调度评分和分类规则。"""
     stage = validate_stage(stage)
     if stage == "invalid":
-        from raman.audit.stage_invalid import classify_invalid
+        from raman.audit.stage import classify_invalid
 
         score_raw_and_basic(records, cfg, audit_cfg)
         classify_invalid(records, audit_cfg)
     elif stage == "anomalous-cosmic":
-        from raman.audit.stage_anomalous_cosmic import classify_anomalous_cosmic
+        from raman.audit.stage import classify_anomalous_cosmic
 
         score_anomalous_wide_regions(records, cfg, audit_cfg)
         classify_anomalous_cosmic(records, audit_cfg)
     elif stage == "class-similarity":
-        from raman.audit.stage_class_similarity import classify_class_similarity
+        from raman.audit.stage import classify_class_similarity
 
         prefix_stats = score_class_similarity(records, cfg, audit_cfg)
         classify_class_similarity(records, audit_cfg)

@@ -1,4 +1,4 @@
-"""第三阶段：同属同前缀类内相似性清洗"""
+"""审核阶段判定规则"""
 
 from __future__ import annotations
 
@@ -6,6 +6,105 @@ import numpy as np
 
 from raman.audit.config import AuditConfig
 from raman.audit.scoring import STAGE_DELETE_CATEGORY
+
+
+def classify_invalid(records, audit_cfg: AuditConfig):
+    """第一阶段：只判断光谱本身是否无效，不做类内离群删除"""
+    for record in records:
+        record.stage = "invalid"
+        if record.z is None:
+            record.decision = "skip"
+            record.reasons = (record.skip_reason or "preprocess_failed",)
+            continue
+
+        reasons = []
+        if np.isfinite(record.coverage_ratio) and record.coverage_ratio < audit_cfg.invalid_raw_coverage_min:
+            reasons.append("invalid_missing_region")
+        if record.long_flat_points >= audit_cfg.invalid_long_flat_points or record.flat_fraction >= audit_cfg.invalid_flat_fraction:
+            reasons.append("invalid_flat_region")
+        if (
+            record.roughness >= audit_cfg.invalid_noise_roughness_min
+            and np.isfinite(record.structure_ratio)
+            and record.structure_ratio <= audit_cfg.invalid_noise_structure_ratio_max
+        ):
+            reasons.append("invalid_noise")
+
+        review_reasons = []
+        if not reasons and record.long_flat_points >= audit_cfg.invalid_review_flat_points:
+            review_reasons.append("invalid_flat_region_review")
+        if (
+            not reasons
+            and record.roughness >= audit_cfg.invalid_noise_review_roughness_min
+            and np.isfinite(record.structure_ratio)
+            and record.structure_ratio <= audit_cfg.invalid_noise_review_structure_ratio_max
+        ):
+            review_reasons.append("invalid_noise_review")
+
+        if reasons:
+            record.decision = "remove_candidate"
+            record.delete_category = STAGE_DELETE_CATEGORY["invalid"]
+            record.reasons = tuple(reasons)
+        elif review_reasons:
+            record.decision = "review_candidate"
+            record.reasons = tuple(review_reasons)
+        else:
+            record.decision = "keep"
+            record.reasons = ()
+
+        record.risk_score = 0.0
+        if np.isfinite(record.coverage_ratio):
+            record.risk_score += max((audit_cfg.invalid_raw_coverage_min - record.coverage_ratio) * 20.0, 0.0)
+        record.risk_score += record.long_flat_points / 45.0
+        record.risk_score += record.flat_fraction * 8.0
+        record.risk_score += max(record.roughness, 0.0) * 3.0
+        if np.isfinite(record.structure_ratio):
+            record.risk_score += max(audit_cfg.invalid_noise_review_structure_ratio_max - record.structure_ratio, 0.0) * 3.0
+        record.risk_score += 5.0 if record.decision == "remove_candidate" else 0.0
+
+
+def classify_anomalous_cosmic(records, audit_cfg: AuditConfig):
+    """第二阶段：判断宇宙射线去除后仍残留的宽平台、阶梯或长上升异常"""
+    for record in records:
+        record.stage = "anomalous-cosmic"
+        if record.z is None:
+            record.decision = "skip"
+            record.reasons = (record.skip_reason or "preprocess_failed",)
+            continue
+
+        has_wide_region = record.wide_bump_count > 0
+        strong_wide_region = (
+            has_wide_region
+            and record.wide_bump_max_z >= audit_cfg.anomalous_wide_max_z_min
+            and record.wide_bump_area >= audit_cfg.anomalous_wide_area_z_min
+            and (
+                record.wide_edge_jump_z >= audit_cfg.anomalous_wide_delete_edge_z_min
+                or record.wide_region_kind == "rising"
+            )
+        )
+
+        if strong_wide_region:
+            record.decision = "remove_candidate"
+            record.delete_category = STAGE_DELETE_CATEGORY["anomalous-cosmic"]
+            if record.wide_region_kind == "rising":
+                record.reasons = ("anomalous_cosmic_long_rising_tail",)
+            else:
+                record.reasons = ("anomalous_cosmic_wide_edge_jump",)
+        elif has_wide_region:
+            record.decision = "review_candidate"
+            if record.wide_region_kind == "rising":
+                record.reasons = ("anomalous_cosmic_long_rising_review",)
+            else:
+                record.reasons = ("anomalous_cosmic_wide_edge_review",)
+        else:
+            record.decision = "keep"
+            record.reasons = ()
+
+        record.risk_score = 0.0
+        record.risk_score += max(record.wide_bump_max_z, 0.0)
+        record.risk_score += max(record.wide_edge_jump_z, 0.0)
+        record.risk_score += max(record.wide_bump_area, 0.0) / 20.0
+        record.risk_score += max(record.wide_bump_width_points - audit_cfg.anomalous_wide_min_points, 0) / 4.0
+        record.risk_score += 5.0 if record.decision == "remove_candidate" else 0.0
 
 
 def _finite_le(value, threshold):
@@ -84,7 +183,7 @@ def _risk_score(record, audit_cfg: AuditConfig):
 
 
 def classify_class_similarity(records, audit_cfg: AuditConfig):
-    """用同属同前缀参考池判断类内相似性；小文件夹集中命中只做复核"""
+    """第三阶段：用同属同前缀参考池判断类内相似性"""
     preliminary: dict[int, tuple[bool, bool, tuple[str, ...]]] = {}
     group_totals = {}
     group_candidate_counts = {}
