@@ -5,6 +5,7 @@ from raman.eval.common import run_cascade_inference
 from raman.eval.experiment import load_experiment_context_with_dataset
 from raman.eval.runtime import build_experiment_runtime
 from raman.tool.hierarchy import load_hierarchy_meta
+from raman.tool.model import select_logits
 
 
 def normalize_level_name(level):
@@ -117,8 +118,6 @@ def predict_tensor(x, predictor, top_k=3, parent_mask=None):
                 child_ids=child_ids,
                 model_path=entry.get("model_path"),
             )(x)
-            from raman.eval.common import select_logits
-
             probs = torch.softmax(select_logits(logits), dim=1)
         labels = predictor["class_names"]
         k = min(top_k, len(labels))

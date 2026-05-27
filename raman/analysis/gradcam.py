@@ -5,7 +5,8 @@ import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 
-from .ig import _ensure_dir, _needs_cudnn_rnn_guard, _select_logits
+from raman.tool.model import needs_cudnn_rnn_guard, select_logits
+from raman.tool.path import ensure_dir
 
 def collect_analyzable_layers(model):
     """
@@ -116,10 +117,10 @@ class LayerGradCAMAnalyzer:
         """
         从前 num_batches 个 batch 计算平均 layer importance（更稳定）
         """
-        _ensure_dir(save_dir)
+        ensure_dir(save_dir)
 
         self.model.eval()
-        disable_cudnn = _needs_cudnn_rnn_guard(self.model)
+        disable_cudnn = needs_cudnn_rnn_guard(self.model)
         prev_cudnn = torch.backends.cudnn.enabled
         if disable_cudnn:
             torch.backends.cudnn.enabled = False
@@ -141,7 +142,7 @@ class LayerGradCAMAnalyzer:
                     head_index = y.size(1) - 1
                 y = y[:, head_index]
 
-            logits = _select_logits(self.model(x), head_name=head_name)
+            logits = select_logits(self.model(x), head_name=head_name)
 
             target = y
 

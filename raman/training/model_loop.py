@@ -105,6 +105,15 @@ def _loss_value_for_log(loss):
 def _model_parameters_are_finite(model):
     return all(torch.isfinite(p).all().item() for p in model.parameters())
 
+
+def _disabled_aux_loss(zero_loss):
+    """构造被关闭的辅助损失函数"""
+    def loss_fn(feat, _hier_labels):
+        return zero_loss(feat)
+
+    return loss_fn
+
+
 @dataclass
 class ModelTrainContext:
     """单模型训练所需的共享上下文，避免训练入口传递过长参数列表"""
@@ -227,8 +236,7 @@ def train_model(
                 level_labels,
             )
     else:
-        def align_loss_fn(feat, hier_labels):
-            return zero_loss(feat)
+        align_loss_fn = _disabled_aux_loss(zero_loss)
 
     if USE_SUPCON_LOSS:
         supcon_criterion = SupConLoss(tau=config.supcon_tau).to(device)
@@ -242,8 +250,7 @@ def train_model(
                 return zero_loss(feat)
             return supcon_criterion(feat[valid], labels[valid])
     else:
-        def supcon_loss_fn(feat, hier_labels):
-            return zero_loss(feat)
+        supcon_loss_fn = _disabled_aux_loss(zero_loss)
 
     # 输入 stem 用较小学习率，分类头用较大学习率
     group_conv = []

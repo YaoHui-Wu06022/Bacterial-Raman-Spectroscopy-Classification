@@ -2,22 +2,7 @@ import numpy as np
 import torch
 from sklearn.metrics import accuracy_score, f1_score, recall_score
 
-
-def select_logits(pred, head_name=None):
-    """从模型输出中取出当前要使用的 logits
-
-    兼容三种输出形式：
-    - dict：多头输出，按 head_name 取指定层
-    - tuple/list：默认取第一个元素
-    - tensor：直接返回
-    """
-    if isinstance(pred, dict):
-        if head_name is None:
-            head_name = list(pred.keys())[-1]
-        return pred[head_name]
-    if isinstance(pred, (tuple, list)):
-        return pred[0]
-    return pred
+from raman.tool.model import select_logits
 
 
 def mask_logits_by_parent(logits, parent_labels, parent_to_children):

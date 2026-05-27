@@ -5,7 +5,7 @@ import pandas as pd
 import torch
 from sklearn.metrics import classification_report, confusion_matrix
 
-from .common import compute_classification_metrics, run_cascade_inference, select_logits
+from .common import compute_classification_metrics, run_cascade_inference
 from .experiment import (
     collect_used_runs,
     load_experiment_context_with_dataset,
@@ -16,6 +16,7 @@ from .experiment import (
     write_used_runs,
 )
 from raman.tool.hierarchy import load_hierarchy_meta, resolve_level_order
+from raman.tool.model import select_logits
 from .report import (
     format_classification_report_text,
     save_confusion_matrix_csv,

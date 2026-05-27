@@ -27,6 +27,15 @@ def resolve_under_base(base_dir, path_value):
     return (Path(base_dir) / path).resolve()
 
 
+def ensure_dir(path):
+    """确保目录存在，None 输入直接跳过"""
+    if path is None:
+        return None
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def normalize_relpath(path):
     """统一相对路径分隔符，便于跨平台保存和比较"""
     return os.path.normpath(os.fspath(path)).replace("\\", "/")

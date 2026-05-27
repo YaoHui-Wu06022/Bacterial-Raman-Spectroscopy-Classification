@@ -5,8 +5,8 @@ from raman.eval.common import (
     compute_classification_metrics,
     mask_logits_by_parent,
     select_level_targets,
-    select_logits,
 )
+from raman.tool.model import select_logits
 from raman.training.se_stats import (
     accumulate_se_stats,
     attach_se_scale_hooks,

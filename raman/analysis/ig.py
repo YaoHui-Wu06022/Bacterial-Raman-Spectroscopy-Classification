@@ -3,44 +3,18 @@ import csv
 
 import numpy as np
 import torch
-import torch.nn as nn
 import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
 
+from raman.tool.model import needs_cudnn_rnn_guard, select_logits
+from raman.tool.path import ensure_dir
 from raman.tool.spectrum import estimate_gap_indices, normalize_bad_bands
-
-def _ensure_dir(d):
-    """保存结果前确保目录存在"""
-    if d is None:
-        return
-    os.makedirs(d, exist_ok=True)
 
 def _to_numpy(x):
     """将张量或数组统一转成 numpy，便于绘图和保存"""
     if isinstance(x, torch.Tensor):
         return x.detach().cpu().numpy()
     return np.asarray(x)
-
-def _needs_cudnn_rnn_guard(model):
-    """评估态下若模型含 RNN 系列模块，则临时关闭 cuDNN 以避免反传限制"""
-    if model.training:
-        return False
-    if not torch.backends.cudnn.enabled:
-        return False
-    for m in model.modules():
-        if isinstance(m, (nn.LSTM, nn.GRU, nn.RNN)):
-            return True
-    return False
-
-def _select_logits(pred, head_name=None):
-    """兼容多种前向返回格式，只抽取当前分析所需的 logits"""
-    if isinstance(pred, dict):
-        if head_name is None:
-            head_name = list(pred.keys())[-1]
-        return pred[head_name]
-    if isinstance(pred, (tuple, list)):
-        return pred[0]
-    return pred
 
 def _compute_baseline_mean_spectrum(loader, device, num_batches=10):
     """
@@ -76,7 +50,7 @@ def compute_input_channel_importance_IG(
     - num_batches:
         取前 num_batches 个批次做平均，比只看单个批次稳定得多
     """
-    _ensure_dir(save_dir)
+    ensure_dir(save_dir)
     ig_batches = compute_ig_batches(
         model,
         loader,
@@ -148,7 +122,7 @@ def compute_ig_batches(
     后续可以基于这些结果分别汇总通道重要性和类别波段重要性
     """
     model.eval()
-    disable_cudnn = _needs_cudnn_rnn_guard(model)
+    disable_cudnn = needs_cudnn_rnn_guard(model)
     prev_cudnn = torch.backends.cudnn.enabled
     if disable_cudnn:
         torch.backends.cudnn.enabled = False
@@ -192,7 +166,7 @@ def compute_ig_batches(
         b = baseline.expand(x.size(0), -1, -1)
 
         with torch.no_grad():
-            logits0 = _select_logits(model(x), head_name=head_name)
+            logits0 = select_logits(model(x), head_name=head_name)
             pred = logits0.argmax(dim=1)
             target = torch.where(target_valid_mask, y_head, pred)
 
@@ -204,7 +178,7 @@ def compute_ig_batches(
 
         for alpha in alphas:
             x_step = (b + alpha * (x - b)).detach().requires_grad_(True)
-            logits = _select_logits(model(x_step), head_name=head_name)
+            logits = select_logits(model(x_step), head_name=head_name)
             score_each = logits.gather(1, safe_target.view(-1, 1)).squeeze(1)
             score = (score_each * ig_mask.float()).sum()
             model.zero_grad(set_to_none=True)
