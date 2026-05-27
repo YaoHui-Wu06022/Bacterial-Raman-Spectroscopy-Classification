@@ -23,6 +23,19 @@ def level_number(level_name):
     return int(text.split("_", 1)[1])
 
 
+def normalize_level_name(level):
+    """把 1、level1、level_1 统一成 level_1"""
+    text = str(level).strip()
+    if text.startswith("level_"):
+        return text
+    if text.startswith("level"):
+        suffix = text[5:].lstrip("_")
+        return f"level_{suffix}"
+    if text.isdigit():
+        return f"level_{text}"
+    raise ValueError(f"Invalid level: {level}")
+
+
 def resolve_level_order(dataset, target_level, field_name="target_level"):
     """解析目标业务层级，并返回从 level_1 到目标层的顺序"""
     target_level = dataset._resolve_level_name(target_level, field_name=field_name)

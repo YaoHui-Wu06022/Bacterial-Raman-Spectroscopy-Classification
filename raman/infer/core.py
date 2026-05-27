@@ -4,21 +4,8 @@ from raman.data import InputPreprocessor
 from raman.eval.common import run_cascade_inference
 from raman.eval.experiment import load_experiment_context_with_dataset
 from raman.eval.runtime import build_experiment_runtime
-from raman.tool.hierarchy import load_hierarchy_meta
+from raman.tool.hierarchy import load_hierarchy_meta, normalize_level_name
 from raman.tool.model import select_logits
-
-
-def normalize_level_name(level):
-    """把 1、level1、level_1 统一成 level_1"""
-    text = str(level).strip()
-    if text.startswith("level_"):
-        return text
-    if text.startswith("level"):
-        suffix = text[5:].lstrip("_")
-        return f"level_{suffix}"
-    if text.isdigit():
-        return f"level_{text}"
-    raise ValueError(f"Invalid level: {level}")
 
 
 def load_predictor(exp_dir, device, predict_level=None):

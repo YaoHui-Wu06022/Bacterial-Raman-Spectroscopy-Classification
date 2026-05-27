@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from raman.tool.dataset import dataset_bundle_root, resolve_dataset_stage
-from raman.tool.hierarchy import label_from_parts
+from raman.tool.hierarchy import label_from_parts, normalize_level_name
 from raman.tool.naming import normalize_folder_prefix, test_folder_prefix
 from raman.tool.path import PROJECT_ROOT, resolve_project_path
 from raman.tool.plotting import add_bad_band_spans, insert_nan_gaps
@@ -356,7 +356,7 @@ def run_independent_test(
 ):
     """运行独立测试集推理并输出逐谱明细、谱线图和汇总报表"""
     import torch
-    from raman.infer.core import load_predictor, normalize_level_name
+    from raman.infer.core import load_predictor
 
     level_name = normalize_level_name(level)
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
