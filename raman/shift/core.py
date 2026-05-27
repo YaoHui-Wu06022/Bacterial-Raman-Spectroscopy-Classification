@@ -64,6 +64,11 @@ def build_plot_grid() -> np.ndarray:
     return np.arange(cut_min, cut_max + GRID_STEP * 0.5, GRID_STEP, dtype=np.float32)
 
 
+def shift_folder_prefix(folder: Path) -> str:
+    """提取 shift 分组使用的文件夹前缀，保留紧随字母后的正负号"""
+    return extract_letters_prefix(folder.name, keep_sign=True, fallback=folder.name)
+
+
 def iter_init_folders(init_dir: Path) -> list[Path]:
     """列出 init 下的全部小文件夹"""
     if not init_dir.is_dir():
@@ -198,7 +203,7 @@ def upsert_delta(rows: list[dict[str, str]], folder: Path, cumulative_delta: flo
             {
                 "genus": folder.parent.name,
                 "folder": folder.name,
-                "prefix": extract_letters_prefix(folder.name, keep_sign=True, fallback=folder.name),
+                "prefix": shift_folder_prefix(folder),
                 "delta": delta,
             }
         )
@@ -328,7 +333,7 @@ def current_delta_state(paths: DatasetPaths, rows: list[dict[str, str]]) -> list
             {
                 "genus": folder.parent.name,
                 "folder": folder.name,
-                "prefix": extract_letters_prefix(folder.name, keep_sign=True, fallback=folder.name),
+                "prefix": shift_folder_prefix(folder),
                 "delta": format_delta(deltas.get((folder.parent.name, folder.name), 0.0)),
                 "plot_version": PREFIX_PLOT_VERSION,
             }
@@ -358,7 +363,7 @@ def plot_prefix_dataset(dataset: str) -> list[Path]:
     outputs: list[Path] = []
     folders_by_group: dict[tuple[str, str], list[Path]] = {}
     for folder in iter_init_folders(paths.init_dir):
-        prefix = extract_letters_prefix(folder.name, keep_sign=True, fallback=folder.name)
+        prefix = shift_folder_prefix(folder)
         folders_by_group.setdefault((folder.parent.name, prefix), []).append(folder)
 
     for (genus, prefix), folders in sorted(folders_by_group.items()):
@@ -399,7 +404,7 @@ def plot_shift_folder(dataset: str, folder_arg: str) -> Path:
     if abs(cumulative_delta) < 1e-9:
         raise ValueError(f"Folder has no delta in delta.txt, run apply first: {folder.parent.name}/{folder.name}")
 
-    prefix = extract_letters_prefix(folder.name, keep_sign=True, fallback=folder.name)
+    prefix = shift_folder_prefix(folder)
     before_raw, _ = folder_raw_median_curve(folder, wn_ref, wn_offset=-cumulative_delta)
     after_raw, _ = folder_raw_median_curve(folder, wn_ref)
     if before_raw is None or after_raw is None:
@@ -443,7 +448,7 @@ def apply_shift(dataset: str, folder_arg: str, delta: float) -> tuple[dict[str, 
     row = {
         "genus": folder.parent.name,
         "folder": folder.name,
-        "prefix": extract_letters_prefix(folder.name, keep_sign=True, fallback=folder.name),
+        "prefix": shift_folder_prefix(folder),
         "delta": format_delta(cumulative_delta),
     }
     return row, changed
