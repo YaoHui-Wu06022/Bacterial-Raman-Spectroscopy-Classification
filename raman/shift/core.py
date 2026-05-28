@@ -12,21 +12,24 @@ matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
 from raman.config import config
+from raman.data.build import DEFAULT_PIPELINE_CONFIG
 from raman.data.input import normalize_spectrum
 from raman.data.io import read_arc_data
-from raman.tool.dataset import resolve_dataset as resolve_profile_dataset
+from raman.data.preprocess import estimate_baseline
+from raman.data.profiles import get_dataset_dir, get_profile
 from raman.tool.naming import extract_letters_prefix
 from raman.tool.path import PROJECT_ROOT
+from raman.tool.plotting import plot_segments_without_bad_bands
 from raman.tool.spectrum import build_valid_mask, get_config_bad_bands
 
 
-TARGET_CM = 1000.0
+TARGET_CM = 1002.0
 GRID_STEP = 0.2
 DELTA_NAME = "delta.txt"
 PREFIX_PLOT_STATE_NAME = "prefix_plot_state.csv"
 DELTA_FIELDS = ("genus", "folder", "prefix", "delta")
-PLOT_STATE_FIELDS = (*DELTA_FIELDS, "plot_version")
-PREFIX_PLOT_VERSION = "raw_norm_v1"
+LEGACY_PLOT_STATE_FIELDS = (*DELTA_FIELDS, "plot_version")
+TRANSFERRED_FOLDER_SUFFIX = "t"
 
 
 @dataclass(frozen=True)
@@ -42,7 +45,8 @@ class DatasetPaths:
 def resolve_dataset(dataset: str) -> DatasetPaths:
     """优先按 profile 解析数据集，失败后按 dataset/<输入> 解析"""
     try:
-        profile, dataset_dir = resolve_profile_dataset(dataset, PROJECT_ROOT)
+        profile = get_profile(dataset)
+        dataset_dir = get_dataset_dir(profile, PROJECT_ROOT)
         init_dir = dataset_dir / profile.root_init
     except KeyError:
         dataset_dir = (PROJECT_ROOT / "dataset" / dataset).resolve()
@@ -69,13 +73,21 @@ def shift_folder_prefix(folder: Path) -> str:
     return extract_letters_prefix(folder.name, keep_sign=True, fallback=folder.name)
 
 
-def iter_init_folders(init_dir: Path) -> list[Path]:
-    """列出 init 下的全部小文件夹"""
+def is_transferred_folder(folder: Path) -> bool:
+    """判断是否为插入训练集的独立测试来源目录，如 KP06t"""
+    return Path(folder).name.lower().endswith(TRANSFERRED_FOLDER_SUFFIX)
+
+
+def iter_init_folders(init_dir: Path, include_transferred: bool = False) -> list[Path]:
+    """列出 init/属/种文件夹 两层结构中的全部种文件夹"""
     if not init_dir.is_dir():
         raise FileNotFoundError(f"Missing init folder: {init_dir}")
     folders: list[Path] = []
     for genus_dir in sorted(path for path in init_dir.iterdir() if path.is_dir()):
-        folders.extend(sorted(path for path in genus_dir.iterdir() if path.is_dir()))
+        for folder_dir in sorted(path for path in genus_dir.iterdir() if path.is_dir()):
+            if not include_transferred and is_transferred_folder(folder_dir):
+                continue
+            folders.append(folder_dir)
     return folders
 
 
@@ -107,10 +119,37 @@ def folder_raw_median_curve(
         return np.nanmedian(np.vstack(curves), axis=0), len(curves)
 
 
-def normalize_preview_curve(curve: np.ndarray, norm_method: str) -> np.ndarray:
-    """按当前归一化方法处理单条预览曲线，保留缺失位置"""
+def normalize_preview_curve(curve: np.ndarray, norm_method: str, wn_ref: np.ndarray) -> np.ndarray:
+    """先去基线，再按当前归一化方法处理单条预览曲线"""
     curve = np.asarray(curve, dtype=np.float32)
-    return normalize_spectrum(curve, norm_method, preserve_nan=True)
+    corrected = baseline_correct_preview_curve(curve, wn_ref)
+    return normalize_spectrum(corrected, norm_method, preserve_nan=True)
+
+
+def baseline_correct_preview_curve(curve: np.ndarray, wn_ref: np.ndarray) -> np.ndarray:
+    """按离线默认参数给 preview 下图扣基线"""
+    curve = np.asarray(curve, dtype=np.float32)
+    output = np.full(curve.shape, np.nan, dtype=np.float32)
+    finite = np.isfinite(curve)
+    if finite.sum() < 10:
+        return output
+
+    cfg = DEFAULT_PIPELINE_CONFIG
+    fit_mask = finite & (wn_ref >= float(cfg.baseline_fit_min)) & (wn_ref <= float(cfg.baseline_fit_max))
+    if fit_mask.sum() < 10:
+        fit_mask = finite
+
+    valid_fit_mask = build_valid_mask(wn_ref[fit_mask], cfg.bad_bands)
+    baseline = estimate_baseline(
+        curve[fit_mask],
+        method=cfg.baseline_method,
+        lam=cfg.baseline_lam,
+        p=cfg.baseline_asls_p,
+        niter=cfg.baseline_max_iter,
+        valid_mask=valid_fit_mask,
+    )
+    output[fit_mask] = curve[fit_mask] - baseline
+    return output
 
 
 def folder_median_curves(
@@ -135,7 +174,7 @@ def folder_median_curves(
             continue
         curve[inside] = np.interp(wn_ref[inside], wn, sp).astype(np.float32)
         raw_curves.append(curve)
-        norm_curves.append(normalize_preview_curve(curve, norm_method))
+        norm_curves.append(normalize_preview_curve(curve, norm_method, wn_ref))
 
     if not raw_curves:
         return None, None, 0
@@ -211,7 +250,7 @@ def upsert_delta(rows: list[dict[str, str]], folder: Path, cumulative_delta: flo
 
 
 def resolve_folder(init_dir: Path, folder_arg: str) -> Path:
-    """解析 Genus/Folder 或唯一 Folder 名"""
+    """解析 属/种文件夹 或唯一的种文件夹名"""
     folder_arg = folder_arg.strip().strip('"').strip("'").replace("\\", "/")
     direct = (init_dir / folder_arg).resolve()
     init_resolved = init_dir.resolve()
@@ -227,7 +266,7 @@ def resolve_folder(init_dir: Path, folder_arg: str) -> Path:
         return matches[0]
     if not matches:
         raise FileNotFoundError(f"Cannot find folder under init: {folder_arg}")
-    choices = "\n".join(f"- {path.relative_to(init_dir).as_posix()}" for path in matches)
+    choices = "\n".join(f"- {path.relative_to(init_resolved).as_posix()}" for path in matches)
     raise ValueError(f"Folder name is ambiguous, use Genus/Folder:\n{choices}")
 
 
@@ -256,13 +295,37 @@ def plot_prefix_group(
 ) -> None:
     """绘制同属同前缀 raw 和归一化后中位谱总览图"""
     fig, axes = plt.subplots(2, 1, figsize=(16, 9), sharex=True)
-    for ax, curves, ylabel, subtitle in (
-        (axes[0], raw_curves, "Raw intensity", "raw median"),
-        (axes[1], norm_curves, f"{norm_method} intensity", f"{norm_method} median"),
+    color_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", [f"C{i}" for i in range(10)])
+    for idx, (name, curve) in enumerate(raw_curves.items()):
+        color = color_cycle[idx % len(color_cycle)]
+        axes[0].plot(wn_ref, curve, lw=1.3, color=color, label=name)
+    plot_bad_bands(axes[0], wn_ref)
+
+    bad_bands = get_config_bad_bands(config)
+    finite_chunks = [curve[np.isfinite(curve)] for curve in norm_curves.values() if np.isfinite(curve).any()]
+    finite_values = np.concatenate(finite_chunks) if finite_chunks else np.asarray([], dtype=np.float32)
+    norm_span = float(np.percentile(finite_values, 95) - np.percentile(finite_values, 5)) if finite_values.size else 1.0
+    offset_step = max(norm_span * 0.55, 1.25)
+    for idx, (name, curve) in enumerate(norm_curves.items()):
+        offset = idx * offset_step
+        color = color_cycle[idx % len(color_cycle)]
+        axes[1].axhline(offset, color="0.88", lw=0.7, zorder=0)
+        plot_segments_without_bad_bands(
+            axes[1],
+            wn_ref,
+            curve + offset,
+            bad_bands,
+            show_bad_bands=False,
+            color=color,
+            lw=1.3,
+            label=name,
+        )
+    plot_bad_bands(axes[1], wn_ref)
+
+    for ax, ylabel, subtitle in (
+        (axes[0], "Raw intensity", "raw median"),
+        (axes[1], f"{norm_method} intensity + offset", f"{norm_method} median with vertical offsets"),
     ):
-        for name, curve in curves.items():
-            ax.plot(wn_ref, curve, lw=1.3, label=name)
-        plot_bad_bands(ax, wn_ref)
         ax.axvline(TARGET_CM, color="black", ls="--", lw=0.8, alpha=0.35)
         ax.set_ylabel(ylabel)
         ax.set_title(subtitle)
@@ -309,7 +372,7 @@ def read_plot_state(path: Path) -> dict[tuple[str, str], dict[str, str]]:
         return {}
     with path.open("r", encoding="utf-8-sig", newline="") as file:
         reader = csv.DictReader(file, delimiter="\t")
-        if reader.fieldnames not in (list(DELTA_FIELDS), list(PLOT_STATE_FIELDS)):
+        if reader.fieldnames not in (list(DELTA_FIELDS), list(LEGACY_PLOT_STATE_FIELDS)):
             return {}
         return {(row["genus"], row["folder"]): row for row in reader}
 
@@ -319,35 +382,38 @@ def write_plot_state(path: Path, rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = sorted(rows, key=lambda row: (row["genus"], row["folder"]))
     with path.open("w", encoding="utf-8-sig", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=PLOT_STATE_FIELDS, delimiter="\t")
+        writer = csv.DictWriter(file, fieldnames=DELTA_FIELDS, delimiter="\t")
         writer.writeheader()
         writer.writerows(rows)
 
 
-def current_delta_state(paths: DatasetPaths, rows: list[dict[str, str]]) -> list[dict[str, str]]:
+def current_delta_state(
+    paths: DatasetPaths,
+    rows: list[dict[str, str]],
+    include_transferred: bool = False,
+) -> list[dict[str, str]]:
     """生成当前全部小文件夹 delta 状态"""
     deltas = delta_map(rows)
     state: list[dict[str, str]] = []
-    for folder in iter_init_folders(paths.init_dir):
+    for folder in iter_init_folders(paths.init_dir, include_transferred=include_transferred):
         state.append(
             {
                 "genus": folder.parent.name,
                 "folder": folder.name,
                 "prefix": shift_folder_prefix(folder),
                 "delta": format_delta(deltas.get((folder.parent.name, folder.name), 0.0)),
-                "plot_version": PREFIX_PLOT_VERSION,
             }
         )
     return state
 
 
-def plot_prefix_dataset(dataset: str) -> list[Path]:
+def plot_prefix_dataset(dataset: str, include_transferred: bool = False) -> list[Path]:
     """按 delta.txt 变化增量输出同前缀 raw 和归一化后中位谱总览图"""
     paths = resolve_dataset(dataset)
     wn_ref = build_plot_grid()
     norm_method = str(getattr(config, "norm_method", "snv")).lower()
     rows = ensure_delta_rows(paths)
-    state = current_delta_state(paths, rows)
+    state = current_delta_state(paths, rows, include_transferred=include_transferred)
     old_state = read_plot_state(paths.output_dir / PREFIX_PLOT_STATE_NAME)
     changed_groups: set[tuple[str, str]] = set()
 
@@ -362,7 +428,7 @@ def plot_prefix_dataset(dataset: str) -> list[Path]:
 
     outputs: list[Path] = []
     folders_by_group: dict[tuple[str, str], list[Path]] = {}
-    for folder in iter_init_folders(paths.init_dir):
+    for folder in iter_init_folders(paths.init_dir, include_transferred=include_transferred):
         prefix = shift_folder_prefix(folder)
         folders_by_group.setdefault((folder.parent.name, prefix), []).append(folder)
 

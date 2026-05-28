@@ -8,6 +8,7 @@ from matplotlib.collections import PolyCollection
 
 from raman.tool.model import needs_cudnn_rnn_guard, select_logits
 from raman.tool.path import ensure_dir
+from raman.tool.plotting import shorten_class_names
 from raman.tool.spectrum import estimate_gap_indices, normalize_bad_bands
 
 def _to_numpy(x):
@@ -392,8 +393,11 @@ def plot_band_importance_heatmap(
     else:
         x_label = "Wavenumber"
 
-    fig_height = max(8, 0.6 * len(class_names))
-    fig, ax = plt.subplots(figsize=(12, fig_height))
+    display_names = shorten_class_names(class_names)
+    max_label_len = max((len(str(name)) for name in display_names), default=0)
+    fig_height = max(8, min(26, 0.48 * len(display_names) + 2.0))
+    fig_width = max(12, min(16, 10.8 + max_label_len * 0.05))
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
     gap_indices = estimate_gap_indices(wavenumbers)
     gap_set = set(gap_indices)
@@ -465,8 +469,9 @@ def plot_band_importance_heatmap(
         else:
             ax.plot(wavenumbers, y_plot, color="#1f1f1f", linewidth=1.0)
 
-    ax.set_yticks([i + 0.4 for i in range(len(class_names))])
-    ax.set_yticklabels(class_names, fontsize=8)
+    ax.set_yticks([i + 0.4 for i in range(len(display_names))])
+    ytick_size = 8 if len(display_names) <= 24 else 6
+    ax.set_yticklabels(display_names, fontsize=ytick_size)
 
     tick_count = 6
     idx = np.linspace(0, len(wavenumbers) - 1, tick_count, dtype=int)
@@ -478,11 +483,20 @@ def plot_band_importance_heatmap(
 
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
-    fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04, label="Importance (normalized)")
+    cbar = fig.colorbar(
+        sm,
+        ax=ax,
+        fraction=0.018,
+        pad=0.025,
+        aspect=max(35, min(70, len(display_names) * 2)),
+        label="Importance (normalized)",
+    )
+    cbar.ax.tick_params(labelsize=ytick_size)
 
     ax.set_ylim(-0.2, len(class_names) - 0.2 + 1.0)
     ax.set_xlim(wavenumbers[0], wavenumbers[-1])
-    plt.tight_layout()
+    left_margin = min(0.30, max(0.10, 0.055 + max_label_len * 0.006))
+    fig.subplots_adjust(left=left_margin, right=0.94, top=0.94, bottom=0.08)
     plt.savefig(save_path, dpi=300)
     plt.close()
 

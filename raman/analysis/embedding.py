@@ -2,6 +2,7 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.cm import ScalarMappable
+from matplotlib.lines import Line2D
 import torch
 
 def _fill_missing_labels(hier, level_names, missing_tag):
@@ -166,8 +167,10 @@ def plot_embedding_hierarchical(
 
     if label_names and parent_level in label_names:
         num_parents = len(label_names[parent_level])
+        parent_names = list(label_names[parent_level])
     else:
         num_parents = len(unique_parents)
+        parent_names = None
 
     # tab10 / tab20 自动选择，避免颜色不够
     if num_parents <= 10:
@@ -182,8 +185,22 @@ def plot_embedding_hierarchical(
     boundaries = np.arange(num_parents + 1) - 0.5
     norm = mcolors.BoundaryNorm(boundaries, cmap.N)
     sm = ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])  # 兼容 matplotlib 的要求
+    sm.set_array([])
 
+    def _parent_label(value):
+        """返回父层类别显示名"""
+        idx = int(value)
+        if parent_names and 0 <= idx < len(parent_names):
+            return str(parent_names[idx])
+        return str(value)
+
+    def _legend_layout(count):
+        """按类别数调整右侧图例"""
+        if count <= 12:
+            return 1, 8, 0.84
+        if count <= 30:
+            return 2, 7, 0.78
+        return 3, 6, 0.70
     # ===== 4. marker 池 =====
     markers = ["o", "s", "^", "D", "P", "X", "*", "<", ">"]
 
@@ -237,14 +254,17 @@ def plot_embedding_hierarchical(
     ylim = (y_min - y_pad, y_max + y_pad)
 
     # ===== 6. 绘图 =====
+    legend_cols, legend_font, right_margin = _legend_layout(num_parents)
+    legend_rows = int(np.ceil(max(num_parents, 1) / legend_cols))
+    fig_height = max(6.0, min(14.0, 0.32 * legend_rows + 1.8))
+
     if split is not None:
         fig, axes = plt.subplots(
             1,
             2,
-            figsize=(12, 6),
+            figsize=(14, fig_height),
             sharex=True,
             sharey=True,
-            constrained_layout=True,
         )
         plot_specs = [
             ("Train", split == 0, 0.85),
@@ -257,28 +277,42 @@ def plot_embedding_hierarchical(
             ax.set_xlim(xlim)
             ax.set_ylim(ylim)
         axes[0].set_ylabel(f"{method_name}-2")
-        cbar_ax = axes
+        legend_anchor = (right_margin + 0.01, 0.5)
     else:
-        fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+        fig, ax = plt.subplots(figsize=(9.5, fig_height))
         _scatter_subset(ax, np.ones(len(parent_labels), dtype=bool), alpha=0.85)
         ax.set_title(title)
         ax.set_xlabel(f"{method_name}-1")
         ax.set_ylabel(f"{method_name}-2")
         ax.set_xlim(xlim)
         ax.set_ylim(ylim)
-        cbar_ax = ax
+        legend_anchor = (right_margin + 0.01, 0.5)
 
-    # ===== 7. Colorbar =====
-    cbar = fig.colorbar(sm, ax=cbar_ax, fraction=0.046, pad=0.04)
-    cbar.set_label(parent_level, rotation=90)
-    if label_names and parent_level in label_names:
-        names = label_names[parent_level]
-        ticks = np.arange(len(names))
-        cbar.set_ticks(ticks)
-        cbar.set_ticklabels(names)
-    else:
-        cbar.set_ticks(unique_parents)
-        cbar.set_ticklabels(unique_parents)
+    # ===== 7. 类别图例 =====
+    handles = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor=sm.to_rgba(int(parent_id)),
+            markeredgecolor="none",
+            markersize=6,
+            label=_parent_label(parent_id),
+        )
+        for parent_id in unique_parents
+    ]
+    fig.subplots_adjust(right=right_margin)
+    fig.legend(
+        handles=handles,
+        title=parent_level,
+        loc="center left",
+        bbox_to_anchor=legend_anchor,
+        ncol=legend_cols,
+        fontsize=legend_font,
+        title_fontsize=legend_font + 1,
+        frameon=False,
+    )
 
     plt.savefig(save_path, dpi=300)
     plt.close()

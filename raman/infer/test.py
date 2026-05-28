@@ -34,7 +34,7 @@ def _validate_input_length(signal_length, config, source):
     if int(signal_length) != int(expected):
         raise ValueError(
             f"Input length mismatch for {source}: got {signal_length}, expected {expected}. "
-            f"请用该模型 run 的配置重新从 init_test 生成 test，或在 infer_test.py 中保持 BUILD_TEST_FIRST=True"
+            f"请确认 dataset/<数据集>/test 中的独立测试谱已经按该模型 run 的输入配置预处理"
         )
 
 
@@ -486,7 +486,7 @@ def build_parser():
     parser.add_argument("--top-k", type=int, default=3, help="逐谱输出 top-k 数量")
     parser.add_argument("--cpu", action="store_true", help="强制使用 CPU")
     parser.add_argument("--skip-transferred", action="store_true", help="跳过已迁移进训练集的测试谱")
-    parser.add_argument("--transfer-manifest", default="dataset/初始数据/test_transfer_manifest.csv", help="测试谱迁移 manifest")
+    parser.add_argument("--transfer-manifest", default="dataset/测试菌/test_transfer_manifest.csv", help="测试谱迁移 manifest")
     return parser
 
 

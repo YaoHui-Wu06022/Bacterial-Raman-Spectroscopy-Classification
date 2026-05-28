@@ -6,6 +6,7 @@ import seaborn as sns
 from raman.tool.plotting import (
     auto_confusion_matrix_figsize,
     auto_confusion_matrix_font_sizes,
+    auto_confusion_matrix_left_margin,
     shorten_class_names,
 )
 
@@ -103,7 +104,7 @@ def save_confusion_matrix_figure(
         figsize = auto_confusion_matrix_figsize(display_names)
     annot_size, tick_size = auto_confusion_matrix_font_sizes(len(display_names))
 
-    plt.figure(figsize=figsize)
+    fig = plt.figure(figsize=figsize)
     ax = sns.heatmap(
         cm_norm,
         cmap="Blues",
@@ -126,6 +127,9 @@ def save_confusion_matrix_figure(
     plt.xticks(rotation=45, ha="right", fontsize=tick_size)
     plt.yticks(rotation=0, fontsize=tick_size)
     plt.tight_layout()
+    fig.subplots_adjust(
+        left=max(fig.subplotpars.left, auto_confusion_matrix_left_margin(display_names))
+    )
     plt.savefig(out_path, dpi=300)
     if show:
         plt.show()

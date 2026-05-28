@@ -217,7 +217,10 @@ def run_level_analysis(
             dataset=full_dataset,
             level_names=embed_levels,
         )
-        label_names = None
+        label_names = {
+            level_name: full_dataset.get_class_names(level_name)
+            for level_name in embed_levels
+        }
 
     plot_embedding_hierarchical(
         feats,

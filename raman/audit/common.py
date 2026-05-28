@@ -116,9 +116,7 @@ def load_audit_records(profile, cfg, input_root, record_cls):
                 stats = payload["cosmic_stats"]
                 record.z = np.asarray(payload["z"], dtype=np.float32)
                 record.sp = np.asarray(payload["sp"], dtype=np.float32)
-                record.cosmic_total = int(stats)
-                record.cosmic_narrow = int(getattr(stats, "narrow", 0))
-                record.cosmic_peak = int(getattr(stats, "peak", 0))
+                record.cosmic_ray_replaced = int(stats)
             records.append(record)
     return records
 
@@ -129,17 +127,10 @@ def cosmic_clean_for_plot(wn, sp, profile, cfg):
         return np.asarray(sp, dtype=np.float32)
     cleaned, _ = remove_cosmic_rays(
         sp,
-        window_points=cfg.cosmic_ray_narrow_window_points,
+        window_points=cfg.cosmic_ray_window_points,
         threshold=cfg.cosmic_ray_threshold,
         max_iter=cfg.cosmic_ray_max_iter,
         valid_mask=None,
-        peak_prominence_z=cfg.cosmic_ray_peak_prominence_z,
-        peak_window_points=cfg.cosmic_ray_peak_window_points,
-        peak_expand_z=cfg.cosmic_ray_peak_expand_z,
-        peak_expand_gap_points=cfg.cosmic_ray_peak_expand_gap_points,
-        peak_width_max_points=cfg.cosmic_ray_peak_width_max_points,
-        peak_mean_z_min=cfg.cosmic_ray_peak_mean_z_min,
-        peak_pad_points=cfg.cosmic_ray_peak_pad_points,
     )
     return cleaned
 

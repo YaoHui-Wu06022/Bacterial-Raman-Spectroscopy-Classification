@@ -60,6 +60,29 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. Windows / PowerShell / Unicode Safety
+
+**Avoid Unicode-related failures by keeping machine-facing interfaces ASCII-only.**
+
+When running scripts on Windows or through PowerShell:
+
+* Do not pass Chinese dataset names, non-ASCII labels, or Unicode paths as command-line arguments.
+* Use stable ASCII identifiers such as `profile_id`, `dataset_id`, or `slug` for CLI arguments.
+* Store display names, Unicode paths, plot titles, and dataset metadata in UTF-8 config files such as JSON or YAML.
+* Run Python in UTF-8 mode when possible:
+
+  * `python -X utf8 ...`
+  * or set `PYTHONUTF8=1`.
+* In Python, always read and write text files with explicit `encoding="utf-8"` unless the dataset profile explicitly specifies another encoding.
+* Use `pathlib.Path` for filesystem paths.
+* Do not build shell command strings by concatenation.
+* Prefer `subprocess.run([...], shell=False, check=True, text=True, encoding="utf-8")` over shell string execution.
+* Never delete an existing output directory before regeneration.
+* Generate outputs into a temporary directory, validate them, then replace the final directory.
+* If generation fails, preserve the previous successful outputs.
+
+For datasets with Chinese names, do not pass the Chinese name directly through PowerShell or shell command-line arguments.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

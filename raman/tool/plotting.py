@@ -62,7 +62,7 @@ def keep_mask_without_bad_bands(wn, bad_bands):
     return keep
 
 
-def plot_segments_without_bad_bands(ax, wn, values, bad_bands, **kwargs):
+def plot_segments_without_bad_bands(ax, wn, values, bad_bands, show_bad_bands=True, **kwargs):
     """绘制断线光谱，避免坏段灰色区域内出现连线"""
     wn = np.asarray(wn, dtype=np.float32)
     values = np.asarray(values, dtype=np.float32)
@@ -74,7 +74,8 @@ def plot_segments_without_bad_bands(ax, wn, values, bad_bands, **kwargs):
             line_label = label if label and not labeled else None
             ax.plot(wn[start:end], values[start:end], label=line_label, **kwargs)
             labeled = True
-    add_bad_band_spans(ax, bad_bands)
+    if show_bad_bands:
+        add_bad_band_spans(ax, bad_bands)
 
 
 def fill_between_segments_without_bad_bands(ax, wn, lower, upper, bad_bands, **kwargs):
@@ -118,6 +119,13 @@ def auto_confusion_matrix_figsize(class_names):
         min(max(width, 6.0), 38.0),
         min(max(height, 5.6), 38.0),
     )
+
+
+def auto_confusion_matrix_left_margin(class_names):
+    """按 y 轴类别名长度增加左侧留白，避免较长属名贴边或被裁切"""
+    max_label_len = max((len(str(name)) for name in class_names), default=0)
+    margin = 0.115 + min(max_label_len, 28) * 0.006
+    return min(max(margin, 0.18), 0.34)
 
 
 def auto_confusion_matrix_font_sizes(num_classes):

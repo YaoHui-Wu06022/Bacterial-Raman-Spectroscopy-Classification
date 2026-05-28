@@ -62,16 +62,14 @@ raman/
 
 ```text
 raman/data/
-├─ paths.py                          # 训练/测试目录解析，统一把 dataset_root 映射到具体阶段目录
 ├─ loader.py                         # RamanDataset：目录扫描、层级标签、样本索引与读取接口
 ├─ input.py                          # 在线模型输入：标准化、SG、d1 通道与训练增强
-├─ spectrum.py                       # 光谱文件读写、波数轴、坏波段 mask 与通用归一化
-├─ offline.py                        # 离线基线校正、宇宙射线去除、单谱清洗与均值谱绘图
-├─ archive.py                        # init.npz 打包/解包与 init 输入解析
-├─ build.py                          # 离线构建主流程：build_train、build_test
+├─ io.py                             # .arc_data 读写、init.npz 打包/解包与 init 输入解析
+├─ preprocess.py                     # 离线基线校正、宇宙射线去除、单谱清洗与均值谱绘图
+├─ build.py                          # 离线构建主流程：build_train
 ├─ count.py                          # 数据集文件数量统计与树形输出
 ├─ profiles.py                       # 各数据集的目录布局、数据集名称与别名
-├─ cli.py                            # 离线数据处理 CLI：pack/unpack/train/test/count
+├─ cli.py                            # 离线数据处理 CLI：pack/unpack/train/count
 └─ __main__.py                       # 支持 python -m raman.data
 
 raman/shift/
@@ -80,7 +78,24 @@ raman/shift/
 └─ __main__.py                       # 支持 python -m raman.shift
 ```
 
-### 2.4 审核层
+### 2.4 通用工具层
+
+```text
+raman/tool/
+├─ array.py                          # 一维窗口、连续区间、移动平均与鲁棒尺度工具
+├─ dataset.py                        # 数据集 profile 解析、阶段目录解析与 .arc_data 叶目录遍历
+├─ hierarchy.py                      # 层级 key、level 名称、hierarchy_meta 读写与规整
+├─ model.py                          # 模型输出 logits 选择与 RNN 反传保护判断
+├─ naming.py                         # 类别前缀、测试文件夹前缀与文件名前缀工具
+├─ path.py                           # 项目根目录、相对路径规范化和安全路径解析
+├─ plotting.py                       # 坏段断线绘图、灰色坏段标注与混淆矩阵尺寸辅助
+├─ spectrum.py                       # 波数轴、坏段 mask、坏段规范化与输出波数轴工具
+└─ __init__.py                       # raman.tool 包标记
+```
+
+`raman/tool` 只放跨数据、审核、训练、评估、推理和分析复用的轻量工具；具体业务流程仍保留在各自子包中。
+
+### 2.5 审核层
 
 ```text
 raman/audit/
@@ -88,16 +103,14 @@ raman/audit/
 ├─ full_scan.py                      # 分阶段全库审核入口与报告、复核图输出
 ├─ config.py                         # AuditConfig：各阶段阈值、删除分类与原因标签
 ├─ scoring.py                        # 审核公共评分、SpectrumRecord 字段整理与阶段调度
-├─ common.py                         # 审核共用预处理、绘图、路径解析与 CSV 工具
-├─ stage_invalid.py                  # 第一阶段：无效谱、长平坦段、强噪声判定
-├─ stage_anomalous_cosmic.py         # 第二阶段：基线扣除谱上的宽宇宙射线残留/阶梯异常
-├─ stage_class_similarity.py         # 第三阶段：同属同前缀参考池类内相似性审核
+├─ common.py                         # 审核载荷预处理、记录读取与 CSV 输出
+├─ stage.py                          # invalid / class-similarity 两阶段判定规则
 ├─ bad_band.py                       # 系统性下凹坏段只读扫描
 ├─ move.py                           # 按路径或候选清单移动到 delete
 └─ __main__.py                       # 支持 python -m raman.audit
 ```
 
-### 2.5 训练层
+### 2.6 训练层
 
 ```text
 raman/training/
@@ -110,7 +123,7 @@ raman/training/
 └─ session.py                        # 输出目录、日志、随机种子与配置快照
 ```
 
-### 2.6 评估与推理层
+### 2.7 评估与推理层
 
 ```text
 raman/eval/
@@ -129,7 +142,7 @@ raman/infer/
 └─ __main__.py                       # 支持 python -m raman.infer
 ```
 
-### 2.7 分析层
+### 2.8 分析层
 
 ```text
 raman/analysis/
@@ -143,7 +156,7 @@ raman/analysis/
 └─ se.py                             # 读取训练期 SE sidecar 并输出 SEBlock 缩放统计
 ```
 
-### 2.8 Notebook 与数据目录
+### 2.9 Notebook 与数据目录
 
 ```text
 colab/
@@ -157,14 +170,12 @@ dataset/
    ├─ init/                          # 原始归档解包后的初始数据
    ├─ init.npz                       # init 的压缩归档
    ├─ train/                         # 训练用清洗后数据
-   ├─ init_test/                     # 独立测试原始数据
-   ├─ test/                          # 测试用清洗后数据
+   ├─ test/                          # 手动放入的独立测试集
    ├─ audit_full_scan/               # full 分阶段审核报告、候选表和复核图
    ├─ audit_bad_band/                # 系统性坏段扫描输出
    ├─ delete/                        # 人工确认移除后的原始文件
    ├─ fig_init/                      # raman.shift preview / plot-shift 输出与 delta.txt
-   ├─ fig_train/                     # 训练集均值图与高层级均值图
-   └─ fig_test/                      # 测试集均值图
+   └─ fig_train/                     # 训练集均值图与高层级均值图
 ```
 
 ## 3. 记号说明
@@ -208,7 +219,6 @@ python -m raman.data pack <数据集名或profile>       # 打包init数据集
 python -m raman.data unpack <数据集名或profile>     # 还原init数据集
 python -m raman.data count <数据集名或profile>      # 统计数据集
 python -m raman.data train <数据集名或profile>      # 从init直接清洗、按类别前缀合并并生成train
-python -m raman.data test <数据集名或profile>       # 对测试数据进行一致的清洗
 ```
 
 ### 4.2 参数修改
@@ -239,11 +249,9 @@ python -m raman.data test <数据集名或profile>       # 对测试数据进行
 - `init/`：原始按测量文件夹组织的数据
 - `init.npz`：`init/` 的打包版本
 - `train/`：训练集离线清洗结果
-- `init_test/`：独立测试集原始输入目录
-- `test/`：测试集离线清洗结果
+- `test/`：手动放入的独立测试集目录
 - `fig_init/`：`raman.shift preview`、`plot-shift` 输出和 `delta.txt`
 - `fig_train/`：训练集均值谱图与高层级均值谱图
-- `fig_test/`：测试集均值谱图
 - `audit_full_scan/`：分阶段审核报告、候选表和复核图
 - `audit_bad_band/`：系统性坏段扫描输出
 - `delete/`：人工确认移除后的原始 `.arc_data` 文件
@@ -290,9 +298,9 @@ python -m raman.shift plot-shift <数据集名或profile> --folder <属名>/<小
 
 平移审核完成后，再运行 `raman.audit full --stage ...` 做分阶段异常谱扫描
 
-这样可以避免把系统性峰位偏移误判成类内相似性离群，也能让第三阶段的同前缀参考池更可靠
+这样可以避免把系统性峰位偏移误判成类内相似性离群，也能让类内相似性阶段的同前缀参考池更可靠
 
-如果 preview 中已经能看到明显坏段或整体下凹区域，可以先运行 `raman.audit bad-band` 做只读坏段扫描；如果主要问题是少数单谱无效、残留宽宇宙射线或类内离群，则进入 `raman.audit full` 的分阶段流程
+如果 preview 中已经能看到明显坏段或整体下凹区域，可以先运行 `raman.audit bad-band` 做只读坏段扫描；如果主要问题是少数单谱无效或类内离群，则进入 `raman.audit full` 的分阶段流程
 
 ### 4.6 原始库审核与人工移除
 
@@ -310,18 +318,13 @@ python -m raman.audit move <数据集名或profile> --from-list <delete_candidat
 - `bad-band`：可选的系统性下凹坏段只读扫描，不移动文件
 - `move`：把人工确认或阶段扫描确认的候选从 `init/` 移到 `delete/`
 
-单谱异常、类内参考组异常和局部残留突起都放进 `full --stage ...` 的阶段流程里处理
+单谱无效和类内参考组异常都放进 `full --stage ...` 的阶段流程里处理
 
-#### 推荐审核顺序
-
-建议按“先排除明显无效，再处理宇宙射线残留，最后做类内相似性”的顺序执行：
+建议按“先排除明显无效，再做类内相似性”的顺序执行：
 
 ```bash
 python -m raman.audit full <数据集名或profile> --stage invalid --max-spectrum-figures 200
 python -m raman.audit full <数据集名或profile> --stage invalid --move --max-spectrum-figures 200
-
-python -m raman.audit full <数据集名或profile> --stage anomalous-cosmic --max-spectrum-figures 200
-python -m raman.audit full <数据集名或profile> --stage anomalous-cosmic --move --max-spectrum-figures 200
 
 python -m raman.audit full <数据集名或profile> --stage class-similarity --max-spectrum-figures 200
 python -m raman.audit full <数据集名或profile> --stage class-similarity --move --max-spectrum-figures 200
@@ -333,7 +336,7 @@ python -m raman.audit full <数据集名或profile> --stage class-similarity --m
 
 每移动一批后，建议再跑下一阶段。这样后续阶段的参考池不会被前一阶段已经确认的异常谱污染
 
-#### 三个主审核阶段
+#### 两个主审核阶段
 
 ##### invalid
 
@@ -344,16 +347,6 @@ python -m raman.audit full <数据集名或profile> --stage class-similarity --m
 - `invalid_missing_region`：原始波数覆盖不足，有长段缺失
 - `invalid_flat_region`：连续平坦区过长，或全谱过多点贴近中位数
 - `invalid_noise`：高频粗糙度高，同时平滑结构相对弱
-
-##### anomalous-cosmic
-
-检查宇宙射线去除和 baseline 扣除后仍残留、且宽于 peak 可修复范围的宽上升平台或阶梯异常
-
-是用离线预处理得到的基线校正谱 `sp`
-
-关注 `cosmic_ray_peak_width_max_points` 之外的宽异常区域
-
-强证据包括宽异常区域的 `wide_bump_max_z`、`wide_bump_area` 和边缘突跳 `wide_edge_jump_z` 同时过线，边界情况进入 `review_candidate`
 
 ##### class-similarity
 
@@ -369,7 +362,7 @@ python -m raman.audit full <数据集名或profile> --stage class-similarity --m
 - `local_pos_*`：目标谱相对参考池的局部正残差异常
 - `folder_candidate_count` / `folder_candidate_fraction`：同一小文件夹内候选是否过度集中
 
-第三阶段有一个保护逻辑：如果同一小文件夹里候选数量或比例过高，程序倾向于把它标成 `review_candidate`，并输出文件夹级复核图，而不是直接把整批都当作单谱离群删除
+类内相似性阶段有一个保护逻辑：如果同一小文件夹里候选数量或比例过高，程序倾向于把它标成 `review_candidate`，并输出文件夹级复核图，而不是直接把整批都当作单谱离群删除
 
 这类情况通常需要判断是整批采集偏移、标签/前缀问题，还是确实混入异常谱
 
@@ -391,7 +384,7 @@ dataset/<数据集名>/audit_full_scan/<时间戳>_<stage>_<dry_run|move>/
 - `all_spectra_scores.csv`：所有光谱的审核评分，便于后续排序筛选
 - `figures/delete/`：删除候选复核图
 - `figures/review/`：复核候选复核图
-- `figures/folder_review/`：第三阶段中文件夹集中命中时的文件夹均值对照图
+- `figures/folder_review/`：类内相似性阶段中文件夹集中命中时的文件夹均值对照图
 
 `decision` 字段有四种常见取值：
 
@@ -432,7 +425,6 @@ dataset/<数据集名>/audit_bad_band/<时间戳>/
 
 ```text
 dataset/<数据集名>/delete/Invalid Spectrum/
-dataset/<数据集名>/delete/Anomalous_Cosmic_Rays/
 dataset/<数据集名>/delete/Class_Similarity_Outliers/
 ```
 
@@ -441,7 +433,7 @@ dataset/<数据集名>/delete/Class_Similarity_Outliers/
 ```bash
 python -m raman.audit move <数据集名或profile> --from-list dataset/<数据集名>/audit_full_scan/<时间戳>_<stage>_dry_run/delete_candidates.csv --dry-run
 python -m raman.audit move <数据集名或profile> --from-list dataset/<数据集名>/audit_full_scan/<时间戳>_<stage>_dry_run/delete_candidates.csv
-python -m raman.audit move <数据集名或profile> Burkholderia/BCC01/CELL8_Area01_000_shift.arc_data --reason Anomalous_Cosmic_Rays --category Anomalous_Cosmic_Rays --dry-run
+python -m raman.audit move <数据集名或profile> Burkholderia/BCC01/CELL8_Area01_000_shift.arc_data --reason Class_Similarity_Outliers --category Class_Similarity_Outliers --dry-run
 ```
 
 移动规则为：
@@ -499,58 +491,51 @@ python -m raman.audit move <数据集名或profile> Burkholderia/BCC01/CELL8_Are
 - 宇宙射线更容易表现为窄尖峰，或窄到中等宽度的突起片段
 - 宇宙射线通常是正向异常，不作为负向异常处理
 
-当前单谱清理只保留两个阶段：
-
-1. narrow 阶段：局部 median 和鲁棒 z-score 清理单点或极窄尖峰
-2. peak 阶段：在 narrow 后的局部 median 正残差上，用双阈值检测并扩展短正异常段
-
 宇宙射线清理发生在坏段删除之前，并且默认不使用坏段 mask 参与检测，坏段只在绘图遮挡、基线估计和后续裁切插值阶段使用。这样可以避免 890-950 `cm^-1` 坏段边界附近的宇宙射线因为 mask 断开而无法被修复
-
-##### narrow 阶段
 
 对于单条光谱 $x \in \mathbb{R}^L$，$i$ 表示光谱序列中的第 $i$ 个波数采样点
 
-先在位置 $i$ 附近取局部窗口 $\mathcal{W}_{\mathrm{narrow}}(i)$，用窗口内中值估计该位置的局部正常强度：
+先在位置 $i$ 附近取局部窗口 $\mathcal{W}_{\mathrm{cosmic\_ray}}(i)$，用窗口内中值估计该位置的局部正常强度：
 
 ```math
-\tilde{x}_i^{(\mathrm{narrow})}
+\tilde{x}_i^{(\mathrm{cosmic\_ray})}
 =
 \operatorname{median}
 \left\{
 x_{\ell}
 \mid
-\ell \in \mathcal{W}_{\mathrm{narrow}}(i)
+\ell \in \mathcal{W}_{\mathrm{cosmic\_ray}}(i)
 \right\}
 ```
 
-- $\mathcal{W}_{\mathrm{narrow}}(i)$ 表示以位置 $i$ 为中心的 narrow 局部窗口
+- $\mathcal{W}_{\mathrm{cosmic\_ray}}(i)$ 表示以位置 $i$ 为中心的宇宙射线检测局部窗口
 - $\ell$ 是窗口内的临时位置索引
-- $\mathcal{W}_{\mathrm{narrow}}(i)$ 的长度对应 `cosmic_ray_window_points`
+- $\mathcal{W}_{\mathrm{cosmic\_ray}}(i)$ 的长度对应 `cosmic_ray_window_points`
 
 局部残差定义为：
 
 ```math
-r_i^{(\mathrm{narrow})}
+r_i^{(\mathrm{cosmic\_ray})}
 =
 x_i
 -
-\tilde{x}_i^{(\mathrm{narrow})}
+\tilde{x}_i^{(\mathrm{cosmic\_ray})}
 ```
 
 为了避免局部强峰和少量异常点影响尺度估计，对残差使用 MAD 估计鲁棒尺度
 
 ```math
-\sigma_{\mathrm{narrow}}
+\sigma_{\mathrm{cosmic\_ray}}
 =
 1.4826 \cdot
 \operatorname{median}_{i}
 \left(
 \left|
-r_i^{(\mathrm{narrow})}
+r_i^{(\mathrm{cosmic\_ray})}
 -
 \operatorname{median}_{\ell}
 \left(
-r_{\ell}^{(\mathrm{narrow})}
+r_{\ell}^{(\mathrm{cosmic\_ray})}
 \right)
 \right|
 \right)
@@ -559,179 +544,34 @@ r_{\ell}^{(\mathrm{narrow})}
 对应的鲁棒 z-score 可写为
 
 ```math
-z_i^{(\mathrm{narrow})}
+z_i^{(\mathrm{cosmic\_ray})}
 =
 \frac{
-r_i^{(\mathrm{narrow})}
+r_i^{(\mathrm{cosmic\_ray})}
 -
 \operatorname{median}_{\ell}
 \left(
-r_{\ell}^{(\mathrm{narrow})}
+r_{\ell}^{(\mathrm{cosmic\_ray})}
 \right)
 }
-{\sigma_{\mathrm{narrow}}}
+{\sigma_{\mathrm{cosmic\_ray}}}
 ```
 
 只检测正向异常点，若某个位置满足
 
 ```math
-z_i^{(\mathrm{narrow})}
+z_i^{(\mathrm{cosmic\_ray})}
 >
-\lambda_{\mathrm{narrow}}
+\lambda_{\mathrm{cosmic\_ray}}
 ```
 
 则认为该位置是单谱内的疑似宇宙射线尖峰，并用局部中值替换
 
 ```math
-x_i \leftarrow \tilde{x}_i^{(\mathrm{narrow})}
+x_i \leftarrow \tilde{x}_i^{(\mathrm{cosmic\_ray})}
 ```
 
-其中 $\lambda_{\mathrm{narrow}}$ 对应 `cosmic_ray_threshold`
-
-##### peak 阶段
-
-narrow 后继续处理局部正异常段，但不再对清理后的原谱做峰形搜索，而是直接在 `cleaned_after_narrow - local_median` 的正残差上判断短突起。
-
-先用较宽的局部 median 得到参考谱形：
-
-```math
-\tilde{x}_i^{(\mathrm{peak})}
-=
-\operatorname{median}
-\left\{
-x_{\ell}
-\mid
-\ell \in \mathcal{W}_{\mathrm{peak}}(i)
-\right\}
-```
-
-其中 $\mathcal{W}_{\mathrm{peak}}(i)$ 的长度对应 `cosmic_ray_peak_window_points`
-
-peak 阶段的正向残差定义为：
-
-```math
-r_i^{(\mathrm{peak})}
-=
-x_i - \tilde{x}_i^{(\mathrm{peak})}
-```
-
-再对残差计算鲁棒 z-score：
-
-```math
-z_i^{(\mathrm{peak})}
-=
-\frac{
-r_i^{(\mathrm{peak})}
--
-\operatorname{median}_{\ell}
-\left(
-r_{\ell}^{(\mathrm{peak})}
-\right)
-}
-{
-\sigma_{\mathrm{peak}}
-}
-```
-
-peak 阶段采用“双阈值段扩展”：
-
-- `cosmic_ray_peak_prominence_z` 是高阈值，只负责确认异常核心点
-- `cosmic_ray_peak_expand_z` 是低阈值，只负责从异常核心向两侧扩展完整污染段
-- `cosmic_ray_peak_expand_gap_points` 允许扩展段中跨过很短的断点，避免一个污染峰被切碎
-
-异常核心需要满足：
-
-```math
-r_i^{(\mathrm{peak})} > 0,
-\quad
-z_i^{(\mathrm{peak})}
-\ge
-\lambda_{\mathrm{core}}
-```
-
-其中 $\lambda_{\mathrm{core}}$ 对应 `cosmic_ray_peak_prominence_z`
-
-扩展段从核心点向左右连续扩展，扩展点需要满足：
-
-```math
-r_i^{(\mathrm{peak})} > 0,
-\quad
-z_i^{(\mathrm{peak})}
-\ge
-\lambda_{\mathrm{expand}}
-```
-
-其中 $\lambda_{\mathrm{expand}}$ 对应 `cosmic_ray_peak_expand_z`
-
-对每个扩展片段 $S$ 计算采样点宽度：
-
-```math
-w_S
-=
-\max(S)
--
-\min(S)
-+
-1
-```
-
-要求候选片段不能宽于 peak 阶段点数上限：
-
-```math
-w_S
-\le
-w_{\max}^{(\mathrm{peak})}
-```
-
-其中 $w_{\max}^{(\mathrm{peak})}$ 对应 `cosmic_ray_peak_width_max_points`
-
-同时计算扩展片段内正向 z-score 的平均强度：
-
-```math
-\bar{z}_S
-=
-\frac{1}{|S|}
-\sum_{i \in S}
-\max
-\left(
-z_i^{(\mathrm{peak})},
-0
-\right)
-```
-
-候选片段还需要满足：
-
-```math
-\bar{z}_S
-\ge
-\eta
-```
-
-其中 $\eta$ 对应 `cosmic_ray_peak_mean_z_min`
-
-如果候选片段满足上述条件，代码会先检查该片段两侧是否有 narrow 阶段已经替换过、且距离不超过 `cosmic_ray_peak_expand_gap_points` 的点。如果有，就把这些点并入同一段污染区域，再按 `cosmic_ray_peak_pad_points` 向左右轻微扩展后统一替换。
-
-替换点数统计时，peak 覆盖到的点归入 `peak`，不再重复计入 `narrow`
-
-##### peak 段补值
-
-peak 段替换不直接保留污染段原始形态，避免把宇宙射线边缘趋势也带回去
-
-当前实现会先在替换段左右两侧各收集最多 12 个干净锚点
-
-锚点必须在 `valid_mask` 内，并且不能属于当前 peak 扩展段或 narrow 阶段已替换点
-
-当前补值由三部分组成：
-
-1. 用替换段左右最近的干净锚点做线性桥接，保证段首段尾不会产生明显断点
-2. 从 peak 阶段的局部 median fallback 中提取很弱的低频曲率，只作为线性桥接上的小幅修正
-3. 从左右干净邻域提取去趋势后的上下波动纹理，并按确定性方式移植到修复段内
-
-低频曲率和纹理都会在替换段边缘衰减到 0，避免修复后重新造出台阶
-
-纹理不是每次随机生成的噪声，而是由替换段位置和两侧锚点值确定；同一条谱重复预处理会得到一致结果
-
-修复段的主趋势优先使用两端锚点的线性插值；如果两端锚点不完整，则使用 peak 阶段的局部 median fallback 作为主趋势。若纹理补值无法构造，则直接使用这个主趋势。
+其中 $\lambda_{\mathrm{cosmic\_ray}}$ 对应 `cosmic_ray_threshold`
 
 #### AsLS 基线校正原理
 
@@ -1087,7 +927,7 @@ RAW 域会独立抽样这几类增强：
 
 ### 5.3 标准化方法
 
-在线输入中的 `Normalize(...)` 对应 `raman.data.normalization.normalize_spectrum`
+在线输入中的 `Normalize(...)` 对应 `raman.data.input.normalize_spectrum`
 
 标准化是逐条光谱独立完成的，不使用训练集全局均值或全局方差
 
@@ -2770,7 +2610,7 @@ y_pred = svm.predict(x_test_pca)
 
 ### 8.6 独立测试集推理
 
-独立测试集原始数据放在 `dataset/<数据集>/init_test/`，先运行 `python -m raman.data test <数据集>` 生成处理后的 `test/`
+独立测试集直接放在 `dataset/<数据集>/test/`，infer 只读取这个目录
 
 推理入口统一放在 `raman.infer`：
 
@@ -2783,11 +2623,10 @@ python -m raman.infer test --exp-dir "output/肠杆菌/五分类去除K/20260523
 ```python
 EXP_DIR = r"output/肠杆菌/五分类去除K/20260523_070649_92.1%"
 LEVEL = "level_1"
-BUILD_TEST_FIRST = False
 FOLDER = None
 ```
 
-`infer_test.py` 会从 `EXP_DIR/config.yaml` 自动读取数据集；`BUILD_TEST_FIRST = True` 时会先从 `init_test` 生成 `test`，再执行独立测试推理
+`infer_test.py` 会从模型配置自动读取数据集，并默认使用 `dataset/<数据集>/test/`
 
 常用参数：
 

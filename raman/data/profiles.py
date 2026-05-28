@@ -8,12 +8,11 @@ class DatasetProfile:
     profile_id: str
     dataset_name: str
     root_init: str = "init"
+    root_init_test: str = "init_test"
     root_init_pack: str = "init.npz"
     root_train_clean: str = "train"
-    root_test_clean: str = "test"
+    root_test: str = "test"
     root_train_fig: str = "fig_train"
-    root_test_fig: str = "fig_test"
-    root_init_test: str = "init_test"
     pca_log_name: str = "pca_log.txt"
     cosmic_ray_log_name: str = "cosmic_ray_removal_log.txt"
     cosmic_ray_overrides: dict | None = None

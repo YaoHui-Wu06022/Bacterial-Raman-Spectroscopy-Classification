@@ -122,29 +122,8 @@ def _plot_raw_panel(ax, record, profile, cfg):
     ax.legend(loc="best")
 
 
-def _plot_anomalous_panels(axes, record, wn, cfg, audit_cfg):
-    """绘制第二阶段宽平台/阶梯异常视图。"""
-    plot_segments_without_bad_bands(axes[1], wn, record.sp, cfg.bad_bands, color="C2", linewidth=0.9, label="baseline corrected")
-    if record.wide_smooth is not None:
-        plot_segments_without_bad_bands(axes[1], wn, record.wide_smooth, cfg.bad_bands, color="C1", linewidth=1.1, label="short smooth")
-    if record.wide_floor is not None:
-        plot_segments_without_bad_bands(axes[1], wn, record.wide_floor, cfg.bad_bands, color="0.35", linewidth=1.0, label="local floor")
-    _shade_ranges(axes[1], wn, record.wide_bump_ranges)
-    axes[1].set_title("Baseline corrected / wide platform detection")
-    axes[1].set_ylabel("Corrected intensity")
-    axes[1].legend(loc="best")
-
-    if record.wide_z is not None:
-        plot_segments_without_bad_bands(axes[2], wn, record.wide_z, cfg.bad_bands, color="C4", linewidth=1.0, label="wide residual z")
-        axes[2].axhline(audit_cfg.anomalous_wide_z_min, color="darkorange", linestyle="--", linewidth=1.0, label="wide z threshold")
-    _shade_ranges(axes[2], wn, record.wide_bump_ranges)
-    axes[2].set_title("Wide rising platform / step z-score")
-    axes[2].set_ylabel("z")
-    axes[2].legend(loc="best")
-
-
 def _plot_class_panels(axes, record, wn, cfg, prefix_stats, audit_cfg):
-    """绘制第三阶段类内相似性视图。"""
+    """绘制第二阶段类内相似性视图。"""
     stats = prefix_stats.get(record.ref_pool_scope or record.prefix_scope)
     if stats is not None:
         fill_between_segments_without_bad_bands(axes[1], wn, stats["q10"], stats["q90"], cfg.bad_bands, color="0.85", alpha=0.55, label="reference q10-q90")
@@ -198,16 +177,6 @@ def _record_summary_text(record):
                 f"smooth_range={record.smooth_range:.4f}, detail_noise={record.detail_noise:.4f}, structure_ratio={record.structure_ratio:.3f}",
             ]
         )
-    elif record.stage == "anomalous-cosmic":
-        lines.extend(
-            [
-                f"cosmic_total={record.cosmic_total}, narrow={record.cosmic_narrow}, peak={record.cosmic_peak}",
-                f"wide_bump_count={record.wide_bump_count}, z={record.wide_bump_max_z:.3f}, area={record.wide_bump_area:.3f}",
-                f"width_points={record.wide_bump_width_points}, center={record.wide_bump_center_cm:.1f}",
-                f"edge_jump_z={record.wide_edge_jump_z:.3f}, left={record.wide_left_edge_jump_z:.3f}, right={record.wide_right_edge_jump_z:.3f}",
-                f"rising_area={record.rising_region_area:.3f}, rising_width={record.rising_region_width_cm:.1f}",
-            ]
-        )
     elif record.stage == "class-similarity":
         lines.extend(
             [
@@ -232,9 +201,7 @@ def plot_stage_candidate(record, out_path, profile, cfg, prefix_stats, audit_cfg
     fig, axes = plt.subplots(4, 1, figsize=(12, 13), sharex=False)
     _plot_raw_panel(axes[0], record, profile, cfg)
 
-    if record.stage == "anomalous-cosmic" and record.sp is not None:
-        _plot_anomalous_panels(axes, record, wn, cfg, audit_cfg)
-    elif record.stage == "class-similarity":
+    if record.stage == "class-similarity":
         _plot_class_panels(axes, record, wn, cfg, prefix_stats, audit_cfg)
     else:
         _plot_invalid_panels(axes, record, wn, cfg, audit_cfg)
@@ -450,7 +417,7 @@ def build_parser():
     """构建 full 子命令参数解析器。"""
     parser = argparse.ArgumentParser(description="分阶段清洗 Raman audit")
     parser.add_argument("dataset", nargs="?", default="细菌", help="数据集名或 profile id")
-    parser.add_argument("--stage", choices=("invalid", "anomalous-cosmic", "class-similarity"), default="invalid", help="本次执行的清洗阶段")
+    parser.add_argument("--stage", choices=("invalid", "class-similarity"), default="invalid", help="本次执行的清洗阶段")
     parser.add_argument("--output-root", default=None, help="覆盖输出根目录")
     parser.add_argument("--timestamp", default=None, help="覆盖输出目录名")
     parser.add_argument("--max-spectrum-figures", type=int, default=200, help="最多输出多少张候选图；默认 200，0 表示全部，负数表示不输出")

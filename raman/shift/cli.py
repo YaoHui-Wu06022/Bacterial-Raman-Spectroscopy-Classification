@@ -18,7 +18,7 @@ def run_apply(args) -> None:
 
 def run_preview(args) -> None:
     """输出同前缀 raw 和标准化后中位谱总览图"""
-    outputs = plot_prefix_dataset(args.dataset)
+    outputs = plot_prefix_dataset(args.dataset, include_transferred=args.include_transferred)
     paths = resolve_dataset(args.dataset)
     print(f"Dataset: {paths.dataset_dir}")
     print(f"Output root: {paths.output_dir}")
@@ -47,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     preview = subparsers.add_parser("preview", help="绘制每个属内同前缀小文件夹的 raw 和标准化后中位谱总览图")
     preview.add_argument("dataset", help="数据集 profile id、名称或 dataset 下的文件夹名")
+    preview.add_argument("--include-transferred", action="store_true", help="包含 KP06t 这类插入训练集的独立测试来源目录")
     preview.set_defaults(func=run_preview)
 
     plot_shift = subparsers.add_parser("plot-shift", help="绘制单个已平移文件夹的平移前后 raw 对比图")

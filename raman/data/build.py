@@ -5,8 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from raman.data.preprocess import preprocess_single_spectrum, save_mean_plot
-from raman.data.io import iter_init_groups, read_arc_data, resolve_init_input, write_arc_data
-from raman.tool.dataset import iter_arc_dirs
+from raman.data.io import iter_init_groups, resolve_init_input, write_arc_data
 from raman.tool.hierarchy import iter_ancestor_level_keys, safe_key_name
 from raman.tool.naming import ensure_name_prefix, extract_letters_prefix
 from raman.tool.path import resolve_under_base
@@ -25,17 +24,9 @@ BASELINE_FIT_MIN = 400  # 基线拟合下限，保留训练范围外缓冲区以
 BASELINE_FIT_MAX = 2000  # 基线拟合上限，避免更远端异常尖峰污染基线
 
 COSMIC_RAY_ENABLED_PROFILE_IDS = ("shift", "MN_IgA")
-COSMIC_RAY_NARROW_WINDOW_POINTS = 7  # narrow 阶段局部 median/MAD 窗口宽度，单位点
-COSMIC_RAY_THRESHOLD = 7.0  # narrow 阶段正残差 z 阈值
-COSMIC_RAY_MAX_ITER = 2  # narrow 阶段最大迭代次数
-
-COSMIC_RAY_PEAK_PROMINENCE_Z = 9.6  # peak 阶段局部 median 正残差 z 阈值
-COSMIC_RAY_PEAK_WINDOW_POINTS = 31  # peak 阶段局部 median 窗口宽度
-COSMIC_RAY_PEAK_EXPAND_Z = 4  # peak 阶段从高阈值核心向外扩展的低 z 阈值
-COSMIC_RAY_PEAK_EXPAND_GAP_POINTS = 6  # peak 阶段合并扩展段时允许跨过的断点数
-COSMIC_RAY_PEAK_WIDTH_MAX_POINTS = 15  # peak 阶段可替换正异常段宽度上限
-COSMIC_RAY_PEAK_MEAN_Z_MIN = 6  # peak 阶段扩展段平均 z 下限
-COSMIC_RAY_PEAK_PAD_POINTS = 2  # peak 阶段替换异常段时左右额外扩展宽度
+COSMIC_RAY_WINDOW_POINTS = 7  # 宇宙射线局部 median/MAD 窗口宽度，单位点
+COSMIC_RAY_THRESHOLD = 7.0  # 宇宙射线正残差 z 阈值
+COSMIC_RAY_MAX_ITER = 2  # 宇宙射线最大迭代次数
 
 MIN_SAMPLES_PER_CLASS = 8
 
@@ -58,16 +49,9 @@ class PipelineConfig:
     baseline_fit_min: float = BASELINE_FIT_MIN
     baseline_fit_max: float = BASELINE_FIT_MAX
     cosmic_ray_enabled_profile_ids: tuple[str, ...] = COSMIC_RAY_ENABLED_PROFILE_IDS
-    cosmic_ray_narrow_window_points: int = COSMIC_RAY_NARROW_WINDOW_POINTS
+    cosmic_ray_window_points: int = COSMIC_RAY_WINDOW_POINTS
     cosmic_ray_threshold: float = COSMIC_RAY_THRESHOLD
     cosmic_ray_max_iter: int = COSMIC_RAY_MAX_ITER
-    cosmic_ray_peak_prominence_z: float = COSMIC_RAY_PEAK_PROMINENCE_Z
-    cosmic_ray_peak_window_points: int = COSMIC_RAY_PEAK_WINDOW_POINTS
-    cosmic_ray_peak_expand_z: float = COSMIC_RAY_PEAK_EXPAND_Z
-    cosmic_ray_peak_expand_gap_points: int = COSMIC_RAY_PEAK_EXPAND_GAP_POINTS
-    cosmic_ray_peak_width_max_points: int = COSMIC_RAY_PEAK_WIDTH_MAX_POINTS
-    cosmic_ray_peak_mean_z_min: float = COSMIC_RAY_PEAK_MEAN_Z_MIN
-    cosmic_ray_peak_pad_points: int = COSMIC_RAY_PEAK_PAD_POINTS
     min_samples_per_class: int = MIN_SAMPLES_PER_CLASS
     plot_norm_method: str | None = None
     pca_enabled: bool = PCA_ENABLED
@@ -113,23 +97,9 @@ def _cosmic_log_path(profile, base_dir, cfg):
 
 COSMIC_RAY_OVERRIDE_KEY_MAP = {
     "enabled": "cosmic_ray_remove",
-    "narrow_window_points": "cosmic_ray_window_points",
+    "window_points": "cosmic_ray_window_points",
     "threshold": "cosmic_ray_threshold",
     "max_iter": "cosmic_ray_max_iter",
-    "peak_prominence_z": "cosmic_ray_peak_prominence_z",
-    "peak_window_points": "cosmic_ray_peak_window_points",
-    "peak_expand_z": "cosmic_ray_peak_expand_z",
-    "peak_expand_gap_points": "cosmic_ray_peak_expand_gap_points",
-    "peak_width_max_points": "cosmic_ray_peak_width_max_points",
-    "peak_mean_z_min": "cosmic_ray_peak_mean_z_min",
-    "peak_pad_points": "cosmic_ray_peak_pad_points",
-    "COSMIC_RAY_PEAK_PROMINENCE_Z": "cosmic_ray_peak_prominence_z",
-    "COSMIC_RAY_PEAK_WINDOW_POINTS": "cosmic_ray_peak_window_points",
-    "COSMIC_RAY_PEAK_EXPAND_Z": "cosmic_ray_peak_expand_z",
-    "COSMIC_RAY_PEAK_EXPAND_GAP_POINTS": "cosmic_ray_peak_expand_gap_points",
-    "COSMIC_RAY_PEAK_WIDTH_MAX_POINTS": "cosmic_ray_peak_width_max_points",
-    "COSMIC_RAY_PEAK_MEAN_Z_MIN": "cosmic_ray_peak_mean_z_min",
-    "COSMIC_RAY_PEAK_PAD_POINTS": "cosmic_ray_peak_pad_points",
 }
 
 def _matching_cosmic_ray_overrides(profile, label_display=None):
@@ -169,16 +139,9 @@ def _cosmic_ray_kwargs(profile, cfg, label_display=None):
     """构造单谱宇宙射线去除参数"""
     options = {
         "cosmic_ray_remove": _cosmic_ray_enabled(profile, cfg),
-        "cosmic_ray_window_points": int(cfg.cosmic_ray_narrow_window_points),
+        "cosmic_ray_window_points": int(cfg.cosmic_ray_window_points),
         "cosmic_ray_threshold": float(cfg.cosmic_ray_threshold),
         "cosmic_ray_max_iter": int(cfg.cosmic_ray_max_iter),
-        "cosmic_ray_peak_prominence_z": float(cfg.cosmic_ray_peak_prominence_z),
-        "cosmic_ray_peak_window_points": int(cfg.cosmic_ray_peak_window_points),
-        "cosmic_ray_peak_expand_z": float(cfg.cosmic_ray_peak_expand_z),
-        "cosmic_ray_peak_expand_gap_points": int(cfg.cosmic_ray_peak_expand_gap_points),
-        "cosmic_ray_peak_width_max_points": int(cfg.cosmic_ray_peak_width_max_points),
-        "cosmic_ray_peak_mean_z_min": float(cfg.cosmic_ray_peak_mean_z_min),
-        "cosmic_ray_peak_pad_points": int(cfg.cosmic_ray_peak_pad_points),
     }
     return _apply_cosmic_ray_overrides(options, profile, label_display)
 
@@ -337,8 +300,6 @@ def _base_group_stats(input_count, valid_count):
         "cosmic_ray_enabled": False,
         "cosmic_single_spectra": 0,
         "cosmic_single_replaced": 0,
-        "cosmic_single_narrow_replaced": 0,
-        "cosmic_single_peak_replaced": 0,
     }
 
 def _apply_pca_filter(spectra_arr, filenames, wn_list, stats, label_display, cfg, log_path):
@@ -394,9 +355,7 @@ def _format_cosmic_ray_stats(stats):
     spectra_count = _cosmic_spectra_count(stats)
     return (
         "Cosmic ray replacement avg points/spectrum: "
-        f"total={_cosmic_avg(stats, 'cosmic_single_replaced'):.2f}, "
-        f"narrow={_cosmic_avg(stats, 'cosmic_single_narrow_replaced'):.2f}, "
-        f"peak={_cosmic_avg(stats, 'cosmic_single_peak_replaced'):.2f}, "
+        f"cosmic_ray={_cosmic_avg(stats, 'cosmic_single_replaced'):.2f}, "
         f"spectra={spectra_count}"
     )
 
@@ -467,8 +426,6 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
     cosmic_ray_enabled = bool(cosmic_ray_options.get("cosmic_ray_remove"))
     cosmic_single_spectra = 0
     cosmic_single_replaced = 0
-    cosmic_single_narrow_replaced = 0
-    cosmic_single_peak_replaced = 0
 
     for fname, wn, sp in samples:
         if wn.size == 0 or sp.size == 0:
@@ -493,8 +450,6 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
         )
         if cosmic_ray_enabled:
             cosmic_single_replaced += int(single_replaced)
-            cosmic_single_narrow_replaced += int(getattr(single_replaced, "narrow", 0))
-            cosmic_single_peak_replaced += int(getattr(single_replaced, "peak", 0))
         if wn_u is None:
             continue
 
@@ -506,8 +461,6 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
     stats["cosmic_ray_enabled"] = cosmic_ray_enabled
     stats["cosmic_single_spectra"] = int(cosmic_single_spectra)
     stats["cosmic_single_replaced"] = int(cosmic_single_replaced)
-    stats["cosmic_single_narrow_replaced"] = int(cosmic_single_narrow_replaced)
-    stats["cosmic_single_peak_replaced"] = int(cosmic_single_peak_replaced)
 
     return _finalize_group_result(
         spectra,
@@ -610,21 +563,6 @@ def _collect_merged_init_groups(profile, input_path, root_process_clean, cfg, co
 
     return groups, skipped
 
-def _read_arc_samples(root, arc_files, input_root):
-    """读取一个小文件夹内的光谱，并统计读取失败数量"""
-    samples = []
-    errored = 0
-    for fname in arc_files:
-        in_path = root / fname
-        try:
-            wn, sp = read_arc_data(in_path)
-            samples.append((fname, wn, sp))
-        except Exception as exc:
-            rel_path = in_path.relative_to(input_root).as_posix()
-            print(f"[ERROR] {rel_path}: {exc}")
-            errored += 1
-    return samples, errored
-
 def build_train(profile, base_dir, pipeline_config=None):
     """从 init 直接清洗、按类别合并后执行 PCA 并生成最终 train"""
     cfg = resolve_pipeline_config(pipeline_config)
@@ -713,79 +651,59 @@ def build_train(profile, base_dir, pipeline_config=None):
     if cosmic_log_path is not None and cosmic_log_path.is_file() and cosmic_log_path.stat().st_size > 0:
         print(f"- Cosmic ray log: {cosmic_log_path}")
 
-def build_test(
-    profile,
-    base_dir,
-    input_dir=None,
-    output_dir=None,
-    pipeline_config=None,
-):
-    """从测试原始目录构建 test，并输出每个文件夹的均值谱图"""
+
+def build_test(profile, base_dir, pipeline_config=None):
+    """从 init_test 生成已预处理的独立测试集 test，不做 PCA"""
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
-    input_dir = (
-        Path(input_dir)
-        if input_dir is not None
-        else resolve_under_base(base_dir, profile.root_init_test)
-    )
-    output_dir = (
-        Path(output_dir)
-        if output_dir is not None
-        else resolve_under_base(base_dir, profile.root_test_clean)
-    )
-    root_test_fig = resolve_under_base(base_dir, profile.root_test_fig)
+    root_init_test = resolve_under_base(base_dir, profile.root_init_test)
+    root_test = resolve_under_base(base_dir, profile.root_test)
+    cosmic_log_path = _cosmic_log_path(profile, base_dir, cfg)
 
-    if not input_dir.is_dir():
-        raise FileNotFoundError(f"Missing input dir: {input_dir}")
+    if not root_init_test.is_dir():
+        raise FileNotFoundError(f"Missing init_test folder: {root_init_test}")
 
-    _reset_generated_dir(output_dir)
-    _reset_generated_dir(root_test_fig)
+    _reset_generated_dir(root_test)
+    built_groups = 0
+    skipped_groups = 0
+    total_files = 0
 
-    processed = 0
-    skipped = 0
-    errored = 0
-
-    for root, arc_files in iter_arc_dirs(input_dir):
-        rel_dir = root.relative_to(input_dir)
-        label_display = rel_dir.as_posix()
-        samples, group_errors = _read_arc_samples(root, arc_files, input_dir)
-        errored += group_errors
+    for rel_dir, leaf_name, samples in iter_init_groups(root_init_test):
+        label = rel_dir.as_posix() if rel_dir != Path(".") else leaf_name
+        label_display = label.replace("\\", "/")
+        print(f"\n=== Build test: {label_display} ===")
 
         processed_group, stats = preprocess_physical_group(
             profile,
             cfg,
             samples,
             label_display,
+            min_samples=1,
         )
-        skipped += stats["input"] - stats["valid_before_pca"]
-
         if stats["skip_reason"] is not None:
             print(
                 f"  Skip: no valid spectra after preprocessing "
                 f"({stats['valid_before_pca']}/{stats['input']})"
             )
+            skipped_groups += 1
             continue
 
         _print_processing_stats(stats)
-        _save_spectra_files(
-            output_dir / rel_dir,
-            processed_group["filenames"],
-            processed_group["wn_list"],
-            processed_group["spectra"],
-        )
-        processed += len(processed_group["filenames"])
+        _log_cosmic_ray_stats(label_display, stats, cosmic_log_path)
 
-        _save_mean_figure(
-            root_figure=root_test_fig,
-            rel_dir=rel_dir,
-            filename=f"{root.name}.png",
-            wn=processed_group["wn"],
-            spectra=processed_group["spectra"],
-            title=f"{label_display} (mean, q10-q90)",
-            cfg=cfg,
-        )
+        save_dir = root_test / rel_dir
+        spectra_arr = processed_group["spectra"]
+        filenames = processed_group["filenames"]
+        wn_list = processed_group["wn_list"]
+        _save_spectra_files(save_dir, filenames, wn_list, spectra_arr)
+        built_groups += 1
+        total_files += len(filenames)
 
-    print(
-        "Test dataset preprocessing finished. "
-        f"Processed={processed}, Skipped={skipped}, Error={errored}"
-    )
+    print("\nTest dataset preprocessing finished:")
+    print(f"- Source init_test: {root_init_test}")
+    print(f"- Final test spectra: {root_test}")
+    print(f"- Groups built: {built_groups}")
+    print(f"- Spectra built: {total_files}")
+    print(f"- Skipped groups: {skipped_groups}")
+    if cosmic_log_path is not None and cosmic_log_path.is_file() and cosmic_log_path.stat().st_size > 0:
+        print(f"- Cosmic ray log: {cosmic_log_path}")

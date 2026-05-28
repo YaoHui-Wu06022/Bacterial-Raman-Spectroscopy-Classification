@@ -10,10 +10,8 @@ DATASET_BUNDLE_STAGE_MAP = {
     "train": ("train",),
     "test": ("test",),
     "init": ("init",),
-    "init_test": ("init_test",),
     "predict_input": ("test",),
     "train_fig": ("fig_train",),
-    "test_fig": ("fig_test",),
 }
 
 
@@ -57,9 +55,9 @@ def _is_dataset_bundle_dir(path):
 
 
 def dataset_bundle_root(path):
-    """把 train/test/init/init_test 等阶段目录还原到数据集根目录"""
+    """把 train/test/init 等阶段目录还原到数据集根目录"""
     path = Path(path)
-    if path.name in {"train", "test", "init", "init_test"}:
+    if path.name in {"train", "test", "init"}:
         return path.parent
     return path
 

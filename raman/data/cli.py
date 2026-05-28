@@ -33,7 +33,7 @@ def run_train(args):
 
 
 def run_test(args):
-    """构建测试集预处理结果"""
+    """从 init_test 构建已预处理的独立测试集"""
     profile, dataset_dir = resolve_dataset(args.dataset, create=True)
     build_test(profile, dataset_dir)
 

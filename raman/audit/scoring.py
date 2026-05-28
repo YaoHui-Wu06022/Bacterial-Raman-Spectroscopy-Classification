@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from scipy.ndimage import percentile_filter
 
 from raman.audit.config import AuditConfig, DEFAULT_AUDIT_CONFIG
 from raman.data.io import read_arc_data
@@ -24,10 +23,9 @@ from raman.tool.spectrum import (
 )
 
 
-VALID_STAGES = ("invalid", "anomalous-cosmic", "class-similarity")
+VALID_STAGES = ("invalid", "class-similarity")
 STAGE_DELETE_CATEGORY = {
     "invalid": "Invalid Spectrum",
-    "anomalous-cosmic": "Anomalous_Cosmic_Rays",
     "class-similarity": "Class_Similarity_Outliers",
 }
 
@@ -45,9 +43,7 @@ class SpectrumRecord:
     z: np.ndarray | None = None
     sp: np.ndarray | None = None
     skip_reason: str = ""
-    cosmic_total: int = 0
-    cosmic_narrow: int = 0
-    cosmic_peak: int = 0
+    cosmic_ray_replaced: int = 0
 
     stage: str = ""
     decision: str = "keep"
@@ -67,26 +63,6 @@ class SpectrumRecord:
     smooth_range: float = np.nan
     detail_noise: float = np.nan
     structure_ratio: float = np.nan
-
-    wide_bump_count: int = 0
-    wide_bump_max_z: float = 0.0
-    wide_bump_area: float = 0.0
-    wide_bump_width_points: int = 0
-    wide_bump_width_cm: float = 0.0
-    wide_bump_center_cm: float = 0.0
-    wide_region_kind: str = ""
-    wide_edge_jump_z: float = 0.0
-    wide_left_edge_jump_z: float = 0.0
-    wide_right_edge_jump_z: float = 0.0
-    wide_bump_positions: tuple[float, ...] = ()
-    wide_bump_ranges: tuple[tuple[int, int], ...] = ()
-    wide_z: np.ndarray | None = None
-    wide_smooth: np.ndarray | None = None
-    wide_floor: np.ndarray | None = None
-    rising_region_count: int = 0
-    rising_region_area: float = 0.0
-    rising_region_width_cm: float = 0.0
-    rising_region_center_cm: float = 0.0
 
     ref_pool_scope: str = ""
     ref_pool_size: int = 0
@@ -160,215 +136,6 @@ def longest_flat_points(wn, z, audit_cfg: AuditConfig):
             else:
                 current = 0
     return int(best_points)
-
-
-def rolling_quantile(values, window_points, q=0.20):
-    """计算滚动分位数曲线。"""
-    values = np.asarray(values, dtype=np.float32)
-    window = max(3, int(window_points))
-    if window % 2 == 0:
-        window += 1
-    if values.size == 0:
-        return values.copy()
-    return percentile_filter(values, percentile=float(q) * 100.0, size=window, mode="nearest").astype(np.float32, copy=False)
-
-
-def _diff_scale_by_segments(values, segments):
-    """按连续段计算一阶差分鲁棒尺度。"""
-    diffs = []
-    for start, end in segments:
-        if end - start >= 2:
-            diffs.append(np.diff(values[start:end]))
-    if not diffs:
-        return 1e-8
-    return robust_mad_scale(np.concatenate(diffs))
-
-
-def _region_edge_jump_z(smooth_values, start, end, seg_start, seg_end, scale, window_points):
-    """估计宽异常段两侧边缘跳变强度。"""
-    diffs = np.diff(np.asarray(smooth_values, dtype=np.float32))
-    if diffs.size == 0:
-        return 0.0, 0.0, 0.0
-
-    window = max(2, int(window_points))
-    left_start = max(int(seg_start), int(start) - window)
-    left_end = min(int(seg_end) - 1, int(start) + window)
-    right_start = max(int(seg_start), int(end) - window)
-    right_end = min(int(seg_end) - 1, int(end) + window)
-
-    left_jump = 0.0
-    if left_end > left_start:
-        left_jump = max(float(np.max(diffs[left_start:left_end])), 0.0)
-    right_jump = 0.0
-    if right_end > right_start:
-        right_jump = max(float(np.max(-diffs[right_start:right_end])), 0.0)
-
-    denom = max(float(scale), 1e-8)
-    left_z = left_jump / denom
-    right_z = right_jump / denom
-    return max(left_z, right_z), left_z, right_z
-
-
-def _wide_regions_by_points(wn, z_values, smooth_values, threshold, min_points, segments, edge_scale, edge_window_points):
-    """按点数阈值提取宽平台/阶梯候选段。"""
-    regions = []
-    for seg_start, seg_end in segments:
-        mask = z_values[seg_start:seg_end] >= float(threshold)
-        for rel_start, rel_end in contiguous_regions(mask):
-            start = seg_start + int(rel_start)
-            end = seg_start + int(rel_end)
-            width_points = end - start
-            if width_points < int(min_points):
-                continue
-            segment = z_values[start:end]
-            if segment.size == 0:
-                continue
-            peak_idx = int(start + np.argmax(segment))
-            edge_jump_z, left_edge_jump_z, right_edge_jump_z = _region_edge_jump_z(
-                smooth_values,
-                start,
-                end,
-                seg_start,
-                seg_end,
-                edge_scale,
-                edge_window_points,
-            )
-            regions.append(
-                {
-                    "start": start,
-                    "end": end,
-                    "center_cm": float(wn[peak_idx]),
-                    "width_points": int(width_points),
-                    "width_cm": region_width_cm(wn, start, end),
-                    "max_z": float(np.max(segment)),
-                    "area": float(np.sum(np.maximum(segment, 0.0))),
-                    "kind": "edge",
-                    "edge_jump_z": float(edge_jump_z),
-                    "left_edge_jump_z": float(left_edge_jump_z),
-                    "right_edge_jump_z": float(right_edge_jump_z),
-                }
-            )
-    return regions
-
-
-def _long_rising_regions(wn, z_values, audit_cfg: AuditConfig, segments):
-    """检测清理后仍存在的长上升尾段"""
-    regions = []
-    scale = _diff_scale_by_segments(z_values, segments)
-    for seg_start, seg_end in segments:
-        if seg_end - seg_start < int(audit_cfg.anomalous_rising_min_points):
-            continue
-        segment = moving_average(z_values[seg_start:seg_end], audit_cfg.anomalous_wide_smooth_points)
-        edge_points = max(25, int(segment.size // 5))
-        left = float(np.median(segment[:edge_points]))
-        right = float(np.median(segment[-edge_points:]))
-        center = float(np.median(segment))
-        rise_z = (right - left) / max(scale, 1e-8)
-        end_lift = right - center
-        if rise_z < float(audit_cfg.anomalous_rising_z_min) or end_lift < float(audit_cfg.anomalous_rising_norm_min):
-            continue
-
-        start_threshold = left + 0.30 * (right - left)
-        start_candidates = np.flatnonzero(segment >= start_threshold)
-        start = seg_start
-        if start_candidates.size:
-            start = seg_start + int(max(0, start_candidates[0] - audit_cfg.anomalous_wide_smooth_points))
-        end = seg_end
-        width_points = int(end - start)
-        if width_points < int(audit_cfg.anomalous_rising_min_points):
-            continue
-
-        center_idx = min(end - 1, max(start, start + width_points // 2))
-        regions.append(
-            {
-                "start": int(start),
-                "end": int(end),
-                "center_cm": float(wn[center_idx]),
-                "width_points": width_points,
-                "width_cm": region_width_cm(wn, start, end),
-                "max_z": float(rise_z),
-                "area": float(rise_z * width_points),
-                "kind": "rising",
-                "edge_jump_z": 0.0,
-                "left_edge_jump_z": 0.0,
-                "right_edge_jump_z": 0.0,
-            }
-        )
-    return regions
-
-
-def score_anomalous_wide_regions(records, cfg, audit_cfg: AuditConfig):
-    """为第二阶段宽上升平台/阶梯异常打分。"""
-    wn_full = output_wn(cfg)
-    segments_by_size = {}
-    for record in records:
-        if record.sp is None:
-            continue
-
-        values = np.asarray(record.sp, dtype=np.float32)
-        wn = wn_full[: values.size]
-        segments = segments_by_size.get(values.size)
-        if segments is None:
-            segments = contiguous_index_ranges(wn)
-            segments_by_size[values.size] = segments
-        smooth = np.empty_like(values, dtype=np.float32)
-        floor = np.empty_like(values, dtype=np.float32)
-        for start, end in segments:
-            segment = values[start:end]
-            smooth_segment = moving_average(segment, audit_cfg.anomalous_wide_smooth_points)
-            smooth[start:end] = smooth_segment
-            floor[start:end] = rolling_quantile(
-                smooth_segment,
-                audit_cfg.anomalous_wide_floor_window_points,
-                q=0.20,
-            )
-
-        residual = smooth - floor
-        scale = _diff_scale_by_segments(values, segments)
-        wide_z = residual / max(scale, 1e-8)
-        edge_regions = _wide_regions_by_points(
-            wn,
-            wide_z,
-            smooth,
-            threshold=audit_cfg.anomalous_wide_z_min,
-            min_points=audit_cfg.anomalous_wide_min_points,
-            segments=segments,
-            edge_scale=scale,
-            edge_window_points=audit_cfg.anomalous_wide_smooth_points,
-        )
-        edge_threshold = audit_cfg.anomalous_wide_review_edge_z_min
-        edge_regions = [region for region in edge_regions if region["edge_jump_z"] >= edge_threshold]
-        rising_regions = []
-        if record.z is not None:
-            rising_regions = _long_rising_regions(wn, np.asarray(record.z, dtype=np.float32), audit_cfg, segments)
-        regions = edge_regions + rising_regions
-        best = max(
-            regions,
-            key=lambda item: (item["kind"] == "rising", item.get("edge_jump_z", 0.0), item["max_z"], item["area"], item["width_points"]),
-            default=None,
-        )
-
-        record.wide_z = wide_z.astype(np.float32, copy=False)
-        record.wide_smooth = smooth
-        record.wide_floor = floor
-        record.wide_bump_count = len(regions)
-        record.wide_bump_positions = tuple(region["center_cm"] for region in regions)
-        record.wide_bump_ranges = tuple((int(region["start"]), int(region["end"])) for region in regions)
-        if best is not None:
-            record.wide_bump_max_z = best["max_z"]
-            record.wide_bump_area = best["area"]
-            record.wide_bump_width_points = best["width_points"]
-            record.wide_bump_width_cm = best["width_cm"]
-            record.wide_bump_center_cm = best["center_cm"]
-            record.wide_region_kind = best.get("kind", "")
-            record.wide_edge_jump_z = best["edge_jump_z"]
-            record.wide_left_edge_jump_z = best["left_edge_jump_z"]
-            record.wide_right_edge_jump_z = best["right_edge_jump_z"]
-            record.rising_region_count = len(rising_regions)
-            if best.get("kind") == "rising":
-                record.rising_region_area = best["area"]
-                record.rising_region_width_cm = best["width_cm"]
-                record.rising_region_center_cm = best["center_cm"]
 
 
 def _local_positive_regions(wn, z_values, audit_cfg: AuditConfig):
@@ -446,7 +213,7 @@ def _nearest_other_folder_corr(spectra, folders, block_size=256):
 
 
 def score_class_similarity(records, cfg, audit_cfg: AuditConfig):
-    """为第三阶段同前缀类内相似性打分。"""
+    """为第二阶段同前缀类内相似性打分。"""
     wn_full = output_wn(cfg)
     by_scope: dict[str, list[SpectrumRecord]] = {}
     for record in records:
@@ -539,11 +306,6 @@ def score_stage(records, cfg, stage: str, audit_cfg: AuditConfig = DEFAULT_AUDIT
 
         score_raw_and_basic(records, cfg, audit_cfg)
         classify_invalid(records, audit_cfg)
-    elif stage == "anomalous-cosmic":
-        from raman.audit.stage import classify_anomalous_cosmic
-
-        score_anomalous_wide_regions(records, cfg, audit_cfg)
-        classify_anomalous_cosmic(records, audit_cfg)
     elif stage == "class-similarity":
         from raman.audit.stage import classify_class_similarity
 
@@ -559,8 +321,6 @@ def reason_labels(reasons, audit_cfg: AuditConfig = DEFAULT_AUDIT_CONFIG):
     labels = []
     if any(reason.startswith("invalid_") for reason in reasons):
         labels.append("Invalid Spectrum")
-    if any(reason.startswith("anomalous_cosmic") for reason in reasons):
-        labels.append("Anomalous_Cosmic_Rays")
     if any(reason.startswith("class_") for reason in reasons):
         labels.append("Class_Similarity_Outliers")
     return tuple(label for label in audit_cfg.delete_reason_labels if label in labels)
@@ -591,21 +351,6 @@ def record_to_row(record: SpectrumRecord):
         "smooth_range": fmt_value(record.smooth_range, 6),
         "detail_noise": fmt_value(record.detail_noise, 6),
         "structure_ratio": fmt_value(record.structure_ratio, 6),
-        "wide_bump_count": record.wide_bump_count,
-        "wide_bump_max_z": fmt_value(record.wide_bump_max_z, 3),
-        "wide_bump_area": fmt_value(record.wide_bump_area, 3),
-        "wide_bump_width_points": record.wide_bump_width_points,
-        "wide_bump_width_cm": fmt_value(record.wide_bump_width_cm, 3),
-        "wide_bump_center_cm": fmt_value(record.wide_bump_center_cm, 3),
-        "wide_region_kind": record.wide_region_kind,
-        "wide_edge_jump_z": fmt_value(record.wide_edge_jump_z, 3),
-        "wide_left_edge_jump_z": fmt_value(record.wide_left_edge_jump_z, 3),
-        "wide_right_edge_jump_z": fmt_value(record.wide_right_edge_jump_z, 3),
-        "wide_bump_positions": ";".join(f"{pos:.1f}" for pos in record.wide_bump_positions),
-        "rising_region_count": record.rising_region_count,
-        "rising_region_area": fmt_value(record.rising_region_area, 3),
-        "rising_region_width_cm": fmt_value(record.rising_region_width_cm, 3),
-        "rising_region_center_cm": fmt_value(record.rising_region_center_cm, 3),
         "ref_pool_scope": record.ref_pool_scope,
         "ref_pool_size": record.ref_pool_size,
         "other_ref_pool_size": record.other_ref_pool_size,
@@ -621,9 +366,7 @@ def record_to_row(record: SpectrumRecord):
         "local_pos_positions": ";".join(f"{pos:.1f}" for pos in record.local_pos_positions),
         "folder_candidate_count": record.folder_candidate_count,
         "folder_candidate_fraction": fmt_value(record.folder_candidate_fraction, 6),
-        "cosmic_total": record.cosmic_total,
-        "cosmic_narrow": record.cosmic_narrow,
-        "cosmic_peak": record.cosmic_peak,
+        "cosmic_ray_replaced": record.cosmic_ray_replaced,
         "risk_score": fmt_value(record.risk_score, 3),
     }
 
@@ -631,8 +374,6 @@ def record_to_row(record: SpectrumRecord):
 def stage_title(stage: str) -> str:
     """返回阶段展示名称。"""
     stage = validate_stage(stage)
-    if stage == "anomalous-cosmic":
-        return "Anomalous Cosmic Rays"
     if stage == "class-similarity":
         return "Class Similarity"
     return "Invalid Spectrum"
