@@ -6,7 +6,7 @@ from raman.infer.test import run_independent_test
 
 
 # 手动配置
-EXP_DIR = "output/GN/20260528_120101"
+EXP_DIR = "output/GN/二次修正/20260528_135822"
 LEVEL = "level_1"
 
 # 可选配置
@@ -14,6 +14,8 @@ TEST_ROOT = None  # None 表示使用模型配置对应数据集的 test
 FOLDER = None  # 例如 "CS01KP"，None 表示运行全部测试文件夹
 TOP_K = 3
 USE_CPU = False
+EVALUATE_EXPECTED_LABEL = True
+PLOT_TRAIN_MEAN = False
 SKIP_TRANSFERRED_TEST_SAMPLES = True
 TRANSFER_MANIFEST = "dataset/测试菌/test_transfer_manifest.csv"
 
@@ -31,6 +33,8 @@ def main():
         folder=FOLDER,
         top_k=TOP_K,
         device=device,
+        evaluate=EVALUATE_EXPECTED_LABEL,
+        plot_train_mean=PLOT_TRAIN_MEAN,
         skip_transferred=SKIP_TRANSFERRED_TEST_SAMPLES,
         transfer_manifest=TRANSFER_MANIFEST,
     )

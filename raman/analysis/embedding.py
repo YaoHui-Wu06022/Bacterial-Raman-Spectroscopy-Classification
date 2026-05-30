@@ -240,12 +240,7 @@ def plot_embedding_hierarchical(
                 color="0.5",
             )
 
-    # ===== 5. 标题 / 坐标 =====
-    if child_level is None:
-        title = f"{method_name}: {parent_level}"
-    else:
-        title = f"{method_name}: {parent_level} (color) / {child_level} (marker)"
-
+    # ===== 5. 坐标范围 =====
     x_min, x_max = emb_2d[:, 0].min(), emb_2d[:, 0].max()
     y_min, y_max = emb_2d[:, 1].min(), emb_2d[:, 1].max()
     x_pad = max((x_max - x_min) * 0.05, 1e-3)
@@ -272,7 +267,7 @@ def plot_embedding_hierarchical(
         ]
         for ax, (split_name, sample_mask, alpha) in zip(axes, plot_specs):
             _scatter_subset(ax, sample_mask, alpha=alpha)
-            ax.set_title(f"{title} - {split_name}")
+            ax.set_title(split_name)
             ax.set_xlabel(f"{method_name}-1")
             ax.set_xlim(xlim)
             ax.set_ylim(ylim)
@@ -281,7 +276,7 @@ def plot_embedding_hierarchical(
     else:
         fig, ax = plt.subplots(figsize=(9.5, fig_height))
         _scatter_subset(ax, np.ones(len(parent_labels), dtype=bool), alpha=0.85)
-        ax.set_title(title)
+        ax.set_title(method_name)
         ax.set_xlabel(f"{method_name}-1")
         ax.set_ylabel(f"{method_name}-2")
         ax.set_xlim(xlim)
@@ -302,17 +297,15 @@ def plot_embedding_hierarchical(
         )
         for parent_id in unique_parents
     ]
-    fig.subplots_adjust(right=right_margin)
+    fig.subplots_adjust(left=0.055, right=right_margin, bottom=0.10, top=0.90, wspace=0.08)
     fig.legend(
         handles=handles,
-        title=parent_level,
         loc="center left",
         bbox_to_anchor=legend_anchor,
         ncol=legend_cols,
         fontsize=legend_font,
-        title_fontsize=legend_font + 1,
         frameon=False,
     )
 
-    plt.savefig(save_path, dpi=300)
+    plt.savefig(save_path, dpi=450, bbox_inches="tight", pad_inches=0.08)
     plt.close()

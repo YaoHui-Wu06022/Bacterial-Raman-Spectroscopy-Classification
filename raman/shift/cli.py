@@ -7,13 +7,14 @@ from raman.shift.core import apply_shift, plot_prefix_dataset, plot_shift_folder
 
 def run_apply(args) -> None:
     """执行单个小文件夹平移"""
-    row, changed = apply_shift(args.dataset, args.folder, args.delta)
+    row, changed = apply_shift(args.dataset, args.folder, args.delta, note=args.note)
     paths = resolve_dataset(args.dataset)
     print(f"Dataset: {paths.dataset_dir}")
     print(f"Folder: {row['genus']}/{row['folder']}")
     print(f"Files changed: {changed}")
     print(f"delta: {row['delta']}")
     print(f"Delta file: {paths.delta_path}")
+    print(f"Delta log: {paths.delta_log_path}")
 
 
 def run_preview(args) -> None:
@@ -43,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("dataset", help="数据集 profile id、名称或 dataset 下的文件夹名")
     apply.add_argument("--folder", required=True, help="属/小文件夹，或唯一小文件夹名，例如 Burkholderia/BCC01")
     apply.add_argument("--delta", required=True, type=float, help="平移增量，单位 cm-1，右移为正，左移为负")
+    apply.add_argument("--note", default="", help="写入 delta_log.txt 的备注")
     apply.set_defaults(func=run_apply)
 
     preview = subparsers.add_parser("preview", help="绘制每个属内同前缀小文件夹的 raw 和标准化后中位谱总览图")

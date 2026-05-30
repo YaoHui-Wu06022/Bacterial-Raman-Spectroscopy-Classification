@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import warnings
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import matplotlib
@@ -26,8 +27,10 @@ from raman.tool.spectrum import build_valid_mask, get_config_bad_bands
 TARGET_CM = 1002.0
 GRID_STEP = 0.2
 DELTA_NAME = "delta.txt"
+DELTA_LOG_NAME = "delta_log.txt"
 PREFIX_PLOT_STATE_NAME = "prefix_plot_state.csv"
 DELTA_FIELDS = ("genus", "folder", "prefix", "delta")
+DELTA_LOG_FIELDS = ("time", "genus", "folder", "prefix", "step_delta", "cumulative_delta", "files_changed", "note")
 LEGACY_PLOT_STATE_FIELDS = (*DELTA_FIELDS, "plot_version")
 TRANSFERRED_FOLDER_SUFFIX = "t"
 
@@ -40,6 +43,7 @@ class DatasetPaths:
     init_dir: Path
     output_dir: Path
     delta_path: Path
+    delta_log_path: Path
 
 
 def resolve_dataset(dataset: str) -> DatasetPaths:
@@ -58,6 +62,7 @@ def resolve_dataset(dataset: str) -> DatasetPaths:
         init_dir=init_dir,
         output_dir=output_dir,
         delta_path=output_dir / DELTA_NAME,
+        delta_log_path=output_dir / DELTA_LOG_NAME,
     )
 
 
@@ -218,6 +223,35 @@ def write_delta_rows(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
+def append_delta_log(
+    path: Path,
+    folder: Path,
+    step_delta: float,
+    cumulative_delta: float,
+    files_changed: int,
+    note: str = "",
+) -> None:
+    """追加记录单次平移动作"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    need_header = not path.is_file() or path.stat().st_size == 0
+    with path.open("a", encoding="utf-8-sig", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=DELTA_LOG_FIELDS, delimiter="\t")
+        if need_header:
+            writer.writeheader()
+        writer.writerow(
+            {
+                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "genus": folder.parent.name,
+                "folder": folder.name,
+                "prefix": shift_folder_prefix(folder),
+                "step_delta": format_delta(step_delta),
+                "cumulative_delta": format_delta(cumulative_delta),
+                "files_changed": str(files_changed),
+                "note": note,
+            }
+        )
+
+
 def ensure_delta_rows(paths: DatasetPaths) -> list[dict[str, str]]:
     """读取 delta.txt，不存在时创建空记录"""
     rows = read_delta_rows(paths.delta_path)
@@ -305,7 +339,10 @@ def plot_prefix_group(
     finite_chunks = [curve[np.isfinite(curve)] for curve in norm_curves.values() if np.isfinite(curve).any()]
     finite_values = np.concatenate(finite_chunks) if finite_chunks else np.asarray([], dtype=np.float32)
     norm_span = float(np.percentile(finite_values, 95) - np.percentile(finite_values, 5)) if finite_values.size else 1.0
-    offset_step = max(norm_span * 0.55, 1.25)
+    if norm_method == "minmax":
+        offset_step = max(norm_span * 0.35, 0.38)
+    else:
+        offset_step = max(norm_span * 0.55, 1.25)
     for idx, (name, curve) in enumerate(norm_curves.items()):
         offset = idx * offset_step
         color = color_cycle[idx % len(color_cycle)]
@@ -499,7 +536,7 @@ def shift_folder(folder: Path, delta: float) -> int:
     return changed
 
 
-def apply_shift(dataset: str, folder_arg: str, delta: float) -> tuple[dict[str, str], int]:
+def apply_shift(dataset: str, folder_arg: str, delta: float, note: str = "") -> tuple[dict[str, str], int]:
     """执行单个小文件夹平移并更新 delta.txt"""
     paths = resolve_dataset(dataset)
     folder = resolve_folder(paths.init_dir, folder_arg)
@@ -510,6 +547,7 @@ def apply_shift(dataset: str, folder_arg: str, delta: float) -> tuple[dict[str, 
     changed = shift_folder(folder, float(delta))
     rows = upsert_delta(rows, folder, cumulative_delta)
     write_delta_rows(paths.delta_path, rows)
+    append_delta_log(paths.delta_log_path, folder, float(delta), cumulative_delta, changed, note=note)
 
     row = {
         "genus": folder.parent.name,

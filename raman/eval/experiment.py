@@ -10,7 +10,7 @@ from raman.config_io import (
     find_experiment_root,
     load_experiment,
 )
-from raman.tool.dataset import resolve_dataset_stage
+from raman.tool.dataset import dataset_bundle_root, resolve_dataset_stage
 from raman.tool.path import (
     PROJECT_ROOT,
     exp_abspath,
@@ -91,17 +91,21 @@ def resolve_experiment_input(path):
     )
 
 
-def load_experiment_context_with_dataset(exp_dir):
-    """加载实验配置，并把 dataset_root 对齐到训练阶段目录"""
+def load_experiment_context_with_dataset(exp_dir, dataset_stage="train", must_exist=True):
+    """加载实验配置，并按需要把 dataset_root 对齐到数据集阶段目录"""
     input_context = resolve_experiment_input(exp_dir)
     config_path = input_context.input_run_dir or input_context.exp_dir
     config = load_experiment(os.fspath(config_path))
-    dataset_root = resolve_dataset_stage(
-        os.fspath(resolve_project_path(config.dataset_root)),
-        stage="train",
-        project_root=os.fspath(PROJECT_ROOT),
-        must_exist=True,
-    )
+    raw_dataset_root = resolve_project_path(config.dataset_root)
+    if dataset_stage is None:
+        dataset_root = dataset_bundle_root(raw_dataset_root)
+    else:
+        dataset_root = resolve_dataset_stage(
+            os.fspath(raw_dataset_root),
+            stage=dataset_stage,
+            project_root=os.fspath(PROJECT_ROOT),
+            must_exist=must_exist,
+        )
     config.dataset_root = os.fspath(dataset_root)
     config.output_dir = input_context.exp_dir
     config.experiment_dir = input_context.exp_dir

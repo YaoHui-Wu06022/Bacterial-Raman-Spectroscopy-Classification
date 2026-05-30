@@ -2,19 +2,16 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import shutil
-from collections import Counter
 from pathlib import Path
 
 import numpy as np
 
 from raman.tool.dataset import dataset_bundle_root, resolve_dataset_stage
-from raman.tool.hierarchy import label_from_parts, normalize_level_name
-from raman.tool.naming import normalize_folder_prefix, test_folder_prefix
+from raman.tool.hierarchy import normalize_level_name
+from raman.tool.naming import test_folder_prefix
 from raman.tool.path import PROJECT_ROOT, resolve_project_path
-from raman.tool.plotting import add_bad_band_spans, insert_nan_gaps
-from raman.tool.spectrum import build_valid_mask, expected_wavenumbers, get_config_bad_bands
+from raman.tool.spectrum import expected_wavenumbers, get_config_bad_bands
 from raman.eval.experiment import (
     collect_used_runs,
     resolve_result_dir,
@@ -25,152 +22,16 @@ from raman.infer.folder import (
     iter_predict_folders,
     list_arc_files,
 )
-from raman.training.split import TRAIN_SPLIT_NAME
-
-
-def _validate_input_length(signal_length, config, source):
-    """确认测试谱长度和模型训练配置一致"""
-    expected = expected_wavenumbers(config).shape[0]
-    if int(signal_length) != int(expected):
-        raise ValueError(
-            f"Input length mismatch for {source}: got {signal_length}, expected {expected}. "
-            f"请确认 dataset/<数据集>/test 中的独立测试谱已经按该模型 run 的输入配置预处理"
-        )
-
-
-def _preprocess_with_config_mask(path, preprocessor, config):
-    """按模型 bad_bands 对齐已预处理光谱，再构建模型输入"""
-    x = preprocessor(path)
-    expected = expected_wavenumbers(config).shape[0]
-    if int(x.shape[-1]) == int(expected):
-        return x
-
-    data = np.loadtxt(path, dtype=np.float32)
-    data = np.atleast_2d(data)
-    if data.shape[1] >= 2:
-        keep_mask = build_valid_mask(data[:, 0], get_config_bad_bands(config))
-        if keep_mask is not None and int(keep_mask.sum()) == int(expected):
-            from raman.data.input import build_model_input
-
-            signal = data[:, 1][keep_mask].astype(np.float32, copy=False)
-            aligned = build_model_input(
-                signal,
-                config=config,
-                sg_smooth=preprocessor.sg_smooth,
-                sg_d1=preprocessor.sg_d1,
-                device=preprocessor.device,
-                augment=False,
-            )
-            return aligned.unsqueeze(0)
-
-    _validate_input_length(x.shape[-1], config, path)
-    return x
-
-
-def _candidate_train_roots(dataset_root):
-    """列出可用的训练侧光谱目录"""
-    dataset_root = dataset_bundle_root(resolve_project_path(dataset_root))
-    train_root = dataset_root / "train"
-    if train_root.is_dir():
-        return [train_root]
-    return []
-
-
-def _iter_labeled_train_files(train_root, level_name):
-    """遍历训练侧光谱并带上业务层标签"""
-    train_root = Path(train_root)
-    for path in sorted(train_root.rglob("*.arc_data")):
-        rel = path.relative_to(train_root)
-        if len(rel.parts) < 3:
-            continue
-        label = label_from_parts(rel.parts[:-1], level_name)
-        if label:
-            yield path, label, normalize_folder_prefix(rel.parts[-2])
-
-
-def _build_expected_lookup(exp_dir, train_roots, level_name):
-    """由模型训练清单建立测试简称到各级真实标签的映射"""
-    counters: dict[str, Counter] = {}
-    train_files = _load_train_file_list(exp_dir)
-    if train_files:
-        for rel in train_files:
-            parts = Path(rel).parts[:-1]
-            if not parts:
-                continue
-            label = label_from_parts(parts, level_name)
-            prefix = normalize_folder_prefix(parts[-1])
-            if label and prefix:
-                counters.setdefault(prefix, Counter())[label] += 1
-
-    if counters:
-        return {
-            prefix: counter.most_common(1)[0][0]
-            for prefix, counter in counters.items()
-            if counter
-        }
-
-    for train_root in train_roots:
-        for _, label, prefix in _iter_labeled_train_files(train_root, level_name):
-            counters.setdefault(prefix, Counter())[label] += 1
-    return {
-        prefix: counter.most_common(1)[0][0]
-        for prefix, counter in counters.items()
-        if counter
-    }
-
-
-def _load_train_file_list(exp_dir):
-    """读取实验根保存的训练文件清单"""
-    path = Path(exp_dir) / TRAIN_SPLIT_NAME
-    if not path.is_file():
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _resolve_train_mean_files(exp_dir, dataset_root, level_name):
-    """优先使用模型训练清单，缺失时回退到当前 train"""
-    dataset_root = dataset_bundle_root(resolve_project_path(dataset_root))
-    train_files = _load_train_file_list(exp_dir)
-    train_root = dataset_root / "train"
-    if train_files and train_root.is_dir():
-        rows = []
-        for rel in train_files:
-            path = train_root / rel
-            if not path.is_file():
-                continue
-            parts = Path(rel).parts[:-1]
-            label = label_from_parts(parts, level_name)
-            if label:
-                rows.append((path, label))
-        if rows:
-            return rows
-
-    rows = []
-    for root in _candidate_train_roots(dataset_root):
-        for path, label, _ in _iter_labeled_train_files(root, level_name):
-            rows.append((path, label))
-    if not rows:
-        raise FileNotFoundError(f"No train spectra found under {dataset_root}")
-    return rows
-
-
-def _build_train_mean_bank(exp_dir, dataset_root, level_name, preprocessor, config):
-    """构建训练均值谱对照库"""
-    from tqdm import tqdm
-
-    signals: dict[str, list[np.ndarray]] = {}
-    for path, label in tqdm(
-        _resolve_train_mean_files(exp_dir, dataset_root, level_name),
-        desc="Building train mean spectra",
-        unit="spectrum",
-    ):
-        x = _preprocess_with_config_mask(path, preprocessor, config)
-        signal = x[0, 0].detach().cpu().numpy().astype(np.float32, copy=False)
-        signals.setdefault(label, []).append(signal)
-    return {
-        label: np.mean(np.stack(items, axis=0), axis=0)
-        for label, items in signals.items()
-    }
+from raman.infer.labels import (
+    build_expected_lookup_from_meta,
+    folder_summary,
+    write_summary,
+)
+from raman.infer.spectra import (
+    build_train_mean_bank,
+    plot_spectra,
+    preprocess_with_config_mask,
+)
 
 
 def _resolve_test_root(config, override):
@@ -217,7 +78,7 @@ def _predict_folder(folder_path, predictor, top_k, skip_lookup=None):
         if path.name in skip_files:
             skipped.append(path.name)
             continue
-        x = _preprocess_with_config_mask(path, predictor["preprocessor"], predictor["config"])
+        x = preprocess_with_config_mask(path, predictor["preprocessor"], predictor["config"])
         results = predict_tensor(x, predictor, top_k=top_k)
         signal = x[0, 0].detach().cpu().numpy().astype(np.float32, copy=False)
         predictions.append(
@@ -232,116 +93,117 @@ def _predict_folder(folder_path, predictor, top_k, skip_lookup=None):
     return predictions, np.stack(signals, axis=0) if signals else np.empty((0, 0), dtype=np.float32), skipped
 
 
-def _folder_summary(folder_name, expected_label, class_names, predictions):
-    """汇总单个测试文件夹的多数投票结果"""
-    total = len(predictions)
-    counter = Counter(item["top1_label"] for item in predictions)
-    predicted, majority_count = counter.most_common(1)[0] if counter else ("unknown", 0)
-    expected_in_model = expected_label in set(class_names)
-    correct_count = (
-        sum(1 for item in predictions if item["top1_label"] == expected_label)
-        if expected_in_model
-        else 0
+def _resolve_target_classes(predictor, input_context, level_name, runtime, class_names):
+    """解析单 parent run 的类别范围"""
+    if not (
+        input_context.is_single_run
+        and input_context.input_level == level_name
+        and input_context.input_parent_idx is not None
+    ):
+        return None, class_names
+
+    target_parent_idx = int(input_context.input_parent_idx)
+    runtime.ensure_parent_models(level_name)
+    entry = runtime.parent_models.get(level_name, {}).get(target_parent_idx, {})
+    child_ids = [int(item) for item in entry.get("child_ids", [])]
+    if child_ids and not predictor.get("class_names"):
+        class_names = [class_names[child_id] for child_id in child_ids]
+    return target_parent_idx, class_names
+
+
+def _reset_result_dir(exp_dir, level_name, predictor, input_context, runtime, target_parent_idx):
+    """解析并重建本次 infer 输出目录"""
+    out_root = resolve_result_dir(
+        exp_dir,
+        "infer",
+        level_name,
+        input_context=input_context,
+        runtime=runtime,
+        target_parent_idx=target_parent_idx,
+        prefer_run_dir=(input_context.is_single_run or len(predictor["level_order"]) == 1),
     )
-    correct_ratio = correct_count / total if total else 0.0
-    return {
-        "folder": folder_name,
-        "expected_label": expected_label or "unknown",
-        "expected_in_model": bool(expected_in_model),
-        "predicted_label": predicted,
-        "majority_count": int(majority_count),
-        "total_count": int(total),
-        "correct_count": int(correct_count),
-        "correct_ratio": float(correct_ratio),
-        "folder_correct": bool(expected_in_model and predicted == expected_label),
-    }
+    if out_root.exists():
+        shutil.rmtree(out_root)
+    out_root.mkdir(parents=True, exist_ok=True)
+    return out_root
 
 
-def _plot_spectra(save_path, folder_name, test_signals, wavenumbers, expected_label, predicted_label, train_mean_bank, bad_bands=()):
-    """绘制测试均值和训练均值对照图"""
-    import matplotlib
+def _write_used_runs(out_root, exp_dir, predictor, runtime, level_name, target_parent_idx):
+    """记录当前 infer 实际使用的模型 run"""
+    used_runs = collect_used_runs(
+        exp_dir,
+        runtime,
+        level_order=predictor["level_order"],
+        target_level=level_name,
+        target_parent_idx=target_parent_idx,
+    )
+    write_used_runs(
+        out_root,
+        mode="single_run" if out_root.parent.name.startswith("run_") else "cascade",
+        target_level=level_name,
+        target_parent=target_parent_idx,
+        runs=used_runs,
+    )
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
-    def plot_line(ax, y, **kwargs):
-        wn_plot, y_plot = insert_nan_gaps(wavenumbers, y)
-        ax.plot(wn_plot, y_plot, **kwargs)
-
-    fig, ax = plt.subplots(figsize=(10, 5.5))
-    add_bad_band_spans(ax, bad_bands, alpha=0.18, label="Removed Bad Band")
-    for signal in test_signals:
-        plot_line(ax, signal, color="#9ECAE1", alpha=0.38, linewidth=0.9)
-
-    test_mean = test_signals.mean(axis=0)
-    plot_line(ax, test_mean, color="#1F77B4", linewidth=2.0, label="Test Mean")
-
-    expected_mean = train_mean_bank.get(expected_label)
-    if expected_mean is not None:
-        plot_line(ax, expected_mean, color="#E45756", linewidth=2.2, label=f"Train Mean ({expected_label})")
-
-    predicted_mean = train_mean_bank.get(predicted_label)
-    if predicted_label != expected_label and predicted_mean is not None:
-        plot_line(
-            ax,
-            predicted_mean,
-            color="#F28E2B",
-            linewidth=2.0,
-            linestyle="--",
-            label=f"Predicted Mean ({predicted_label})",
+def _process_folder(
+    folder_path,
+    *,
+    predictor,
+    class_names,
+    expected_lookup,
+    evaluate,
+    top_k,
+    skip_lookup,
+    out_root,
+    wavenumbers,
+    train_mean_bank,
+    config,
+):
+    """预测一个测试文件夹，并写出逐谱文本和谱图"""
+    folder_path = Path(folder_path)
+    expected_prefix = test_folder_prefix(folder_path.name)
+    expected_label = expected_lookup.get(expected_prefix) if evaluate else None
+    if evaluate and expected_label not in set(class_names):
+        print(
+            f"[Skip] {folder_path.name}: expected label "
+            f"{expected_label or expected_prefix} not in model classes"
         )
+        return None, []
 
-    ax.set_title(f"Spectrum Compare | {folder_name}")
-    ax.set_xlabel("Wavenumber")
-    ax.set_ylabel("Normalized Intensity")
-    ax.grid(alpha=0.25)
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=300)
-    plt.close(fig)
+    predictions, signals, skipped = _predict_folder(
+        folder_path,
+        predictor,
+        top_k,
+        skip_lookup=skip_lookup,
+    )
+    skipped_rows = [f"{folder_path.name}/{item}" for item in skipped]
+    if not predictions:
+        if skipped:
+            print(f"[Skip] {folder_path.name}: all spectra were transferred into training")
+        return None, skipped_rows
 
+    row = folder_summary(folder_path.name, expected_label, class_names, predictions)
+    folder_out = out_root / folder_path.name
+    folder_out.mkdir(parents=True, exist_ok=True)
+    report_lines = format_prediction_report(
+        folder_path.name,
+        predictions,
+        row if evaluate else None,
+    )
+    (folder_out / f"{folder_path.name}_file.txt").write_text("".join(report_lines), encoding="utf-8")
 
-def _write_summary(path, rows):
-    """写出独立测试文件夹级汇总"""
-    total = len(rows)
-    correct = sum(1 for row in rows if row["folder_correct"])
-    lines = [
-        "===== TEST SUMMARY =====",
-        "",
-        f"Folders        : {total}",
-        f"Folder correct : {correct}/{total} ({(correct / total * 100) if total else 0.0:.2f}%)",
-        "",
-        "\t".join(
-            [
-                "folder",
-                "expected_label",
-                "expected_in_model",
-                "predicted_label",
-                "majority_count",
-                "total_count",
-                "correct_count",
-                "correct_ratio",
-                "folder_correct",
-            ]
-        ),
-    ]
-    for row in rows:
-        lines.append(
-            "\t".join(
-                [
-                    row["folder"],
-                    row["expected_label"],
-                    str(row["expected_in_model"]),
-                    row["predicted_label"],
-                    str(row["majority_count"]),
-                    str(row["total_count"]),
-                    str(row["correct_count"]),
-                    f"{row['correct_ratio']:.6f}",
-                    str(row["folder_correct"]),
-                ]
-            )
-        )
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    plot_spectra(
+        folder_out / "spectra.png",
+        folder_path.name,
+        signals,
+        wavenumbers,
+        row["expected_label"] if evaluate else None,
+        row["predicted_label"],
+        train_mean_bank,
+        get_config_bad_bands(config),
+    )
+    return row, skipped_rows
 
 
 def run_independent_test(
@@ -351,6 +213,8 @@ def run_independent_test(
     folder=None,
     top_k=3,
     device=None,
+    evaluate=True,
+    plot_train_mean=False,
     skip_transferred=False,
     transfer_manifest=None,
 ):
@@ -366,107 +230,69 @@ def run_independent_test(
     config = predictor["config"]
     runtime = predictor["runtime"]
     class_names = list(predictor.get("class_names") or runtime.class_names_by_level.get(level_name, []))
-
-    target_parent_idx = None
-    if (
-        input_context.is_single_run
-        and input_context.input_level == level_name
-        and input_context.input_parent_idx is not None
-    ):
-        target_parent_idx = int(input_context.input_parent_idx)
-        runtime.ensure_parent_models(level_name)
-        entry = runtime.parent_models.get(level_name, {}).get(target_parent_idx, {})
-        child_ids = [int(item) for item in entry.get("child_ids", [])]
-        if child_ids and not predictor.get("class_names"):
-            class_names = [class_names[child_id] for child_id in child_ids]
-
-    split_source_dir = exp_dir
+    target_parent_idx, class_names = _resolve_target_classes(
+        predictor,
+        input_context,
+        level_name,
+        runtime,
+        class_names,
+    )
 
     test_root = Path(_resolve_test_root(config, test_root))
-    train_roots = _candidate_train_roots(config.dataset_root)
-    expected_lookup = _build_expected_lookup(split_source_dir, train_roots, level_name)
-    train_mean_bank = _build_train_mean_bank(
-        split_source_dir,
-        config.dataset_root,
-        level_name,
-        predictor["preprocessor"],
-        config,
+    expected_lookup = (
+        build_expected_lookup_from_meta(predictor["meta"], level_name)
+        if evaluate
+        else {}
+    )
+    train_mean_bank = (
+        build_train_mean_bank(
+            exp_dir,
+            config.dataset_root,
+            level_name,
+            predictor["preprocessor"],
+            config,
+        )
+        if plot_train_mean
+        else {}
     )
     wavenumbers = expected_wavenumbers(config)
 
-    out_root = resolve_result_dir(
+    out_root = _reset_result_dir(
         exp_dir,
-        "infer",
         level_name,
-        input_context=input_context,
-        runtime=runtime,
-        target_parent_idx=target_parent_idx,
-        prefer_run_dir=(input_context.is_single_run or len(predictor["level_order"]) == 1),
-    )
-    if out_root.exists():
-        shutil.rmtree(out_root)
-    out_root.mkdir(parents=True, exist_ok=True)
-    used_runs = collect_used_runs(
-        exp_dir,
+        predictor,
+        input_context,
         runtime,
-        level_order=predictor["level_order"],
-        target_level=level_name,
-        target_parent_idx=target_parent_idx,
+        target_parent_idx,
     )
-    write_used_runs(
-        out_root,
-        mode="single_run" if out_root.parent.name.startswith("run_") else "cascade",
-        target_level=level_name,
-        target_parent=target_parent_idx,
-        runs=used_runs,
-    )
+    _write_used_runs(out_root, exp_dir, predictor, runtime, level_name, target_parent_idx)
+
     folders = iter_predict_folders(test_root, folder)
     if not folders:
         raise FileNotFoundError(f"No test folders found under {test_root}")
 
     summary_rows = []
     skipped_rows = []
-    class_name_set = set(class_names)
     skip_lookup = _load_transfer_skip_lookup(transfer_manifest) if skip_transferred else {}
     for folder_path in folders:
-        folder_path = Path(folder_path)
-        expected_prefix = test_folder_prefix(folder_path.name)
-        expected_label = expected_lookup.get(expected_prefix)
-        if expected_label not in class_name_set:
-            print(
-                f"[Skip] {folder_path.name}: expected label "
-                f"{expected_label or expected_prefix} not in model classes"
-            )
-            continue
-
-        predictions, signals, skipped = _predict_folder(folder_path, predictor, top_k, skip_lookup=skip_lookup)
-        for item in skipped:
-            skipped_rows.append(f"{folder_path.name}/{item}")
-        if not predictions:
-            if skipped:
-                print(f"[Skip] {folder_path.name}: all spectra were transferred into training")
-            continue
-
-        row = _folder_summary(folder_path.name, expected_label, class_names, predictions)
-        summary_rows.append(row)
-
-        folder_out = out_root / folder_path.name
-        folder_out.mkdir(parents=True, exist_ok=True)
-        report_lines = format_prediction_report(folder_path.name, predictions, row)
-        (folder_out / f"{folder_path.name}_file.txt").write_text("".join(report_lines), encoding="utf-8")
-
-        _plot_spectra(
-            folder_out / "spectra.png",
-            folder_path.name,
-            signals,
-            wavenumbers,
-            row["expected_label"],
-            row["predicted_label"],
-            train_mean_bank,
-            get_config_bad_bands(config),
+        row, skipped = _process_folder(
+            folder_path,
+            predictor=predictor,
+            class_names=class_names,
+            expected_lookup=expected_lookup,
+            evaluate=evaluate,
+            top_k=top_k,
+            skip_lookup=skip_lookup,
+            out_root=out_root,
+            wavenumbers=wavenumbers,
+            train_mean_bank=train_mean_bank,
+            config=config,
         )
+        if row is not None:
+            summary_rows.append(row)
+        skipped_rows.extend(skipped)
 
-    _write_summary(out_root / "summary.txt", summary_rows)
+    write_summary(out_root / "summary.txt", summary_rows, evaluate=evaluate)
     if skipped_rows:
         (out_root / "skipped_transferred_samples.txt").write_text(
             "\n".join(skipped_rows) + "\n",
@@ -485,6 +311,8 @@ def build_parser():
     parser.add_argument("--folder", default=None, help="只运行某个测试文件夹")
     parser.add_argument("--top-k", type=int, default=3, help="逐谱输出 top-k 数量")
     parser.add_argument("--cpu", action="store_true", help="强制使用 CPU")
+    parser.add_argument("--no-eval", action="store_true", help="只做预测，不按文件夹名称评估真值")
+    parser.add_argument("--plot-train-mean", action="store_true", help="在谱图中叠加训练集均值曲线")
     parser.add_argument("--skip-transferred", action="store_true", help="跳过已迁移进训练集的测试谱")
     parser.add_argument("--transfer-manifest", default="dataset/测试菌/test_transfer_manifest.csv", help="测试谱迁移 manifest")
     return parser
@@ -503,6 +331,8 @@ def main(argv=None):
         folder=args.folder,
         top_k=args.top_k,
         device=device,
+        evaluate=not args.no_eval,
+        plot_train_mean=args.plot_train_mean,
         skip_transferred=args.skip_transferred,
         transfer_manifest=args.transfer_manifest,
     )

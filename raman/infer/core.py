@@ -10,7 +10,11 @@ from raman.tool.model import select_logits
 
 def load_predictor(exp_dir, device, predict_level=None):
     """读取实验目录并构建单条光谱预测所需的运行时上下文"""
-    input_context, config = load_experiment_context_with_dataset(exp_dir)
+    input_context, config = load_experiment_context_with_dataset(
+        exp_dir,
+        dataset_stage=None,
+        must_exist=False,
+    )
     exp_dir = input_context.exp_dir
     if not predict_level:
         raise ValueError("predict_level must be provided explicitly.")

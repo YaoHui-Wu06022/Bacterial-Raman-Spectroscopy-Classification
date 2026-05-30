@@ -94,6 +94,10 @@ def airpls_baseline(spectrum, lam=1e5, niter=15, valid_mask=None):
     if valid_mask is not None:
         valid_mask = np.asarray(valid_mask, dtype=bool)
         weights[~valid_mask] = 0.0
+        stop_scale = float(np.sum(np.abs(y[valid_mask])))
+    else:
+        stop_scale = float(np.sum(np.abs(y)))
+    stop_scale = max(stop_scale, 1e-12)
 
     for iteration in range(1, int(niter) + 1):
         matrix_w = sparse.diags(weights, 0)
@@ -104,7 +108,7 @@ def airpls_baseline(spectrum, lam=1e5, niter=15, valid_mask=None):
             negative_mask &= valid_mask
 
         negative_sum = float(np.sum(np.abs(residual[negative_mask])))
-        if negative_sum <= 1e-3 * float(np.sum(np.abs(y))):
+        if negative_sum <= 1e-3 * stop_scale:
             break
 
         next_weights = np.zeros(length, dtype=np.float64)
