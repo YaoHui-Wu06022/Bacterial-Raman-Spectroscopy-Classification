@@ -21,10 +21,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from raman.data.build import COMMON_BAD_BANDS, DEFAULT_PIPELINE_CONFIG, _cosmic_ray_kwargs
+from raman.data.input import normalize_spectrum, sg_coeff
 from raman.data.preprocess import CosmicRayStats, estimate_baseline, remove_cosmic_rays
 from raman.data.profiles import get_dataset_dir, get_profile
 from raman.data.io import read_arc_data
 from raman.tool.spectrum import build_valid_mask
+from raman.config import config as runtime_config
 
 
 CHINESE_FONT_FILES = (
@@ -106,6 +108,50 @@ def _plot_without_bad_bands(ax, wn, y, bad_bands, **kwargs):
             start = None
     if start is not None:
         ax.plot(wn[start:], y[start:], **kwargs)
+
+
+def _input_view_curve(wn_fit, sp_corrected, cfg, bad_bands):
+    wn_ref = cfg.build_wn_ref()
+    mask_cut = (wn_fit >= cfg.cut_min) & (wn_fit <= cfg.cut_max)
+    wn_cut = wn_fit[mask_cut]
+    sp_cut = sp_corrected[mask_cut]
+
+    if bad_bands:
+        src_keep = build_valid_mask(wn_cut, bad_bands)
+        wn_cut = wn_cut[src_keep]
+        sp_cut = sp_cut[src_keep]
+
+    if wn_cut.size < 10 or wn_ref.size == 0:
+        return None, None
+    sp_interp = np.interp(wn_ref, wn_cut, sp_cut).astype(np.float32)
+    target_keep = build_valid_mask(wn_ref, bad_bands)
+    if target_keep is not None:
+        sp_interp[~target_keep] = np.nan
+    return wn_ref, sp_interp
+
+
+def _sg_smooth_curve(curve, window):
+    curve = np.asarray(curve, dtype=np.float32)
+    window = int(window)
+    if window % 2 == 0:
+        window += 1
+    if curve.size < window or window <= 3:
+        return curve.copy()
+
+    finite = np.isfinite(curve)
+    if not finite.any():
+        return curve.copy()
+    smooth_source = curve.copy()
+    if not finite.all():
+        idx = np.arange(curve.size)
+        smooth_source[~finite] = np.interp(idx[~finite], idx[finite], curve[finite])
+
+    kernel = sg_coeff(window, 3, 0)
+    pad = window // 2
+    padded = np.pad(smooth_source, pad_width=pad, mode="edge")
+    smoothed = np.convolve(padded, kernel[::-1], mode="valid").astype(np.float32)
+    smoothed[~finite] = np.nan
+    return smoothed
 
 
 def _style_axis(ax, title, bad_bands, display_min=None, display_max=None, ylabel="Intensity"):
@@ -266,6 +312,62 @@ def show_preprocess(
         cfg,
         valid_fit_mask,
     )
+    _plot_model_input_view(
+        wn_fit,
+        sp_corrected,
+        cfg,
+        bad_bands,
+        display_min,
+        display_max,
+    )
+
+
+def _plot_model_input_view(
+    wn_fit,
+    sp_corrected,
+    cfg,
+    bad_bands,
+    display_min,
+    display_max,
+):
+    wn_input, input_curve = _input_view_curve(wn_fit, sp_corrected, cfg, bad_bands)
+    if wn_input is None:
+        print("输入形态图跳过：有效点过少")
+        return
+
+    norm_method = str(getattr(runtime_config, "norm_method", "snv")).lower()
+    normalized = normalize_spectrum(input_curve, norm_method, preserve_nan=True)
+    smoothed = _sg_smooth_curve(normalized, getattr(runtime_config, "win_smooth", 15))
+
+    fig, ax = plt.subplots(1, 1, figsize=(13, 5))
+    _plot_without_bad_bands(
+        ax,
+        wn_input,
+        normalized,
+        bad_bands,
+        label=f"{norm_method} 标准化后",
+        linewidth=1.0,
+        alpha=0.72,
+    )
+    _plot_without_bad_bands(
+        ax,
+        wn_input,
+        smoothed,
+        bad_bands,
+        label=f"{norm_method} 标准化后 smooth",
+        linewidth=1.8,
+        alpha=0.95,
+    )
+    _style_axis(
+        ax,
+        "模型输入样本形态（无增强）",
+        bad_bands,
+        display_min,
+        display_max,
+        f"{norm_method} intensity",
+    )
+    fig.tight_layout()
+    plt.show()
 
 
 def _plot_baseline(

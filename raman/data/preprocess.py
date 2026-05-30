@@ -37,9 +37,12 @@ def asls_baseline(spectrum, lam=1e5, p=0.01, niter=10, valid_mask=None):
         matrix_w = sparse.diags(weights, 0)
         matrix_b = (matrix_w + lam * (diff.T @ diff)).tocsc()
         baseline = spsolve(matrix_b, weights * spectrum)
-        weights = np.where(spectrum > baseline, p, 1 - p)
         if valid_mask is not None:
-            weights[~valid_mask] = 0.0
+            next_weights = np.zeros(length)
+            next_weights[valid_mask] = np.where(spectrum[valid_mask] > baseline[valid_mask], p, 1 - p)
+            weights = next_weights
+        else:
+            weights = np.where(spectrum > baseline, p, 1 - p)
 
     return baseline
 
