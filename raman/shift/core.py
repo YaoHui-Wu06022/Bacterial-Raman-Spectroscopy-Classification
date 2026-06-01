@@ -330,7 +330,7 @@ def plot_prefix_group(
     norm_method: str,
 ) -> None:
     """绘制同属同前缀 raw 和归一化后中位谱总览图"""
-    fig, axes = plt.subplots(2, 1, figsize=(16, 9), sharex=True)
+    fig, axes = plt.subplots(2, 1, figsize=(12, 9), sharex=True)
     color_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", [f"C{i}" for i in range(10)])
     for idx, (name, curve) in enumerate(raw_curves.items()):
         color = color_cycle[idx % len(color_cycle)]

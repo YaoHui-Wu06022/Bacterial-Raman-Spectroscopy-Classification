@@ -435,7 +435,7 @@ def save_mean_summary_plot(groups, out_path, norm_method, bad_bands):
     span = float(np.percentile(finite_values, 95) - np.percentile(finite_values, 5))
     offset_step = max(span * 1.05, 1e-6)
 
-    fig, ax = plt.subplots(figsize=(12, max(4.0, 0.62 * row_count + 1.4)))
+    fig, ax = plt.subplots(figsize=(8, max(4.0, 0.62 * row_count + 1.4)))
     _add_bad_band_spans(ax, plot_rows[0][3])
     for idx, (label, wn_plot, mean_plot, _) in enumerate(plot_rows):
         offset = (row_count - idx - 1) * offset_step
