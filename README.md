@@ -305,7 +305,7 @@ python -m raman.shift plot-shift <数据集名或profile> --folder <属名>/<小
 
 `--delta` 的单位是 `cm^-1`，正值向右平移，负值向左平移。当前累计平移量记录在 `fig_init/delta.txt`；每次平移动作会追加到 `fig_init/delta_log.txt`，包括单次增量、累计增量、修改文件数和可选备注
 
-`plot-shift` 会输出单个文件夹平移前后的 raw 中位谱对照图，方便复核
+`plot-shift` 会输出目标文件夹平移前后的 raw 中位谱，并在上下两张图中叠加同属同前缀参考曲线，方便复核
 
 默认 preview 会忽略以 `t` 结尾的迁移目录，例如 `KP06t`。需要把这些插入训练集的独立测试来源目录也纳入对照时，运行：
 
@@ -2714,9 +2714,9 @@ HEATMAP_SEPARATE_CLASS_PLOTS = False
 - 各层或各 stage 的重要性图 `layer_importance.png`
 - embedding 可视化图
 
-聚合分析的对应波段文件会增加 `_aggregate` 后缀，例如 `band_importance_heatmap_aggregate.png` 和 `band_importance_per_class_aggregate.csv`。
+聚合分析的对应波段文件会增加 `_aggregate` 后缀，例如 `band_importance_heatmap_aggregate.png` 和 `band_importance_per_class_aggregate.csv`
 
-默认 `HEATMAP_SEPARATE_CLASS_PLOTS = False`，会输出一张类别汇总热图。改为 `True` 后，会改为按类别分别输出 `band_importance_heatmap__<类别路径>.png`；完整逐点 CSV 仍然保留。
+默认 `HEATMAP_SEPARATE_CLASS_PLOTS = False`，会输出一张类别汇总热图。改为 `True` 后，会改为按类别分别输出 `band_importance_heatmap__<类别路径>.png`；完整逐点 CSV 仍然保留
 
 这些结果并不在回答同一个问题：
 

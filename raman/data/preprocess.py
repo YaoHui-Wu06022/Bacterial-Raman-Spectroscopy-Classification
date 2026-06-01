@@ -18,7 +18,7 @@ from raman.tool.array import (
     median_filter_1d,
     odd_window_points,
 )
-from raman.tool.plotting import insert_nan_gaps
+from raman.tool.plotting import GLASBEY_DARK_COLORS, insert_nan_gaps
 from raman.tool.spectrum import build_valid_mask, normalize_bad_bands
 
 
@@ -387,41 +387,6 @@ def save_mean_summary_plot(groups, out_path, norm_method, bad_bands):
 
     row_count = len(groups)
     plot_rows = []
-    # Colorcet glasbey_dark 前 32 色，适合白底上的多类别细线
-    colors = (
-        "#d60000",
-        "#8c3bff",
-        "#018700",
-        "#00acc6",
-        "#e6a500",
-        "#ff7ed1",
-        "#6b004f",
-        "#573b00",
-        "#005659",
-        "#15e18c",
-        "#0000dd",
-        "#a17569",
-        "#bcb6ff",
-        "#bf03b8",
-        "#645472",
-        "#790000",
-        "#0774d8",
-        "#729a7c",
-        "#ff7752",
-        "#004b00",
-        "#8e7b01",
-        "#f2007b",
-        "#8eba00",
-        "#a57bb8",
-        "#5901a3",
-        "#e2afaf",
-        "#a03a52",
-        "#a1c8c8",
-        "#9e4b00",
-        "#546744",
-        "#bac389",
-        "#5e7b87",
-    )
     for group in groups:
         normalized_bands, wn_plot, mean_plot, _, _ = prepare_mean_plot_data(
             group["wn"],
@@ -439,7 +404,12 @@ def save_mean_summary_plot(groups, out_path, norm_method, bad_bands):
     _add_bad_band_spans(ax, plot_rows[0][3])
     for idx, (label, wn_plot, mean_plot, _) in enumerate(plot_rows):
         offset = (row_count - idx - 1) * offset_step
-        ax.plot(wn_plot, mean_plot + offset, color=colors[idx % len(colors)], linewidth=1.0)
+        ax.plot(
+            wn_plot,
+            mean_plot + offset,
+            color=GLASBEY_DARK_COLORS[idx % len(GLASBEY_DARK_COLORS)],
+            linewidth=1.0,
+        )
         ax.text(
             -0.01,
             offset,
@@ -452,10 +422,10 @@ def save_mean_summary_plot(groups, out_path, norm_method, bad_bands):
         )
 
     ax.set_xlim([groups[0]["wn"].min(), groups[0]["wn"].max()])
+    ax.margins(y=0.01)
     ax.tick_params(axis="y", which="both", labelleft=False, left=False)
     ax.set_xlabel("Wavenumber (cm$^{-1}$)")
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
-

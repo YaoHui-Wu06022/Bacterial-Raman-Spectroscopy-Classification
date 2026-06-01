@@ -6,6 +6,43 @@ from raman.tool.array import contiguous_regions
 from raman.tool.spectrum import median_step_cm
 
 
+# Colorcet glasbey_dark 前 32 色，适合白底上的多类别细线
+GLASBEY_DARK_COLORS = (
+    "#d60000",
+    "#8c3bff",
+    "#018700",
+    "#00acc6",
+    "#e6a500",
+    "#ff7ed1",
+    "#6b004f",
+    "#573b00",
+    "#005659",
+    "#15e18c",
+    "#0000dd",
+    "#a17569",
+    "#bcb6ff",
+    "#bf03b8",
+    "#645472",
+    "#790000",
+    "#0774d8",
+    "#729a7c",
+    "#ff7752",
+    "#004b00",
+    "#8e7b01",
+    "#f2007b",
+    "#8eba00",
+    "#a57bb8",
+    "#5901a3",
+    "#e2afaf",
+    "#a03a52",
+    "#a1c8c8",
+    "#9e4b00",
+    "#546744",
+    "#bac389",
+    "#5e7b87",
+)
+
+
 def insert_nan_gaps(wn, *values):
     """在波数轴明显断开的地方插入 NaN，避免绘图跨坏段连线"""
     wn = np.asarray(wn, dtype=np.float32)

@@ -20,12 +20,13 @@ from raman.data.preprocess import estimate_baseline
 from raman.data.profiles import get_dataset_dir, get_profile
 from raman.tool.naming import extract_letters_prefix
 from raman.tool.path import PROJECT_ROOT
-from raman.tool.plotting import plot_segments_without_bad_bands
+from raman.tool.plotting import GLASBEY_DARK_COLORS, plot_segments_without_bad_bands
 from raman.tool.spectrum import build_valid_mask, get_config_bad_bands
 
 
 TARGET_CM = 1002.0
 GRID_STEP = 0.2
+PREVIEW_FIGURE_WIDTH = 12
 DELTA_NAME = "delta.txt"
 DELTA_LOG_NAME = "delta_log.txt"
 DELTA_CS_NAME = "delta_cs.txt"
@@ -330,10 +331,9 @@ def plot_prefix_group(
     norm_method: str,
 ) -> None:
     """绘制同属同前缀 raw 和归一化后中位谱总览图"""
-    fig, axes = plt.subplots(2, 1, figsize=(12, 9), sharex=True)
-    color_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", [f"C{i}" for i in range(10)])
+    fig, axes = plt.subplots(2, 1, figsize=(PREVIEW_FIGURE_WIDTH, 9), sharex=True)
     for idx, (name, curve) in enumerate(raw_curves.items()):
-        color = color_cycle[idx % len(color_cycle)]
+        color = GLASBEY_DARK_COLORS[idx % len(GLASBEY_DARK_COLORS)]
         axes[0].plot(wn_ref, curve, lw=1.3, color=color, label=name)
     plot_bad_bands(axes[0], wn_ref)
 
@@ -347,7 +347,7 @@ def plot_prefix_group(
         offset_step = max(norm_span * 0.55, 1.25)
     for idx, (name, curve) in enumerate(norm_curves.items()):
         offset = idx * offset_step
-        color = color_cycle[idx % len(color_cycle)]
+        color = GLASBEY_DARK_COLORS[idx % len(GLASBEY_DARK_COLORS)]
         axes[1].axhline(offset, color="0.88", lw=0.7, zorder=0)
         plot_segments_without_bad_bands(
             axes[1],
@@ -381,23 +381,36 @@ def plot_prefix_group(
 def plot_shift_compare(
     before_curve: np.ndarray,
     after_curve: np.ndarray,
+    reference_curves: dict[str, np.ndarray],
     out_path: Path,
     title: str,
     wn_ref: np.ndarray,
+    target_name: str,
 ) -> None:
-    """绘制平移前后 raw 中位谱对比图"""
-    fig, axes = plt.subplots(2, 1, figsize=(16, 8), sharex=True)
-    for ax, curve, label in (
-        (axes[0], before_curve, "Before shift"),
-        (axes[1], after_curve, "After shift"),
+    """绘制平移前后 raw 中位谱及同前缀参考曲线"""
+    fig, axes = plt.subplots(2, 1, figsize=(PREVIEW_FIGURE_WIDTH, 8), sharex=True)
+    target_color = GLASBEY_DARK_COLORS[len(reference_curves) % len(GLASBEY_DARK_COLORS)]
+    for ax, curve, label, subtitle in (
+        (axes[0], before_curve, f"{target_name} before shift", "before shift"),
+        (axes[1], after_curve, f"{target_name} after shift", "after shift"),
     ):
-        ax.plot(wn_ref, curve, lw=1.4, label=label)
+        for idx, (name, reference) in enumerate(reference_curves.items()):
+            ax.plot(
+                wn_ref,
+                reference,
+                lw=1.0,
+                alpha=0.8,
+                color=GLASBEY_DARK_COLORS[idx % len(GLASBEY_DARK_COLORS)],
+                label=name,
+            )
+        ax.plot(wn_ref, curve, color=target_color, lw=1.0, label=label)
         plot_bad_bands(ax, wn_ref)
         ax.axvline(TARGET_CM, color="black", ls="--", lw=0.8, alpha=0.35)
         ax.set_ylabel("Raw intensity")
-        ax.legend(loc="upper left")
+        ax.set_title(subtitle)
+        ax.legend(loc="upper left", ncol=2, fontsize=8)
         ax.grid(alpha=0.15)
-    axes[0].set_title(title)
+    fig.suptitle(title)
     axes[1].set_xlabel("Wavenumber (cm$^{-1}$)")
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -525,7 +538,7 @@ def plot_prefix_dataset(dataset: str, include_transferred: bool = False) -> list
 
 
 def plot_shift_folder(dataset: str, folder_arg: str) -> Path:
-    """按 delta.txt 累计平移量输出单文件夹平移前后 raw 对比图"""
+    """按 delta.txt 累计平移量输出单文件夹平移前后和同前缀参考图"""
     paths = resolve_dataset(dataset)
     wn_ref = build_plot_grid()
     folder = resolve_folder(paths.init_dir, folder_arg)
@@ -539,13 +552,25 @@ def plot_shift_folder(dataset: str, folder_arg: str) -> Path:
     if before_raw is None or after_raw is None:
         raise RuntimeError(f"Cannot compute raw median curve: {folder}")
 
+    reference_curves: dict[str, np.ndarray] = {}
+    for reference_folder in sorted(path for path in folder.parent.iterdir() if path.is_dir()):
+        if reference_folder == folder or is_transferred_folder(reference_folder):
+            continue
+        if shift_folder_prefix(reference_folder) != prefix:
+            continue
+        reference_raw, _ = folder_raw_median_curve(reference_folder, wn_ref)
+        if reference_raw is not None:
+            reference_curves[reference_folder.name] = reference_raw
+
     out_path = paths.output_dir / "figure" / prefix / f"{folder.name}_shift_compare.png"
     plot_shift_compare(
         before_raw,
         after_raw,
+        reference_curves,
         out_path,
         f"{folder.parent.name} {prefix}: {folder.name} cumulative shift {cumulative_delta:+g} cm$^{{-1}}$",
         wn_ref,
+        folder.name,
     )
     return out_path
 
