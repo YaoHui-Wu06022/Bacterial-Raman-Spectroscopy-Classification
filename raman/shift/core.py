@@ -28,8 +28,10 @@ TARGET_CM = 1002.0
 GRID_STEP = 0.2
 DELTA_NAME = "delta.txt"
 DELTA_LOG_NAME = "delta_log.txt"
+DELTA_CS_NAME = "delta_cs.txt"
 PREFIX_PLOT_STATE_NAME = "prefix_plot_state.csv"
 DELTA_FIELDS = ("genus", "folder", "prefix", "delta")
+DELTA_CS_FIELDS = ("source_folder", "target_genus", "target_folder", "delta")
 DELTA_LOG_FIELDS = ("time", "genus", "folder", "prefix", "step_delta", "cumulative_delta", "files_changed", "note")
 LEGACY_PLOT_STATE_FIELDS = (*DELTA_FIELDS, "plot_version")
 TRANSFERRED_FOLDER_SUFFIX = "t"
@@ -424,6 +426,21 @@ def write_plot_state(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
+def read_transferred_delta_map(path: Path) -> dict[tuple[str, str], str]:
+    """读取迁移 CS 文件夹对应的累计平移快照"""
+    if not path.is_file():
+        return {}
+    with path.open("r", encoding="utf-8-sig", newline="") as file:
+        reader = csv.DictReader(file, delimiter="\t")
+        if reader.fieldnames != list(DELTA_CS_FIELDS):
+            return {}
+        return {
+            (row["target_genus"], row["target_folder"]): format_delta(parse_delta(row.get("delta")))
+            for row in reader
+            if row.get("target_genus") and row.get("target_folder")
+        }
+
+
 def current_delta_state(
     paths: DatasetPaths,
     rows: list[dict[str, str]],
@@ -431,14 +448,23 @@ def current_delta_state(
 ) -> list[dict[str, str]]:
     """生成当前全部小文件夹 delta 状态"""
     deltas = delta_map(rows)
+    transferred_deltas = (
+        read_transferred_delta_map(paths.output_dir / DELTA_CS_NAME)
+        if include_transferred
+        else {}
+    )
     state: list[dict[str, str]] = []
     for folder in iter_init_folders(paths.init_dir, include_transferred=include_transferred):
+        key = (folder.parent.name, folder.name)
+        delta = format_delta(deltas.get(key, 0.0))
+        if is_transferred_folder(folder):
+            delta = transferred_deltas.get(key, delta)
         state.append(
             {
                 "genus": folder.parent.name,
                 "folder": folder.name,
                 "prefix": shift_folder_prefix(folder),
-                "delta": format_delta(deltas.get((folder.parent.name, folder.name), 0.0)),
+                "delta": delta,
             }
         )
     return state
