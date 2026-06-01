@@ -130,6 +130,13 @@ def save_confusion_matrix_figure(
     fig.subplots_adjust(
         left=max(fig.subplotpars.left, auto_confusion_matrix_left_margin(display_names))
     )
+    if colorbar is not None:
+        # square=True 会压缩热图主体，颜色条需要在最终布局后重新对齐
+        heatmap_pos = ax.get_position()
+        colorbar_pos = colorbar.ax.get_position()
+        colorbar.ax.set_position(
+            [colorbar_pos.x0, heatmap_pos.y0, colorbar_pos.width, heatmap_pos.height]
+        )
     plt.savefig(out_path, dpi=300)
     if show:
         plt.show()
