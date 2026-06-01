@@ -32,7 +32,7 @@ class HeatmapConfig:
     max_per_class: int = 50
     row_norm: str = "max"
     use_train_loader: bool = True
-    topk_per_class: int = 5
+    separate_class_plots: bool = False
 
 def _load_analysis_context(exp_dir, target_level=None, inherit_missing_levels=False):
     """加载分析入口共用的实验配置、数据集、split 和 runtime"""

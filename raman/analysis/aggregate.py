@@ -22,8 +22,8 @@ from .ig import (
     compute_class_band_importance_ig,
     compute_class_mean_spectrum,
     compute_ig_batches,
-    plot_band_importance_heatmap,
-    save_topk_bands_csv,
+    plot_band_importance_figures,
+    save_band_importance_csv,
 )
 from .tasks import build_task_loaders
 
@@ -461,7 +461,7 @@ def run_aggregate_analysis(
     wavenumbers = build_wavenumber_axis(band_avg.shape[1], config)
     bad_bands = get_config_bad_bands(config)
     heatmap_path = os.path.join(fig_dir, "band_importance_heatmap_aggregate.png")
-    plot_band_importance_heatmap(
+    heatmap_paths = plot_band_importance_figures(
         band_avg,
         band_counts,
         global_class_names,
@@ -470,21 +470,19 @@ def run_aggregate_analysis(
         row_norm=heatmap_cfg.row_norm,
         mean_spectra=mean_avg,
         bad_bands=bad_bands,
+        separate_class_plots=heatmap_cfg.separate_class_plots,
     )
-    log(f"Saved aggregate band importance heatmap: {heatmap_path}")
+    log(f"Saved aggregate band importance heatmap figures: {len(heatmap_paths)}")
 
-    topk_path = os.path.join(
-        fig_dir, f"band_top{heatmap_cfg.topk_per_class}_per_class_aggregate.csv"
-    )
-    save_topk_bands_csv(
+    csv_path = os.path.join(fig_dir, "band_importance_per_class_aggregate.csv")
+    save_band_importance_csv(
         band_avg,
         global_class_names,
         wavenumbers,
-        top_k=heatmap_cfg.topk_per_class,
-        save_path=topk_path,
+        save_path=csv_path,
         row_norm=heatmap_cfg.row_norm,
     )
-    log(f"Saved aggregate band top-k CSV: {topk_path}")
+    log(f"Saved aggregate full-spectrum band importance CSV: {csv_path}")
 
     log("Note: Embedding plots are skipped in aggregate mode (different parent models).")
     log_file.close()

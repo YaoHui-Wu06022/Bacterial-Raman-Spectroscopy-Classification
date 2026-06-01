@@ -8,6 +8,7 @@ from matplotlib.collections import PolyCollection
 
 from raman.tool.model import needs_cudnn_rnn_guard, select_logits
 from raman.tool.path import ensure_dir
+from raman.tool.hierarchy import safe_key_name
 from raman.tool.plotting import shorten_class_names
 from raman.tool.spectrum import estimate_gap_indices, normalize_bad_bands
 
@@ -371,8 +372,14 @@ def plot_band_importance_heatmap(
     row_norm="max",
     mean_spectra=None,
     bad_bands=None,
+    layout="summary",
 ):
     """按类别绘制热图：曲线表示平均光谱，曲线下填充颜色表示波段重要性"""
+    if layout not in {"summary", "single_class"}:
+        raise ValueError(f"Unknown band importance layout: {layout}")
+    if layout == "single_class" and len(class_names) != 1:
+        raise ValueError("single_class layout requires exactly one class.")
+
     data = importance.copy()
     if row_norm == "max":
         denom = np.max(data, axis=1, keepdims=True)
@@ -395,8 +402,11 @@ def plot_band_importance_heatmap(
 
     display_names = shorten_class_names(class_names)
     max_label_len = max((len(str(name)) for name in display_names), default=0)
-    fig_height = max(8, min(26, 0.48 * len(display_names) + 2.0))
-    fig_width = max(12, min(16, 10.8 + max_label_len * 0.05))
+    if layout == "single_class":
+        fig_width, fig_height = 12, 4.5
+    else:
+        fig_height = max(8, min(26, 0.48 * len(display_names) + 2.0))
+        fig_width = max(12, min(16, 10.8 + max_label_len * 0.05))
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
     gap_indices = estimate_gap_indices(wavenumbers)
@@ -469,17 +479,22 @@ def plot_band_importance_heatmap(
         else:
             ax.plot(wavenumbers, y_plot, color="#1f1f1f", linewidth=1.0)
 
-    ax.set_yticks([i + 0.4 for i in range(len(display_names))])
     ytick_size = 8 if len(display_names) <= 24 else 6
-    ax.set_yticklabels(display_names, fontsize=ytick_size)
+    if layout == "single_class":
+        ax.set_yticks([])
+    else:
+        ax.set_yticks([i + 0.4 for i in range(len(display_names))])
+        ax.set_yticklabels(display_names, fontsize=ytick_size)
 
     tick_count = 6
     idx = np.linspace(0, len(wavenumbers) - 1, tick_count, dtype=int)
     ax.set_xticks(wavenumbers[idx])
     ax.set_xticklabels([f"{wavenumbers[i]:.0f}" for i in idx])
     ax.set_xlabel(x_label)
-    ax.set_ylabel("Class")
-    ax.set_title("Band Importance (Mean Spectrum with Colored Area)")
+    if layout == "single_class":
+        ax.set_title(f"Band Importance - {display_names[0]}")
+    else:
+        ax.set_title("Band Importance Summary")
 
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
@@ -493,17 +508,66 @@ def plot_band_importance_heatmap(
     )
     cbar.ax.tick_params(labelsize=ytick_size)
 
-    ax.set_ylim(-0.2, len(class_names) - 0.2 + 1.0)
     ax.set_xlim(wavenumbers[0], wavenumbers[-1])
-    left_margin = min(0.30, max(0.10, 0.055 + max_label_len * 0.006))
-    fig.subplots_adjust(left=left_margin, right=0.94, top=0.94, bottom=0.08)
+    if layout == "single_class":
+        ax.set_ylim(-0.05, 0.85)
+        fig.subplots_adjust(left=0.075, right=0.94, top=0.90, bottom=0.16)
+    else:
+        ax.set_ylim(-0.2, len(class_names) - 0.2 + 1.0)
+        left_margin = min(0.30, max(0.10, 0.055 + max_label_len * 0.006))
+        fig.subplots_adjust(left=left_margin, right=0.94, top=0.94, bottom=0.08)
     plt.savefig(save_path, dpi=300)
     plt.close()
 
-def save_topk_bands_csv(
-    importance, class_names, wavenumbers, top_k, save_path, row_norm="max"
+def plot_band_importance_figures(
+    importance,
+    counts,
+    class_names,
+    wavenumbers,
+    save_path,
+    row_norm="max",
+    mean_spectra=None,
+    bad_bands=None,
+    separate_class_plots=False,
 ):
-    """把每个类别最重要的前 k 个波段导出到 CSV"""
+    """按配置输出汇总图，或为每个类别分别输出一张波段重要性图"""
+    if not separate_class_plots:
+        plot_band_importance_heatmap(
+            importance,
+            counts,
+            class_names,
+            wavenumbers,
+            save_path,
+            row_norm=row_norm,
+            mean_spectra=mean_spectra,
+            bad_bands=bad_bands,
+        )
+        return [save_path]
+
+    stem, suffix = os.path.splitext(save_path)
+    suffix = suffix or ".png"
+    paths = []
+    for class_idx, class_name in enumerate(class_names):
+        parts = str(class_name).replace("\\", "/").split("/")
+        class_path = f"{stem}__{safe_key_name(parts)}{suffix}"
+        plot_band_importance_heatmap(
+            importance[class_idx:class_idx + 1],
+            counts[class_idx:class_idx + 1],
+            [class_name],
+            wavenumbers,
+            class_path,
+            row_norm=row_norm,
+            mean_spectra=mean_spectra[class_idx:class_idx + 1],
+            bad_bands=bad_bands,
+            layout="single_class",
+        )
+        paths.append(class_path)
+    return paths
+
+def save_band_importance_csv(
+    importance, class_names, wavenumbers, save_path, row_norm="max"
+):
+    """把每个类别的完整逐点波段重要性导出到 CSV"""
     data = importance.copy()
     if row_norm == "max":
         denom = np.max(data, axis=1, keepdims=True)
@@ -520,15 +584,14 @@ def save_topk_bands_csv(
         wavenumbers = np.arange(data.shape[1])
     with open(save_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["class", "rank", "band_index", "wavenumber", "importance"])
+        writer.writerow(["class", "band_index", "wavenumber", "importance"])
         for i, name in enumerate(class_names):
             row = data[i]
             if row.size == 0:
                 continue
-            top_idx = np.argsort(row)[::-1][:top_k]
-            for rank, idx in enumerate(top_idx, 1):
+            for idx in range(row.size):
                 writer.writerow(
-                    [name, rank, int(idx), float(wavenumbers[idx]), float(row[idx])]
+                    [name, int(idx), float(wavenumbers[idx]), float(row[idx])]
                 )
 
 def _plot_channel_importance(importance, channel_names, save_path):

@@ -18,8 +18,8 @@ from .ig import (
     compute_channel_importance_from_ig,
     compute_class_mean_spectrum,
     compute_ig_batches,
-    plot_band_importance_heatmap,
-    save_topk_bands_csv,
+    plot_band_importance_figures,
+    save_band_importance_csv,
 )
 from .se import log_seblock_summary
 from .tasks import build_task_loaders
@@ -249,7 +249,7 @@ def run_level_analysis(
     wavenumbers = build_wavenumber_axis(band_importance.shape[1], config)
     bad_bands = get_config_bad_bands(config)
     heatmap_path = os.path.join(fig_dir, "band_importance_heatmap.png")
-    plot_band_importance_heatmap(
+    heatmap_paths = plot_band_importance_figures(
         band_importance,
         counts,
         heatmap_class_names,
@@ -258,21 +258,19 @@ def run_level_analysis(
         row_norm=heatmap_cfg.row_norm,
         mean_spectra=mean_spectra,
         bad_bands=bad_bands,
+        separate_class_plots=heatmap_cfg.separate_class_plots,
     )
-    log(f"Saved band importance heatmap: {heatmap_path}")
+    log(f"Saved band importance heatmap figures: {len(heatmap_paths)}")
 
-    topk_path = os.path.join(
-        fig_dir, f"band_top{heatmap_cfg.topk_per_class}_per_class.csv"
-    )
-    save_topk_bands_csv(
+    csv_path = os.path.join(fig_dir, "band_importance_per_class.csv")
+    save_band_importance_csv(
         band_importance,
         heatmap_class_names,
         wavenumbers,
-        top_k=heatmap_cfg.topk_per_class,
-        save_path=topk_path,
+        save_path=csv_path,
         row_norm=heatmap_cfg.row_norm,
     )
-    log(f"Saved band top-k CSV: {topk_path}")
+    log(f"Saved full-spectrum band importance CSV: {csv_path}")
 
     log_file.close()
 

@@ -26,7 +26,7 @@ HEATMAP_STEPS = 32
 HEATMAP_MAX_PER_CLASS = 50
 HEATMAP_ROW_NORM = "max"
 HEATMAP_USE_TRAIN_LOADER = True
-HEATMAP_TOPK_PER_CLASS = 5
+HEATMAP_SEPARATE_CLASS_PLOTS = False
 
 
 def _heatmap_config():
@@ -36,7 +36,7 @@ def _heatmap_config():
         max_per_class=HEATMAP_MAX_PER_CLASS,
         row_norm=HEATMAP_ROW_NORM,
         use_train_loader=HEATMAP_USE_TRAIN_LOADER,
-        topk_per_class=HEATMAP_TOPK_PER_CLASS,
+        separate_class_plots=HEATMAP_SEPARATE_CLASS_PLOTS,
     )
 
 
