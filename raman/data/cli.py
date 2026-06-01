@@ -3,6 +3,7 @@ import argparse
 from raman.data.build import build_test, build_train
 from raman.data.io import pack_init, unpack_init
 from raman.data.count import count_dataset, print_results
+from raman.data.plot import plot_train
 from raman.tool.dataset import resolve_dataset
 
 
@@ -38,6 +39,12 @@ def run_test(args):
     build_test(profile, dataset_dir)
 
 
+def run_plot(args):
+    """从已有 train 生成训练集审图"""
+    profile, dataset_dir = resolve_dataset(args.dataset, create=True)
+    plot_train(profile, dataset_dir)
+
+
 def run_count(args):
     """统计某个数据阶段下的光谱文件数量"""
     _, dataset_dir = resolve_dataset(args.dataset, create=True)
@@ -56,6 +63,7 @@ def build_parser():
         ("unpack", run_unpack, "把 init.npz 解包回 init"),
         ("train", run_train, "从 init 直接构建 train"),
         ("test", run_test, "从 init_test 构建 test"),
+        ("plot", run_plot, "从已有 train 生成 fig_train"),
         ("count", run_count, "统计指定数据阶段的 arc_data 数量"),
     ):
         sub = subparsers.add_parser(command, help=help_text)

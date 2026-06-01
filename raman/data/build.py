@@ -1,12 +1,11 @@
 import shutil
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from raman.data.preprocess import preprocess_single_spectrum, save_mean_plot
+from raman.data.preprocess import preprocess_single_spectrum
 from raman.data.io import iter_init_groups, resolve_init_input, write_arc_data
-from raman.tool.hierarchy import iter_ancestor_level_keys, safe_key_name
 from raman.tool.naming import ensure_name_prefix, extract_letters_prefix
 from raman.tool.path import resolve_under_base
 from raman.tool.spectrum import build_wn_ref
@@ -53,7 +52,6 @@ class PipelineConfig:
     cosmic_ray_threshold: float = COSMIC_RAY_THRESHOLD
     cosmic_ray_max_iter: int = COSMIC_RAY_MAX_ITER
     min_samples_per_class: int = MIN_SAMPLES_PER_CLASS
-    plot_norm_method: str | None = None
     pca_enabled: bool = PCA_ENABLED
     pca_components: float | int = PCA_COMPONENTS
     pca_center: bool = PCA_CENTER
@@ -67,14 +65,8 @@ class PipelineConfig:
 DEFAULT_PIPELINE_CONFIG = PipelineConfig()
 
 def resolve_pipeline_config(pipeline_config=None):
-    """返回离线预处理配置，均值图标准化默认跟随运行配置"""
-    cfg = pipeline_config or DEFAULT_PIPELINE_CONFIG
-    if cfg.plot_norm_method:
-        return cfg
-
-    from raman.config import config as runtime_config
-
-    return replace(cfg, plot_norm_method=str(runtime_config.norm_method))
+    """返回离线预处理配置"""
+    return pipeline_config or DEFAULT_PIPELINE_CONFIG
 
 def _cosmic_ray_enabled(profile, cfg):
     """判断当前数据集是否启用宇宙射线去除"""
@@ -155,62 +147,11 @@ def _resolve_merged_class_dir(root_output, rel_dir, leaf_name):
         return root_output / target_cls
     return root_output / rel_parent / target_cls
 
-def _resolve_group_figure_dir(root_figure, rel_dir):
-    """为一个分组解析均值谱图输出目录，避免多处重复拼接父目录"""
-    rel_parent = rel_dir.parent
-    if rel_parent in (Path("."), Path("")):
-        return root_figure
-    return root_figure / rel_parent
-
-def _save_hierarchy_mean_plots(hierarchy_groups, root_figure, cfg):
-    """输出 train 阶段聚合得到的高层级平均光谱图"""
-    if not hierarchy_groups:
-        return 0
-
-    output_root = root_figure / "_hierarchy_mean"
-    generated = 0
-
-    for (level_idx, parts), payload in sorted(hierarchy_groups.items()):
-        spectra_arr = np.vstack(payload["spectra"])
-        level_dir = output_root / f"level_{level_idx}"
-        level_dir.mkdir(parents=True, exist_ok=True)
-
-        label = "/".join(parts)
-        fig_save_path = level_dir / f"{safe_key_name(parts)}.png"
-        save_mean_plot(
-            wn=payload["wn"],
-            spectra=spectra_arr,
-            out_path=fig_save_path,
-            norm_method=cfg.plot_norm_method,
-            bad_bands=cfg.bad_bands,
-            title=f"{label} (mean, q10-q90, n={spectra_arr.shape[0]})",
-        )
-        print(f"  Hierarchy mean spectrum saved: {fig_save_path}")
-        generated += 1
-
-    return generated
-
 def _save_spectra_files(save_dir, filenames, wn_list, spectra_arr, fmt="%.3f"):
     """批量写出预处理后的光谱文件，统一文本精度和目录创建行为"""
     save_dir.mkdir(parents=True, exist_ok=True)
     for fname, wn_u, sp_u in zip(filenames, wn_list, spectra_arr):
         write_arc_data(save_dir / fname, wn_u, sp_u, fmt=fmt)
-
-def _save_mean_figure(root_figure, rel_dir, filename, wn, spectra, title, cfg):
-    """统一保存均值谱图，标准化方式跟随配置"""
-    fig_dir = _resolve_group_figure_dir(root_figure, rel_dir)
-    fig_dir.mkdir(parents=True, exist_ok=True)
-    fig_path = fig_dir / filename
-    save_mean_plot(
-        wn=wn,
-        spectra=spectra,
-        out_path=fig_path,
-        norm_method=cfg.plot_norm_method,
-        bad_bands=cfg.bad_bands,
-        title=title,
-    )
-    print(f"  Mean spectrum saved: {fig_path}")
-    return fig_path
 
 def _reset_generated_dir(path):
     """重建生成型目录，避免旧类别残留影响下一次扫描"""
@@ -575,8 +516,6 @@ def build_train(profile, base_dir, pipeline_config=None):
     reset_log_file(pca_log_path)
 
     _reset_generated_dir(root_process_clean)
-    _reset_generated_dir(root_figure)
-    hierarchy_groups = {}
     merged_groups, skipped_sources = _collect_merged_init_groups(
         profile,
         input_path,
@@ -616,36 +555,11 @@ def build_train(profile, base_dir, pipeline_config=None):
         save_dir = group["target_dir"]
         _save_spectra_files(save_dir, filenames, wn_list, spectra_arr)
 
-        title = " - ".join(rel_dir.parts) + " (mean, q10-q90)"
-        _save_mean_figure(
-            root_figure=root_figure,
-            rel_dir=rel_dir,
-            filename=f"{rel_dir.name}.png",
-            wn=wn_list[0],
-            spectra=spectra_arr,
-            title=title,
-            cfg=cfg,
-        )
-
-        for level_idx, parts in iter_ancestor_level_keys(rel_dir):
-            key = (level_idx, parts)
-            if key not in hierarchy_groups:
-                hierarchy_groups[key] = {
-                    "wn": wn_list[0],
-                    "spectra": [],
-                }
-            hierarchy_groups[key]["spectra"].append(spectra_arr)
-
-    generated_hierarchy_plots = _save_hierarchy_mean_plots(
-        hierarchy_groups,
-        root_figure,
-        cfg,
-    )
+    _reset_generated_dir(root_figure)
 
     print("\nTraining dataset preprocessing finished:")
     print(f"- Final train spectra: {root_process_clean}")
-    print(f"- Mean plots: {root_figure}")
-    print(f"- Hierarchy mean plots: {generated_hierarchy_plots}")
+    print(f"- Cleared stale train plots: {root_figure}")
     print(f"- PCA log: {pca_log_path}")
     print(f"- Skipped source groups: {skipped_sources}")
     if cosmic_log_path is not None and cosmic_log_path.is_file() and cosmic_log_path.stat().st_size > 0:

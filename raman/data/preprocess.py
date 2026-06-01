@@ -319,8 +319,8 @@ def preprocess_single_spectrum(
 
 
 # ===== 预处理结果绘图 =====
-def save_mean_plot(wn, spectra, out_path, norm_method, bad_bands, title):
-    """保存一组光谱的均值谱图，并在图上标出坏波段区域"""
+def prepare_mean_plot_data(wn, spectra, norm_method, bad_bands):
+    """计算均值谱绘图需要的标准化统计量"""
     bad_bands = normalize_bad_bands(bad_bands)
     spectra_norm = normalize_spectrum(spectra, norm_method)
     mean_spec = np.mean(spectra_norm, axis=0)
@@ -337,30 +337,125 @@ def save_mean_plot(wn, spectra, out_path, norm_method, bad_bands, title):
         q10_spec,
         q90_spec,
     )
+    return bad_bands, wn_plot, mean_plot, q10_plot, q90_plot
 
-    plt.figure(figsize=(10, 5))
-    std_proxy = Patch(facecolor="C0", alpha=0.3, label="q10-q90 range")
 
+def _add_bad_band_spans(ax, bad_bands, with_label=False):
     if bad_bands:
         for band_min, band_max in bad_bands:
-            plt.axvspan(
+            ax.axvspan(
                 band_min,
                 band_max,
                 color="gray",
                 alpha=0.2,
                 label="CCD-affected region"
-                if (band_min, band_max) == bad_bands[0]
+                if with_label and (band_min, band_max) == bad_bands[0]
                 else None,
             )
 
+
+def save_mean_plot(wn, spectra, out_path, norm_method, bad_bands, title):
+    """保存一组光谱的均值谱图，并在图上标出坏波段区域"""
+    bad_bands, wn_plot, mean_plot, q10_plot, q90_plot = prepare_mean_plot_data(
+        wn,
+        spectra,
+        norm_method,
+        bad_bands,
+    )
+
+    plt.figure(figsize=(10, 5))
+    ax = plt.gca()
+    _add_bad_band_spans(ax, bad_bands, with_label=True)
     plt.plot(wn_plot, mean_plot, label=f"Mean spectrum {norm_method}")
     plt.fill_between(wn_plot, q10_plot, q90_plot, alpha=0.3)
     plt.title(title)
     plt.xlabel("Wavenumber (cm$^{-1}$)")
     plt.ylabel("Normalized intensity")
     plt.xlim([wn.min(), wn.max()])
-    plt.legend(handles=[std_proxy] + plt.gca().get_legend_handles_labels()[0])
+    handles = [Patch(facecolor="C0", alpha=0.3, label="q10-q90 range")]
+    handles += plt.gca().get_legend_handles_labels()[0]
+    plt.legend(handles=handles)
     plt.tight_layout()
     plt.savefig(out_path, dpi=300)
     plt.close()
+
+
+def save_mean_summary_plot(groups, out_path, norm_method, bad_bands):
+    """按层级将多个类别均值谱错位排列为一张长图"""
+    if not groups:
+        return
+
+    row_count = len(groups)
+    plot_rows = []
+    # Colorcet glasbey_dark 前 32 色，适合白底上的多类别细线
+    colors = (
+        "#d60000",
+        "#8c3bff",
+        "#018700",
+        "#00acc6",
+        "#e6a500",
+        "#ff7ed1",
+        "#6b004f",
+        "#573b00",
+        "#005659",
+        "#15e18c",
+        "#0000dd",
+        "#a17569",
+        "#bcb6ff",
+        "#bf03b8",
+        "#645472",
+        "#790000",
+        "#0774d8",
+        "#729a7c",
+        "#ff7752",
+        "#004b00",
+        "#8e7b01",
+        "#f2007b",
+        "#8eba00",
+        "#a57bb8",
+        "#5901a3",
+        "#e2afaf",
+        "#a03a52",
+        "#a1c8c8",
+        "#9e4b00",
+        "#546744",
+        "#bac389",
+        "#5e7b87",
+    )
+    for group in groups:
+        normalized_bands, wn_plot, mean_plot, _, _ = prepare_mean_plot_data(
+            group["wn"],
+            group["spectra"],
+            norm_method,
+            bad_bands,
+        )
+        plot_rows.append((group["label"], wn_plot, mean_plot, normalized_bands))
+
+    finite_values = np.concatenate([curve[np.isfinite(curve)] for _, _, curve, _ in plot_rows])
+    span = float(np.percentile(finite_values, 95) - np.percentile(finite_values, 5))
+    offset_step = max(span * 1.05, 1e-6)
+
+    fig, ax = plt.subplots(figsize=(12, max(4.0, 0.62 * row_count + 1.4)))
+    _add_bad_band_spans(ax, plot_rows[0][3])
+    for idx, (label, wn_plot, mean_plot, _) in enumerate(plot_rows):
+        offset = (row_count - idx - 1) * offset_step
+        ax.plot(wn_plot, mean_plot + offset, color=colors[idx % len(colors)], linewidth=1.0)
+        ax.text(
+            -0.01,
+            offset,
+            label,
+            transform=ax.get_yaxis_transform(),
+            ha="right",
+            va="center",
+            fontsize=8,
+            color="black",
+        )
+
+    ax.set_xlim([groups[0]["wn"].min(), groups[0]["wn"].max()])
+    ax.tick_params(axis="y", which="both", labelleft=False, left=False)
+    ax.set_xlabel("Wavenumber (cm$^{-1}$)")
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
 
