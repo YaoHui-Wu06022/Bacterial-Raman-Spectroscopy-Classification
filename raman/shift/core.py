@@ -24,18 +24,22 @@ from raman.tool.plotting import GLASBEY_DARK_COLORS, plot_segments_without_bad_b
 from raman.tool.spectrum import build_valid_mask, get_config_bad_bands
 
 
-TARGET_CM = 1002.0
-GRID_STEP = 0.2
-PREVIEW_FIGURE_WIDTH = 12
-DELTA_NAME = "delta.txt"
-DELTA_LOG_NAME = "delta_log.txt"
-DELTA_CS_NAME = "delta_cs.txt"
-PREFIX_PLOT_STATE_NAME = "prefix_plot_state.csv"
-DELTA_FIELDS = ("genus", "folder", "prefix", "delta")
-DELTA_CS_FIELDS = ("source_folder", "target_genus", "target_folder", "delta")
-DELTA_LOG_FIELDS = ("time", "genus", "folder", "prefix", "step_delta", "cumulative_delta", "files_changed", "note")
-LEGACY_PLOT_STATE_FIELDS = (*DELTA_FIELDS, "plot_version")
-TRANSFERRED_FOLDER_SUFFIX = "t"
+TARGET_CM = 1002.0  # 峰位审查图中的参考波数
+GRID_STEP = 0.2  # 绘图统一插值轴的步长
+PREVIEW_FIGURE_WIDTH = 12  # preview 和 plot-shift 图宽
+SNV_OFFSET_SCALE = 0.85  # SNV 曲线间距相对整体波动范围的倍率
+SNV_OFFSET_MIN = 2.0  # SNV 曲线最小间距
+MINMAX_OFFSET_SCALE = 0.35  # minmax 曲线间距相对整体波动范围的倍率
+MINMAX_OFFSET_MIN = 0.38  # minmax 曲线最小间距
+DELTA_NAME = "delta.txt"  # 当前训练文件夹累计平移量
+DELTA_LOG_NAME = "delta_log.txt"  # 每次训练文件夹平移动作日志
+DELTA_CS_NAME = "delta_cs.txt"  # 从测试菌迁入的 t 文件夹平移快照
+PREFIX_PLOT_STATE_NAME = "prefix_plot_state.csv"  # 上次 prefix 总览图使用的平移状态
+DELTA_FIELDS = ("genus", "folder", "prefix", "delta")  # delta.txt 字段
+DELTA_CS_FIELDS = ("source_folder", "target_genus", "target_folder", "delta")  # delta_cs.txt 字段
+DELTA_LOG_FIELDS = ("time", "genus", "folder", "prefix", "step_delta", "cumulative_delta", "files_changed", "note")  # delta_log.txt 字段
+LEGACY_PLOT_STATE_FIELDS = (*DELTA_FIELDS, "plot_version")  # 兼容旧 prefix 状态文件
+TRANSFERRED_FOLDER_SUFFIX = "t"  # 测试菌迁入训练集后的文件夹后缀
 
 
 @dataclass(frozen=True)
@@ -127,10 +131,8 @@ def folder_raw_median_curve(
         return np.nanmedian(np.vstack(curves), axis=0), len(curves)
 
 
-def normalize_preview_curve(curve: np.ndarray, norm_method: str, wn_ref: np.ndarray) -> np.ndarray:
-    """先去基线，再按当前归一化方法处理单条预览曲线"""
-    curve = np.asarray(curve, dtype=np.float32)
-    corrected = baseline_correct_preview_curve(curve, wn_ref)
+def normalize_preview_curve(corrected: np.ndarray, norm_method: str) -> np.ndarray:
+    """按指定方法归一化已扣基线的预览曲线"""
     return normalize_spectrum(corrected, norm_method, preserve_nan=True)
 
 
@@ -163,11 +165,11 @@ def baseline_correct_preview_curve(curve: np.ndarray, wn_ref: np.ndarray) -> np.
 def folder_median_curves(
     folder: Path,
     wn_ref: np.ndarray,
-    norm_method: str,
-) -> tuple[np.ndarray | None, np.ndarray | None, int]:
-    """返回小文件夹 raw 中位谱和归一化后中位谱"""
+) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None, int]:
+    """返回小文件夹 raw、SNV 和 minmax 中位谱"""
     raw_curves: list[np.ndarray] = []
-    norm_curves: list[np.ndarray] = []
+    snv_curves: list[np.ndarray] = []
+    minmax_curves: list[np.ndarray] = []
     for path in sorted(folder.glob("*.arc_data")):
         wn, sp = read_arc_data(path)
         if wn.size == 0 or sp.size == 0:
@@ -182,15 +184,18 @@ def folder_median_curves(
             continue
         curve[inside] = np.interp(wn_ref[inside], wn, sp).astype(np.float32)
         raw_curves.append(curve)
-        norm_curves.append(normalize_preview_curve(curve, norm_method, wn_ref))
+        corrected = baseline_correct_preview_curve(curve, wn_ref)
+        snv_curves.append(normalize_preview_curve(corrected, "snv"))
+        minmax_curves.append(normalize_preview_curve(corrected, "minmax"))
 
     if not raw_curves:
-        return None, None, 0
+        return None, None, None, 0
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         raw_median = np.nanmedian(np.vstack(raw_curves), axis=0)
-        norm_median = np.nanmedian(np.vstack(norm_curves), axis=0)
-    return raw_median, norm_median, len(raw_curves)
+        snv_median = np.nanmedian(np.vstack(snv_curves), axis=0)
+        minmax_median = np.nanmedian(np.vstack(minmax_curves), axis=0)
+    return raw_median, snv_median, minmax_median, len(raw_curves)
 
 
 def parse_delta(value: str | None) -> float:
@@ -324,46 +329,48 @@ def plot_bad_bands(ax, wn_ref: np.ndarray) -> None:
 
 def plot_prefix_group(
     raw_curves: dict[str, np.ndarray],
-    norm_curves: dict[str, np.ndarray],
+    snv_curves: dict[str, np.ndarray],
+    minmax_curves: dict[str, np.ndarray],
     out_path: Path,
     title: str,
     wn_ref: np.ndarray,
-    norm_method: str,
 ) -> None:
-    """绘制同属同前缀 raw 和归一化后中位谱总览图"""
-    fig, axes = plt.subplots(2, 1, figsize=(PREVIEW_FIGURE_WIDTH, 9), sharex=True)
+    """绘制同属同前缀 raw、SNV 和 minmax 中位谱总览图"""
+    fig, axes = plt.subplots(3, 1, figsize=(PREVIEW_FIGURE_WIDTH, 12), sharex=True)
     for idx, (name, curve) in enumerate(raw_curves.items()):
         color = GLASBEY_DARK_COLORS[idx % len(GLASBEY_DARK_COLORS)]
         axes[0].plot(wn_ref, curve, lw=1.3, color=color, label=name)
     plot_bad_bands(axes[0], wn_ref)
 
     bad_bands = get_config_bad_bands(config)
-    finite_chunks = [curve[np.isfinite(curve)] for curve in norm_curves.values() if np.isfinite(curve).any()]
-    finite_values = np.concatenate(finite_chunks) if finite_chunks else np.asarray([], dtype=np.float32)
-    norm_span = float(np.percentile(finite_values, 95) - np.percentile(finite_values, 5)) if finite_values.size else 1.0
-    if norm_method == "minmax":
-        offset_step = max(norm_span * 0.35, 0.38)
-    else:
-        offset_step = max(norm_span * 0.55, 1.25)
-    for idx, (name, curve) in enumerate(norm_curves.items()):
-        offset = idx * offset_step
-        color = GLASBEY_DARK_COLORS[idx % len(GLASBEY_DARK_COLORS)]
-        axes[1].axhline(offset, color="0.88", lw=0.7, zorder=0)
-        plot_segments_without_bad_bands(
-            axes[1],
-            wn_ref,
-            curve + offset,
-            bad_bands,
-            show_bad_bands=False,
-            color=color,
-            lw=1.3,
-            label=name,
-        )
-    plot_bad_bands(axes[1], wn_ref)
+    for ax, curves, scale, minimum in (
+        (axes[1], snv_curves, SNV_OFFSET_SCALE, SNV_OFFSET_MIN),
+        (axes[2], minmax_curves, MINMAX_OFFSET_SCALE, MINMAX_OFFSET_MIN),
+    ):
+        finite_chunks = [curve[np.isfinite(curve)] for curve in curves.values() if np.isfinite(curve).any()]
+        finite_values = np.concatenate(finite_chunks) if finite_chunks else np.asarray([], dtype=np.float32)
+        span = float(np.percentile(finite_values, 95) - np.percentile(finite_values, 5)) if finite_values.size else 1.0
+        offset_step = max(span * scale, minimum)
+        for idx, (name, curve) in enumerate(curves.items()):
+            offset = idx * offset_step
+            color = GLASBEY_DARK_COLORS[idx % len(GLASBEY_DARK_COLORS)]
+            ax.axhline(offset, color="0.88", lw=0.7, zorder=0)
+            plot_segments_without_bad_bands(
+                ax,
+                wn_ref,
+                curve + offset,
+                bad_bands,
+                show_bad_bands=False,
+                color=color,
+                lw=1.3,
+                label=name,
+            )
+        plot_bad_bands(ax, wn_ref)
 
     for ax, ylabel, subtitle in (
         (axes[0], "Raw intensity", "raw median"),
-        (axes[1], f"{norm_method} intensity + offset", f"{norm_method} median with vertical offsets"),
+        (axes[1], "SNV intensity", "SNV median with vertical offsets"),
+        (axes[2], "minmax intensity", "minmax median with vertical offsets"),
     ):
         ax.axvline(TARGET_CM, color="black", ls="--", lw=0.8, alpha=0.35)
         ax.set_ylabel(ylabel)
@@ -371,7 +378,7 @@ def plot_prefix_group(
         ax.legend(loc="upper left", ncol=2, fontsize=8)
         ax.grid(alpha=0.15)
     fig.suptitle(title)
-    axes[1].set_xlabel("Wavenumber (cm$^{-1}$)")
+    axes[2].set_xlabel("Wavenumber (cm$^{-1}$)")
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=160)
@@ -484,10 +491,9 @@ def current_delta_state(
 
 
 def plot_prefix_dataset(dataset: str, include_transferred: bool = False) -> list[Path]:
-    """按 delta.txt 变化增量输出同前缀 raw 和归一化后中位谱总览图"""
+    """按 delta.txt 变化增量输出同前缀 raw、SNV 和 minmax 中位谱总览图"""
     paths = resolve_dataset(dataset)
     wn_ref = build_plot_grid()
-    norm_method = str(getattr(config, "norm_method", "snv")).lower()
     rows = ensure_delta_rows(paths)
     state = current_delta_state(paths, rows, include_transferred=include_transferred)
     old_state = read_plot_state(paths.output_dir / PREFIX_PLOT_STATE_NAME)
@@ -514,22 +520,24 @@ def plot_prefix_dataset(dataset: str, include_transferred: bool = False) -> list
             continue
 
         raw_curves: dict[str, np.ndarray] = {}
-        norm_curves: dict[str, np.ndarray] = {}
+        snv_curves: dict[str, np.ndarray] = {}
+        minmax_curves: dict[str, np.ndarray] = {}
         for folder in folders:
-            raw_curve, norm_curve, _ = folder_median_curves(folder, wn_ref, norm_method)
-            if raw_curve is not None and norm_curve is not None:
+            raw_curve, snv_curve, minmax_curve, _ = folder_median_curves(folder, wn_ref)
+            if raw_curve is not None and snv_curve is not None and minmax_curve is not None:
                 raw_curves[folder.name] = raw_curve
-                norm_curves[folder.name] = norm_curve
+                snv_curves[folder.name] = snv_curve
+                minmax_curves[folder.name] = minmax_curve
         if not raw_curves:
             continue
 
         plot_prefix_group(
             raw_curves,
-            norm_curves,
+            snv_curves,
+            minmax_curves,
             out_path,
             f"{genus} {prefix} median spectra",
             wn_ref,
-            norm_method,
         )
         outputs.append(out_path)
 

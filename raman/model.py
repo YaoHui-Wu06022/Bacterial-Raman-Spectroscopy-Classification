@@ -137,7 +137,6 @@ class ResidualBottleneck1D(nn.Module):
             mid_channels,
             kernel_size=1,
             make_activation=make_activation,
-            padding=0,
         )
         self.conv_mid = make_conv_block(
             mid_channels,
@@ -150,7 +149,6 @@ class ResidualBottleneck1D(nn.Module):
             mid_channels,
             out_channels,
             kernel_size=1,
-            padding=0,
         )
         self.se = SEBlock1D(
             out_channels,
@@ -172,9 +170,9 @@ class ResidualBottleneck1D(nn.Module):
     def forward(self, x):
         """执行 bottleneck 主分支和 shortcut 残差融合"""
         residual = self.shortcut(x)
-        out = self.conv_reduce(x)
-        out = self.conv_mid(out)
-        out = self.conv_expand(out)
+        out = self.conv_reduce(x)  # 有激活
+        out = self.conv_mid(out)  # 有激活
+        out = self.conv_expand(out)  # 最后一个 1x1 expand 先保持线性映射，然后和 shortcut 相加，最后再统一激活
         out = self.se(out)
         return self.out_act(out + residual)
 

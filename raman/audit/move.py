@@ -98,11 +98,45 @@ def normalize_reason(reason: str) -> str:
     if not reason:
         raise ValueError("Move reason is required")
     labels = [label.strip() for label in reason.replace(",", ";").split(";") if label.strip()]
-    bad = [label for label in labels if label not in DEFAULT_AUDIT_CONFIG.delete_reason_labels]
+    bad = [label for label in labels if label not in DEFAULT_AUDIT_CONFIG.delete_categories]
     if bad:
-        allowed = "、".join(DEFAULT_AUDIT_CONFIG.delete_reason_labels)
+        allowed = "、".join(DEFAULT_AUDIT_CONFIG.delete_categories)
         raise ValueError(f"Unsupported reason label: {';'.join(bad)}. Allowed: {allowed}")
     return "；".join(dict.fromkeys(labels))
+
+
+def resolve_candidate_list_path(text: str, dataset_dir: Path) -> Path:
+    """把清单文件、扫描目录或时间戳目录名解析成候选 CSV"""
+    raw = Path(str(text).strip().strip('"').strip("'"))
+    candidates = [raw] if raw.is_absolute() else [
+        Path.cwd() / raw,
+        PROJECT_ROOT / raw,
+        dataset_dir / raw,
+        dataset_dir / "audit_full_scan" / raw,
+    ]
+
+    seen = set()
+    tried = []
+    missing_csv_dirs = []
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        tried.append(str(candidate))
+        if candidate.is_file():
+            return candidate
+        if candidate.is_dir():
+            csv_path = candidate / "delete_candidates.csv"
+            if csv_path.is_file():
+                return csv_path
+            missing_csv_dirs.append(candidate)
+
+    joined = "\n".join(f"  - {path}" for path in tried)
+    if missing_csv_dirs:
+        missing = "\n".join(f"  - {path}" for path in missing_csv_dirs)
+        raise FileNotFoundError(f"Missing delete_candidates.csv under matched audit output folder:\n{missing}")
+    raise FileNotFoundError(f"Cannot find candidate list or audit output folder:\n{joined}")
 
 
 def build_item(
@@ -218,7 +252,8 @@ def move_items(dataset, paths=None, from_list=None, reason=None, dry_run=False, 
 
     raw_items: list[tuple[str, str, str]] = []
     if from_list:
-        raw_items.extend(read_items_from_list(Path(from_list), reason, category))
+        list_path = resolve_candidate_list_path(from_list, dataset_dir)
+        raw_items.extend(read_items_from_list(list_path, reason, category))
     for path in paths or []:
         raw_items.append((path, reason or "", category or ""))
     if not raw_items and from_list:
@@ -241,7 +276,7 @@ def build_parser():
     parser.add_argument("dataset", nargs="?", default="细菌", help="数据集名或 profile id")
     parser.add_argument("paths", nargs="*", help="要移动的文件夹或文件路径")
     parser.add_argument("--path", action="append", default=[], help="要移动的文件夹或文件路径，可重复")
-    parser.add_argument("--from-list", default=None, help="audit 生成的 delete_candidates.csv")
+    parser.add_argument("--from-list", default=None, help="audit 输出目录名、输出目录路径或 delete_candidates.csv")
     parser.add_argument("--reason", default=None, help="手工移动原因；CSV 清单优先使用 reason_labels 列")
     parser.add_argument("--category", default=None, choices=DEFAULT_AUDIT_CONFIG.delete_categories, help="移动到 delete 下的分类目录")
     parser.add_argument("--dry-run", action="store_true", help="只打印移动计划，不移动文件")

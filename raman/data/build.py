@@ -22,7 +22,7 @@ BASELINE_MAX_ITER = 15  # 基线迭代次数上限
 BASELINE_FIT_MIN = 400  # 基线拟合下限，保留训练范围外缓冲区以稳定边缘基线
 BASELINE_FIT_MAX = 2000  # 基线拟合上限，避免更远端异常尖峰污染基线
 
-COSMIC_RAY_ENABLED_PROFILE_IDS = ("shift", "MN_IgA")
+COSMIC_RAY_ENABLED_PROFILE_IDS = ("original", "MN_IgA")
 COSMIC_RAY_WINDOW_POINTS = 7  # 宇宙射线局部 median/MAD 窗口宽度，单位点
 COSMIC_RAY_THRESHOLD = 7.0  # 宇宙射线正残差 z 阈值
 COSMIC_RAY_MAX_ITER = 2  # 宇宙射线最大迭代次数

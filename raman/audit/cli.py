@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from raman.audit import bad_band, full_scan, move
+from raman.audit import full_scan, move
 
 
 def build_parser():
@@ -13,14 +13,12 @@ def build_parser():
     parser = argparse.ArgumentParser(description="Raman 数据审核与移除工具")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("full", help="全库分阶段清洗")
-    subparsers.add_parser("bad-band", help="系统性坏段扫描")
     subparsers.add_parser("move", help="按路径或清单移动到 delete")
     return parser
 
 
 COMMANDS = {
     "full": full_scan.main,
-    "bad-band": bad_band.main,
     "move": move.main,
 }
 

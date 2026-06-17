@@ -122,7 +122,7 @@ def load_audit_records(profile, cfg, input_root, record_cls):
 
 
 def cosmic_clean_for_plot(wn, sp, profile, cfg):
-    """仅用于复核图展示宇宙射线清理结果"""
+    """仅用于候选图展示宇宙射线清理结果"""
     if profile.profile_id not in set(cfg.cosmic_ray_enabled_profile_ids):
         return np.asarray(sp, dtype=np.float32)
     cleaned, _ = remove_cosmic_rays(

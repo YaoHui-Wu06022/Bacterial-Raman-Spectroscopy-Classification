@@ -13,21 +13,20 @@ from raman.tool.array import (
     contiguous_regions,
     moving_average,
     robust_mad_scale,
-    robust_wave_stats,
 )
 from raman.tool.naming import prefix_of
 from raman.tool.spectrum import (
     contiguous_index_ranges,
     output_wavenumbers as output_wn,
-    region_width_cm,
 )
 
 
-VALID_STAGES = ("invalid", "class-similarity")
+VALID_STAGES = ("invalid", "similar")
 STAGE_DELETE_CATEGORY = {
     "invalid": "Invalid Spectrum",
-    "class-similarity": "Class_Similarity_Outliers",
+    "similar": "Similar Outliers",
 }
+INVALID_NOISE_SMOOTH_POINTS = 21
 
 
 @dataclass
@@ -66,19 +65,15 @@ class SpectrumRecord:
 
     ref_pool_scope: str = ""
     ref_pool_size: int = 0
-    other_ref_pool_size: int = 0
     corr_ref: float = np.nan
-    nearest_ref_corr: float = np.nan
     rmse_to_ref: float = np.nan
-    local_pos_count: int = 0
-    local_pos_max_z: float = 0.0
-    local_pos_area: float = 0.0
-    local_pos_width_points: int = 0
-    local_pos_width_cm: float = 0.0
-    local_pos_center_cm: float = 0.0
-    local_pos_positions: tuple[float, ...] = ()
-    local_pos_ranges: tuple[tuple[int, int], ...] = ()
-    local_pos_z: np.ndarray | None = None
+    local_residual_count: int = 0
+    local_residual_max: float = 0.0
+    local_residual_area: float = 0.0
+    local_residual_width_points: int = 0
+    local_residual_center_point: int = -1
+    local_residual_ranges: tuple[tuple[int, int], ...] = ()
+    local_residual_curve: np.ndarray | None = None
     folder_candidate_count: int = 0
     folder_candidate_fraction: float = 0.0
 
@@ -138,31 +133,6 @@ def longest_flat_points(wn, z, audit_cfg: AuditConfig):
     return int(best_points)
 
 
-def _local_positive_regions(wn, z_values, audit_cfg: AuditConfig):
-    """提取类内参考残差里的局部正异常段。"""
-    regions = []
-    for start, end in contiguous_regions(z_values >= float(audit_cfg.class_local_z_min)):
-        width_points = int(end - start)
-        if width_points < int(audit_cfg.class_local_width_min_points):
-            continue
-        segment = z_values[start:end]
-        if segment.size == 0:
-            continue
-        peak_idx = int(start + np.argmax(segment))
-        regions.append(
-            {
-                "start": int(start),
-                "end": int(end),
-                "center_cm": float(wn[peak_idx]),
-                "width_points": width_points,
-                "width_cm": region_width_cm(wn, start, end),
-                "max_z": float(np.max(segment)),
-                "area": float(np.sum(np.maximum(segment, 0.0))),
-            }
-        )
-    return regions
-
-
 def _row_corr_to_one(spectra, reference):
     """计算多条谱到一条参考谱的相关系数"""
     spectra = np.asarray(spectra, dtype=np.float32)
@@ -179,42 +149,34 @@ def _row_corr_to_one(spectra, reference):
     return corr
 
 
-def _nearest_other_folder_corr(spectra, folders, block_size=256):
-    """分块计算非同小文件夹最近邻相关性"""
-    spectra = np.asarray(spectra, dtype=np.float32)
-    folders = np.asarray(folders, dtype=object)
-    count = int(spectra.shape[0])
-    nearest = np.full(count, np.nan, dtype=np.float32)
-    other_counts = np.zeros(count, dtype=np.int32)
-    if count <= 1:
-        return nearest, other_counts
-
-    centered = spectra - spectra.mean(axis=1, keepdims=True)
-    norms = np.linalg.norm(centered, axis=1)
-    valid = norms > 1e-8
-    normed = np.zeros_like(centered, dtype=np.float32)
-    normed[valid] = centered[valid] / norms[valid, None]
-
-    folder_indices = {folder: np.flatnonzero(folders == folder) for folder in np.unique(folders)}
-    for indices in folder_indices.values():
-        other_counts[indices] = count - int(indices.size)
-
-    block_size = max(16, int(block_size))
-    for start in range(0, count, block_size):
-        end = min(start + block_size, count)
-        sim = normed[start:end] @ normed.T
-        sim[:, ~valid] = -np.inf
-        for row, idx in enumerate(range(start, end)):
-            sim[row, folder_indices[folders[idx]]] = -np.inf
-        best = np.max(sim, axis=1)
-        ok = np.isfinite(best)
-        nearest[start:end][ok] = best[ok].astype(np.float32, copy=False)
-    return nearest, other_counts
+def _local_residual_regions(residual, audit_cfg: AuditConfig):
+    """提取相对参考中位谱的局部正残差异常"""
+    residual = moving_average(np.asarray(residual, dtype=np.float32), 5)
+    threshold = float(audit_cfg.class_local_residual_min)
+    regions = []
+    for start, end in contiguous_regions(residual >= threshold):
+        width_points = int(end - start)
+        if width_points < int(audit_cfg.class_local_residual_width_min_points):
+            continue
+        segment = np.asarray(residual[start:end], dtype=np.float32)
+        if segment.size == 0:
+            continue
+        peak_offset = int(np.argmax(segment))
+        regions.append(
+            {
+                "start": int(start),
+                "end": int(end),
+                "center_point": int(start + peak_offset),
+                "width_points": width_points,
+                "max_residual": float(np.max(segment)),
+                "area": float(np.sum(np.maximum(segment - threshold, 0.0))),
+            }
+        )
+    return regions, residual
 
 
 def score_class_similarity(records, cfg, audit_cfg: AuditConfig):
     """为第二阶段同前缀类内相似性打分。"""
-    wn_full = output_wn(cfg)
     by_scope: dict[str, list[SpectrumRecord]] = {}
     for record in records:
         record.prefix_scope = prefix_scope(record)
@@ -225,11 +187,9 @@ def score_class_similarity(records, cfg, audit_cfg: AuditConfig):
     prefix_stats = {}
     for scope, scope_records in by_scope.items():
         spectra = np.stack([record.z for record in scope_records]).astype(np.float32, copy=False)
-        folders = np.asarray([record.folder for record in scope_records], dtype=object)
-        center_all, scale_all = robust_wave_stats(spectra)
+        center_all = np.median(spectra, axis=0).astype(np.float32)
         prefix_stats[scope] = {
             "center": center_all,
-            "wave_scale": scale_all,
             "q10": np.quantile(spectra, 0.10, axis=0).astype(np.float32),
             "q90": np.quantile(spectra, 0.90, axis=0).astype(np.float32),
             "records": scope_records,
@@ -242,30 +202,21 @@ def score_class_similarity(records, cfg, audit_cfg: AuditConfig):
 
         corr_ref = _row_corr_to_one(spectra, center_all)
         rmse_to_ref = np.sqrt(np.mean((spectra - center_all) ** 2, axis=1))
-        nearest_ref, other_counts = _nearest_other_folder_corr(spectra, folders)
         for idx, record in enumerate(scope_records):
-            sample = spectra[idx]
             record.ref_pool_size = int(len(scope_records) - 1)
-            record.other_ref_pool_size = int(other_counts[idx])
             record.corr_ref = float(corr_ref[idx])
             record.rmse_to_ref = float(rmse_to_ref[idx])
-            if np.isfinite(nearest_ref[idx]):
-                record.nearest_ref_corr = float(nearest_ref[idx])
-
-            local_z = (sample - center_all) / np.maximum(scale_all, 1e-8)
-            record.local_pos_z = local_z.astype(np.float32, copy=False)
-            wn = wn_full[: sample.size]
-            regions = _local_positive_regions(wn, local_z, audit_cfg)
-            best = max(regions, key=lambda item: (item["max_z"], item["area"], item["width_points"]), default=None)
-            record.local_pos_count = len(regions)
-            record.local_pos_positions = tuple(region["center_cm"] for region in regions)
-            record.local_pos_ranges = tuple((int(region["start"]), int(region["end"])) for region in regions)
+            residual = spectra[idx] - center_all
+            regions, smooth_residual = _local_residual_regions(residual, audit_cfg)
+            best = max(regions, key=lambda item: (item["area"], item["max_residual"], item["width_points"]), default=None)
+            record.local_residual_curve = smooth_residual.astype(np.float32, copy=False)
+            record.local_residual_count = len(regions)
+            record.local_residual_ranges = tuple((int(region["start"]), int(region["end"])) for region in regions)
             if best is not None:
-                record.local_pos_max_z = best["max_z"]
-                record.local_pos_area = best["area"]
-                record.local_pos_width_points = best["width_points"]
-                record.local_pos_width_cm = best["width_cm"]
-                record.local_pos_center_cm = best["center_cm"]
+                record.local_residual_max = best["max_residual"]
+                record.local_residual_area = best["area"]
+                record.local_residual_width_points = best["width_points"]
+                record.local_residual_center_point = best["center_point"]
 
     return prefix_stats
 
@@ -292,7 +243,7 @@ def score_raw_and_basic(records, cfg, audit_cfg: AuditConfig):
         median_level = float(np.median(record.z))
         record.flat_fraction = float(np.mean(np.abs(record.z - median_level) <= audit_cfg.invalid_flat_near_median))
         record.roughness = robust_mad_scale(np.diff(record.z))
-        smooth = moving_average(record.z, audit_cfg.invalid_noise_smooth_points)
+        smooth = moving_average(record.z, INVALID_NOISE_SMOOTH_POINTS)
         record.smooth_range = float(np.quantile(smooth, 0.95) - np.quantile(smooth, 0.05))
         record.detail_noise = robust_mad_scale(record.z - smooth)
         record.structure_ratio = record.smooth_range / max(record.roughness, 1e-8)
@@ -306,7 +257,7 @@ def score_stage(records, cfg, stage: str, audit_cfg: AuditConfig = DEFAULT_AUDIT
 
         score_raw_and_basic(records, cfg, audit_cfg)
         classify_invalid(records, audit_cfg)
-    elif stage == "class-similarity":
+    elif stage == "similar":
         from raman.audit.stage import classify_class_similarity
 
         prefix_stats = score_class_similarity(records, cfg, audit_cfg)
@@ -322,8 +273,8 @@ def reason_labels(reasons, audit_cfg: AuditConfig = DEFAULT_AUDIT_CONFIG):
     if any(reason.startswith("invalid_") for reason in reasons):
         labels.append("Invalid Spectrum")
     if any(reason.startswith("class_") for reason in reasons):
-        labels.append("Class_Similarity_Outliers")
-    return tuple(label for label in audit_cfg.delete_reason_labels if label in labels)
+        labels.append("Similar Outliers")
+    return tuple(label for label in audit_cfg.delete_categories if label in labels)
 
 
 def record_to_row(record: SpectrumRecord):
@@ -353,17 +304,13 @@ def record_to_row(record: SpectrumRecord):
         "structure_ratio": fmt_value(record.structure_ratio, 6),
         "ref_pool_scope": record.ref_pool_scope,
         "ref_pool_size": record.ref_pool_size,
-        "other_ref_pool_size": record.other_ref_pool_size,
         "corr_ref": fmt_value(record.corr_ref, 6),
-        "nearest_ref_corr": fmt_value(record.nearest_ref_corr, 6),
         "rmse_to_ref": fmt_value(record.rmse_to_ref, 6),
-        "local_pos_count": record.local_pos_count,
-        "local_pos_max_z": fmt_value(record.local_pos_max_z, 3),
-        "local_pos_area": fmt_value(record.local_pos_area, 3),
-        "local_pos_width_points": record.local_pos_width_points,
-        "local_pos_width_cm": fmt_value(record.local_pos_width_cm, 3),
-        "local_pos_center_cm": fmt_value(record.local_pos_center_cm, 3),
-        "local_pos_positions": ";".join(f"{pos:.1f}" for pos in record.local_pos_positions),
+        "local_residual_count": record.local_residual_count,
+        "local_residual_max": fmt_value(record.local_residual_max, 3),
+        "local_residual_area": fmt_value(record.local_residual_area, 3),
+        "local_residual_width_points": record.local_residual_width_points,
+        "local_residual_center_point": record.local_residual_center_point if record.local_residual_center_point >= 0 else "",
         "folder_candidate_count": record.folder_candidate_count,
         "folder_candidate_fraction": fmt_value(record.folder_candidate_fraction, 6),
         "cosmic_ray_replaced": record.cosmic_ray_replaced,
@@ -374,6 +321,6 @@ def record_to_row(record: SpectrumRecord):
 def stage_title(stage: str) -> str:
     """返回阶段展示名称。"""
     stage = validate_stage(stage)
-    if stage == "class-similarity":
+    if stage == "similar":
         return "Class Similarity"
     return "Invalid Spectrum"

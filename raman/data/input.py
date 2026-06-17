@@ -7,6 +7,7 @@
 import math
 
 import numpy as np
+from scipy.interpolate import PchipInterpolator
 
 try:
     import torch
@@ -210,6 +211,8 @@ BASELINE_FREQ_MIN = 0.5
 BASELINE_FREQ_MAX = 2.0
 BASELINE_STRONG_AMP_MIN = 0.05
 BASELINE_STRONG_AMP_MAX = 0.15
+BASELINE_STRONG_KNOTS_MIN = 5
+BASELINE_STRONG_KNOTS_MAX = 9
 SHIFT_MAX = 3
 BROAD_SIGMA_MIN = 0.6
 BROAD_SIGMA_MAX = 1.2
@@ -296,17 +299,29 @@ def aug_weak_baseline(
     return x + baseline
 
 
-def aug_strong_baseline(x, amp_min=0.05, amp_max=0.15, n_knots_min=3, n_knots_max=6):
-    """加入更明显的批次或仪器背景差异"""
+def aug_strong_baseline(
+    x,
+    amp_min=0.05,
+    amp_max=0.15,
+    n_knots_min=BASELINE_STRONG_KNOTS_MIN,
+    n_knots_max=BASELINE_STRONG_KNOTS_MAX,
+):
+    """加入更明显的平滑低频背景扰动，模拟批次或仪器背景差异"""
     x = np.asarray(x, dtype=np.float32)
     amp = _robust_amp(x)
     length = len(x)
+    if length < 2:
+        return x.copy()
+
+    n_knots_min = max(2, min(int(n_knots_min), length))
+    n_knots_max = max(n_knots_min, min(int(n_knots_max), length))
     n_knots = np.random.randint(n_knots_min, n_knots_max + 1)
     xs = np.linspace(0, length - 1, n_knots, dtype=np.float32)
     ys = np.random.uniform(-1.0, 1.0, n_knots).astype(np.float32)
     ys *= np.random.uniform(amp_min, amp_max) * amp
 
-    baseline = np.interp(np.arange(length, dtype=np.float32), xs, ys).astype(np.float32)
+    grid = np.arange(length, dtype=np.float32)
+    baseline = PchipInterpolator(xs, ys)(grid).astype(np.float32)
     return x + baseline
 
 
@@ -455,6 +470,8 @@ def augment_raw_spectrum(x, config):
                 z,
                 amp_min=BASELINE_STRONG_AMP_MIN,
                 amp_max=BASELINE_STRONG_AMP_MAX,
+                n_knots_min=BASELINE_STRONG_KNOTS_MIN,
+                n_knots_max=BASELINE_STRONG_KNOTS_MAX,
             )
         )
 

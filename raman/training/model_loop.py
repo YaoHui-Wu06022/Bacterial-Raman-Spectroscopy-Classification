@@ -53,8 +53,8 @@ def _compute_severity_weights(prob, targets):
 
     设计原则：
     - 二分类时不再额外做 severity 重加权，避免和 Focal 重复放大
-    - 三分类时只对“差一点分对”的样本做轻微降权
-    - 四类及以上时再明显区分 rank-2 / rank-3 / 高置信度错判
+    - 三分类和多分类都只做温和惩罚，避免高置信错判被过度放大
+    - 真实类别排名越靠后，权重越高；高置信错判再小幅提高
     """
     num_classes = prob.size(1)
     severity_w = torch.ones(prob.size(0), dtype=prob.dtype, device=prob.device)
@@ -72,23 +72,24 @@ def _compute_severity_weights(prob, targets):
     # 三分类
     if num_classes == 3:
         if topk >= 2:
-            severity_w[rank == 2] = 0.95
-        severity_w[rank >= 3] = 1.10
+            severity_w[rank == 2] = 1.00
+        severity_w[rank >= 3] = 1.08
 
         high_conf_wrong = (~is_top1) & (topk_val[:, 0] > 0.88)
-        severity_w[high_conf_wrong & (rank == 2)] = 1.05
-        severity_w[high_conf_wrong & (rank >= 3)] = 1.25
+        severity_w[high_conf_wrong & (rank == 2)] = 1.10
+        severity_w[high_conf_wrong & (rank >= 3)] = 1.20
         return severity_w
 
     if topk >= 2:
-        severity_w[rank == 2] = 0.90
+        severity_w[rank == 2] = 1.00
     if topk >= 3:
-        severity_w[rank == 3] = 1.00
+        severity_w[rank == 3] = 1.05
     severity_w[rank >= 4] = 1.10
 
     high_conf_wrong = (~is_top1) & (topk_val[:, 0] > 0.85)
     severity_w[high_conf_wrong & (rank == 2)] = 1.10
-    severity_w[high_conf_wrong & (rank >= 3)] = 1.35
+    severity_w[high_conf_wrong & (rank == 3)] = 1.20
+    severity_w[high_conf_wrong & (rank >= 4)] = 1.25
     return severity_w
 
 

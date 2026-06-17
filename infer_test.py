@@ -6,8 +6,8 @@ from raman.infer.test import run_independent_test
 
 
 # 手动配置
-EXP_DIR = "output/GN/20260601_135202"
-LEVEL = "level_2"
+EXP_DIR = "output/GN/日常测试"
+LEVEL = "level_1"
 
 # 可选配置
 TEST_ROOT = None  # None 表示使用模型配置对应数据集的 test
