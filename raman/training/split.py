@@ -11,6 +11,7 @@ from raman.tool.path import normalize_relpath
 TRAIN_SPLIT_NAME = "train_split.json"
 VAL_SPLIT_NAME = "val_split.json"
 DEFAULT_SPLIT_LEVEL = "leaf"
+TRANSFERRED_SOURCE_SUFFIX = "t"
 
 
 def save_split_files(
@@ -111,6 +112,12 @@ def _split_group_key(dataset, idx, lowest_level):
     return key
 
 
+def _is_transferred_sample(sample_path):
+    """判断样本是否来自后插入的 `*t` 来源"""
+    source_prefix = source_prefix_from_filename(sample_path)
+    return str(source_prefix).lower().endswith(TRANSFERRED_SOURCE_SUFFIX)
+
+
 def _split_indices_sample_level(
     dataset,
     lowest_level,
@@ -123,7 +130,11 @@ def _split_indices_sample_level(
     group_to_indices = {}
 
     for i in range(len(dataset)):
-        key = _split_group_key(dataset, i, lowest_level)
+        # 同一类别下把 `*t` 来源和普通来源分开切，避免某一类来源比例偏到一边
+        key = (
+            _split_group_key(dataset, i, lowest_level),
+            _is_transferred_sample(dataset.samples[i]),
+        )
         group_to_indices.setdefault(key, []).append(i)
 
     train_idx = []
@@ -148,20 +159,22 @@ def _split_indices_sample_level(
 
 
 def _split_indices_source_prefix_level(dataset, lowest_level, train_ratio, seed):
-    """按原子文件夹前缀整组切分，避免同一前缀泄漏到 train/val 两侧"""
+    """按原子文件夹前缀整组切分，并分别保持 `*t` 与非 `*t` 的比例"""
     rng = np.random.RandomState(seed)
-    level_to_prefix_groups = {}
+    bucket_to_prefix_groups = {}
 
     for i in range(len(dataset)):
         level_key = _split_group_key(dataset, i, lowest_level)
         source_prefix = source_prefix_from_filename(dataset.samples[i])
-        prefix_groups = level_to_prefix_groups.setdefault(level_key, {})
+        # prefix 整组切分时仍先区分 `*t` 和非 `*t`，再在桶内做 8:2
+        bucket_key = (level_key, str(source_prefix).lower().endswith(TRANSFERRED_SOURCE_SUFFIX))
+        prefix_groups = bucket_to_prefix_groups.setdefault(bucket_key, {})
         prefix_groups.setdefault(source_prefix, []).append(i)
 
     train_idx = []
     val_idx = []
 
-    for level_key, prefix_groups in level_to_prefix_groups.items():
+    for (level_key, is_transferred), prefix_groups in bucket_to_prefix_groups.items():
         groups = [
             (prefix, np.array(indices, dtype=np.int64))
             for prefix, indices in prefix_groups.items()
@@ -171,9 +184,10 @@ def _split_indices_source_prefix_level(dataset, lowest_level, train_ratio, seed)
         if len(groups) == 1:
             prefix, indices = groups[0]
             train_idx.extend(indices.tolist())
+            source_kind = "*t" if is_transferred else "non-*t"
             print(
                 "[Warn] split_by_source_prefix=True 时 "
-                f"{level_key!r} 只有一个 source prefix={prefix!r}，"
+                f"{level_key!r}/{source_kind} 只有一个 source prefix={prefix!r}，"
                 "无法无泄漏切出 val，已全部放入 train"
             )
             continue

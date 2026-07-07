@@ -6,7 +6,7 @@ from raman.infer.test import run_independent_test
 
 
 # 手动配置
-EXP_DIR = "output/GN/日常测试"
+EXP_DIR = "output/GN/全18属/20260630_063625_tseed88"
 LEVEL = "level_1"
 
 # 可选配置

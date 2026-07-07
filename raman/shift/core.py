@@ -29,8 +29,8 @@ GRID_STEP = 0.2  # 绘图统一插值轴的步长
 PREVIEW_FIGURE_WIDTH = 12  # preview 和 plot-shift 图宽
 SNV_OFFSET_SCALE = 0.85  # SNV 曲线间距相对整体波动范围的倍率
 SNV_OFFSET_MIN = 2.0  # SNV 曲线最小间距
-MINMAX_OFFSET_SCALE = 0.35  # minmax 曲线间距相对整体波动范围的倍率
-MINMAX_OFFSET_MIN = 0.38  # minmax 曲线最小间距
+MINMAX_OFFSET_SCALE = 1.05  # minmax 曲线间距相对整体波动范围的倍率
+MINMAX_OFFSET_MIN = 1.05  # minmax 曲线最小间距，需略大于 0-1 范围避免重叠
 DELTA_NAME = "delta.txt"  # 当前训练文件夹累计平移量
 DELTA_LOG_NAME = "delta_log.txt"  # 每次训练文件夹平移动作日志
 DELTA_CS_NAME = "delta_cs.txt"  # 从测试菌迁入的 t 文件夹平移快照
@@ -40,6 +40,7 @@ DELTA_CS_FIELDS = ("source_folder", "target_genus", "target_folder", "delta")  #
 DELTA_LOG_FIELDS = ("time", "genus", "folder", "prefix", "step_delta", "cumulative_delta", "files_changed", "note")  # delta_log.txt 字段
 LEGACY_PLOT_STATE_FIELDS = (*DELTA_FIELDS, "plot_version")  # 兼容旧 prefix 状态文件
 TRANSFERRED_FOLDER_SUFFIX = "t"  # 测试菌迁入训练集后的文件夹后缀
+DELETE_SHIFT_CATEGORIES = ("Invalid Spectrum", "Similar Outliers")  # apply 时同步平移的 delete 分类
 
 
 @dataclass(frozen=True)
@@ -595,8 +596,23 @@ def shift_folder(folder: Path, delta: float) -> int:
     return changed
 
 
+def matching_delete_folders(paths: DatasetPaths, folder: Path) -> list[Path]:
+    """查找与 init 小文件夹对应的 delete 小文件夹"""
+    if is_transferred_folder(folder):
+        return []
+    genus = folder.parent.name
+    name = folder.name
+    delete_root = paths.dataset_dir / "delete"
+    return [
+        candidate
+        for category in DELETE_SHIFT_CATEGORIES
+        for candidate in [delete_root / category / genus / name]
+        if candidate.is_dir()
+    ]
+
+
 def apply_shift(dataset: str, folder_arg: str, delta: float, note: str = "") -> tuple[dict[str, str], int]:
-    """执行单个小文件夹平移并更新 delta.txt"""
+    """执行单个小文件夹平移，并同步同名 delete 数据"""
     paths = resolve_dataset(dataset)
     folder = resolve_folder(paths.init_dir, folder_arg)
     rows = ensure_delta_rows(paths)
@@ -604,6 +620,8 @@ def apply_shift(dataset: str, folder_arg: str, delta: float, note: str = "") -> 
     cumulative_delta = existing + float(delta)
 
     changed = shift_folder(folder, float(delta))
+    for delete_folder in matching_delete_folders(paths, folder):
+        changed += shift_folder(delete_folder, float(delta))
     rows = upsert_delta(rows, folder, cumulative_delta)
     write_delta_rows(paths.delta_path, rows)
     append_delta_log(paths.delta_log_path, folder, float(delta), cumulative_delta, changed, note=note)
