@@ -8,14 +8,15 @@ import torch
 from raman.config_io import assert_input_compatible, load_experiment, load_run_config
 from raman.model import RamanClassifier1D
 
-from .experiment import (
+from raman.experiment import (
     resolve_level_model_entry,
     resolve_level_model_path,
     resolve_model_sidecar_path,
-    resolve_project_path,
     scan_parent_model_files,
 )
 from raman.tool.hierarchy import load_hierarchy_meta
+from raman.tool.model import select_logits
+from raman.tool.path import resolve_path
 
 
 @dataclass
@@ -258,7 +259,7 @@ class ExperimentRuntime:
 
 def build_experiment_runtime(exp_dir, device, config=None, meta=None, run_selection=None):
     """构建统一的实验运行时上下文"""
-    exp_dir = os.fspath(resolve_project_path(exp_dir))
+    exp_dir = os.fspath(resolve_path(exp_dir))
     if config is None:
         config = load_experiment(exp_dir)
     if meta is None:
@@ -280,3 +281,176 @@ def build_experiment_runtime(exp_dir, device, config=None, meta=None, run_select
         se_stats_cache={},
         run_selection=run_selection,
     )
+
+
+def mask_logits_by_parent(logits, parent_labels, parent_to_children):
+    """按父类约束对子类 logits 做遮罩。"""
+    if parent_labels is None or parent_to_children is None:
+        valid = torch.ones(logits.size(0), dtype=torch.bool, device=logits.device)
+        return logits, valid
+
+    device = logits.device
+    batch = logits.size(0)
+    mask = torch.zeros_like(logits, dtype=torch.bool)
+    valid = torch.zeros(batch, dtype=torch.bool, device=device)
+
+    for index, parent_id in enumerate(parent_labels.tolist()):
+        if parent_id < 0:
+            continue
+        child_ids = parent_to_children.get(parent_id)
+        if child_ids is None:
+            child_ids = parent_to_children.get(str(parent_id))
+        if not child_ids:
+            continue
+
+        invalid = [child_id for child_id in child_ids if child_id < 0 or child_id >= logits.size(1)]
+        if invalid:
+            raise ValueError(
+                f"parent_to_children index out of range: parent={parent_id}, "
+                f"invalid={invalid}, num_classes={logits.size(1)}"
+            )
+        mask[index, list(child_ids)] = True
+        valid[index] = True
+
+    masked_logits = logits.masked_fill(~mask, float("-inf"))
+    if (~valid).any():
+        masked_logits[~valid] = 0.0
+    return masked_logits, valid
+
+
+def mask_logits_by_allowed(logits, allowed_indices):
+    """按显式允许的类别索引集合做遮罩。"""
+    if not allowed_indices:
+        return logits, None
+    mask = torch.zeros_like(logits, dtype=torch.bool)
+    mask[:, allowed_indices] = True
+    masked_logits = logits.masked_fill(~mask, float("-inf"))
+    valid = mask.any(dim=1)
+    if (~valid).any():
+        masked_logits[~valid] = 0.0
+    return masked_logits, valid
+
+
+def resolve_allowed_indices(class_names, allowed):
+    """把类别名或类别索引形式的限制统一成索引列表。"""
+    if not allowed:
+        return []
+    items = list(allowed) if isinstance(allowed, (list, tuple, set)) else [allowed]
+    name_to_idx = {name: index for index, name in enumerate(class_names)}
+    return sorted({int(item) if isinstance(item, int) else name_to_idx[str(item)] for item in items if isinstance(item, int) or str(item) in name_to_idx})
+
+
+def select_level_targets(labels, head_index=None):
+    """从多层标签矩阵中取出当前层的目标标签。"""
+    if labels.ndim != 2:
+        return labels
+    return labels[:, labels.size(1) - 1 if head_index is None else head_index]
+
+
+def forward_level_with_probs(
+    model,
+    inputs,
+    *,
+    head_name=None,
+    parent_labels=None,
+    parent_to_children=None,
+    allowed_indices=None,
+):
+    """执行单层前向并统一施加父类和显式类别遮罩。"""
+    logits = select_logits(model(inputs), head_name=head_name)
+    valid_parts = []
+    if parent_labels is not None and parent_to_children is not None:
+        logits, valid_parent = mask_logits_by_parent(logits, parent_labels, parent_to_children)
+        valid_parts.append(valid_parent)
+    if allowed_indices:
+        logits, valid_allowed = mask_logits_by_allowed(logits, allowed_indices)
+        if valid_allowed is not None:
+            valid_parts.append(valid_allowed)
+
+    probs = torch.softmax(logits, dim=1)
+    valid = None
+    for part in valid_parts:
+        valid = part if valid is None else valid & part
+    return logits, probs, valid
+
+
+def run_cascade_inference(
+    runtime,
+    inputs,
+    *,
+    level_order,
+    target_level,
+    num_classes_by_level,
+    class_names_by_level,
+    parent_to_children,
+    allowed_names_by_level=None,
+    fallback_to_previous=False,
+):
+    """执行从顶层到目标层的共享级联推理。"""
+    parent_pred = None
+    last_result = None
+    allowed_names_by_level = allowed_names_by_level or {}
+
+    for level_name in level_order:
+        level_class_names = class_names_by_level.get(level_name, [])
+        allowed_global = resolve_allowed_indices(
+            level_class_names,
+            allowed_names_by_level.get(level_name),
+        )
+        step = runtime.prepare_cascade_step(
+            level_name,
+            parent_pred,
+            num_classes=num_classes_by_level[level_name],
+            level_class_names=level_class_names,
+            parent_to_children=parent_to_children,
+        )
+        if step is None:
+            return last_result if fallback_to_previous else None
+
+        if step["mode"] == "direct":
+            pred_global = int(step["pred_global"])
+            current = {
+                "resolved_level": level_name,
+                "probs": torch.ones((1, 1), device=inputs.device, dtype=torch.float32),
+                "class_names": step["class_names"],
+                "child_ids": list(step["child_ids"]),
+                "pred_global": pred_global,
+            }
+        else:
+            child_ids = step.get("child_ids")
+            allowed_indices = allowed_global
+            if child_ids is not None and allowed_global:
+                allowed_set = set(allowed_global)
+                allowed_indices = [
+                    local_index
+                    for local_index, child_id in enumerate(child_ids)
+                    if int(child_id) in allowed_set
+                ]
+            parent_labels = None
+            if step.get("parent_labels") is not None:
+                parent_labels = torch.tensor([step["parent_labels"]], device=inputs.device)
+            _, probs, valid = forward_level_with_probs(
+                step["model"],
+                inputs,
+                parent_labels=parent_labels,
+                parent_to_children=step.get("parent_to_children"),
+                allowed_indices=allowed_indices,
+            )
+            if valid is not None and not valid.any():
+                return last_result if fallback_to_previous else None
+            pred_local = int(probs.argmax(1).item())
+            pred_global = int(child_ids[pred_local]) if child_ids is not None else pred_local
+            current = {
+                "resolved_level": level_name,
+                "probs": probs,
+                "class_names": step["class_names"],
+                "child_ids": list(child_ids) if child_ids is not None else None,
+                "pred_global": pred_global,
+            }
+
+        if level_name == target_level:
+            return current
+        last_result = current
+        parent_pred = pred_global
+
+    return last_result if fallback_to_previous else None

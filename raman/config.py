@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from raman.data.build import COMMON_BAD_BANDS, DEFAULT_PIPELINE_CONFIG
 from raman.data.profiles import get_profile
+from raman.pipeline import COMMON_BAD_BANDS, DEFAULT_PIPELINE_CONFIG
 
 
 # ==================== 配置文件字段分组 ====================
@@ -69,7 +69,6 @@ MODEL_CONFIG_FIELDS = (
     "reduction",
     "backbone_activation_negative_slope",
     "gamma",
-    "use_severity_weight",
     "use_ema",
     "backbone_type",
     "cnn_block_type",
@@ -202,16 +201,16 @@ class ModelRunConfig:
     scheduler_eta_min: float = 1e-5
 
     # Align Loss
-    use_align_loss: bool = True
+    use_align_loss: bool = False
     align_loss_weight: float = 0.01
     align_start: int = 20
     align_end: int = 50
 
     # SupCon Loss
     use_supcon_loss: bool = True
-    supcon_loss_weight: float = 0.03
-    supcon_tau: float = 0.15
-    supcon_start: int = 30
+    supcon_loss_weight: float = 0.01
+    supcon_tau: float = 0.12
+    supcon_start: int = 25
     supcon_end: int = 50
 
     # 对齐/SupCon 后期衰减起点，占总 epoch 的比例
@@ -221,12 +220,11 @@ class ModelRunConfig:
     early_stop_w_f1: float = 0.6
     early_stop_w_acc: float = 0.4
 
-    # SE 模块和损失重加权
+    # SE 模块
     se_use: bool = True
     reduction: int = 8
     backbone_activation_negative_slope: float = 0.05
-    gamma: float = 0.8
-    use_severity_weight: bool = True
+    gamma: float = 1.0
     use_ema: bool = True
 
     # CNN 主干结构

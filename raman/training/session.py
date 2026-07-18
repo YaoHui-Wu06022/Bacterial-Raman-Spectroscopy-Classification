@@ -16,7 +16,8 @@ from raman.config_io import (
     dump_shared_config_to_yaml,
     load_config_from_yaml,
 )
-from raman.tool.hierarchy import build_hierarchy_meta, save_json
+from raman.tool.hierarchy import build_hierarchy_meta
+from raman.tool.path import write_json
 
 
 def _sanitize_log_name(name):
@@ -195,7 +196,7 @@ def save_hierarchy_meta(
         name: full_dataset.class_names_by_level[full_dataset.head_name_to_idx[name]]
         for name in head_names
     }
-    save_json(class_names_path, class_names_by_level)
+    write_json(class_names_path, class_names_by_level)
 
     parent_to_children_json = {
         level: {str(key): value for key, value in mapping.items()}
@@ -258,7 +259,7 @@ def save_hierarchy_meta(
                 if entry not in runs_json[key]:
                     runs_json[key].append(entry)
 
-    save_json(
+    write_json(
         hier_meta_path,
         build_hierarchy_meta(
             head_names=head_names,

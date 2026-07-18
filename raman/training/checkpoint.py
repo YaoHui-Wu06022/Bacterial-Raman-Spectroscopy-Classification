@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from raman.eval.experiment import resolve_model_sidecar_path
+from raman.experiment import resolve_model_sidecar_path
 
 
 @dataclass

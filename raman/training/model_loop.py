@@ -8,8 +8,8 @@ from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 import os
 
-from raman.eval.common import mask_logits_by_parent
 from raman.model import RamanClassifier1D
+from raman.runtime import mask_logits_by_parent
 from raman.training.checkpoint import (
     TrainingState,
     build_checkpoint_path,
@@ -46,52 +46,6 @@ def _build_loader_kwargs(config, device, train=True):
         kwargs["persistent_workers"] = bool(config.loader_persistent_workers)
         kwargs["prefetch_factor"] = int(config.loader_prefetch_factor)
     return kwargs
-
-def _compute_severity_weights(prob, targets):
-    """
-    按当前层类别数自适应计算样本级严重程度权重
-
-    设计原则：
-    - 二分类时不再额外做 severity 重加权，避免和 Focal 重复放大
-    - 三分类和多分类都只做温和惩罚，避免高置信错判被过度放大
-    - 真实类别排名越靠后，权重越高；高置信错判再小幅提高
-    """
-    num_classes = prob.size(1)
-    severity_w = torch.ones(prob.size(0), dtype=prob.dtype, device=prob.device)
-    # 二分类直接返回
-    if num_classes <= 2:
-        return severity_w
-
-    topk = min(3, num_classes)
-    topk_val, topk_idx = prob.topk(topk, dim=1)
-    is_top1 = topk_idx[:, 0] == targets
-
-    rank = torch.full_like(topk_idx[:, 0], fill_value=topk + 1)
-    for k in range(topk):
-        rank[topk_idx[:, k] == targets] = k + 1
-    # 三分类
-    if num_classes == 3:
-        if topk >= 2:
-            severity_w[rank == 2] = 1.00
-        severity_w[rank >= 3] = 1.08
-
-        high_conf_wrong = (~is_top1) & (topk_val[:, 0] > 0.88)
-        severity_w[high_conf_wrong & (rank == 2)] = 1.10
-        severity_w[high_conf_wrong & (rank >= 3)] = 1.20
-        return severity_w
-
-    if topk >= 2:
-        severity_w[rank == 2] = 1.00
-    if topk >= 3:
-        severity_w[rank == 3] = 1.05
-    severity_w[rank >= 4] = 1.10
-
-    high_conf_wrong = (~is_top1) & (topk_val[:, 0] > 0.85)
-    severity_w[high_conf_wrong & (rank == 2)] = 1.10
-    severity_w[high_conf_wrong & (rank == 3)] = 1.20
-    severity_w[high_conf_wrong & (rank >= 4)] = 1.25
-    return severity_w
-
 
 def _loss_value_for_log(loss):
     """安全地把 loss 张量转换成日志用的浮点数。"""
@@ -419,14 +373,7 @@ def train_model(
                     y_valid = y_level[valid]
                     loss_cls_each = criterion(logits_valid, y_valid)
 
-                    if config.use_severity_weight:
-                        with torch.no_grad():
-                            prob = torch.softmax(logits_valid, dim=1)
-                            severity_w = _compute_severity_weights(prob, y_valid)
-
-                        loss_cls = (loss_cls_each * severity_w).mean()
-                    else:
-                        loss_cls = loss_cls_each.mean()
+                    loss_cls = loss_cls_each.mean()
                 else:
                     loss_cls = torch.tensor(0.0, device=device)
 

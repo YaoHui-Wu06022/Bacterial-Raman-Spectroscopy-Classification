@@ -7,8 +7,8 @@ from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
-from .common import compute_classification_metrics
-from .experiment import (
+from raman.metrics import compute_classification_metrics
+from raman.experiment import (
     load_experiment_context_with_dataset,
     resolve_mode_result_dir,
     resolve_split_dir,
@@ -20,7 +20,7 @@ from .report import (
     save_confusion_matrix_figure,
     write_text,
 )
-from .runtime import build_experiment_runtime
+from raman.runtime import build_experiment_runtime
 from raman.data import RamanDataset
 from raman.training import load_split_files
 

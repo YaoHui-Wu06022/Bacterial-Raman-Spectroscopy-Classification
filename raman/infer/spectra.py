@@ -5,10 +5,10 @@ import numpy as np
 from raman.tool.dataset import dataset_bundle_root
 from raman.tool.hierarchy import label_from_parts
 from raman.tool.naming import normalize_folder_prefix
-from raman.tool.path import resolve_project_path
+from raman.tool.path import resolve_path
 from raman.tool.plotting import add_bad_band_spans, insert_nan_gaps
 from raman.tool.spectrum import build_valid_mask, expected_wavenumbers, get_config_bad_bands
-from raman.training.split import TRAIN_SPLIT_NAME
+from raman.experiment import TRAIN_SPLIT_NAME
 
 
 def validate_input_length(signal_length, config, source):
@@ -52,7 +52,7 @@ def preprocess_with_config_mask(path, preprocessor, config):
 
 def _candidate_train_roots(dataset_root):
     """列出可用的训练侧光谱目录"""
-    dataset_root = dataset_bundle_root(resolve_project_path(dataset_root))
+    dataset_root = dataset_bundle_root(resolve_path(dataset_root))
     train_root = dataset_root / "train"
     if train_root.is_dir():
         return [train_root]
@@ -83,7 +83,7 @@ def _load_train_file_list(exp_dir):
 
 def _resolve_train_mean_files(exp_dir, dataset_root, level_name):
     """优先使用模型训练清单，缺失时回退到当前 train"""
-    dataset_root = dataset_bundle_root(resolve_project_path(dataset_root))
+    dataset_root = dataset_bundle_root(resolve_path(dataset_root))
     train_files = _load_train_file_list(exp_dir)
     train_root = dataset_root / "train"
     if train_files and train_root.is_dir():

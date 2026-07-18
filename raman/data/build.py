@@ -1,72 +1,13 @@
 import shutil
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 from raman.data.preprocess import preprocess_single_spectrum
 from raman.data.io import iter_init_groups, resolve_init_input, write_arc_data
+from raman.pipeline import resolve_pipeline_config
 from raman.tool.naming import ensure_name_prefix, extract_letters_prefix
-from raman.tool.path import resolve_under_base
-from raman.tool.spectrum import build_wn_ref
-
-CUT_MIN = 600
-CUT_MAX = 1800
-TARGET_POINTS = 896
-COMMON_BAD_BANDS = ((890.0, 950.0),)
-
-BASELINE_METHOD = "airPLS"
-BASELINE_LAM = 1e5  # 基线平滑强度；越大，估计基线越平滑
-BASELINE_ASLS_P = 0.01  # 仅 AsLS 使用的不对称权重；airPLS/arPLS 不使用
-BASELINE_MAX_ITER = 15  # 基线迭代次数上限
-BASELINE_FIT_MIN = 400  # 基线拟合下限，保留训练范围外缓冲区以稳定边缘基线
-BASELINE_FIT_MAX = 2000  # 基线拟合上限，避免更远端异常尖峰污染基线
-
-COSMIC_RAY_ENABLED_PROFILE_IDS = ("original")
-COSMIC_RAY_WINDOW_POINTS = 7  # 宇宙射线局部 median/MAD 窗口宽度，单位点
-COSMIC_RAY_THRESHOLD = 7.0  # 宇宙射线正残差 z 阈值
-COSMIC_RAY_MAX_ITER = 2  # 宇宙射线最大迭代次数
-
-MIN_SAMPLES_PER_CLASS = 8
-
-PCA_ENABLED = True
-PCA_COMPONENTS = 0.95
-PCA_CENTER = True
-PCA_OUTLIER_RATIO = 0.02
-
-@dataclass(frozen=True)
-class PipelineConfig:
-    """集中管理离线预处理阶段的固定参数，便于 CLI 统一覆盖"""
-    cut_min: float = CUT_MIN
-    cut_max: float = CUT_MAX
-    target_points: int = TARGET_POINTS
-    bad_bands: tuple[tuple[float, float], ...] = COMMON_BAD_BANDS
-    baseline_method: str = BASELINE_METHOD
-    baseline_lam: float = BASELINE_LAM
-    baseline_asls_p: float = BASELINE_ASLS_P
-    baseline_max_iter: int = BASELINE_MAX_ITER
-    baseline_fit_min: float = BASELINE_FIT_MIN
-    baseline_fit_max: float = BASELINE_FIT_MAX
-    cosmic_ray_enabled_profile_ids: tuple[str, ...] = COSMIC_RAY_ENABLED_PROFILE_IDS
-    cosmic_ray_window_points: int = COSMIC_RAY_WINDOW_POINTS
-    cosmic_ray_threshold: float = COSMIC_RAY_THRESHOLD
-    cosmic_ray_max_iter: int = COSMIC_RAY_MAX_ITER
-    min_samples_per_class: int = MIN_SAMPLES_PER_CLASS
-    pca_enabled: bool = PCA_ENABLED
-    pca_components: float | int = PCA_COMPONENTS
-    pca_center: bool = PCA_CENTER
-    pca_outlier_ratio: float = PCA_OUTLIER_RATIO
-
-    def build_wn_ref(self):
-        """根据当前裁剪范围和目标点数生成统一插值坐标"""
-        return build_wn_ref(self.cut_min, self.cut_max, self.target_points)
-
-
-DEFAULT_PIPELINE_CONFIG = PipelineConfig()
-
-def resolve_pipeline_config(pipeline_config=None):
-    """返回离线预处理配置"""
-    return pipeline_config or DEFAULT_PIPELINE_CONFIG
+from raman.tool.path import resolve_path
 
 def _cosmic_ray_enabled(profile, cfg):
     """判断当前数据集是否启用宇宙射线去除"""
@@ -85,7 +26,7 @@ def _cosmic_log_path(profile, base_dir, cfg):
     """只在启用宇宙射线时返回日志路径"""
     if not _profile_may_use_cosmic_ray(profile, cfg):
         return None
-    return resolve_under_base(base_dir, profile.cosmic_ray_log_name)
+    return resolve_path(profile.cosmic_ray_log_name, base_dir)
 
 COSMIC_RAY_OVERRIDE_KEY_MAP = {
     "enabled": "cosmic_ray_remove",
@@ -509,9 +450,9 @@ def build_train(profile, base_dir, pipeline_config=None):
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
     input_path = resolve_init_input(base_dir, profile)
-    root_process_clean = resolve_under_base(base_dir, profile.root_train_clean)
-    root_figure = resolve_under_base(base_dir, profile.root_train_fig)
-    pca_log_path = resolve_under_base(base_dir, profile.pca_log_name)
+    root_process_clean = resolve_path(profile.root_train_clean, base_dir)
+    root_figure = resolve_path(profile.root_train_fig, base_dir)
+    pca_log_path = resolve_path(profile.pca_log_name, base_dir)
     cosmic_log_path = _cosmic_log_path(profile, base_dir, cfg)
     reset_log_file(pca_log_path)
 
@@ -570,8 +511,8 @@ def build_test(profile, base_dir, pipeline_config=None):
     """从 init_test 生成已预处理的独立测试集 test，不做 PCA"""
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
-    root_init_test = resolve_under_base(base_dir, profile.root_init_test)
-    root_test = resolve_under_base(base_dir, profile.root_test)
+    root_init_test = resolve_path(profile.root_init_test, base_dir)
+    root_test = resolve_path(profile.root_test, base_dir)
     cosmic_log_path = _cosmic_log_path(profile, base_dir, cfg)
 
     if not root_init_test.is_dir():

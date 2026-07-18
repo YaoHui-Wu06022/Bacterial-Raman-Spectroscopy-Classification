@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from raman.tool.dataset import iter_arc_dirs
-from raman.tool.path import resolve_under_base
+from raman.tool.path import resolve_path
 
 PACK_EXT = ".npz"
 
@@ -148,8 +148,8 @@ def unpack_init(npz_path, output_dir, verbose=True):
 
 def resolve_init_input(base_dir, profile):
     """优先解析 init 目录，其次回退到打包后的 init.npz"""
-    root_init = resolve_under_base(base_dir, profile.root_init)
-    root_init_pack = resolve_under_base(base_dir, profile.root_init_pack)
+    root_init = resolve_path(profile.root_init, base_dir)
+    root_init_pack = resolve_path(profile.root_init_pack, base_dir)
 
     if root_init.is_dir():
         return root_init

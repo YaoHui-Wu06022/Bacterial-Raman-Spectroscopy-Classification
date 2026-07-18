@@ -7,12 +7,12 @@ from pathlib import Path
 
 import numpy as np
 
-from raman.data.build import DEFAULT_PIPELINE_CONFIG
 from raman.data.io import read_arc_data
 from raman.data.preprocess import save_mean_plot, save_mean_summary_plot
+from raman.pipeline import DEFAULT_PIPELINE_CONFIG
 from raman.tool.dataset import iter_arc_dirs
 from raman.tool.hierarchy import iter_ancestor_level_keys, safe_key_name
-from raman.tool.path import resolve_under_base
+from raman.tool.path import resolve_path
 
 
 @dataclass(frozen=True)
@@ -204,8 +204,8 @@ def plot_train(profile, base_dir, plot_config=None):
     """从已有 train 安全重建 fig_train"""
     cfg = resolve_train_plot_config(plot_config)
     base_dir = Path(base_dir).resolve()
-    root_train = resolve_under_base(base_dir, profile.root_train_clean)
-    root_figure = resolve_under_base(base_dir, profile.root_train_fig)
+    root_train = resolve_path(profile.root_train_clean, base_dir)
+    root_figure = resolve_path(profile.root_train_fig, base_dir)
     if not root_train.is_dir():
         raise FileNotFoundError(f"Missing train folder: {root_train}")
 

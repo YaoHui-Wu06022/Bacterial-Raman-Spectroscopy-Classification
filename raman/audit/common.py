@@ -5,10 +5,11 @@ from pathlib import Path
 
 import numpy as np
 
-from raman.data.build import DEFAULT_PIPELINE_CONFIG, _cosmic_ray_kwargs, resolve_pipeline_config
+from raman.data.build import _cosmic_ray_kwargs
 from raman.data.input import normalize_spectrum
 from raman.data.preprocess import remove_cosmic_rays
 from raman.data.preprocess import preprocess_single_spectrum
+from raman.pipeline import DEFAULT_PIPELINE_CONFIG, resolve_pipeline_config
 from raman.data.io import read_arc_data
 from raman.tool.dataset import iter_arc_dirs
 

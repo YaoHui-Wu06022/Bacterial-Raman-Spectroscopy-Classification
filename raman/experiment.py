@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -16,12 +17,11 @@ from raman.tool.path import (
     exp_abspath,
     exp_relpath,
     normalize_relpath,
-    resolve_project_path,
+    resolve_path,
 )
-from raman.training.split import TRAIN_SPLIT_NAME, VAL_SPLIT_NAME, split_files_hash
-
-
 RUN_SELECTION_ENV = "RAMAN_RUN_SELECTION"
+TRAIN_SPLIT_NAME = "train_split.json"
+VAL_SPLIT_NAME = "val_split.json"
 RESULT_DIR_NAMES = {
     "val": "val_result",
     "analysis": "analysis_result",
@@ -30,6 +30,20 @@ RESULT_DIR_NAMES = {
 }
 LEVEL_ONLY_RESULT_DIR = "level_only_result"
 CASCADE_RESULT_DIR = "cascade_result"
+
+
+def split_files_hash(split_dir):
+    """返回某个目录下 train/val 切分文件的稳定哈希。"""
+    digest = hashlib.sha256()
+    for name in (TRAIN_SPLIT_NAME, VAL_SPLIT_NAME):
+        path = Path(split_dir) / name
+        if not path.exists():
+            return None
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\n")
+    return digest.hexdigest()
 
 
 @dataclass
@@ -63,7 +77,7 @@ def _parse_slot_identity(slot_dir):
 
 def resolve_experiment_input(path):
     """统一解析实验根或 run 目录输入"""
-    input_path = Path(resolve_project_path(path)).resolve()
+    input_path = Path(resolve_path(path)).resolve()
     if input_path.name.startswith("run_"):
         run_dir = input_path
         slot_dir = run_dir.parent
@@ -96,7 +110,7 @@ def load_experiment_context_with_dataset(exp_dir, dataset_stage="train", must_ex
     input_context = resolve_experiment_input(exp_dir)
     config_path = input_context.input_run_dir or input_context.exp_dir
     config = load_experiment(os.fspath(config_path))
-    raw_dataset_root = resolve_project_path(config.dataset_root)
+    raw_dataset_root = resolve_path(config.dataset_root)
     if dataset_stage is None:
         dataset_root = dataset_bundle_root(raw_dataset_root)
     else:
@@ -242,7 +256,7 @@ def _entry_from_meta(exp_dir, entry):
 
 def resolve_level_model_entry(exp_dir, level_name, level_models_meta=None, run_selection=None):
     """解析某一层全局模型条目，优先使用 best/latest run"""
-    exp_dir = Path(resolve_project_path(exp_dir))
+    exp_dir = Path(resolve_path(exp_dir))
     run_dir, source = select_run_dir(exp_dir / level_name, run_selection=run_selection)
     if run_dir is not None:
         model_path = _find_model_file(run_dir, [f"{level_name}_model.pt"])
@@ -260,7 +274,7 @@ def resolve_level_model_entry(exp_dir, level_name, level_models_meta=None, run_s
 
 def resolve_level_model_path(exp_dir, level_name, level_models_meta, run_selection=None):
     """解析某一层全局模型文件绝对路径"""
-    exp_dir = Path(resolve_project_path(exp_dir))
+    exp_dir = Path(resolve_path(exp_dir))
     entry = resolve_level_model_entry(
         exp_dir,
         level_name,
@@ -288,7 +302,7 @@ def _parent_model_names(level_name, parent_idx):
 
 def scan_parent_model_files(exp_dir, level_name, parent_to_children, run_selection=None):
     """扫描某一层 parent 子模型，优先识别新 best/latest run 结构"""
-    exp_dir = Path(resolve_project_path(exp_dir))
+    exp_dir = Path(resolve_path(exp_dir))
     level_dir = exp_dir / level_name
     if isinstance(parent_to_children, dict) and level_name in parent_to_children:
         level_mapping = parent_to_children.get(level_name, {})
@@ -336,7 +350,7 @@ def resolve_run_dir(exp_dir, entry):
     run_dir = (entry or {}).get("run_dir")
     if not run_dir:
         return None
-    path = exp_abspath(resolve_project_path(exp_dir), run_dir)
+    path = exp_abspath(resolve_path(exp_dir), run_dir)
     return path if path is not None and path.exists() else None
 
 
@@ -351,7 +365,7 @@ def _used_run_item(exp_dir, run_dir):
 
 def collect_used_runs(exp_dir, runtime, level_order=None, target_level=None, target_parent_idx=None):
     """收集当前 runtime 已解析到的 run 目录"""
-    exp_dir = Path(resolve_project_path(exp_dir))
+    exp_dir = Path(resolve_path(exp_dir))
     used = {}
     level_names = list(level_order or [])
     if target_level and target_level not in level_names:
@@ -413,7 +427,7 @@ def resolve_result_dir(
         )
         if run_dir is not None:
             return Path(run_dir) / name
-    return Path(resolve_project_path(exp_dir)) / target_level / name
+    return Path(resolve_path(exp_dir)) / target_level / name
 
 
 def resolve_mode_result_root(exp_dir, target_level, mode):
@@ -424,7 +438,7 @@ def resolve_mode_result_root(exp_dir, target_level, mode):
         result_name = CASCADE_RESULT_DIR
     else:
         raise ValueError(f"Unknown result mode: {mode}")
-    return Path(resolve_project_path(exp_dir)) / target_level / result_name
+    return Path(resolve_path(exp_dir)) / target_level / result_name
 
 
 def resolve_mode_result_dir(exp_dir, kind, target_level, mode):
@@ -477,7 +491,7 @@ def validate_parent_split_hashes(exp_dir, level_name, parent_entries):
 
 def resolve_split_dir(exp_dir):
     """返回实验根 split 目录；新结构只允许实验根保存 train/val split"""
-    split_dir = Path(resolve_project_path(exp_dir))
+    split_dir = Path(resolve_path(exp_dir))
     if (split_dir / TRAIN_SPLIT_NAME).exists() and (split_dir / VAL_SPLIT_NAME).exists():
         return os.fspath(split_dir)
     return None

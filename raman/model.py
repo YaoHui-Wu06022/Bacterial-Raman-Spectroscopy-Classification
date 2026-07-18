@@ -319,13 +319,11 @@ class RamanClassifier1D(nn.Module):
                 )
             ]
         )
-        self.stem_pool = nn.AvgPool1d(kernel_size=2)
-
         self.stage_in_channels = self.stem_out_channels
         self.layer1 = self._make_stage(64, num_blocks=2, pool_first=False)
         self.layer2 = self._make_stage(128, num_blocks=2, pool_first=True)
         self.layer3 = self._make_stage(256, num_blocks=2, pool_first=True)
-        self.layer4 = self._make_stage(512, num_blocks=2, pool_first=True)
+        self.layer4 = self._make_stage(512, num_blocks=2, pool_first=False)
         self.proj = nn.Conv1d(512, self.proj_dim, kernel_size=1, bias=False)
 
     def _split_channels(self, total_channels, num_branches):
@@ -446,7 +444,6 @@ class RamanClassifier1D(nn.Module):
         """把输入 `[B, C, L]` 转成 backbone 序列特征"""
         if self.cnn_backbone_on:
             x = torch.cat([branch(x) for branch in self.stem_branches], dim=1)
-            x = self.stem_pool(x)
             x = self.layer1(x)
             x = self.layer2(x)
             x = self.layer3(x)

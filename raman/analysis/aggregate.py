@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, Subset
 
 from raman.tool.spectrum import build_wavenumber_axis, get_config_bad_bands
 from raman.tool.hierarchy import load_hierarchy_meta
-from raman.eval.runtime import build_experiment_runtime
+from raman.runtime import build_experiment_runtime
 
 from .gradcam import (
     LayerGradCAMAnalyzer,

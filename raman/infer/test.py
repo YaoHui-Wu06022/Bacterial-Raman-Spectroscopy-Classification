@@ -7,12 +7,13 @@ from pathlib import Path
 
 import numpy as np
 
+from raman.data.profiles import get_dataset_dir, get_profile
 from raman.tool.dataset import dataset_bundle_root, resolve_dataset_stage
 from raman.tool.hierarchy import normalize_level_name
 from raman.tool.naming import test_folder_prefix
-from raman.tool.path import PROJECT_ROOT, resolve_project_path
+from raman.tool.path import PROJECT_ROOT, resolve_path
 from raman.tool.spectrum import expected_wavenumbers, get_config_bad_bands
-from raman.eval.experiment import (
+from raman.experiment import (
     collect_used_runs,
     resolve_result_dir,
     write_used_runs,
@@ -35,10 +36,16 @@ from raman.infer.spectra import (
 
 
 def _resolve_test_root(config, override):
-    """解析本次独立测试的已处理 test 目录"""
+    """解析本次独立测试目录；50cos 模型默认使用 测试菌/init。"""
     if override:
-        return resolve_project_path(override)
-    dataset_root = dataset_bundle_root(resolve_project_path(config.dataset_root))
+        return resolve_path(override)
+    dataset_root = dataset_bundle_root(resolve_path(config.dataset_root))
+    cos_dir = get_dataset_dir(get_profile("cos"), PROJECT_ROOT)
+    if dataset_root.resolve() == cos_dir.resolve():
+        test_dir = get_dataset_dir(get_profile("test"), PROJECT_ROOT) / "init"
+        if not test_dir.is_dir():
+            raise FileNotFoundError(f"Missing independent test init directory: {test_dir}")
+        return test_dir
     return resolve_dataset_stage(
         dataset_root,
         stage="test",
@@ -51,7 +58,7 @@ def _load_transfer_skip_lookup(manifest_path):
     """读取测试样本迁移 manifest，返回需要跳过的源文件"""
     if not manifest_path:
         return {}
-    path = resolve_project_path(manifest_path)
+    path = resolve_path(manifest_path)
     if not path.is_file():
         raise FileNotFoundError(f"Transfer manifest not found: {path}")
 

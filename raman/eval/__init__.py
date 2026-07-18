@@ -1,6 +1,6 @@
 """评估与基线入口统一导出层"""
 
-from .common import compute_classification_metrics
+from raman.metrics import compute_classification_metrics
 
 __all__ = [
     "compute_classification_metrics",

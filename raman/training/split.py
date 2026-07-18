@@ -1,4 +1,3 @@
-import hashlib
 import json
 import os
 
@@ -6,10 +5,9 @@ import numpy as np
 
 from raman.tool.naming import source_prefix_from_filename
 from raman.tool.path import normalize_relpath
+from raman.experiment import TRAIN_SPLIT_NAME, VAL_SPLIT_NAME
 
 
-TRAIN_SPLIT_NAME = "train_split.json"
-VAL_SPLIT_NAME = "val_split.json"
 DEFAULT_SPLIT_LEVEL = "leaf"
 TRANSFERRED_SOURCE_SUFFIX = "t"
 
@@ -39,21 +37,6 @@ def save_split_files(
         json.dump(train_files, f, indent=2, ensure_ascii=False)
     with open(os.path.join(out_dir, val_name), "w", encoding="utf-8") as f:
         json.dump(val_files, f, indent=2, ensure_ascii=False)
-
-
-def split_files_hash(split_dir):
-    """返回某个目录下 train/val split 文件的稳定哈希"""
-    digest = hashlib.sha256()
-    for name in (TRAIN_SPLIT_NAME, VAL_SPLIT_NAME):
-        path = os.path.join(split_dir, name)
-        if not os.path.exists(path):
-            return None
-        with open(path, "rb") as file:
-            digest.update(name.encode("utf-8"))
-            digest.update(b"\0")
-            digest.update(file.read())
-            digest.update(b"\n")
-    return digest.hexdigest()
 
 
 def load_split_files(dataset, split_dir):

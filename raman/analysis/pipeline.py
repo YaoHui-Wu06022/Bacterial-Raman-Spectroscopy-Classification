@@ -5,7 +5,7 @@ import numpy as np
 import torch
 
 from raman.data import RamanDataset
-from raman.eval.experiment import (
+from raman.experiment import (
     collect_used_runs,
     load_experiment_context_with_dataset,
     resolve_mode_result_dir,
@@ -15,7 +15,7 @@ from raman.eval.experiment import (
     write_used_runs,
 )
 from raman.tool.hierarchy import load_hierarchy_meta, resolve_level_order
-from raman.eval.runtime import build_experiment_runtime
+from raman.runtime import build_experiment_runtime
 from raman.training import load_split_files
 
 from .aggregate import run_aggregate_analysis

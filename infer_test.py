@@ -1,16 +1,21 @@
 """独立测试集推理入口"""
 
+from dataclasses import replace
+
 import torch
 
+from raman.data.build import build_test
+from raman.data.profiles import get_dataset_dir, get_profile
 from raman.infer.test import run_independent_test
 
 
 # 手动配置
-EXP_DIR = "output/GN/全18属/20260630_063625_tseed88"
+EXP_DIR = "output/GN/20260717_083000_div8_newbest"
 LEVEL = "level_1"
 
 # 可选配置
-TEST_ROOT = None  # None 表示使用模型配置对应数据集的 test
+BUILD_TEST_FROM_INIT = True  # True 时先由 测试菌/init 重建 测试菌/test
+TEST_ROOT = "dataset/测试菌/test"  # 关闭上方开关时使用的测试数据目录
 FOLDER = None  # 例如 "CS01KP"，None 表示运行全部测试文件夹
 TOP_K = 3  # 每条光谱输出置信度最高的前 k 个预测类别
 USE_CPU = False  # False 表示优先使用 CUDA，不可用时自动回退到 CPU
@@ -24,6 +29,11 @@ def main():
     """运行独立测试集推理"""
     if not EXP_DIR:
         raise ValueError("请先在 infer_test.py 里填写 EXP_DIR")
+
+    if BUILD_TEST_FROM_INIT:
+        profile = replace(get_profile("test"), root_init_test="init")
+        dataset_dir = get_dataset_dir(profile)
+        build_test(profile, dataset_dir)
 
     device = torch.device("cpu") if USE_CPU else None
     run_independent_test(

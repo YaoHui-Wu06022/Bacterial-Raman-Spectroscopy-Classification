@@ -134,11 +134,3 @@ def build_hierarchy_meta(
         "parent_models": parent_models,
         "runs": runs,
     }
-
-
-def save_json(path, payload):
-    """按 UTF-8 写出层级相关 JSON"""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file:
-        json.dump(payload, file, indent=2, ensure_ascii=False)

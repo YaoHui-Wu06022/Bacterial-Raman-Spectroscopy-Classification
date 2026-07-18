@@ -2,7 +2,7 @@ import os
 
 import torch
 
-from raman.eval.runtime import build_experiment_runtime
+from raman.runtime import build_experiment_runtime
 from raman.tool.spectrum import build_wavenumber_axis, get_config_bad_bands
 
 from .embedding import collect_embeddings_train_val, plot_embedding_hierarchical

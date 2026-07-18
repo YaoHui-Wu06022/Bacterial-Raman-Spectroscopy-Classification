@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import warnings
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 import matplotlib
@@ -13,11 +12,11 @@ matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
 from raman.config import config
-from raman.data.build import DEFAULT_PIPELINE_CONFIG
 from raman.data.input import normalize_spectrum
 from raman.data.io import read_arc_data
 from raman.data.preprocess import estimate_baseline
 from raman.data.profiles import get_dataset_dir, get_profile
+from raman.pipeline import DEFAULT_PIPELINE_CONFIG
 from raman.tool.naming import extract_letters_prefix
 from raman.tool.path import PROJECT_ROOT
 from raman.tool.plotting import GLASBEY_DARK_COLORS, plot_segments_without_bad_bands
@@ -32,26 +31,20 @@ SNV_OFFSET_MIN = 2.0  # SNV 曲线最小间距
 MINMAX_OFFSET_SCALE = 1.05  # minmax 曲线间距相对整体波动范围的倍率
 MINMAX_OFFSET_MIN = 1.05  # minmax 曲线最小间距，需略大于 0-1 范围避免重叠
 DELTA_NAME = "delta.txt"  # 当前训练文件夹累计平移量
-DELTA_LOG_NAME = "delta_log.txt"  # 每次训练文件夹平移动作日志
-DELTA_CS_NAME = "delta_cs.txt"  # 从测试菌迁入的 t 文件夹平移快照
 PREFIX_PLOT_STATE_NAME = "prefix_plot_state.csv"  # 上次 prefix 总览图使用的平移状态
 DELTA_FIELDS = ("genus", "folder", "prefix", "delta")  # delta.txt 字段
-DELTA_CS_FIELDS = ("source_folder", "target_genus", "target_folder", "delta")  # delta_cs.txt 字段
-DELTA_LOG_FIELDS = ("time", "genus", "folder", "prefix", "step_delta", "cumulative_delta", "files_changed", "note")  # delta_log.txt 字段
 LEGACY_PLOT_STATE_FIELDS = (*DELTA_FIELDS, "plot_version")  # 兼容旧 prefix 状态文件
 TRANSFERRED_FOLDER_SUFFIX = "t"  # 测试菌迁入训练集后的文件夹后缀
-DELETE_SHIFT_CATEGORIES = ("Invalid Spectrum", "Similar Outliers")  # apply 时同步平移的 delete 分类
 
 
 @dataclass(frozen=True)
 class DatasetPaths:
-    """shift 工具需要的一组数据集路径"""
+    """audit 绘图需要的一组数据集路径"""
 
     dataset_dir: Path
     init_dir: Path
     output_dir: Path
     delta_path: Path
-    delta_log_path: Path
 
 
 def resolve_dataset(dataset: str) -> DatasetPaths:
@@ -69,8 +62,7 @@ def resolve_dataset(dataset: str) -> DatasetPaths:
         dataset_dir=dataset_dir,
         init_dir=init_dir,
         output_dir=output_dir,
-        delta_path=output_dir / DELTA_NAME,
-        delta_log_path=output_dir / DELTA_LOG_NAME,
+        delta_path=dataset_dir / DELTA_NAME,
     )
 
 
@@ -222,74 +214,14 @@ def read_delta_rows(path: Path) -> list[dict[str, str]]:
         return list(reader)
 
 
-def write_delta_rows(path: Path, rows: list[dict[str, str]]) -> None:
-    """写出 delta.txt"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    rows = sorted(rows, key=lambda row: (row["genus"], row["folder"]))
-    with path.open("w", encoding="utf-8-sig", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=DELTA_FIELDS, delimiter="\t")
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def append_delta_log(
-    path: Path,
-    folder: Path,
-    step_delta: float,
-    cumulative_delta: float,
-    files_changed: int,
-    note: str = "",
-) -> None:
-    """追加记录单次平移动作"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    need_header = not path.is_file() or path.stat().st_size == 0
-    with path.open("a", encoding="utf-8-sig", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=DELTA_LOG_FIELDS, delimiter="\t")
-        if need_header:
-            writer.writeheader()
-        writer.writerow(
-            {
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "genus": folder.parent.name,
-                "folder": folder.name,
-                "prefix": shift_folder_prefix(folder),
-                "step_delta": format_delta(step_delta),
-                "cumulative_delta": format_delta(cumulative_delta),
-                "files_changed": str(files_changed),
-                "note": note,
-            }
-        )
-
-
 def ensure_delta_rows(paths: DatasetPaths) -> list[dict[str, str]]:
-    """读取 delta.txt，不存在时创建空记录"""
-    rows = read_delta_rows(paths.delta_path)
-    if rows or paths.delta_path.is_file():
-        return rows
-    write_delta_rows(paths.delta_path, [])
-    return []
+    """只读读取自动平移生成的 delta.txt。"""
+    return read_delta_rows(paths.delta_path)
 
 
 def delta_map(rows: list[dict[str, str]]) -> dict[tuple[str, str], float]:
     """构建小文件夹到累计平移量的映射"""
     return {(row["genus"], row["folder"]): parse_delta(row.get("delta")) for row in rows}
-
-
-def upsert_delta(rows: list[dict[str, str]], folder: Path, cumulative_delta: float) -> list[dict[str, str]]:
-    """更新单个小文件夹的累计平移量"""
-    key = (folder.parent.name, folder.name)
-    kept = [row for row in rows if (row["genus"], row["folder"]) != key]
-    delta = format_delta(cumulative_delta)
-    if delta:
-        kept.append(
-            {
-                "genus": folder.parent.name,
-                "folder": folder.name,
-                "prefix": shift_folder_prefix(folder),
-                "delta": delta,
-            }
-        )
-    return kept
 
 
 def resolve_folder(init_dir: Path, folder_arg: str) -> Path:
@@ -447,17 +379,23 @@ def write_plot_state(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
-def read_transferred_delta_map(path: Path) -> dict[tuple[str, str], str]:
-    """读取迁移 CS 文件夹对应的累计平移快照"""
-    if not path.is_file():
+def read_transferred_delta_map() -> dict[tuple[str, str], str]:
+    """从测试菌 manifest 和根目录 delta.txt 映射 t 文件夹的累计平移。"""
+    test_dir = get_dataset_dir(get_profile("test"), PROJECT_ROOT)
+    manifest_path = test_dir / "test_transfer_manifest.csv"
+    delta_path = test_dir / DELTA_NAME
+    if not manifest_path.is_file() or not delta_path.is_file():
         return {}
-    with path.open("r", encoding="utf-8-sig", newline="") as file:
-        reader = csv.DictReader(file, delimiter="\t")
-        if reader.fieldnames != list(DELTA_CS_FIELDS):
-            return {}
+
+    source_delta = {
+        row["folder"]: format_delta(parse_delta(row.get("delta")))
+        for row in read_delta_rows(delta_path)
+        if row.get("folder")
+    }
+    with manifest_path.open("r", encoding="utf-8-sig", newline="") as file:
         return {
-            (row["target_genus"], row["target_folder"]): format_delta(parse_delta(row.get("delta")))
-            for row in reader
+            (row["target_genus"], row["target_folder"]): source_delta.get(row.get("source_folder", ""), "")
+            for row in csv.DictReader(file)
             if row.get("target_genus") and row.get("target_folder")
         }
 
@@ -469,16 +407,12 @@ def current_delta_state(
 ) -> list[dict[str, str]]:
     """生成当前全部小文件夹 delta 状态"""
     deltas = delta_map(rows)
-    transferred_deltas = (
-        read_transferred_delta_map(paths.output_dir / DELTA_CS_NAME)
-        if include_transferred
-        else {}
-    )
+    transferred_deltas = read_transferred_delta_map() if include_transferred else {}
     state: list[dict[str, str]] = []
     for folder in iter_init_folders(paths.init_dir, include_transferred=include_transferred):
         key = (folder.parent.name, folder.name)
         delta = format_delta(deltas.get(key, 0.0))
-        if is_transferred_folder(folder):
+        if is_transferred_folder(folder) and key not in deltas:
             delta = transferred_deltas.get(key, delta)
         state.append(
             {
@@ -491,7 +425,7 @@ def current_delta_state(
     return state
 
 
-def plot_prefix_dataset(dataset: str, include_transferred: bool = False) -> list[Path]:
+def plot_prefix_dataset(dataset: str, include_transferred: bool = True) -> list[Path]:
     """按 delta.txt 变化增量输出同前缀 raw、SNV 和 minmax 中位谱总览图"""
     paths = resolve_dataset(dataset)
     wn_ref = build_plot_grid()
@@ -553,7 +487,7 @@ def plot_shift_folder(dataset: str, folder_arg: str) -> Path:
     folder = resolve_folder(paths.init_dir, folder_arg)
     cumulative_delta = delta_map(ensure_delta_rows(paths)).get((folder.parent.name, folder.name), 0.0)
     if abs(cumulative_delta) < 1e-9:
-        raise ValueError(f"Folder has no delta in delta.txt, run apply first: {folder.parent.name}/{folder.name}")
+        raise ValueError(f"Folder has no delta in delta.txt, run automatic audit shift first: {folder.parent.name}/{folder.name}")
 
     prefix = shift_folder_prefix(folder)
     before_raw, _ = folder_raw_median_curve(folder, wn_ref, wn_offset=-cumulative_delta)
@@ -582,54 +516,3 @@ def plot_shift_folder(dataset: str, folder_arg: str) -> Path:
         folder.name,
     )
     return out_path
-
-
-def shift_folder(folder: Path, delta: float) -> int:
-    """按增量 delta 修改目标小文件夹的波数列"""
-    changed = 0
-    for path in sorted(folder.glob("*.arc_data")):
-        wn, sp = read_arc_data(path)
-        if wn.size == 0:
-            continue
-        np.savetxt(path, np.column_stack([wn + delta, sp]), fmt=["%.3f", "%.6f"], delimiter="\t")
-        changed += 1
-    return changed
-
-
-def matching_delete_folders(paths: DatasetPaths, folder: Path) -> list[Path]:
-    """查找与 init 小文件夹对应的 delete 小文件夹"""
-    if is_transferred_folder(folder):
-        return []
-    genus = folder.parent.name
-    name = folder.name
-    delete_root = paths.dataset_dir / "delete"
-    return [
-        candidate
-        for category in DELETE_SHIFT_CATEGORIES
-        for candidate in [delete_root / category / genus / name]
-        if candidate.is_dir()
-    ]
-
-
-def apply_shift(dataset: str, folder_arg: str, delta: float, note: str = "") -> tuple[dict[str, str], int]:
-    """执行单个小文件夹平移，并同步同名 delete 数据"""
-    paths = resolve_dataset(dataset)
-    folder = resolve_folder(paths.init_dir, folder_arg)
-    rows = ensure_delta_rows(paths)
-    existing = delta_map(rows).get((folder.parent.name, folder.name), 0.0)
-    cumulative_delta = existing + float(delta)
-
-    changed = shift_folder(folder, float(delta))
-    for delete_folder in matching_delete_folders(paths, folder):
-        changed += shift_folder(delete_folder, float(delta))
-    rows = upsert_delta(rows, folder, cumulative_delta)
-    write_delta_rows(paths.delta_path, rows)
-    append_delta_log(paths.delta_log_path, folder, float(delta), cumulative_delta, changed, note=note)
-
-    row = {
-        "genus": folder.parent.name,
-        "folder": folder.name,
-        "prefix": shift_folder_prefix(folder),
-        "delta": format_delta(cumulative_delta),
-    }
-    return row, changed

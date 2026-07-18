@@ -8,6 +8,7 @@ import torch
 
 from raman.config import config as default_config
 from raman.data import RamanDataset
+from raman.experiment import TRAIN_SPLIT_NAME, VAL_SPLIT_NAME, split_files_hash
 from raman.tool.hierarchy import resolve_level_order
 from raman.tool.path import relpath
 from raman.training.session import (
@@ -18,8 +19,6 @@ from raman.training.session import (
 )
 from raman.training.model_loop import ModelTrainContext, train_model
 from raman.training.split import (
-    TRAIN_SPLIT_NAME,
-    VAL_SPLIT_NAME,
     DEFAULT_SPLIT_LEVEL,
     apply_train_filter,
     build_label_map_np,
@@ -28,7 +27,6 @@ from raman.training.split import (
     resolve_train_scope,
     save_split_files,
     split_by_lowest_level_ratio,
-    split_files_hash,
 )
 
 @dataclass
