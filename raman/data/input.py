@@ -485,7 +485,7 @@ def augment_raw_spectrum(x, config):
 
 
 def augment_norm_spectrum(x, config):
-    """在归一化后做弱形状扰动"""
+    """在归一化后做弱形状扰动。"""
     is_tensor = _is_tensor(x)
     if is_tensor:
         device = x.device

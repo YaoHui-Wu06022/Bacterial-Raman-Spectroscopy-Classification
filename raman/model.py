@@ -323,6 +323,7 @@ class RamanClassifier1D(nn.Module):
         self.layer1 = self._make_stage(64, num_blocks=2, pool_first=False)
         self.layer2 = self._make_stage(128, num_blocks=2, pool_first=True)
         self.layer3 = self._make_stage(256, num_blocks=2, pool_first=True)
+        # 两次 2 倍池化：将输入谱轴长度累计压缩为原来的 1/4。
         self.layer4 = self._make_stage(512, num_blocks=2, pool_first=False)
         self.proj = nn.Conv1d(512, self.proj_dim, kernel_size=1, bias=False)
 

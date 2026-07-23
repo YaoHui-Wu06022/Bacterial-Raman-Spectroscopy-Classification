@@ -244,18 +244,26 @@ def _plot_raw(record: RawRecord, output: Path) -> None:
 
 
 def _stage_move(record: RawRecord, dataset_dir: Path, test_dir: Path, stage: str) -> None:
+    """按来源归档候选：测试谱只保留在测试菌 delete，常规谱保留在 50cos delete。"""
+    if record.origin_path is not None:
+        if not record.origin_path.is_file():
+            raise FileNotFoundError(f"Missing test-source spectrum: {record.origin_path}")
+        origin_destination = test_dir / "delete" / stage / Path(record.origin_rel_path)
+        origin_destination.parent.mkdir(parents=True, exist_ok=True)
+        if origin_destination.exists():
+            raise FileExistsError(f"Refusing to overwrite source delete target: {origin_destination}")
+        shutil.move(str(record.origin_path), str(origin_destination))
+        # record.path 是 50cos 中的临时 audit 副本，删除后避免后续 Stage3 重复扫描，不能归档为 *t 删除谱。
+        if record.path.is_file():
+            record.path.unlink()
+        return
+
     destination = dataset_dir / "delete" / stage / Path(record.rel_path)
     if record.path.is_file():
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
             raise FileExistsError(f"Refusing to overwrite delete target: {destination}")
         shutil.move(str(record.path), str(destination))
-    if record.origin_path is not None and record.origin_path.is_file():
-        origin_destination = test_dir / "delete" / stage / Path(record.origin_rel_path)
-        origin_destination.parent.mkdir(parents=True, exist_ok=True)
-        if origin_destination.exists():
-            raise FileExistsError(f"Refusing to overwrite source delete target: {origin_destination}")
-        shutil.move(str(record.origin_path), str(origin_destination))
 
 
 def run_stage1(dataset_key: str = "cos", test_key: str = "test", move: bool = True) -> Path:
@@ -353,12 +361,13 @@ def _read_delta(path: Path) -> dict[tuple[str, str], float]:
 
 
 def _write_delta(path: Path, values: dict[tuple[str, str], tuple[str, float]]) -> None:
+    """写入最终文件夹的累计平移，不保留临时 audit 池名称。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=DELTA_FIELDS, delimiter="\t")
         writer.writeheader()
         for (genus, folder), (prefix, delta) in sorted(values.items()):
-            if abs(delta) > 1e-9:
+            if source_folder_from_audit_folder(folder) is None and abs(delta) > 1e-9:
                 writer.writerow({"genus": genus, "folder": folder, "prefix": prefix, "delta": f"{delta:+g}"})
 
 
