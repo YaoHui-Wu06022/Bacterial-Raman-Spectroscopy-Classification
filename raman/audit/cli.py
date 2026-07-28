@@ -25,8 +25,9 @@ def build_parser() -> argparse.ArgumentParser:
         ("manual-shift", "对一个最终文件夹追加人工平移"),
     ):
         child = subparsers.add_parser(command, help=help_text)
-        if command != "clean":
-            child.add_argument("--dataset", default="cos", help="主数据集 profile id")
+        child.add_argument("--dataset", default="alldata", help="主数据集 profile id")
+        if command == "clean":
+            child.add_argument("--test-dataset", default="test", help="测试菌 profile id")
         if command == "plot-shift":
             child.add_argument("--folder", required=True, help="属/小文件夹，或唯一小文件夹名")
         if command == "manual-shift":
@@ -58,14 +59,16 @@ def main(argv=None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     if args.command == "clean":
-        copied, skipped = transfer_all()
+        copied, skipped = transfer_all(args.dataset, args.test_dataset)
         try:
-            out_dir = run_cleaning_pipeline()
+            out_dir = run_cleaning_pipeline(args.dataset, args.test_dataset)
         finally:
-            synced, missing = sync_back()
-        rebuild_training_test_copies()
+            synced, missing = sync_back(args.dataset, args.test_dataset)
+        rebuild_training_test_copies(args.dataset)
+        outputs = plot_prefix_dataset(args.dataset, force=True)
         print(f"test_pool_copied={copied}, skipped={skipped}")
         print(f"test_pool_synced={synced}, missing={missing}")
+        print(f"figures={len(outputs)}")
         print(out_dir)
         return 0
     raise RuntimeError(f"未处理的 audit 命令：{args.command}")

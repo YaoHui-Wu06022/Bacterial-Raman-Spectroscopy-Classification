@@ -70,10 +70,10 @@ def _target_genus_by_prefix(target_init: Path) -> dict[str, str]:
     return result
 
 
-def transfer_all() -> tuple[int, int]:
+def transfer_all(dataset_key: str = "alldata", test_key: str = "test") -> tuple[int, int]:
     """全量复制 CS 测试谱到临时 audit 池；不依赖迁移比例或 CSV。"""
-    _, dataset_dir = resolve_dataset("cos", PROJECT_ROOT)
-    _, test_dir = resolve_dataset("test", PROJECT_ROOT)
+    _, dataset_dir = resolve_dataset(dataset_key, PROJECT_ROOT)
+    _, test_dir = resolve_dataset(test_key, PROJECT_ROOT)
     target_init = dataset_dir / "init"
     source_root = test_dir / "init"
     if not target_init.is_dir():
@@ -99,10 +99,10 @@ def transfer_all() -> tuple[int, int]:
     return copied, skipped
 
 
-def sync_back() -> tuple[int, int]:
+def sync_back(dataset_key: str = "alldata", test_key: str = "test") -> tuple[int, int]:
     """把临时 audit 池中保留的谱回写到测试集，再清理临时池。"""
-    _, dataset_dir = resolve_dataset("cos", PROJECT_ROOT)
-    _, test_dir = resolve_dataset("test", PROJECT_ROOT)
+    _, dataset_dir = resolve_dataset(dataset_key, PROJECT_ROOT)
+    _, test_dir = resolve_dataset(test_key, PROJECT_ROOT)
     target_init = dataset_dir / "init"
     source_root = test_dir / "init"
     copied = 0
@@ -120,15 +120,17 @@ def sync_back() -> tuple[int, int]:
     return copied, missing
 
 
-def rebuild_training_test_copies() -> None:
+def rebuild_training_test_copies(dataset_key: str = "alldata") -> None:
     """按测试菌迁移脚本当前配置重建 *t 训练副本与 manifest。"""
+    _, dataset_dir = resolve_dataset(dataset_key, PROJECT_ROOT)
     _, test_dir = resolve_dataset("test", PROJECT_ROOT)
-    script = test_dir / "transfer_cs_to_50cos_init.py"
+    script = test_dir / "transfer_cs_to_init.py"
     spec = importlib.util.spec_from_file_location("raman_test_transfer", script)
     if spec is None or spec.loader is None:
         raise ImportError(f"无法加载测试菌迁移脚本：{script}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.TARGET_INIT = dataset_dir / "init"
     result = module.main([])
     if result:
         raise RuntimeError(f"重建 *t 训练副本失败，退出码：{result}")

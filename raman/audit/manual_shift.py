@@ -42,7 +42,7 @@ def _source_folder_for_t(test_dir: Path, target_folder: str) -> str:
 def apply_manual_shift(
     folder: str,
     delta: float,
-    dataset_key: str = "cos",
+    dataset_key: str = "alldata",
     test_key: str = "test",
 ) -> dict[str, object]:
     """给一个最终数据文件夹追加平移，并同步累计记录。"""
@@ -115,7 +115,7 @@ def apply_manual_shift(
                 "step_delta": f"{delta:+g}",
                 "cumulative_delta": f"{test_cumulative:+g}",
                 "files_changed": len(source_files),
-                "note": f"manual_sync_from_50cos={genus}/{target_folder}",
+                "note": f"manual_sync_from_alldata={genus}/{target_folder}",
             }],
         )
 

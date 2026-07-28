@@ -425,7 +425,11 @@ def current_delta_state(
     return state
 
 
-def plot_prefix_dataset(dataset: str, include_transferred: bool = True) -> list[Path]:
+def plot_prefix_dataset(
+    dataset: str,
+    include_transferred: bool = True,
+    force: bool = False,
+) -> list[Path]:
     """按 delta.txt 变化增量输出同前缀 raw、SNV 和 minmax 中位谱总览图"""
     paths = resolve_dataset(dataset)
     wn_ref = build_plot_grid()
@@ -451,7 +455,7 @@ def plot_prefix_dataset(dataset: str, include_transferred: bool = True) -> list[
 
     for (genus, prefix), folders in sorted(folders_by_group.items()):
         out_path = paths.output_dir / genus / f"{prefix}.png"
-        if out_path.is_file() and (genus, prefix) not in changed_groups:
+        if not force and out_path.is_file() and (genus, prefix) not in changed_groups:
             continue
 
         raw_curves: dict[str, np.ndarray] = {}

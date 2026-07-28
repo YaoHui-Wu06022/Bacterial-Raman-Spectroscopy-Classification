@@ -51,9 +51,9 @@ PROFILES = {
         profile_id="original",
         dataset_name="50种菌",
     ),
-    "cos": DatasetProfile(
-        profile_id="cos",
-        dataset_name="50种菌cos",
+    "alldata": DatasetProfile(
+        profile_id="alldata",
+        dataset_name="alldata",
     ),
     "MN_IgA": DatasetProfile(
         profile_id="MN_IgA",

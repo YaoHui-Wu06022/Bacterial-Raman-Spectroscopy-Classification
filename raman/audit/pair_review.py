@@ -50,7 +50,7 @@ def _target_directories(dataset_dir: Path, folders: tuple[str, ...]):
 
 def _load_pairs(dataset_dir: Path, folders: tuple[str, ...]):
     """读取可组成 000/001 对的处理谱，并保留它们当前所在位置。"""
-    profile, profile_dir = resolve_dataset("cos", PROJECT_ROOT)
+    profile, profile_dir = resolve_dataset("alldata", PROJECT_ROOT)
     if profile_dir != dataset_dir:
         raise ValueError(f"数据集目录不匹配：{dataset_dir}")
 
@@ -145,7 +145,7 @@ def run_pair_review(folders: tuple[str, ...] = DEFAULT_FOLDERS, max_per_folder: 
     """输出指定文件夹中相关性最低的重复测量对图。"""
     if max_per_folder < 1:
         raise ValueError("每个文件夹至少绘制一对重复测量")
-    _, dataset_dir = resolve_dataset("cos", PROJECT_ROOT)
+    _, dataset_dir = resolve_dataset("alldata", PROJECT_ROOT)
     pairs = _load_pairs(dataset_dir, folders)
     by_folder: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
     for item in pairs:

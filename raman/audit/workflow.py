@@ -285,7 +285,7 @@ def _stage_move(record: RawRecord, dataset_dir: Path, test_dir: Path, stage: str
         shutil.move(str(record.path), str(destination))
 
 
-def run_stage1(dataset_key: str = "cos", test_key: str = "test", move: bool = True) -> Path:
+def run_stage1(dataset_key: str = "alldata", test_key: str = "test", move: bool = True) -> Path:
     """扫描原始坏谱，并可把强候选移到 delete/stage1。"""
     _, dataset_dir = resolve_dataset(dataset_key, PROJECT_ROOT)
     _, test_dir = resolve_dataset(test_key, PROJECT_ROOT)
@@ -534,7 +534,7 @@ def _shift_file(path: Path, delta: float) -> None:
     temp.replace(path)
 
 
-def rollback_data_driven_shift(dataset_key: str = "cos") -> int:
+def rollback_data_driven_shift(dataset_key: str = "alldata") -> int:
     """撤销数据集根目录 delta.txt 所代表的当前新版平移。"""
     _, dataset_dir = resolve_dataset(dataset_key, PROJECT_ROOT)
     init_dir = dataset_dir / "init"
@@ -585,7 +585,7 @@ def _test_training_folder_map(test_dir: Path) -> dict[tuple[str, str], str]:
     return result
 
 
-def run_data_driven_shift(dataset_key: str = "cos", test_key: str = "test") -> Path:
+def run_data_driven_shift(dataset_key: str = "alldata", test_key: str = "test") -> Path:
     """以原版平滑峰为主体，仅用 Candida 双峰拟合补充平移。"""
     _, dataset_dir = resolve_dataset(dataset_key, PROJECT_ROOT)
     _, test_dir = resolve_dataset(test_key, PROJECT_ROOT)
@@ -884,12 +884,12 @@ def _moved_similarity_rows(records: list[SimilarityRecord]) -> list[dict[str, ob
     """为已移动的相似度候选补充来源数据集字段。"""
     rows = _similar_rows(records)
     for item, row in zip(records, rows):
-        row["source_dataset"] = "test" if item.raw.origin_path is not None else "cos"
+        row["source_dataset"] = "test" if item.raw.origin_path is not None else "alldata"
     return rows
 
 
 def run_stage3(
-    dataset_key: str = "cos",
+    dataset_key: str = "alldata",
     test_key: str = "test",
     folder: str | None = None,
     draw: bool = False,
@@ -1018,7 +1018,7 @@ def _plot_similarity(record: SimilarityRecord, output: Path) -> None:
     plt.close(fig)
 
 
-def run_stage2(dataset_key: str = "cos", test_key: str = "test", move: bool = True) -> Path:
+def run_stage2(dataset_key: str = "alldata", test_key: str = "test", move: bool = True) -> Path:
     """对阶段一保留谱按类内近邻进行低相似性审核。"""
     _, dataset_dir = resolve_dataset(dataset_key, PROJECT_ROOT)
     _, test_dir = resolve_dataset(test_key, PROJECT_ROOT)
@@ -1070,7 +1070,7 @@ def run_stage2(dataset_key: str = "cos", test_key: str = "test", move: bool = Tr
     return out_dir
 
 
-def run_cleaning_pipeline(dataset_key: str = "cos", test_key: str = "test") -> Path:
+def run_cleaning_pipeline(dataset_key: str = "alldata", test_key: str = "test") -> Path:
     """执行连续清洗：三个阶段的强候选均在各自阶段直接删除。"""
     _, dataset_dir = resolve_dataset(dataset_key, PROJECT_ROOT)
 

@@ -40,7 +40,7 @@ def _resolve_test_root(config, override):
     if override:
         return resolve_path(override)
     dataset_root = dataset_bundle_root(resolve_path(config.dataset_root))
-    cos_dir = get_dataset_dir(get_profile("cos"), PROJECT_ROOT)
+    cos_dir = get_dataset_dir(get_profile("alldata"), PROJECT_ROOT)
     if dataset_root.resolve() == cos_dir.resolve():
         test_dir = get_dataset_dir(get_profile("test"), PROJECT_ROOT) / "init"
         if not test_dir.is_dir():
