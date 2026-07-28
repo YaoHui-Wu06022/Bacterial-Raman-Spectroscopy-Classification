@@ -122,7 +122,7 @@ def compose_config(shared=None, model=None, runtime=None, base_config=None):
 
 # ==================== 实验目录解析 ====================
 def find_experiment_root(path):
-    """从实验根、best 或 run 目录向上寻找包含共享配置的根目录"""
+    """从实验根或 run 目录向上寻找包含共享配置的根目录"""
     current = Path(path).resolve()
     if current.is_file():
         current = current.parent

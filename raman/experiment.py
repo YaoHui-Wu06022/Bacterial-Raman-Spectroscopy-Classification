@@ -189,20 +189,12 @@ def _selected_run_dir(slot_dir, run_selection=None):
 def select_run_dir(slot_dir, run_selection=None):
     """
     在某个模型槽位目录中选择要使用的 run
-    best/ 里有唯一 run 时优先使用，否则回退到外层最新 run
+    默认使用外层最新 run；显式 RUN_SELECTION 可覆盖。
     """
     slot_dir = Path(slot_dir)
     selected_run = _selected_run_dir(slot_dir, run_selection=run_selection)
     if selected_run is not None:
         return selected_run, "selected"
-
-    best_dir = slot_dir / "best"
-    if best_dir.exists():
-        best_runs = sorted(path for path in best_dir.iterdir() if path.is_dir() and path.name.startswith("run_"))
-        if len(best_runs) > 1:
-            raise ValueError(f"{best_dir} 内有多个 run_*，best 目录只允许保留一个")
-        if len(best_runs) == 1:
-            return best_runs[0], "best"
 
     if not slot_dir.exists():
         return None, None

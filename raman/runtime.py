@@ -103,7 +103,7 @@ class ExperimentRuntime:
             if not entry.get("child_ids"):
                 entry["child_ids"] = list(scanned_entry.get("child_ids", []))
 
-            # 目录中的 best/latest run 优先于 meta 中已有记录
+            # 目录中的最新 run 优先于 meta 中已有记录
             if scanned_entry.get("run_dir"):
                 entry.update(scanned_entry)
             elif entry.get("model_path") is None:

@@ -69,3 +69,7 @@ def main(argv=None) -> int:
         print(out_dir)
         return 0
     raise RuntimeError(f"未处理的 audit 命令：{args.command}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

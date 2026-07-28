@@ -1,10 +1,35 @@
 import argparse
+import tempfile
+import zipfile
+from pathlib import Path
 
 from raman.data.build import build_test, build_train
 from raman.data.io import pack_init, unpack_init
 from raman.data.count import count_dataset, print_results
 from raman.data.plot import plot_train
 from raman.tool.dataset import resolve_dataset
+from raman.tool.path import PROJECT_ROOT
+
+
+def pack_raman_package() -> Path:
+    """将项目中的 raman 包压缩为项目根目录的 raman.zip。"""
+    package_dir = PROJECT_ROOT / "raman"
+    archive_path = PROJECT_ROOT / "raman.zip"
+    with tempfile.NamedTemporaryFile(dir=PROJECT_ROOT, prefix="raman-", suffix=".zip", delete=False) as file:
+        temporary_path = Path(file.name)
+    try:
+        with zipfile.ZipFile(temporary_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(package_dir.rglob("*")):
+                if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc":
+                    archive.write(path, path.relative_to(PROJECT_ROOT))
+        with zipfile.ZipFile(temporary_path) as archive:
+            if not archive.namelist():
+                raise RuntimeError("raman.zip 为空")
+        temporary_path.replace(archive_path)
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+    return archive_path
 
 
 def run_pack(args):
@@ -15,6 +40,7 @@ def run_pack(args):
         dataset_dir / profile.root_init_pack,
         verbose=not args.quiet,
     )
+    print(f"[Pack] raman package={pack_raman_package()}")
 
 
 def run_unpack(args):

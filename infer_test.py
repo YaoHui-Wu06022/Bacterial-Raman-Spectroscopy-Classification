@@ -10,8 +10,8 @@ from raman.infer.test import run_independent_test
 
 
 # 手动配置
-EXP_DIR = "output/GN/20260717_083000_div8_newbest"
-LEVEL = "level_1"
+EXP_DIR = "output/GN/20260722_051934_div4_89%"
+LEVEL = "level_2"
 
 # 可选配置
 BUILD_TEST_FROM_INIT = True  # True 时先由 测试菌/init 重建 测试菌/test

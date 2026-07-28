@@ -12,6 +12,8 @@ from pathlib import Path
 
 import matplotlib
 import numpy as np
+from scipy.optimize import curve_fit
+from scipy.signal import find_peaks
 
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
@@ -37,11 +39,28 @@ SHIFT_LIMIT = 30.0
 SHIFT_ANCHOR_MIN = 980.0
 SHIFT_ANCHOR_MAX = 1020.0
 SHIFT_TARGET_CM = 1002.0
-SHIFT_RESIDUAL_MIN = 1000.0
-SHIFT_RESIDUAL_MAX = 1004.0
+SHIFT_DEFAULT_RESIDUAL_MIN = 1000.0
+SHIFT_DEFAULT_RESIDUAL_MAX = 1004.0
+SHIFT_FUNG_RESIDUAL_MIN = 1001.0
+SHIFT_FUNG_RESIDUAL_MAX = 1003.0
 SHIFT_SMOOTH_WINDOW = 5
 SHIFT_TOTAL_LIMIT = 10.0
 SHIFT_LARGE_MOVE_FOLDERS = {"BCC01", "ECL04", "EC03", "KAE03", "KAE04"}
+SHIFT_FIXED_TOTALS = {
+    ("Burkholderia", "BCC01"): -26.0,
+    ("Enterobacter", "ECL04"): -27.0,
+    ("Escherichia", "EC03"): -14.3,
+    ("Klebsiella", "KAE03"): -26.0,
+    ("Klebsiella", "KAE04"): -26.0,
+    ("Proteus", "PVU03"): 3.0,
+}
+SHIFT_FIT_MIN = 992.0
+SHIFT_FIT_MAX = 1012.0
+SHIFT_FIT_MIN_R2 = 0.35
+SHIFT_DOUBLE_BIC_GAIN = 10.0
+SHIFT_DOUBLE_MIN_SEPARATION = 2.5
+SHIFT_DOUBLE_MAX_SEPARATION = 9.0
+SHIFT_DOUBLE_MIN_AMPLITUDE_RATIO = 0.20
 
 
 @dataclass
@@ -317,7 +336,7 @@ def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
     return np.convolve(values, kernel, mode="same")
 
 
-def _folder_curve(folder: Path) -> np.ndarray | None:
+def _folder_curve(folder: Path, wn_offset: float = 0.0) -> np.ndarray | None:
     cfg = DEFAULT_PIPELINE_CONFIG
     grid = cfg.build_wn_ref()
     curves = []
@@ -328,9 +347,10 @@ def _folder_curve(folder: Path) -> np.ndarray | None:
             continue
         if malformed or wn.size < RAW_MIN_POINTS or np.any(np.diff(wn) <= 0):
             continue
-        if wn.min() > cfg.cut_min or wn.max() < cfg.cut_max:
+        shifted_wn = wn + wn_offset
+        if shifted_wn.min() > cfg.cut_min or shifted_wn.max() < cfg.cut_max:
             continue
-        curve = np.interp(grid, wn, sp)
+        curve = np.interp(grid, shifted_wn, sp)
         curve = curve - _moving_average(curve, 101)
         scale = float(np.median(np.abs(curve - np.median(curve))))
         if scale > 1e-8:
@@ -338,8 +358,128 @@ def _folder_curve(folder: Path) -> np.ndarray | None:
     return np.median(np.asarray(curves), axis=0) if curves else None
 
 
+def _single_peak_model(x: np.ndarray, baseline: float, slope: float, amplitude: float, center: float, width: float) -> np.ndarray:
+    return baseline + slope * (x - SHIFT_TARGET_CM) + amplitude * np.exp(-0.5 * ((x - center) / width) ** 2)
+
+
+def _double_peak_model(
+    x: np.ndarray,
+    baseline: float,
+    slope: float,
+    amplitude_1: float,
+    center_1: float,
+    width_1: float,
+    amplitude_2: float,
+    center_2: float,
+    width_2: float,
+) -> np.ndarray:
+    return (
+        baseline
+        + slope * (x - SHIFT_TARGET_CM)
+        + amplitude_1 * np.exp(-0.5 * ((x - center_1) / width_1) ** 2)
+        + amplitude_2 * np.exp(-0.5 * ((x - center_2) / width_2) ** 2)
+    )
+
+
+def _fit_score(values: np.ndarray, fitted: np.ndarray, parameter_count: int) -> tuple[float, float]:
+    residual_sum = max(float(np.sum((values - fitted) ** 2)), 1e-12)
+    total_sum = max(float(np.sum((values - np.mean(values)) ** 2)), 1e-12)
+    bic = len(values) * math.log(residual_sum / len(values)) + parameter_count * math.log(len(values))
+    return bic, 1.0 - residual_sum / total_sum
+
+
+def _fit_single_anchor(grid: np.ndarray, values: np.ndarray) -> dict[str, float | str] | None:
+    baseline = float(np.median(values))
+    scale = max(float(np.ptp(values)), 0.1)
+    peak_index = int(np.argmax(values))
+    try:
+        params, _ = curve_fit(
+            _single_peak_model,
+            grid,
+            values,
+            p0=(baseline, 0.0, max(float(values[peak_index] - baseline), 0.05), float(grid[peak_index]), 2.0),
+            bounds=((-10 * scale, -5 * scale, 0.0, SHIFT_FIT_MIN, 0.3), (10 * scale, 5 * scale, 20 * scale, SHIFT_FIT_MAX, 8.0)),
+            maxfev=20_000,
+        )
+    except (RuntimeError, ValueError):
+        return None
+    bic, r2 = _fit_score(values, _single_peak_model(grid, *params), 5)
+    return {"model": "single", "position": float(params[3]), "quality": r2, "bic": bic, "r2": r2}
+
+
+def _fit_double_anchor(grid: np.ndarray, values: np.ndarray, peak_indices: np.ndarray) -> dict[str, float | str] | None:
+    baseline = float(np.median(values))
+    scale = max(float(np.ptp(values)), 0.1)
+    best: dict[str, float | str] | None = None
+    for rank, left_index in enumerate(peak_indices):
+        for right_index in peak_indices[rank + 1:]:
+            if not SHIFT_DOUBLE_MIN_SEPARATION <= grid[right_index] - grid[left_index] <= SHIFT_DOUBLE_MAX_SEPARATION:
+                continue
+            try:
+                params, _ = curve_fit(
+                    _double_peak_model,
+                    grid,
+                    values,
+                    p0=(
+                        baseline,
+                        0.0,
+                        max(float(values[left_index] - baseline), 0.05),
+                        float(grid[left_index]),
+                        1.8,
+                        max(float(values[right_index] - baseline), 0.05),
+                        float(grid[right_index]),
+                        1.8,
+                    ),
+                    bounds=(
+                        (-10 * scale, -5 * scale, 0.0, SHIFT_FIT_MIN, 0.3, 0.0, SHIFT_FIT_MIN, 0.3),
+                        (10 * scale, 5 * scale, 20 * scale, SHIFT_FIT_MAX, 8.0, 20 * scale, SHIFT_FIT_MAX, 8.0),
+                    ),
+                    maxfev=30_000,
+                )
+            except (RuntimeError, ValueError):
+                continue
+            components = sorted(((float(params[2]), float(params[3])), (float(params[5]), float(params[6]))), key=lambda item: item[1])
+            separation = components[1][1] - components[0][1]
+            amplitude_ratio = min(components[0][0], components[1][0]) / max(components[0][0], components[1][0], 1e-12)
+            if not SHIFT_DOUBLE_MIN_SEPARATION <= separation <= SHIFT_DOUBLE_MAX_SEPARATION or amplitude_ratio < SHIFT_DOUBLE_MIN_AMPLITUDE_RATIO:
+                continue
+            bic, r2 = _fit_score(values, _double_peak_model(grid, *params), 8)
+            candidate: dict[str, float | str] = {
+                "model": "double",
+                "position": 0.5 * (components[0][1] + components[1][1]),
+                "quality": r2,
+                "bic": bic,
+                "r2": r2,
+                "separation": separation,
+                "amplitude_ratio": amplitude_ratio,
+            }
+            if best is None or float(candidate["bic"]) < float(best["bic"]):
+                best = candidate
+    return best
+
+
+def _fit_anchor(source: np.ndarray, grid: np.ndarray) -> dict[str, float | str] | None:
+    """拟合 1002 cm⁻¹ 邻域的单峰或双峰，并返回可信锚点。"""
+    anchor = (grid >= SHIFT_FIT_MIN) & (grid <= SHIFT_FIT_MAX) & np.isfinite(source)
+    if anchor.sum() < 10:
+        return None
+    fit_grid = grid[anchor]
+    values = source[anchor]
+    single = _fit_single_anchor(fit_grid, values)
+    if single is None or float(single["r2"]) < SHIFT_FIT_MIN_R2:
+        return None
+    spread = float(np.percentile(values, 95) - np.percentile(values, 5))
+    peak_indices, _ = find_peaks(values, prominence=max(spread * 0.10, 1e-6), distance=2)
+    double = _fit_double_anchor(fit_grid, values, peak_indices) if len(peak_indices) >= 2 else None
+    if double is not None and float(double["r2"]) >= SHIFT_FIT_MIN_R2 and float(single["bic"]) - float(double["bic"]) >= SHIFT_DOUBLE_BIC_GAIN:
+        double["bic_gain"] = float(single["bic"]) - float(double["bic"])
+        return double
+    single["bic_gain"] = float(single["bic"]) - float(double["bic"]) if double is not None else 0.0
+    return single
+
+
 def _anchor_peak(source: np.ndarray, grid: np.ndarray) -> tuple[float, float] | None:
-    """返回 950--1050 cm⁻¹ 内 1002 标准峰的位置及相对显著度。"""
+    """返回原版 1002 cm⁻¹ 锚点：5 点平滑后的局部最高点。"""
     anchor = (grid >= SHIFT_ANCHOR_MIN) & (grid <= SHIFT_ANCHOR_MAX) & np.isfinite(source)
     if anchor.sum() < SHIFT_SMOOTH_WINDOW:
         return None
@@ -351,6 +491,11 @@ def _anchor_peak(source: np.ndarray, grid: np.ndarray) -> tuple[float, float] | 
     if spread <= 1e-8 or prominence <= spread * 0.15:
         return None
     return float(grid[anchor][peak_index]), prominence / spread
+
+
+def _fung_fit_anchor(source: np.ndarray, grid: np.ndarray) -> dict[str, float | str] | None:
+    """对 FUNG 属先拟合高斯单峰，可靠双峰时再由 BIC 升级为双峰。"""
+    return _fit_anchor(source, grid)
 
 
 def _read_delta(path: Path) -> dict[tuple[str, str], float]:
@@ -420,69 +565,120 @@ def _transfer_folder_map(dataset_dir: Path) -> dict[tuple[str, str], str]:
     return result
 
 
+def _test_training_folder_map(test_dir: Path) -> dict[tuple[str, str], str]:
+    """映射 cos 的 *t 训练副本到测试菌 CS 来源文件夹。"""
+    manifest = test_dir / "test_transfer_manifest.csv"
+    if not manifest.is_file():
+        return {}
+    result = {}
+    with manifest.open("r", encoding="utf-8-sig", newline="") as file:
+        for row in csv.DictReader(file):
+            genus = row.get("target_genus", "")
+            folder = row.get("target_folder", "")
+            source = row.get("source_folder", "")
+            if not genus or not folder or not source:
+                continue
+            key = (genus, folder)
+            previous = result.setdefault(key, source)
+            if previous != source:
+                raise ValueError(f"测试训练副本映射不唯一：{genus}/{folder}")
+    return result
+
+
 def run_data_driven_shift(dataset_key: str = "cos", test_key: str = "test") -> Path:
-    """以 1002 cm⁻¹ 标准峰为锚点，稀疏地平移各文件夹并同步测试菌来源。"""
+    """以原版平滑峰为主体，仅用 Candida 双峰拟合补充平移。"""
     _, dataset_dir = resolve_dataset(dataset_key, PROJECT_ROOT)
     _, test_dir = resolve_dataset(test_key, PROJECT_ROOT)
+    fung_profile, fung_dir = resolve_dataset("FUNG", PROJECT_ROOT)
+    fung_init = fung_dir / fung_profile.root_init
+    fung_genera = {path.name for path in fung_init.iterdir() if path.is_dir()} if fung_init.is_dir() else set()
     init_dir = dataset_dir / "init"
     out_dir = _run_dir(dataset_dir, "shift")
+    source_delta = dataset_dir / "delta.txt"
+    if source_delta.is_file():
+        shutil.copy2(source_delta, out_dir / "delta_before.txt")
+    else:
+        (out_dir / "delta_before.txt").write_text("\t".join(DELTA_FIELDS) + "\n", encoding="utf-8-sig")
     grid = DEFAULT_PIPELINE_CONFIG.build_wn_ref()
-    folders: list[tuple[Path, np.ndarray]] = []
+    folders: list[Path] = []
     for genus_dir in sorted(path for path in init_dir.iterdir() if path.is_dir()):
         for folder in sorted(path for path in genus_dir.iterdir() if path.is_dir()):
-            curve = _folder_curve(folder)
-            if curve is not None:
-                folders.append((folder, curve))
+            folders.append(folder)
     current = _read_delta(dataset_dir / "delta.txt")
     legacy = _read_delta(dataset_dir / "fig_init" / "delta.txt")
     transfer_sources = _transfer_folder_map(dataset_dir)
     test_current = _read_delta(test_dir / "delta.txt")
     for target, source_folder in transfer_sources.items():
         current.setdefault(target, test_current.get((".", source_folder), 0.0))
+    previous_delta = current.copy()
     absolute: dict[tuple[str, str], tuple[str, float]] = {}
     plan = []
-    for folder, curve in sorted(folders, key=lambda item: (item[0].parent.name, item[0].name)):
+    for folder in sorted(folders, key=lambda item: (item.parent.name, item.name)):
         genus, prefix = folder.parent.name, prefix_of(folder.name)
         key = (genus, folder.name)
         legacy_delta = legacy.get(key, 0.0)
-        peak = _anchor_peak(curve, grid)
+        current_delta = current.get(key, 0.0)
+        curve = _folder_curve(folder, wn_offset=-current_delta)
         step = 0.0
         status = "unresolved"
         peak_cm = ""
-        prominence = ""
-        if peak is not None:
-            position, quality = peak
-            peak_cm = f"{position:.3f}"
-            prominence = f"{quality:.6f}"
-            proposed = round(SHIFT_TARGET_CM - position, 1)
-            current_delta = current.get(key, 0.0)
-            if position < SHIFT_RESIDUAL_MIN or position > SHIFT_RESIDUAL_MAX:
-                desired_total = current_delta + proposed
-            else:
-                desired_total = current_delta
-            if abs(proposed) > SHIFT_LIMIT:
-                status = "unresolved"
-            elif folder.name not in SHIFT_LARGE_MOVE_FOLDERS and abs(desired_total) > SHIFT_TOTAL_LIMIT:
-                if abs(current_delta) > SHIFT_TOTAL_LIMIT:
-                    step = math.copysign(SHIFT_TOTAL_LIMIT, current_delta) - current_delta
-                    status = "limited_by_total_shift_cap"
-                else:
-                    status = "unresolved"
-            elif position < SHIFT_RESIDUAL_MIN or position > SHIFT_RESIDUAL_MAX:
-                step = proposed
-                status = "applied"
-            else:
-                status = "kept_within_residual"
-        cumulative = current.get(key, 0.0) + step
-        absolute[key] = (prefix, cumulative)
-        plan.append({"genus": genus, "folder": folder.name, "prefix": prefix, "reference_folder": f"{SHIFT_TARGET_CM:.0f}cm-1", "step_delta": step, "anchor_peak_cm": peak_cm, "peak_prominence": prominence, "status": status, "legacy_delta": legacy_delta, "residual_range": f"{SHIFT_RESIDUAL_MIN:.0f}-{SHIFT_RESIDUAL_MAX:.0f}", "total_shift_limit": "" if folder.name in SHIFT_LARGE_MOVE_FOLDERS else f"{SHIFT_TOTAL_LIMIT:.0f}"})
+        anchor_model = ""
+        anchor_quality = ""
+        fit_bic_gain = ""
+        fit_separation = ""
+        raw_total = ""
+        desired_total = current_delta
+        if curve is not None:
+            fung_anchor = _fung_fit_anchor(curve, grid) if genus in fung_genera else None
+            peak = _anchor_peak(curve, grid) if genus not in fung_genera else None
+            if fung_anchor is not None:
+                position = float(fung_anchor["position"])
+                peak_cm = f"{position:.3f}"
+                anchor_model = f"fung_{fung_anchor['model']}_fit"
+                anchor_quality = f"r2={float(fung_anchor['r2']):.6f}"
+                fit_bic_gain = f"{float(fung_anchor['bic_gain']):.6f}"
+                if "separation" in fung_anchor:
+                    fit_separation = f"{float(fung_anchor['separation']):.6f}"
+            elif peak is not None:
+                position, quality = peak
+                peak_cm = f"{position:.3f}"
+                anchor_model = "moving_average_peak"
+                anchor_quality = f"prominence_ratio={quality:.6f}"
+            if peak_cm:
+                raw_total = round(SHIFT_TARGET_CM - position, 1)
+
+        residual_min, residual_max = (
+            (SHIFT_FUNG_RESIDUAL_MIN, SHIFT_FUNG_RESIDUAL_MAX)
+            if genus in fung_genera
+            else (SHIFT_DEFAULT_RESIDUAL_MIN, SHIFT_DEFAULT_RESIDUAL_MAX)
+        )
+        fixed_total = SHIFT_FIXED_TOTALS.get(key)
+        if fixed_total is not None:
+            desired_total = fixed_total
+            status = "fixed_special_total"
+        elif raw_total == "":
+            status = "unresolved"
+        elif abs(raw_total) > SHIFT_LIMIT:
+            status = "unresolved"
+        elif folder.name not in SHIFT_LARGE_MOVE_FOLDERS and abs(raw_total) > SHIFT_TOTAL_LIMIT:
+            status = "unresolved"
+        elif position < residual_min or position > residual_max:
+            desired_total = raw_total
+            status = "rebased_applied"
+        else:
+            desired_total = 0.0
+            status = "kept_within_residual" if abs(current_delta) < 1e-9 else "rebased_to_zero"
+
+        step = desired_total - current_delta
+        absolute[key] = (prefix, desired_total)
+        plan.append({"genus": genus, "folder": folder.name, "prefix": prefix, "reference_folder": f"{SHIFT_TARGET_CM:.0f}cm-1", "current_delta": current_delta, "raw_from_zero_delta": raw_total, "target_delta": desired_total, "step_delta": step, "anchor_peak_cm": peak_cm, "anchor_model": anchor_model, "anchor_quality": anchor_quality, "fit_bic_gain": fit_bic_gain, "fit_separation_cm": fit_separation, "status": status, "legacy_delta": legacy_delta, "residual_range": f"{residual_min:.0f}-{residual_max:.0f}", "total_shift_limit": "" if folder.name in SHIFT_LARGE_MOVE_FOLDERS else f"{SHIFT_TOTAL_LIMIT:.0f}"})
     _write_csv(out_dir / "shift_plan.csv", plan)
     logs = []
     test_logs = []
     now = datetime.now().isoformat(timespec="seconds")
     for row in plan:
         step = float(row["step_delta"])
-        if row["status"] not in {"applied", "limited_by_total_shift_cap"} or abs(step) < 1e-9:
+        if row["status"] not in {"rebased_applied", "rebased_to_zero", "fixed_special_total"} or abs(step) < 1e-9:
             continue
         folder = init_dir / str(row["genus"]) / str(row["folder"])
         files = list(folder.glob("*.arc_data"))
@@ -495,8 +691,7 @@ def run_data_driven_shift(dataset_key: str = "cos", test_key: str = "test") -> P
             for path in source_files:
                 _shift_file(path, step)
             test_logs.append({"time": now, "genus": ".", "folder": source_folder, "prefix": prefix_of(source_folder), "step_delta": f"{step:+g}", "cumulative_delta": f"{cumulative:+g}", "files_changed": len(source_files), "note": f"synced_from_50cos={row['genus']}/{row['folder']}"})
-        logs.append({"time": now, "genus": row["genus"], "folder": row["folder"], "prefix": row["prefix"], "step_delta": f"{step:+g}", "cumulative_delta": f"{cumulative:+g}", "files_changed": len(files), "note": f"anchor_peak={row['anchor_peak_cm']}; target={SHIFT_TARGET_CM:.0f}"})
-    _write_delta(dataset_dir / "delta.txt", absolute)
+        logs.append({"time": now, "genus": row["genus"], "folder": row["folder"], "prefix": row["prefix"], "step_delta": f"{step:+g}", "cumulative_delta": f"{cumulative:+g}", "files_changed": len(files), "note": f"anchor_model={row['anchor_model']}; center={row['anchor_peak_cm']}; quality={row['anchor_quality']}; target={SHIFT_TARGET_CM:.0f}"})
     test_absolute = {
         key: (prefix_of(folder), delta)
         for key, delta in test_current.items()
@@ -507,12 +702,57 @@ def run_data_driven_shift(dataset_key: str = "cos", test_key: str = "test") -> P
         for target, source_folder in transfer_sources.items()
         if target in absolute
     })
+    cos_absolute = {
+        (genus, folder): (prefix_of(folder), delta)
+        for (genus, folder), delta in current.items()
+        if source_folder_from_audit_folder(folder) is None
+    }
+    cos_absolute.update({key: value for key, value in absolute.items() if key not in transfer_sources})
+    for (genus, folder), source_folder in _test_training_folder_map(test_dir).items():
+        prefix = prefix_of(folder)
+        desired_total = test_absolute.get((".", source_folder), (prefix_of(source_folder), 0.0))[1]
+        prior_total = absolute.get((genus, folder), (prefix, current.get((genus, folder), 0.0)))[1]
+        step = desired_total - prior_total
+        files = list((init_dir / genus / folder).glob("*.arc_data"))
+        if abs(step) > 1e-9:
+            for path in files:
+                _shift_file(path, step)
+            logs.append({
+                "time": now,
+                "genus": genus,
+                "folder": folder,
+                "prefix": prefix,
+                "step_delta": f"{step:+g}",
+                "cumulative_delta": f"{desired_total:+g}",
+                "files_changed": len(files),
+                "note": f"synced_from_test_training_source={source_folder}",
+            })
+        cos_absolute[(genus, folder)] = (prefix, desired_total)
+    differences = [
+        {
+            "genus": genus,
+            "folder": folder,
+            "prefix": prefix,
+            "old_delta": f"{previous_delta.get((genus, folder), 0.0):+g}",
+            "new_delta": f"{delta:+g}",
+            "step_delta": f"{delta - previous_delta.get((genus, folder), 0.0):+g}",
+        }
+        for (genus, folder), (prefix, delta) in sorted(cos_absolute.items())
+        if abs(delta - previous_delta.get((genus, folder), 0.0)) > 1e-9
+    ]
+    difference_path = out_dir / "shift_differences.csv"
+    if differences:
+        _write_csv(difference_path, differences)
+    else:
+        with difference_path.open("w", encoding="utf-8-sig", newline="") as file:
+            csv.DictWriter(file, fieldnames=("genus", "folder", "prefix", "old_delta", "new_delta", "step_delta")).writeheader()
+    _write_delta(dataset_dir / "delta.txt", cos_absolute)
     _write_delta(test_dir / "delta.txt", test_absolute)
     if logs:
         _append_delta_log(dataset_dir / "delta_log.txt", logs)
     if test_logs:
         _append_delta_log(test_dir / "delta_log.txt", test_logs)
-    (out_dir / "run.json").write_text(json.dumps({"stage": "shift", "folders": len(plan), "applied": len(logs)}, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out_dir / "run.json").write_text(json.dumps({"stage": "shift", "mode": "rebase_from_zero", "anchor_method": "moving_average_peak_with_fung_gaussian_fit", "folders": len(plan), "applied": len(logs), "changed_shifts": len(differences)}, ensure_ascii=False, indent=2), encoding="utf-8")
     return out_dir
 
 
