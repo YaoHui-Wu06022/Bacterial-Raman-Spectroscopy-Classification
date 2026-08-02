@@ -136,15 +136,18 @@ def prepare_run_runtime(config, run_dir):
     os.makedirs(logs_dir, exist_ok=True)
     config.run_dir = run_dir
 
+    log_mode = "a" if config.resume_training and os.path.exists(
+        os.path.join(logs_dir, "run.log")
+    ) else "w"
     log_file = open(
         os.path.join(logs_dir, "run.log"),
-        "w",
+        log_mode,
         buffering=1,
         encoding="utf-8",
     )
     config_log_file = open(
         os.path.join(logs_dir, "config.txt"),
-        "w",
+        log_mode,
         buffering=1,
         encoding="utf-8",
     )
@@ -171,7 +174,8 @@ def create_model_logger(logs_dir, model_tag, shared_log):
     """为单个模型创建独立日志，并同步写入总日志"""
     safe_tag = _sanitize_log_name(model_tag)
     log_path = os.path.join(logs_dir, f"{safe_tag}.log")
-    log_file = open(log_path, "w", buffering=1, encoding="utf-8")
+    log_mode = "a" if os.path.exists(log_path) else "w"
+    log_file = open(log_path, log_mode, buffering=1, encoding="utf-8")
 
     def model_log(msg):
         shared_log(msg)

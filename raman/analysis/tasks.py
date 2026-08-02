@@ -17,13 +17,13 @@ class LabelMapDataset(Dataset):
         return len(self.base_dataset)
 
     def __getitem__(self, idx):
-        x, labels, hier = self.base_dataset[idx]
+        x, labels, hier, path = self.base_dataset[idx]
         labels = np.array(labels, copy=True)
         if labels[self.level_idx] >= 0:
             labels[self.level_idx] = self.label_map_np[labels[self.level_idx]]
         else:
             labels[self.level_idx] = -1
-        return x, labels, hier
+        return x, labels, hier, path
 
 def normalize_parent_idx(parent_idx):
     """统一 parent_idx 输入格式（None/int/'all'）"""

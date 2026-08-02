@@ -1,13 +1,27 @@
+import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
 from raman.data.preprocess import preprocess_single_spectrum
-from raman.data.io import iter_init_groups, resolve_init_input, write_arc_data
-from raman.pipeline import resolve_pipeline_config
+from raman.data.io import (
+    iter_init_groups,
+    load_arc_intensity,
+    read_arc_data,
+    resolve_init_input,
+    write_arc_data,
+)
+from raman.pipeline import (
+    DEFAULT_PIPELINE_CONFIG,
+    INPUT_GRID_STANFORD_TRANSFER,
+    resolve_pipeline_config,
+)
+from raman.tool.dataset import iter_arc_dirs
 from raman.tool.naming import ensure_name_prefix, extract_letters_prefix
 from raman.tool.path import resolve_path
+from raman.tool.spectrum import build_valid_mask
 
 def _cosmic_ray_enabled(profile, cfg):
     """判断当前数据集是否启用宇宙射线去除"""
@@ -318,8 +332,8 @@ def preprocess_physical_group(profile, cfg, samples, label_display, min_samples=
         wn_u, sp_u, single_replaced = preprocess_single_spectrum(
             wn,
             sp,
-            cut_min=cfg.cut_min,
-            cut_max=cfg.cut_max,
+            cut_min=float(wn_ref[0]),
+            cut_max=float(wn_ref[-1]),
             wn_ref=wn_ref,
             bad_bands=cfg.bad_bands,
             baseline_method=cfg.baseline_method,
@@ -445,8 +459,99 @@ def _collect_merged_init_groups(profile, input_path, root_process_clean, cfg, co
 
     return groups, skipped
 
+
+def _stanford_transfer_pipeline_config(pipeline_config):
+    """返回使用 Stanford 原始共享轴的训练配置。"""
+    cfg = resolve_pipeline_config(pipeline_config)
+    if cfg.input_grid_mode == INPUT_GRID_STANFORD_TRANSFER:
+        return cfg
+    if pipeline_config is not None:
+        raise ValueError("Stanford 构建必须使用 input_grid_mode='stanford_transfer'")
+    return replace(DEFAULT_PIPELINE_CONFIG, input_grid_mode=INPUT_GRID_STANFORD_TRANSFER)
+
+
+def _build_train_by_copy(profile, base_dir, pipeline_config):
+    """直接选取共享原始波数轴并删除坏区，不做插值或强度处理。"""
+    base_dir = Path(base_dir)
+    input_path = resolve_init_input(base_dir, profile)
+    output_path = resolve_path(profile.root_train_clean, base_dir)
+    temp_path = base_dir / f"{profile.root_train_clean}_building"
+    cfg = _stanford_transfer_pipeline_config(pipeline_config)
+    wn_ref = cfg.build_wn_ref()
+    keep_mask = build_valid_mask(wn_ref, cfg.bad_bands)
+    output_wn = wn_ref[keep_mask]
+    if output_path.exists():
+        raise FileExistsError(f"训练目录已存在，不覆盖已有数据：{output_path}")
+    if temp_path.exists():
+        raise FileExistsError(f"检测到未完成的训练构建目录：{temp_path}")
+
+    temp_path.mkdir(parents=True)
+    copied = 0
+    for source_dir, arc_files in iter_arc_dirs(input_path):
+        target_dir = temp_path / source_dir.relative_to(input_path)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        first_path = source_dir / arc_files[0]
+        wn, first_sp = read_arc_data(first_path)
+        if wn.size < 2 or wn.min() > wn_ref[0] or wn.max() < wn_ref[-1]:
+            raise ValueError(f"Stanford 谱不覆盖共同训练区间：{first_path}")
+        right = np.searchsorted(wn, wn_ref)
+        left = np.clip(right - 1, 0, wn.size - 1)
+        right = np.clip(right, 0, wn.size - 1)
+        choose_right = np.abs(wn[right] - wn_ref) < np.abs(wn[left] - wn_ref)
+        selected = np.where(choose_right, right, left)
+        # init.npz 可能保留 float32 原始波数，而共享轴来自文本化后的同一轴。
+        # 仅允许远小于一个采样间隔的舍入误差，不能把相邻波数点误当作同一点。
+        if not np.allclose(wn[selected], wn_ref, rtol=0.0, atol=1e-3):
+            raise ValueError(
+                f"Stanford 谱与共享原始波数轴不一致，不能直接选点：{first_path}"
+            )
+
+        for index, filename in enumerate(arc_files):
+            source_path = source_dir / filename
+            sp = first_sp if index == 0 else load_arc_intensity(source_path, dtype=np.float64)
+            if sp.size != wn.size:
+                raise ValueError(f"Stanford 谱长度与该文件夹共享轴不一致：{source_path}")
+            output_sp = sp[selected][keep_mask]
+            write_arc_data(target_dir / filename, output_wn, output_sp, fmt="%.10g")
+            copied += 1
+
+    source_count = sum(1 for _ in input_path.rglob("*.arc_data"))
+    target_count = sum(1 for _ in temp_path.rglob("*.arc_data"))
+    if copied != source_count or target_count != source_count:
+        raise RuntimeError(
+            f"原样构建文件数不一致：source={source_count}, copied={copied}, target={target_count}"
+        )
+    (temp_path / "train_build_metadata.json").write_text(
+        json.dumps(
+            {
+                "source": "Stanford init",
+                "input_grid_mode": cfg.input_grid_mode,
+                "spectra": copied,
+                "cut_min": cfg.cut_min,
+                "cut_max": cfg.cut_max,
+                "target_points_before_bad_band_removal": cfg.target_points,
+                "bad_bands_removed": cfg.bad_bands,
+                "output_points": int(output_wn.size),
+                "intensity_transform": "native_point_selection_and_bad_band_removal_only",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    temp_path.replace(output_path)
+    print("\nTraining dataset build finished with native-axis selection only:")
+    print(f"- Source init: {input_path}")
+    print(f"- Final train spectra: {output_path}")
+    print(f"- Preserved leaf classes: {sum(1 for _ in iter_arc_dirs(output_path))}")
+    print(f"- Copied spectra: {copied}")
+    print(f"- Grid: {cfg.cut_min:g}-{cfg.cut_max:g} cm-1, points={output_wn.size}")
+
 def build_train(profile, base_dir, pipeline_config=None):
     """从 init 直接清洗、按类别合并后执行 PCA 并生成最终 train"""
+    if profile.train_build_mode == "grid_mask_only":
+        _build_train_by_copy(profile, base_dir, pipeline_config)
+        return
     cfg = resolve_pipeline_config(pipeline_config)
     base_dir = Path(base_dir)
     input_path = resolve_init_input(base_dir, profile)

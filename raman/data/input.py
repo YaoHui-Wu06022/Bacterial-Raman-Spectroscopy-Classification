@@ -22,7 +22,7 @@ from raman.data.io import load_arc_intensity
 # ===== 归一化 =====
 
 EPS = 1e-8
-SUPPORTED_NORM_METHODS = ("snv", "minmax", "l2")
+SUPPORTED_NORM_METHODS = ("none", "snv", "minmax", "l2")
 
 
 def _normalize_method(method):
@@ -53,6 +53,8 @@ def _scale_l2_numpy(values, eps):
 
 
 def _normalize_numpy(values, method, eps):
+    if method == "none":
+        return values
     if method == "snv":
         return _standardize_numpy(values, eps)
     if method == "minmax":
@@ -95,6 +97,8 @@ def _scale_l2_tensor(values, eps):
 
 
 def _normalize_tensor(values, method, eps):
+    if method == "none":
+        return values
     if method == "snv":
         return _standardize_tensor(values, eps)
     if method == "minmax":

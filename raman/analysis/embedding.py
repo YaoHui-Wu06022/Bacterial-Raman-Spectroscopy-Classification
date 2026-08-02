@@ -47,7 +47,7 @@ def collect_embeddings_train_val(
 
     with torch.no_grad():
         # 训练集样本标记为 split=0
-        for x, _, hier in train_loader:
+        for x, _, hier, _ in train_loader:
             x = x.to(device)
             if inherit_missing:
                 hier_filled = _fill_missing_labels(hier, level_names, missing_tag)
@@ -74,7 +74,7 @@ def collect_embeddings_train_val(
                     labels_all[k].append(hier_labels[k].numpy())
 
         # 验证集样本标记为 split=1
-        for x, _, hier in val_loader:
+        for x, _, hier, _ in val_loader:
             x = x.to(device)
             if inherit_missing:
                 hier_filled = _fill_missing_labels(hier, level_names, missing_tag)

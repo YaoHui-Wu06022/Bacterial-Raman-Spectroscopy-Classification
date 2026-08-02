@@ -27,7 +27,7 @@ def _compute_baseline_mean_spectrum(loader, device, num_batches=10):
     it = iter(loader)
     for _ in range(num_batches):
         try:
-            x, _ , _= next(it)
+            x, *_ = next(it)
         except StopIteration:
             break
         x = x.to(device)
@@ -136,7 +136,7 @@ def compute_ig_batches(
     it = iter(loader)
     for _ in range(num_batches):
         try:
-            x, y, hier = next(it)
+            x, y, hier, _ = next(it)
         except StopIteration:
             break
 
@@ -314,7 +314,7 @@ def compute_class_mean_spectrum(
     sums = None
     counts = np.zeros(num_classes, dtype=np.int64)
 
-    for x, y, hier in loader:
+    for x, y, hier, _ in loader:
         x = x.to(device)
         y = y.to(device)
 

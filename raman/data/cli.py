@@ -7,21 +7,30 @@ from raman.data.build import build_test, build_train
 from raman.data.io import pack_init, unpack_init
 from raman.data.count import count_dataset, print_results
 from raman.data.plot import plot_train
+from raman.pipeline import INPUT_GRID_STANDARD, INPUT_GRID_STANFORD_TRANSFER, PipelineConfig
 from raman.tool.dataset import resolve_dataset
 from raman.tool.path import PROJECT_ROOT
 
 
 def pack_raman_package() -> Path:
     """将项目中的 raman 包压缩为项目根目录的 raman.zip。"""
-    package_dir = PROJECT_ROOT / "raman"
+    package_dirs = (PROJECT_ROOT / "raman", PROJECT_ROOT / "raman_fine_tuning")
     archive_path = PROJECT_ROOT / "raman.zip"
+    stanford_axis_path = (
+        PROJECT_ROOT / "dataset" / "Stanforddataset" / "reference_wavenumbers.npy"
+    )
     with tempfile.NamedTemporaryFile(dir=PROJECT_ROOT, prefix="raman-", suffix=".zip", delete=False) as file:
         temporary_path = Path(file.name)
     try:
         with zipfile.ZipFile(temporary_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for path in sorted(package_dir.rglob("*")):
-                if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc":
-                    archive.write(path, path.relative_to(PROJECT_ROOT))
+            for package_dir in package_dirs:
+                if not package_dir.is_dir():
+                    continue
+                for path in sorted(package_dir.rglob("*")):
+                    if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc":
+                        archive.write(path, path.relative_to(PROJECT_ROOT))
+            if stanford_axis_path.is_file():
+                archive.write(stanford_axis_path, stanford_axis_path.relative_to(PROJECT_ROOT))
         with zipfile.ZipFile(temporary_path) as archive:
             if not archive.namelist():
                 raise RuntimeError("raman.zip 为空")
@@ -35,6 +44,10 @@ def pack_raman_package() -> Path:
 def run_pack(args):
     """执行 init 目录打包"""
     profile, dataset_dir = resolve_dataset(args.dataset, create=True)
+    if profile.profile_id == "Stanford":
+        from raman.data.stanford import ensure_transfer_reference_axis
+
+        ensure_transfer_reference_axis(dataset_dir)
     pack_init(
         dataset_dir / profile.root_init,
         dataset_dir / profile.root_init_pack,
@@ -56,13 +69,23 @@ def run_unpack(args):
 def run_train(args):
     """从 init 直接构建最终训练集"""
     profile, dataset_dir = resolve_dataset(args.dataset, create=True)
-    build_train(profile, dataset_dir)
+    pipeline_config = (
+        PipelineConfig(input_grid_mode=args.input_grid_mode)
+        if args.input_grid_mode is not None
+        else None
+    )
+    build_train(profile, dataset_dir, pipeline_config=pipeline_config)
 
 
 def run_test(args):
     """从 init_test 构建已预处理的独立测试集"""
     profile, dataset_dir = resolve_dataset(args.dataset, create=True)
-    build_test(profile, dataset_dir)
+    pipeline_config = (
+        PipelineConfig(input_grid_mode=args.input_grid_mode)
+        if args.input_grid_mode is not None
+        else None
+    )
+    build_test(profile, dataset_dir, pipeline_config=pipeline_config)
 
 
 def run_plot(args):
@@ -96,6 +119,13 @@ def build_parser():
         sub.add_argument("dataset", help="数据集 profile id、名称或 dataset 下的文件夹名")
         if command in {"pack", "unpack"}:
             sub.add_argument("--quiet", action="store_true", help="减少打包/解包过程输出")
+        if command in {"train", "test"}:
+            sub.add_argument(
+                "--input-grid-mode",
+                choices=(INPUT_GRID_STANDARD, INPUT_GRID_STANFORD_TRANSFER),
+                default=None,
+                help="输入网格模式；不传时使用该数据集的默认构建方式",
+            )
         if command == "count":
             sub.add_argument("--subdir", default=None, help="指定要统计的子目录，默认 train")
         sub.set_defaults(func=handler)

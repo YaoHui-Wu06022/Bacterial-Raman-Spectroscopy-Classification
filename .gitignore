@@ -1,8 +1,8 @@
 /dataset/
 /output/
+/备份/
 /__pycache__/
 **/__pycache__/
 *.pyc
 *.pyo
 raman.zip
-ramf.zip

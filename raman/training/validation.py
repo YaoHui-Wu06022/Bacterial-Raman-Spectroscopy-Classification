@@ -21,6 +21,7 @@ def evaluate_validation_loader(
     label_map_tensor=None,
     parent_index=None,
     parent_to_children=None,
+    use_amp=False,
 ):
     """训练期验证入口：统一处理层级标签、局部映射与父类遮罩"""
     model.eval()
@@ -35,12 +36,13 @@ def evaluate_validation_loader(
 
     try:
         with torch.no_grad():
-            for x, y, _ in loader:
+            for x, y, _, _ in loader:
                 x = x.to(device)
                 y = y.to(device)
 
                 batch_scales.clear()
-                logits = select_logits(model(x), head_name=head_name)
+                with torch.autocast(device_type=device.type, enabled=use_amp):
+                    logits = select_logits(model(x), head_name=head_name)
                 y_level = select_level_targets(y, head_index)
 
                 if label_map_tensor is not None:
@@ -71,7 +73,7 @@ def evaluate_validation_loader(
                 if num_classes is None:
                     num_classes = logits.size(1)
 
-                loss = criterion_eval(logits, y_valid)
+                loss = criterion_eval(logits.float(), y_valid)
                 batch_size = y_valid.size(0)
                 total_loss += loss.item() * batch_size
                 total += batch_size

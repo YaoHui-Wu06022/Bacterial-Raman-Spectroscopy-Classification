@@ -131,7 +131,7 @@ class LayerGradCAMAnalyzer:
         it = iter(loader)
         for _ in range(num_batches):
             try:
-                x, y, _ = next(it)
+                x, y, *_ = next(it)
             except StopIteration:
                 break
             used += 1

@@ -106,7 +106,7 @@ def run_level_analysis(
         )
 
     # 先前向一次，确保后续 Grad-CAM 和 hook 能拿到稳定状态
-    sample_x, _, _ = next(iter(train_loader))
+    sample_x, *_ = next(iter(train_loader))
     sample_x = sample_x.to(device)
     _ = model(sample_x)
 

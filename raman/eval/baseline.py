@@ -69,7 +69,7 @@ def _extract_features(dataset, indices, level_idx, use_all_channels, label_map=N
     allowed_labels = set(int(item) for item in allowed_labels) if allowed_labels else None
 
     for idx in indices:
-        x, labels, _ = dataset[idx]
+        x, labels, _, _ = dataset[idx]
         y = int(labels[level_idx] if labels.ndim > 0 else labels)
         if y < 0:
             skipped += 1

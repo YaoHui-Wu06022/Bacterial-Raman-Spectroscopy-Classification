@@ -27,11 +27,11 @@ def read_arc_data(path):
     return np.asarray(wn), np.asarray(sp)
 
 
-def load_arc_intensity(path):
+def load_arc_intensity(path, dtype=np.float32):
     """读取单个 .arc_data 文件的强度列"""
-    data = np.loadtxt(path, dtype=np.float32)
+    data = np.loadtxt(path, dtype=dtype)
     data = np.atleast_2d(data)
-    return data[:, 1].astype(np.float32, copy=False)
+    return data[:, 1].astype(dtype, copy=False)
 
 
 def write_arc_data(path, wn, sp, fmt="%.8f"):

@@ -61,6 +61,38 @@ def _model_parameters_are_finite(model):
     return all(torch.isfinite(p).all().item() for p in model.parameters())
 
 
+def _tensor_summary(tensor):
+    """提取异常张量的有限性与幅值摘要，避免把整批数据写入日志。"""
+    data = tensor.detach()
+    finite = torch.isfinite(data)
+    summary = {
+        "shape": list(data.shape),
+        "finite_count": int(finite.sum().item()),
+        "total_count": int(data.numel()),
+    }
+    if finite.any():
+        summary["finite_abs_max"] = float(data[finite].abs().max().cpu())
+    return summary
+
+
+def _first_nonfinite_gradient(model):
+    """返回首个含非有限值的梯度参数名及其摘要。"""
+    for name, parameter in model.named_parameters():
+        if parameter.grad is None:
+            continue
+        if not torch.isfinite(parameter.grad).all().item():
+            return name, _tensor_summary(parameter.grad)
+    return None, None
+
+
+def _write_numerical_diagnostic(path, record):
+    """将首个数值异常写为 JSONL，便于按 batch 和谱文件回溯。"""
+    import json
+
+    with open(path, "a", encoding="utf-8") as file:
+        file.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def _disabled_aux_loss(zero_loss):
     """构造被关闭的辅助损失函数"""
     def loss_fn(feat, _hier_labels):
@@ -87,6 +119,7 @@ class ModelTrainContext:
     supcon_loss_weight: float
     decay_start_ratio: float
     zero_loss: object
+    model_initializer: object = None
 
 def train_model(
     ctx,
@@ -116,6 +149,7 @@ def train_model(
     SUPCON_LOSS_WEIGHT = ctx.supcon_loss_weight
     decay_start_ratio = ctx.decay_start_ratio
     zero_loss = ctx.zero_loss
+    model_initializer = ctx.model_initializer
 
     model_log_path, model_log, model_log_file = create_model_logger(
         runtime_dirs["logs"],
@@ -151,6 +185,13 @@ def train_model(
         num_classes=num_classes,
         config=config
     ).to(device)
+    if model_initializer is not None:
+        model_initializer.initialize(
+            model=model,
+            level_name=level_name,
+            model_tag=model_tag,
+            num_classes=num_classes,
+        )
 
     # 类别权重（只针对当前训练层）
     labels_for_weights = full_dataset.level_labels[train_indices, level_idx]
@@ -213,6 +254,8 @@ def train_model(
     group_backbone = []
 
     for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
         if name.startswith("stem_branches"):
             group_conv.append(p)
         elif name.startswith("head"):
@@ -220,11 +263,16 @@ def train_model(
         else:
             group_backbone.append(p)
 
-    optimizer = optim.AdamW([
-        {"params": group_conv, "lr": config.learning_rate*0.6},
-        {"params": group_backbone, "lr": config.learning_rate},
-        {"params": group_head, "lr": config.learning_rate*1.1},
-    ], weight_decay=5e-4)
+    optimizer_groups = []
+    if group_conv:
+        optimizer_groups.append({"params": group_conv, "lr": config.learning_rate * 0.6})
+    if group_backbone:
+        optimizer_groups.append({"params": group_backbone, "lr": config.learning_rate})
+    if group_head:
+        optimizer_groups.append({"params": group_head, "lr": config.learning_rate * 1.1})
+    if not optimizer_groups:
+        raise ValueError("当前模型没有可训练参数")
+    optimizer = optim.AdamW(optimizer_groups, weight_decay=5e-4)
 
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=config.scheduler_Tmax, eta_min=config.scheduler_eta_min
@@ -247,6 +295,65 @@ def train_model(
     model_log(f"[{model_tag}] ==================== MODEL START ====================")
     model_log(f"[{model_tag}] log_path = {model_log_path}")
     model_log(f"[{model_tag}] checkpoint_path = {checkpoint_path}")
+    use_amp = bool(getattr(config, "use_amp", False) and device.type == "cuda")
+    scaler = torch.amp.GradScaler("cuda", enabled=True) if use_amp else None
+    diagnostic_path = os.path.splitext(model_log_path)[0] + "_numerical_diagnostics.jsonl"
+    diagnostic_written = False
+    model_log(f"[{model_tag}] AMP enabled = {use_amp}")
+
+    def report_numerical_issue(
+        stage,
+        epoch,
+        batch_idx,
+        x,
+        y,
+        sample_paths,
+        tensors=None,
+        losses=None,
+        parameter_name=None,
+        parameter_summary=None,
+        error=None,
+    ):
+        """每个模型仅保存首个异常 batch，避免训练日志被重复信息淹没。"""
+        nonlocal diagnostic_written
+        if diagnostic_written:
+            return
+
+        record = {
+            "model_tag": model_tag,
+            "level_name": level_name,
+            "stage": stage,
+            "epoch": int(epoch),
+            "batch": int(batch_idx),
+            "sample_paths": [str(path) for path in sample_paths],
+            "labels": y.detach().cpu().tolist(),
+            "input": _tensor_summary(x),
+        }
+        if tensors:
+            record["tensors"] = {
+                name: _tensor_summary(value)
+                for name, value in tensors.items()
+                if value is not None
+            }
+        if losses:
+            record["losses"] = {
+                name: _loss_value_for_log(value)
+                for name, value in losses.items()
+                if value is not None
+            }
+        if parameter_name is not None:
+            record["parameter_name"] = parameter_name
+            record["parameter"] = parameter_summary
+        if error is not None:
+            record["error"] = str(error)
+
+        _write_numerical_diagnostic(diagnostic_path, record)
+        diagnostic_written = True
+        model_log(
+            f"[Warn] first numerical issue saved to {diagnostic_path} "
+            f"(stage={stage}, epoch={epoch}, batch={batch_idx})"
+        )
+
     try:
         start_epoch = 1
         if getattr(config, "resume_training", True) and os.path.exists(checkpoint_path):
@@ -288,6 +395,8 @@ def train_model(
 
         for epoch in range(start_epoch, config.epochs + 1):
             model.train()
+            if model_initializer is not None:
+                model_initializer.apply_training_mode(model)
             # 到达起始轮后，用 EMA 类别 CE 调整静态类别权重
             if config.use_ema and epoch >= ema_start_epoch:
                 if not torch.isfinite(train_state.ema_class_ce).all().item():
@@ -328,7 +437,7 @@ def train_model(
             supcon_w = supcon_w * decay_ratio
             loader_iter = tqdm(train_loader, desc=f"Epoch {epoch}/{config.epochs}")
 
-            for batch_idx, (x, y, _) in enumerate(loader_iter):
+            for batch_idx, (x, y, _, sample_paths) in enumerate(loader_iter):
 
                 x = x.to(device)
                 y = y.to(device)
@@ -336,12 +445,38 @@ def train_model(
                 optimizer.zero_grad(set_to_none=True)
                 if not torch.isfinite(x).all().item():
                     skipped_batches += 1
+                    report_numerical_issue(
+                        "input",
+                        epoch,
+                        batch_idx,
+                        x,
+                        y,
+                        sample_paths,
+                    )
                     model_log(
                         f"[Warn] skipped non-finite input at epoch={epoch}, batch={batch_idx}"
                     )
                     continue
 
-                logits, feat = model(x, return_feat=True)
+                with torch.autocast(device_type=device.type, enabled=use_amp):
+                    logits, feat = model(x, return_feat=True)
+                if not torch.isfinite(logits).all().item() or not torch.isfinite(feat).all().item():
+                    skipped_batches += 1
+                    report_numerical_issue(
+                        "forward",
+                        epoch,
+                        batch_idx,
+                        x,
+                        y,
+                        sample_paths,
+                        tensors={"logits": logits, "feature": feat},
+                    )
+                    model_log(
+                        f"[Warn] skipped non-finite forward output at epoch={epoch}, batch={batch_idx}"
+                    )
+                    continue
+                logits = logits.float()
+                feat = feat.float()
 
                 if y.ndim == 2:
                     hier_labels = {name: y[:, idx] for idx, name in enumerate(head_names)}
@@ -388,6 +523,21 @@ def train_model(
 
                 if not torch.isfinite(loss_total).all().item():
                     skipped_batches += 1
+                    report_numerical_issue(
+                        "loss",
+                        epoch,
+                        batch_idx,
+                        x,
+                        y,
+                        sample_paths,
+                        tensors={"logits": logits, "feature": feat},
+                        losses={
+                            "classification": loss_cls,
+                            "align": loss_align,
+                            "supcon": loss_supcon,
+                            "total": loss_total,
+                        },
+                    )
                     model_log(
                         f"[Warn] skipped non-finite loss at epoch={epoch}, batch={batch_idx}: "
                         f"cls={_loss_value_for_log(loss_cls):.6g}, "
@@ -398,24 +548,50 @@ def train_model(
                     optimizer.zero_grad(set_to_none=True)
                     continue
 
-                loss_total.backward()
+                if scaler is None:
+                    loss_total.backward()
+                else:
+                    scaler.scale(loss_total).backward()
+                    scaler.unscale_(optimizer)
 
                 grad_clip_norm = float(getattr(config, "grad_clip_norm", 0.0) or 0.0)
                 if grad_clip_norm > 0:
-                    grad_norm = torch.nn.utils.clip_grad_norm_(
-                        model.parameters(),
-                        max_norm=grad_clip_norm,
-                    )
-                    if not torch.isfinite(grad_norm).all().item():
-                        skipped_batches += 1
-                        model_log(
-                            f"[Warn] skipped non-finite gradients at epoch={epoch}, "
-                            f"batch={batch_idx}, grad_norm={_loss_value_for_log(grad_norm):.6g}"
+                    try:
+                        torch.nn.utils.clip_grad_norm_(
+                            model.parameters(),
+                            max_norm=grad_clip_norm,
+                            error_if_nonfinite=True,
                         )
+                    except RuntimeError as error:
+                        skipped_batches += 1
+                        parameter_name, parameter_summary = _first_nonfinite_gradient(model)
+                        report_numerical_issue(
+                            "gradient_norm",
+                            epoch,
+                            batch_idx,
+                            x,
+                            y,
+                            sample_paths,
+                            tensors={"logits": logits, "feature": feat},
+                            losses={"classification": loss_cls, "total": loss_total},
+                            parameter_name=parameter_name,
+                            parameter_summary=parameter_summary,
+                            error=error,
+                        )
+                        model_log(
+                            f"[Warn] skipped non-finite gradient norm at epoch={epoch}, "
+                            f"batch={batch_idx}, parameter={parameter_name}"
+                        )
+                        if scaler is not None:
+                            scaler.update()
                         optimizer.zero_grad(set_to_none=True)
                         continue
 
-                optimizer.step()
+                if scaler is None:
+                    optimizer.step()
+                else:
+                    scaler.step(optimizer)
+                    scaler.update()
 
                 running_align_loss += loss_align.item()
                 running_supcon_loss += loss_supcon.item()
@@ -451,6 +627,10 @@ def train_model(
             train_align_loss = align_w * running_align_loss / effective_batches
             train_supcon_loss = supcon_w * running_supcon_loss / effective_batches
             train_acc = running_correct / max(running_total, 1)
+            if not _model_parameters_are_finite(model):
+                raise FloatingPointError(
+                    f"non-finite model parameters after epoch={epoch}"
+                )
             val_loss, val_acc, val_metrics, se_stats = evaluate_validation_loader(
                 model,
                 val_loader,
@@ -460,6 +640,7 @@ def train_model(
                 label_map_tensor=None if use_parent_mask else label_map_tensor,
                 parent_index=parent_level_idx if use_parent_mask else None,
                 parent_to_children=parent_to_children if use_parent_mask else None,
+                use_amp=use_amp,
             )
             macro_f1 = val_metrics["macro_f1"]
             macro_recall = val_metrics["macro_recall"]

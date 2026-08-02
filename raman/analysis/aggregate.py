@@ -131,7 +131,7 @@ def run_aggregate_analysis(
         )
 
         # 先前向一次，初始化 Grad-CAM 所需状态
-        sample_x, _, _ = next(iter(train_loader))
+        sample_x, *_ = next(iter(train_loader))
         sample_x = sample_x.to(device)
         _ = model(sample_x)
 

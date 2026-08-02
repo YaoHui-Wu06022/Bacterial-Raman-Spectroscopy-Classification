@@ -12,6 +12,19 @@ from raman.tool.hierarchy import ROOT_TAG as HIER_ROOT_TAG
 from raman.tool.hierarchy import parts_to_key
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_RAW_INTENSITY_CACHES = {}
+
+
+def _get_raw_intensity_cache(root_dir, sample_paths):
+    """在主进程预读原始强度，避免每个训练轮次重复解析文本谱文件。"""
+    cache = _RAW_INTENSITY_CACHES.setdefault(root_dir, {})
+    for path in sample_paths:
+        path_str = os.fspath(path)
+        if path_str not in cache:
+            intensity = load_arc_intensity(path_str)
+            intensity.setflags(write=False)
+            cache[path_str] = intensity
+    return cache
 
 
 class RamanDataset(Dataset):
@@ -58,6 +71,9 @@ class RamanDataset(Dataset):
 
         # 扫描数据
         self._scan()
+        # 原始谱不参与原地修改；在线增强仍在 __getitem__ 内按次生成。
+        # 训练、验证和切分数据集共用同一缓存，避免重复占用内存。
+        self._raw_intensities = _get_raw_intensity_cache(self.root_dir, self.samples)
 
     def _resolve_level_name(self, level_name, field_name="level_name"):
         valid_levels = ", ".join(self.level_names)
@@ -212,7 +228,7 @@ class RamanDataset(Dataset):
             }
 
         # 与 InputPreprocessor 复用同一套输入构建逻辑，避免训练/评估分支漂移
-        raw_intensity = load_arc_intensity(path)
+        raw_intensity = self._raw_intensities[os.fspath(path)]
         X = build_model_input(
             raw_intensity,
             config=self.config,
@@ -222,7 +238,7 @@ class RamanDataset(Dataset):
             augment=self.augment,
         )
 
-        return X, labels, hier
+        return X, labels, hier, str(path)
 
     def get_hierarchy(self, idx):
         """

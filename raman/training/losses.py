@@ -46,6 +46,8 @@ class FocalLoss(nn.Module):
         self.ignore_index = ignore_index
 
     def forward(self, logits, targets):
+        # 混合精度下分类损失保持 float32，避免高置信度样本过早舍入。
+        logits = logits.float()
         ce_loss = F.cross_entropy(
             logits,
             targets,

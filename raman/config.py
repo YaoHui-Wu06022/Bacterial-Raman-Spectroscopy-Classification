@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from raman.data.profiles import get_profile
 from raman.pipeline import COMMON_BAD_BANDS, DEFAULT_PIPELINE_CONFIG
 
@@ -12,6 +14,7 @@ SHARED_CONFIG_FIELDS = (
     "cut_min",
     "cut_max",
     "target_points",
+    "input_grid_mode",
     "bad_bands",
     "norm_method",
     "smooth_use",
@@ -103,6 +106,7 @@ RUNTIME_CONFIG_FIELDS = (
     "resume_training",
     "checkpoint_interval",
     "use_gpu",
+    "use_amp",
     "deterministic",
 )
 
@@ -112,6 +116,7 @@ INPUT_COMPAT_FIELDS = (
     "cut_min",
     "cut_max",
     "target_points",
+    "input_grid_mode",
     "bad_bands",
     "norm_method",
     "smooth_use",
@@ -132,6 +137,7 @@ class SharedInputConfig:
     cut_min: float = float(DEFAULT_PIPELINE_CONFIG.cut_min)
     cut_max: float = float(DEFAULT_PIPELINE_CONFIG.cut_max)
     target_points: int = int(DEFAULT_PIPELINE_CONFIG.target_points)
+    input_grid_mode: str = DEFAULT_PIPELINE_CONFIG.input_grid_mode
     bad_bands: list = None
 
     # 标准化方式和输入通道
@@ -184,7 +190,7 @@ class ModelRunConfig:
 
     # 训练控制
     epochs: int = 80
-    patience: int = 30
+    patience: int = 50
     batch_size: int = 64
 
     # DataLoader 参数
@@ -224,7 +230,7 @@ class ModelRunConfig:
     se_use: bool = True
     reduction: int = 8
     backbone_activation_negative_slope: float = 0.05
-    gamma: float = 1.0
+    gamma: float = 1.2
     use_ema: bool = True
 
     # CNN 主干结构
@@ -280,6 +286,7 @@ class RuntimeConfig:
     resume_training: bool = True
     checkpoint_interval: int = 20
     use_gpu: bool = True
+    use_amp: bool = True
     deterministic: bool = True
 
 
@@ -328,6 +335,12 @@ class Config:
     @property
     def delta(self):
         # 相邻两个重采样点对应的大致波数间隔。
+        if self.input_grid_mode != DEFAULT_PIPELINE_CONFIG.input_grid_mode:
+            axis = DEFAULT_PIPELINE_CONFIG.__class__(
+                target_points=int(self.target_points),
+                input_grid_mode=self.input_grid_mode,
+            ).build_wn_ref()
+            return float(np.median(np.diff(axis)))
         return (float(self.cut_max) - float(self.cut_min)) / (int(self.target_points) - 1)
 
     @property

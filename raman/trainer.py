@@ -4,10 +4,12 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 import torch
 
 from raman.config import config as default_config
 from raman.data import RamanDataset
+from raman.data.profiles import apply_training_profile_defaults
 from raman.experiment import TRAIN_SPLIT_NAME, VAL_SPLIT_NAME, split_files_hash
 from raman.tool.hierarchy import resolve_level_order
 from raman.tool.path import relpath
@@ -40,6 +42,7 @@ class TrainOverrides:
     override_supcon_tau: float | None = None
     override_supcon_loss_weight: float | None = None
     override_output_dir: str | None = None
+    resume_run_dir: str | None = None
 
 
 def apply_train_overrides(config, overrides=None):
@@ -241,10 +244,11 @@ def _log_missing_upper_level_hint(full_dataset, current_train_level, train_per_p
 
 
 # 逐层训练（全局层或父类子模型）
-def run_training(config_obj=None, overrides=None):
+def run_training(config_obj=None, overrides=None, model_initializer=None):
     """执行一次完整训练流程"""
     config = deepcopy(config_obj or default_config)
     config = apply_train_overrides(config, overrides)
+    config = apply_training_profile_defaults(config)
     current_train_level = getattr(config, "current_train_level", None)
     if current_train_level is None:
         raise ValueError("训练入口必须显式提供 current_train_level")
@@ -352,6 +356,27 @@ def run_training(config_obj=None, overrides=None):
     level_models = {}
     parent_models = {}
     run_name = _run_timestamp()
+    resume_run_dir = None
+    if overrides is not None and overrides.resume_run_dir is not None:
+        resume_run_dir = Path(overrides.resume_run_dir).resolve()
+        exp_path = Path(exp_dir).resolve()
+        if not (resume_run_dir.is_dir() and resume_run_dir.name.startswith("run_")):
+            raise ValueError(f"续训目录必须是已有 run_* 目录：{resume_run_dir}")
+        if not resume_run_dir.is_relative_to(exp_path):
+            raise ValueError(f"续训 run 不属于当前实验目录：{resume_run_dir}")
+
+    def resolve_run_dir(level_name, parent_idx=None):
+        if resume_run_dir is None:
+            return _run_dir(exp_dir, level_name, run_name, parent_idx=parent_idx)
+        slot_dir = Path(exp_dir) / level_name
+        if parent_idx is not None:
+            slot_dir = slot_dir / _model_tag(level_name, parent_idx)
+        if resume_run_dir.parent.resolve() != slot_dir.resolve():
+            raise ValueError(
+                f"续训 run 与当前训练槽位不一致：run={resume_run_dir}，"
+                f"期望位于 {slot_dir}"
+            )
+        return os.fspath(resume_run_dir)
 
     def build_train_context(run_config, run_dirs, run_log):
         return ModelTrainContext(
@@ -369,6 +394,7 @@ def run_training(config_obj=None, overrides=None):
             supcon_loss_weight=SUPCON_LOSS_WEIGHT,
             decay_start_ratio=decay_start_ratio,
             zero_loss=zero_loss,
+            model_initializer=model_initializer,
         )
 
     for level_name in levels_to_train:
@@ -379,7 +405,7 @@ def run_training(config_obj=None, overrides=None):
         parent_to_children = full_dataset.parent_to_children.get(level_name, {})
         # 顶层或非按父类训练：训练全局单模型
         if (parent_name is None) or (not TRAIN_PER_PARENT):
-            run_dir = _run_dir(exp_dir, level_name, run_name, parent_idx=None)
+            run_dir = resolve_run_dir(level_name, parent_idx=None)
             run_config = deepcopy(config)
             run_config.output_dir = run_dir
             run_config.experiment_dir = exp_dir
@@ -410,6 +436,8 @@ def run_training(config_obj=None, overrides=None):
             # 父类内子类独立模型
             parent_models[level_name] = {}
             target_parent_idx = int(only_parent) if only_parent is not None else None
+            if resume_run_dir is not None and target_parent_idx is None:
+                raise ValueError("续训父类子模型时，必须指定 train_only_parent")
 
             for parent_idx, child_ids in parent_to_children.items():
                 if target_parent_idx is not None and int(parent_idx) != target_parent_idx:
@@ -448,7 +476,7 @@ def run_training(config_obj=None, overrides=None):
                     }
                     continue
 
-                run_dir = _run_dir(exp_dir, level_name, run_name, parent_idx=parent_idx)
+                run_dir = resolve_run_dir(level_name, parent_idx=parent_idx)
                 run_config = deepcopy(config)
                 run_config.output_dir = run_dir
                 run_config.experiment_dir = exp_dir
