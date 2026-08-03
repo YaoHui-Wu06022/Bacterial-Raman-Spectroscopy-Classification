@@ -1,4 +1,4 @@
-"""验证�?SE 通道缩放统计。"""
+"""验证集 SE 通道缩放统计。"""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def register_se_scale_hooks(
     model: torch.nn.Module,
     batch_scales: dict[str, torch.Tensor],
 ) -> list[torch.utils.hooks.RemovableHandle]:
-    """注册前向 hook，在每个 SE 模块处缓存当�?batch 的通道缩放系数。"""
+    """注册前向 hook，在每个 SE 模块处缓存当前 batch 的通道缩放系数。"""
     hooks: list[torch.utils.hooks.RemovableHandle] = []
     for name, module in model.named_modules():
         if not isinstance(module, SEBlock1D) or not module.se_enable:
@@ -43,7 +43,7 @@ def _build_scale_hook(
     module_name: str,
     batch_scales: dict[str, torch.Tensor],
 ) -> Callable[[torch.nn.Module, tuple[torch.Tensor, ...], torch.Tensor], None]:
-    """构造一个从 SE 模块输入计算缩放系数的前�?hook。"""
+    """构造一个从 SE 模块输入计算缩放系数的前向 hook。"""
     def cache_scale(
         module: torch.nn.Module,
         inputs: tuple[torch.Tensor, ...],
@@ -63,7 +63,7 @@ def accumulate_se_stats(
     batch_scales: dict[str, torch.Tensor],
     valid_mask: torch.Tensor,
 ) -> None:
-    """仅将标签有效样本�?SE 缩放系数合并到累计统计。"""
+    """仅将标签有效样本的 SE 缩放系数合并到累计统计。"""
     if not batch_scales:
         return
     valid_mask_cpu = valid_mask.detach().cpu()

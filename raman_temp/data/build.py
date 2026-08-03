@@ -64,7 +64,7 @@ def _publish_file(temp_path: Path, output_path: Path):
 
 
 def _pca_reconstruction_error(spectra, components=0.95, is_centered: bool = True):
-    """�?PCA 重构误差识别同一类别中的异常训练谱。"""
+    """使用 PCA 重构误差识别同一类别中的异常训练谱。"""
     spectra = np.asarray(spectra, dtype=np.float32)
     if spectra.ndim != 2 or spectra.shape[0] < 2:
         return 0, np.zeros(spectra.shape[0], dtype=np.float32)
@@ -90,7 +90,7 @@ def _pca_reconstruction_error(spectra, components=0.95, is_centered: bool = True
 
 
 def _apply_pca_filter(samples, config: DataBuildConfig, label_display: str, log_path: Path):
-    """�?PCA 重构误差删除异常谱，并仅�?PCA 启用时写入日志。"""
+    """使用 PCA 重构误差删除异常谱，并仅在 PCA 启用时写入日志。"""
     filenames, axes, spectra = zip(*samples)
     spectra_array = np.vstack(spectra)
     component_count, errors = _pca_reconstruction_error(
@@ -120,12 +120,17 @@ def _physical_clean_group(
     build_config: DataBuildConfig,
     samples,
     label_display: str,
+    reference_wavenumbers: np.ndarray | None = None,
 ):
-    """将一个原始叶子目录的光谱清洗到统一轴，不执�?PCA。"""
-    reference_axis = build_wn_ref(
-        input_config.cut_min,
-        input_config.cut_max,
-        input_config.target_points,
+    """将一个原始叶子目录的光谱清洗到统一轴，不执行 PCA。"""
+    reference_axis = (
+        build_wn_ref(
+            input_config.cut_min,
+            input_config.cut_max,
+            input_config.target_points,
+        )
+        if reference_wavenumbers is None
+        else _validate_reference_wavenumbers(reference_wavenumbers, input_config)
     )
     options = resolve_cosmic_options(profile, build_config, label_display)
     cleaned = []
@@ -152,6 +157,19 @@ def _physical_clean_group(
     return cleaned
 
 
+def _validate_reference_wavenumbers(
+    reference_wavenumbers: np.ndarray,
+    input_config: InputConfig,
+) -> np.ndarray:
+    """校验调用方提供的外部统一波数轴，避免改变常规构建默认值。"""
+    axis = np.asarray(reference_wavenumbers, dtype=np.float64)
+    if axis.ndim != 1 or axis.size != input_config.target_points:
+        raise ValueError("外部参考波数轴长度与 InputConfig.target_points 不一致")
+    if not np.isfinite(axis).all() or not np.all(np.diff(axis) > 0):
+        raise ValueError("外部参考波数轴必须是有限严格递增的一维数组")
+    return axis
+
+
 def _target_group_name(relative_dir: Path, leaf_name: str) -> Path:
     """按旧规则合并叶子目录前缀相同的类别。"""
     matched = re.match(r"([A-Za-z]+)([+-])?", str(leaf_name))
@@ -166,8 +184,7 @@ def _ensure_name_prefix(prefix: str, filename: str) -> str:
 
 
 def _write_group(output_root: Path, relative_dir: Path, samples):
-    """将完成清洗的同一类别光谱写入临时构建目录。"
-    强度在写出前统一�?float32，使文本精度和训练数据数值精度保持一致�?    """
+    """将完成清洗的同一类别光谱写入临时构建目录。"""
     target_dir = output_root / relative_dir
     for filename, wavenumbers, intensities in samples:
         write_arc_data(
@@ -183,8 +200,9 @@ def build_train(
     base_dir: Path | str,
     config: DataBuildConfig | None = None,
     input_config: InputConfig = InputConfig(),
+    reference_wavenumbers: np.ndarray | None = None,
 ):
-    """�?init 构建 train；PCA 关闭时不创建或修�?PCA 日志。"""
+    """从 init 构建 train；PCA 关闭时不创建或修改 PCA 日志。"""
     config = resolve_build_config(config)
     base_dir = Path(base_dir)
     input_path = resolve_init_input(base_dir, profile)
@@ -213,6 +231,7 @@ def build_train(
                 config,
                 raw_samples,
                 label_display,
+                reference_wavenumbers,
             )
             if len(physical_samples) < config.min_samples_per_class:
                 skipped_sources += 1
@@ -265,8 +284,9 @@ def build_test(
     base_dir: Path | str,
     config: DataBuildConfig | None = None,
     input_config: InputConfig = InputConfig(),
+    reference_wavenumbers: np.ndarray | None = None,
 ):
-    """�?init_test 构建独立 test；测试集从不执行 PCA 筛除。"""
+    """从 init_test 构建独立 test；测试集从不执行 PCA 筛除。"""
     config = resolve_build_config(config)
     base_dir = Path(base_dir)
     input_path = resolve_path(profile.root_init_test, base_dir)
@@ -286,6 +306,7 @@ def build_test(
                 config,
                 raw_samples,
                 label_display,
+                reference_wavenumbers,
             )
             if not cleaned:
                 continue

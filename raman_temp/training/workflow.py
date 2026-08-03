@@ -67,6 +67,7 @@ class TrainRequest:
     filter_value: object | None = None
     train_per_parent_enable: bool = True
     experiment_dir: Path | str | None = None
+    train_dir: Path | str | None = None
     run_name: str | None = None
     resume_run_dir: Path | str | None = None
     initialize_model: Callable[[torch.nn.Module, TrainTask], None] | None = None
@@ -87,7 +88,7 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
         _resolve_experiment_dir(request, config),
         config,
     )
-    dataset_index = DatasetIndex(_resolve_train_dir(config))
+    dataset_index = DatasetIndex(_resolve_train_dir(request, config))
     level_name = dataset_index.resolve_level_name(request.level_name)
     train_indices, validation_indices = resolve_train_split(
         dataset_index,
@@ -215,11 +216,20 @@ def _resolve_experiment_dir(request: TrainRequest, config: Config) -> Path:
     return PROJECT_ROOT / "output" / profile.dataset_name / timestamp
 
 
-def _resolve_train_dir(config: Config) -> Path:
+def _resolve_train_dir(request: TrainRequest, config: Config) -> Path:
     """解析配置数据根目录下的训练目录，也支持直接指定训练目录。"""
-    dataset_dir = get_dataset_dir(get_profile(config.dataset.profile_id), PROJECT_ROOT)
-    train_dir = dataset_dir / "train"
-    return train_dir if train_dir.is_dir() else dataset_dir
+    if request.train_dir is not None:
+        train_dir = resolve_path(request.train_dir)
+        if not train_dir.is_dir():
+            raise FileNotFoundError(f"缺少显式训练目录：{train_dir}")
+        return train_dir
+    profile = get_profile(config.dataset.profile_id)
+    dataset_dir = get_dataset_dir(profile, PROJECT_ROOT)
+    train_dir = dataset_dir / profile.root_train_clean
+    if train_dir.is_dir():
+        return train_dir
+    init_dir = dataset_dir / profile.root_init
+    return init_dir if init_dir.is_dir() else dataset_dir
 
 
 def _set_random_seed(seed: int, deterministic_enable: bool) -> None:

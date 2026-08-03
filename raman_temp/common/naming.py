@@ -15,14 +15,14 @@ def parse_folder_prefix(name: str, uppercase_enable: bool = False) -> str:
 
 
 def parse_test_folder_prefix(name: str) -> str:
-    """�?`CS01KP` 等测试菌文件夹解析对应的类别前缀。"""
+    """从 `CS01KP` 等测试菌文件夹解析对应的类别前缀。"""
     text = str(name).strip()
     match = re.match(r"^CS\d*(.+)$", text, re.IGNORECASE)
     return match.group(1).upper() if match else parse_folder_prefix(text, uppercase_enable=True)
 
 
 def is_test_source_folder(name: str) -> bool:
-    """判断目录名是否为可参与测试菌迁移�?`CS` 编号目录。"""
+    """判断目录名是否为可参与测试菌迁移的 `CS` 编号目录。"""
     return re.match(r"^CS\d+", str(name), re.IGNORECASE) is not None
 
 

@@ -13,7 +13,7 @@ from raman_temp.data.input import build_model_input, build_sg_kernels
 
 
 class RamanDataset(Dataset):
-    """按需�?DatasetIndex 样本转换为模型输入张量。"""
+    """按需将 DatasetIndex 样本转换为模型输入张量。"""
 
     def __init__(
         self,
@@ -23,7 +23,7 @@ class RamanDataset(Dataset):
         augmentation_enable: bool = False,
     ) -> None:
         if augmentation_enable and augmentation_spec is None:
-            raise ValueError("启用数据增强时必须提�?AugmentationSpec")
+            raise ValueError("启用数据增强时必须提供 AugmentationSpec")
         self.dataset_index = dataset_index
         self.input_spec = input_spec
         self.augmentation_spec = augmentation_spec

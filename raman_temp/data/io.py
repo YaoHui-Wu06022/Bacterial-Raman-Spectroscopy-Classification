@@ -57,7 +57,7 @@ def is_packed_path(path: Path | str) -> bool:
 
 
 class PackedArcDataset:
-    """�?`init.npz` 按原始样本边界恢复光谱数组。"""
+    """从 `init.npz` 按原始样本边界恢复光谱数组。"""
 
     def __init__(self, npz_path: Path | str):
         if not is_packed_path(npz_path):
@@ -86,7 +86,7 @@ class PackedArcDataset:
 
 
 def pack_init(input_dir: Path | str, output_path: Path | str, is_verbose: bool = True):
-    """�?init 目录打包为可迁移�?`.npz` 归档。"""
+    """将 init 目录打包为可迁移的 `.npz` 归档。"""
     input_dir = Path(input_dir)
     output_path = Path(output_path)
     if not input_dir.is_dir():
@@ -120,7 +120,7 @@ def pack_init(input_dir: Path | str, output_path: Path | str, is_verbose: bool =
 
 
 def unpack_init(npz_path: Path | str, output_dir: Path | str, is_verbose: bool = True):
-    """�?`init.npz` 恢复为目录树，不覆盖已有同名文件。"""
+    """将 `init.npz` 恢复为目录树，不覆盖已有同名文件。"""
     output_dir = Path(output_dir)
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"Refuse to unpack into non-empty directory: {output_dir}")
@@ -134,7 +134,7 @@ def unpack_init(npz_path: Path | str, output_dir: Path | str, is_verbose: bool =
 
 
 def resolve_init_input(base_dir: Path | str, profile):
-    """优先选择 init 目录，缺失时回退�?`init.npz`。"""
+    """优先选择 init 目录，缺失时回退到 `init.npz`。"""
     root_init = resolve_path(profile.root_init, base_dir)
     root_init_pack = resolve_path(profile.root_init_pack, base_dir)
     if root_init.is_dir() or is_packed_path(root_init):

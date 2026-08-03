@@ -168,7 +168,7 @@ def save_split_files(
     val_indices: np.ndarray | list[int],
     split_dir: Path | str,
 ) -> None:
-    """�?train/val 索引写为相对数据根目录的文件清单。"""
+    """将 train/val 索引写为相对数据根目录的文件清单。"""
     target_dir = Path(split_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     root_dir = Path(dataset.root_dir)
@@ -230,7 +230,7 @@ def _map_split_paths(
             indices.append(index)
     if missing_paths:
         raise FileNotFoundError(
-            f"切分文件中有 {len(missing_paths)} �?{split_name} 样本不在当前数据集内。"
+            f"切分文件中有 {len(missing_paths)} 个 {split_name} 样本不在当前数据集内。"
             f"首个缺失项：{missing_paths[0]}"
         )
     return np.array(sorted(indices))
@@ -244,7 +244,7 @@ def split_by_lowest_level_ratio(
     min_train_samples: int = 1,
     split_by_source_prefix_enable: bool = False,
 ) -> tuple[list[int], list[int]]:
-    """按指定层级分组，执行样本级或来源前缀�?train/val 切分。"""
+    """按指定层级分组，执行样本级或来源前缀的 train/val 切分。"""
     if split_by_source_prefix_enable:
         return _split_indices_by_source_prefix(dataset, lowest_level, train_ratio, seed)
     return _split_indices_by_sample(dataset, lowest_level, train_ratio, seed, min_train_samples)
@@ -288,7 +288,7 @@ def _split_indices_by_source_prefix(
     train_ratio: float,
     seed: int,
 ) -> tuple[list[int], list[int]]:
-    """以来源前缀为不可拆分分组，避免同源谱同时进�?train �?val。"""
+    """以来源前缀为不可拆分分组，避免同源谱同时进入 train 和 val。"""
     random_state = np.random.RandomState(seed)
     prefix_groups_by_bucket: dict[tuple[Any, bool], dict[str, list[int]]] = {}
     for index in range(len(dataset)):
@@ -313,7 +313,7 @@ def _split_indices_by_source_prefix(
             train_indices.extend(indices.tolist())
             source_kind = "*t" if is_transferred else "non-*t"
             print(
-                "[Warn] 来源前缀切分�?"
+                "[Warn] 来源前缀切分："
                 f"{level_key!r}/{source_kind} 只有一个来源前缀 {prefix!r}。"
                 "全部归入 train。"
             )
@@ -348,7 +348,7 @@ def _split_indices_by_source_prefix(
 
 
 def _resolve_split_group_key(dataset: Any, index: int, lowest_level: str) -> Any:
-    """读取样本在指�?split 层级中的分组键，并在缺失时回退�?leaf。"""
+    """读取样本在指定 split 层级中的分组键，并在缺失时回退到 leaf。"""
     if "/" in str(lowest_level):
         group_key = dataset.get_split_key(index, lowest_level)
     elif lowest_level == DEFAULT_SPLIT_LEVEL:
@@ -359,7 +359,7 @@ def _resolve_split_group_key(dataset: Any, index: int, lowest_level: str) -> Any
 
 
 def _is_transferred_sample(sample_path: Path | str) -> bool:
-    """判断样本是否来自名称�?``t`` 结尾的迁移来源前缀。"""
+    """判断样本是否来自名称以 ``t`` 结尾的迁移来源前缀。"""
     return parse_source_prefix(sample_path).lower().endswith(TRANSFERRED_SOURCE_SUFFIX)
 
 
@@ -400,7 +400,7 @@ def build_train_scope(
     if only_parent_name is not None and only_parent is None:
         parent_level = dataset.get_parent_level(current_train_level)
         if parent_level is None:
-            raise ValueError(f"{current_train_level} 没有父层，不能使�?train_only_parent_name")
+            raise ValueError(f"{current_train_level} 没有父层，不能使用 train_only_parent_name")
         parent_level_index = head_name_to_index[parent_level]
         only_parent = _resolve_parent_index_by_name(dataset, parent_level_index, only_parent_name)
         if only_parent is None:
@@ -424,7 +424,7 @@ def apply_train_filter(
     train_scope: TrainScope,
     head_name_to_index: dict[str, int],
 ) -> tuple[np.ndarray, np.ndarray]:
-    """根据冻结的训练范围过�?train/val 样本。"""
+    """根据冻结的训练范围过滤 train/val 样本。"""
     if not train_scope.filter_level or train_scope.filter_values is None:
         return train_indices, val_indices
 
@@ -501,7 +501,7 @@ def log_split_summary(
     stats_level: str,
     head_name_to_index: dict[str, int],
 ) -> None:
-    """输出指定层级�?train/val 中的样本数量摘要。"""
+    """输出指定层级在 train/val 中的样本数量摘要。"""
     level_index = head_name_to_index[stats_level]
     labels = dataset.level_labels[:, level_index]
     print(

@@ -22,7 +22,7 @@ def write_nonfinite_diagnostic(
     tensors: dict[str, torch.Tensor] | None = None,
     losses: dict[str, torch.Tensor] | None = None,
 ) -> bool:
-    """写入首个数值异�?batch 的缩�?JSON 摘要。"""
+    """写入首个数值异常 batch 的缩进 JSON 摘要。"""
     if diagnostic_written_enable:
         return True
     record: dict[str, Any] = {
@@ -66,5 +66,5 @@ def _summarize_tensor(values: torch.Tensor) -> dict[str, Any]:
 
 
 def _loss_value(values: torch.Tensor) -> float:
-    """将标量损失转换为可写�?JSON 的浮点数。"""
+    """将标量损失转换为可写入 JSON 的浮点数。"""
     return float(values.detach().cpu())

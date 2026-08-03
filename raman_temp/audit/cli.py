@@ -1,4 +1,4 @@
-"""audit 独立命令的参数解析与工作流调用。"""
+"""audit 命令参数解析与工作流调用。"""
 
 from __future__ import annotations
 
@@ -7,16 +7,9 @@ import csv
 import json
 from pathlib import Path
 
-from raman_temp.audit.plots import plot_prefix_dataset, plot_shift_folder, resolve_folder_dir
-from raman_temp.audit.shift import ManualShiftTarget, apply_manual_shift
-from raman_temp.audit.workflow import run_clean
-from raman_temp.common.naming import parse_folder_prefix
-from raman_temp.data.profiles import get_dataset_dir, get_profile
 
-
-def build_parser() -> argparse.ArgumentParser:
-    """构建 audit 命令及各子命令的参数定义。"""
-    parser = argparse.ArgumentParser(description="Raman 数据审核")
+def configure_parser(parser: argparse.ArgumentParser) -> None:
+    """注册 audit 命令及各子命令参数。"""
     commands = parser.add_subparsers(dest="command", required=True)
     clean = commands.add_parser("clean", help="在运行池执行完整三阶段审核")
     clean.add_argument("--dataset", default="alldata")
@@ -32,6 +25,14 @@ def build_parser() -> argparse.ArgumentParser:
     manual.add_argument("--test-dataset", default="test")
     manual.add_argument("--folder", required=True)
     manual.add_argument("--delta", required=True, type=float)
+    for command_parser in (clean, prefix, shift, manual):
+        command_parser.set_defaults(run_command=run_command)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """构建独立调用时使用的 audit 参数解析器。"""
+    parser = argparse.ArgumentParser(description="Raman 数据审核")
+    configure_parser(parser)
     return parser
 
 
@@ -65,8 +66,17 @@ def read_transfer_target(manifest_path: Path, source_folder: str) -> tuple[str, 
     return targets.pop()
 
 
-def resolve_manual_targets(dataset_key: str, test_key: str, folder_value: str) -> tuple[ManualShiftTarget, ManualShiftTarget | None]:
+def resolve_manual_targets(
+    dataset_key: str,
+    test_key: str,
+    folder_value: str,
+) -> tuple[ManualShiftTarget, ManualShiftTarget | None]:
     """解析人工平移目标及测试菌与 `*t` 副本之间的对应目标。"""
+    from raman_temp.audit.plots import resolve_folder_dir
+    from raman_temp.audit.shift import ManualShiftTarget
+    from raman_temp.common.naming import parse_folder_prefix
+    from raman_temp.data.profiles import get_dataset_dir, get_profile
+
     profile = get_profile(dataset_key)
     dataset_dir = get_dataset_dir(profile)
     test_profile = get_profile(test_key)
@@ -91,21 +101,34 @@ def resolve_manual_targets(dataset_key: str, test_key: str, folder_value: str) -
     return target, counterpart
 
 
-def main(argv: list[str] | None = None) -> int:
-    """执行一个 audit 子命令，并输出可供脚本读取的结果。"""
-    args = build_parser().parse_args(argv)
+def run_command(args: argparse.Namespace) -> int:
+    """执行一个已经解析完成的 audit 子命令。"""
     if args.command == "clean":
+        from raman_temp.audit.workflow import run_clean
+
         print(run_clean(args.dataset, args.test_dataset))
         return 0
     if args.command == "plot-prefix":
+        from raman_temp.audit.plots import plot_prefix_dataset
+
         outputs = plot_prefix_dataset(args.dataset, force_enable=args.force_enable)
         print(f"figures={len(outputs)}")
         return 0
     if args.command == "plot-shift":
+        from raman_temp.audit.plots import plot_shift_folder
+
         print(plot_shift_folder(args.dataset, args.folder))
         return 0
     if args.command == "manual-shift":
+        from raman_temp.audit.shift import apply_manual_shift
+
         target, counterpart = resolve_manual_targets(args.dataset, args.test_dataset, args.folder)
         print(json.dumps(apply_manual_shift(target, args.delta, counterpart), ensure_ascii=False, indent=2))
         return 0
     raise RuntimeError(f"未知 audit 命令：{args.command}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    """解析并执行一个 audit 子命令。"""
+    args = build_parser().parse_args(argv)
+    return args.run_command(args)

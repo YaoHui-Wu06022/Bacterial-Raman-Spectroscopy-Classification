@@ -63,3 +63,14 @@ def get_dataset_dir(profile: DatasetProfile, project_root: Path | str | None = N
     """返回 profile 在项目数据集根目录下的目录。"""
     root = DATASET_ROOT if project_root is None else Path(project_root) / "dataset"
     return (root / profile.dataset_name).resolve()
+
+
+def resolve_training_dir(profile_key: str) -> Path:
+    """优先解析构建后的 train 目录，缺失时使用可直接训练的 init 目录。"""
+    profile = get_profile(profile_key)
+    dataset_dir = get_dataset_dir(profile)
+    train_dir = dataset_dir / profile.root_train_clean
+    if train_dir.is_dir():
+        return train_dir
+    init_dir = dataset_dir / profile.root_init
+    return init_dir if init_dir.is_dir() else dataset_dir

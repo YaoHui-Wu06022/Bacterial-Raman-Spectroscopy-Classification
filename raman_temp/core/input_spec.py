@@ -23,9 +23,10 @@ class InputSpec:
 
 def build_input_spec(input_config: InputConfig) -> InputSpec:
     """从输入配置构建模型和数据层共用的张量规格。"""
-    point_count = int(input_config.target_points)
-    if point_count < 2:
+    raw_point_count = int(input_config.target_points)
+    if raw_point_count < 2:
         raise ValueError("target_points 必须至少为 2")
+    point_count = _resolve_point_count(input_config)
     in_channels = 1 + int(input_config.smooth_use) + int(input_config.d1_use)
     return InputSpec(
         in_channels=in_channels,
@@ -36,5 +37,20 @@ def build_input_spec(input_config: InputConfig) -> InputSpec:
         smooth_window=int(input_config.win_smooth),
         d1_window=int(input_config.win1),
         delta=(float(input_config.cut_max) - float(input_config.cut_min))
-        / (point_count - 1),
+        / (raw_point_count - 1),
     )
+
+
+def _resolve_point_count(input_config: InputConfig) -> int:
+    """计算统一波数轴删除坏段后实际进入模型的点数。"""
+    raw_point_count = int(input_config.target_points)
+    cut_min = float(input_config.cut_min)
+    step = (float(input_config.cut_max) - cut_min) / (raw_point_count - 1)
+    bad_bands = tuple(input_config.bad_bands)
+    count = sum(
+        not any(start <= cut_min + index * step <= end for start, end in bad_bands)
+        for index in range(raw_point_count)
+    )
+    if count <= 0:
+        raise ValueError("坏段移除了全部输入点")
+    return count

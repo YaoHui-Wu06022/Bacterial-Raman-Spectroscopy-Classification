@@ -28,7 +28,7 @@ def compute_linear_weight(
     minimum: float,
     maximum: float,
 ) -> float:
-    """在指�?epoch 区间内线性调整辅助损失权重。"""
+    """在指定 epoch 区间内线性调整辅助损失权重。"""
     if epoch < start:
         return minimum
     if epoch > end:
@@ -39,7 +39,7 @@ def compute_linear_weight(
 
 
 class FocalLoss(torch.nn.Module):
-    """逐样�?Focal 分类损失，调用方负责对返回值进行聚合。"""
+    """逐样本 Focal 分类损失，调用方负责对返回值进行聚合。"""
 
     def __init__(
         self,
@@ -53,7 +53,7 @@ class FocalLoss(torch.nn.Module):
         self.ignore_index = ignore_index
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        """�?float32 计算分类损失，避免混合精度下高置信样本过早舍入。"""
+        """以 float32 计算分类损失，避免混合精度下高置信样本过早舍入。"""
         logits = logits.float()
         ce_loss = torch.nn.functional.cross_entropy(
             logits,
@@ -76,7 +76,7 @@ class FocalLoss(torch.nn.Module):
 
 
 def compute_align_loss(features: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-    """计算 batch 内同�?embedding 围绕类中心的平均离散度。"""
+    """计算 batch 内同类 embedding 围绕类中心的平均离散度。"""
     valid_mask = labels >= 0
     if not valid_mask.any():
         return torch.tensor(0.0, device=features.device)

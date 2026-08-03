@@ -11,7 +11,7 @@ def compute_classification_metrics(
     predictions: np.ndarray,
     labels: range | list[int],
 ) -> dict[str, float]:
-    """计算 accuracy、macro-F1 �?macro recall。"""
+    """计算 accuracy、macro-F1 和 macro recall。"""
     targets = np.asarray(targets)
     predictions = np.asarray(predictions)
     label_list = list(labels)

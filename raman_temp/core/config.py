@@ -137,14 +137,30 @@ class ExecutionConfig:
 
 
 @dataclass(frozen=True)
+class AnalysisConfig:
+    """UMAP 与模型归因分析的默认采样和绘图参数。"""
+
+    umap_neighbors: int = 15
+    umap_min_dist: float = 0.1
+    inherit_missing_levels_use: bool = True
+    attribution_split: str = "train"
+    attribution_batch_count: int = 10
+    ig_steps: int = 32
+    max_per_class: int = 50
+    row_norm: str = "max"
+    separate_class_plots_use: bool = False
+
+
+@dataclass(frozen=True)
 class Config:
-    """由五个职责明确的配置组组成的不可变配置对象。"""
+    """由职责明确的配置组组成的不可变配置对象。"""
 
     dataset: DatasetConfig = DatasetConfig()
     input: InputConfig = InputConfig()
     model: ModelConfig = ModelConfig()
     training: TrainingConfig = TrainingConfig()
     execution: ExecutionConfig = ExecutionConfig()
+    analysis: AnalysisConfig = AnalysisConfig()
 
     def to_shared_dict(self) -> dict[str, Any]:
         """导出实验根共享的 profile 与输入快照。"""
@@ -162,7 +178,7 @@ class Config:
 
     def to_dict(self) -> dict[str, Any]:
         """导出完整扁平快照，供 YAML 与文本日志使用。"""
-        return self.to_shared_dict() | self.to_model_dict() | self.to_execution_dict()
+        return self.to_shared_dict() | self.to_model_dict() | self.to_execution_dict() | _yaml_ready(asdict(self.analysis))
 
 
 def build_config(values: Mapping[str, Any] | None = None) -> Config:
@@ -178,6 +194,7 @@ def build_config(values: Mapping[str, Any] | None = None) -> Config:
         model=_build_group(ModelConfig, source),
         training=_build_group(TrainingConfig, source),
         execution=_build_group(ExecutionConfig, source),
+        analysis=_build_group(AnalysisConfig, source),
     )
 
 

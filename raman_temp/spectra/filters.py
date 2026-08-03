@@ -35,20 +35,20 @@ def _validate_sg_params(window_length, polyorder, deriv) -> tuple[int, int, int]
     if window_length <= 0:
         raise ValueError(f"window_length 必须大于 0，当前为 {window_length}")
     if window_length % 2 == 0:
-        raise ValueError(f"window_length 必须是奇数，当前�?{window_length}")
+        raise ValueError(f"window_length 必须是奇数，当前为 {window_length}")
     if window_length <= polyorder:
         raise ValueError(
-            f"window_length 必须大于 polyorder，当�?window_length={window_length}, polyorder={polyorder}"
+            f"window_length 必须大于 polyorder，当前 window_length={window_length}, polyorder={polyorder}"
         )
     if deriv < 0 or deriv > polyorder:
         raise ValueError(
-            f"deriv 必须落在 [0, polyorder]，当�?deriv={deriv}, polyorder={polyorder}"
+            f"deriv 必须落在 [0, polyorder]，当前 deriv={deriv}, polyorder={polyorder}"
         )
     return window_length, polyorder, deriv
 
 
 def sg_coeff(window_length, polyorder, deriv):
-    """生成一�?Savitzky-Golay 平滑或导数卷积核系数。"""
+    """生成一组 Savitzky-Golay 平滑或导数卷积核系数。"""
     window_length, polyorder, deriv = _validate_sg_params(
         window_length, polyorder, deriv
     )

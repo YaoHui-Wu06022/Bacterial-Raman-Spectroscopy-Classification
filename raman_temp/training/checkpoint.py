@@ -25,7 +25,7 @@ class TrainingState:
 
 
 def build_checkpoint_path(model_path: Path | str) -> Path:
-    """为模型权重路径生成同目录的续�?checkpoint 路径。"""
+    """为模型权重路径生成同目录的续训 checkpoint 路径。"""
     target_path = Path(model_path)
     suffix = "_model.pt"
     if target_path.name.endswith(suffix):
@@ -73,7 +73,7 @@ def restore_training_checkpoint(
     log_message: Callable[[str], None],
     scaler: torch.amp.GradScaler | None = None,
 ) -> tuple[int, float, int, int, torch.Tensor | None]:
-    """恢复训练状态并返回下一�?epoch 与早停相关状态。"""
+    """恢复训练状态并返回下一轮 epoch 与早停相关状态。"""
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state"])
     optimizer.load_state_dict(checkpoint["optimizer_state"])
@@ -101,7 +101,7 @@ def restore_training_checkpoint(
 
 
 def _restore_random_state(checkpoint: dict[str, object]) -> None:
-    """恢复 checkpoint 中保存的 PyTorch、NumPy �?Python 随机数状态。"""
+    """恢复 checkpoint 中保存的 PyTorch、NumPy 和 Python 随机数状态。"""
     torch_state = checkpoint.get("torch_rng_state")
     if isinstance(torch_state, torch.Tensor):
         torch.set_rng_state(torch_state.cpu())

@@ -14,7 +14,7 @@ from .filters import median_filter_1d, odd_window_points
 
 
 def asls_baseline(spectrum, lam: float = 1e5, p: float = 0.01, niter: int = 10, valid_mask=None):
-    """�?AsLS 估计基线；坏波段可通过掩码完全排除。"""
+    """使用 AsLS 估计基线；坏波段可通过掩码完全排除。"""
     length = len(spectrum)
     difference = sparse.diags([1, -2, 1], [0, 1, 2], shape=(length - 2, length))
     weights = np.ones(length)
@@ -37,7 +37,7 @@ def asls_baseline(spectrum, lam: float = 1e5, p: float = 0.01, niter: int = 10, 
 
 
 def arpls_baseline(spectrum, lam: float = 1e5, niter: int = 15, valid_mask=None):
-    """�?arPLS 估计基线，对正向拉曼峰保留较低权重。"""
+    """使用 arPLS 估计基线，对正向拉曼峰保留较低权重。"""
     values = np.asarray(spectrum, dtype=np.float64)
     length = len(values)
     difference = sparse.diags([1, -2, 1], [0, 1, 2], shape=(length - 2, length))
@@ -69,7 +69,7 @@ def arpls_baseline(spectrum, lam: float = 1e5, niter: int = 15, valid_mask=None)
 
 
 def airpls_baseline(spectrum, lam: float = 1e5, niter: int = 15, valid_mask=None):
-    """�?airPLS 估计基线，迭代提高负残差位置的拟合权重。"""
+    """使用 airPLS 估计基线，迭代提高负残差位置的拟合权重。"""
     values = np.asarray(spectrum, dtype=np.float64)
     length = len(values)
     difference = sparse.diags([1, -2, 1], [0, 1, 2], shape=(length - 2, length))
@@ -141,7 +141,7 @@ class CosmicRayStats:
 
 
 def _residual_z_score(residual, valid_mask):
-    """�?MAD 估计残差尺度，生成稳�?z 分数。"""
+    """使用 MAD 估计残差尺度，生成稳健 z 分数。"""
     valid_values = residual[valid_mask]
     valid_values = valid_values[np.isfinite(valid_values)]
     if valid_values.size == 0:
@@ -167,7 +167,7 @@ def remove_cosmic_rays(
     max_iter: int = 2,
     valid_mask=None,
 ):
-    """使用局�?median/MAD 替换正向宇宙射线尖峰。"""
+    """使用局部 median/MAD 替换正向宇宙射线尖峰。"""
     cleaned = np.asarray(spectrum, dtype=np.float32).copy()
     if cleaned.size < 3 or max_iter <= 0:
         return cleaned, CosmicRayStats()

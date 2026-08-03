@@ -1,18 +1,4 @@
-"""训练切分、损失计算和训练状态管理。"""
+"""训练切分、优化、循环、运行上下文与 workflow。
 
-from raman_temp.training.losses import (
-    FocalLoss,
-    SupConLoss,
-    build_class_weights,
-    compute_align_loss,
-)
-from raman_temp.training.split import TrainScope, build_train_scope
-
-__all__ = [
-    "FocalLoss",
-    "SupConLoss",
-    "TrainScope",
-    "build_class_weights",
-    "compute_align_loss",
-    "build_train_scope",
-]
+调用方从具体子模块导入训练组件，使命令帮助无需加载 PyTorch。
+"""
