@@ -1,79 +1,33 @@
-"""训练结果分析入口"""
+"""在 PyCharm 或 Colab 中直接运行的模型解释入口。"""
 
-from raman.analysis import (
-    HeatmapConfig,
-    run_analysis_cascade,
-    run_analysis_level_only,
-    run_analysis_single_model,
-)
+from ramanv2.analysis.runner import run_interpret_parent_routed, run_interpret_run
 
 
-# 可选模式：single_model / level_only / cascade
-ANALYSIS_MODE = "single_model"
-
-# single_model 模式填具体 run_* 或 best/run_* 目录
-RUN_DIR = ""
-
-# level_only / cascade 模式填实验根目录
-EXP_DIR = ""
-
-TARGET_LEVEL = "level_1"
-PARENT_IDX = None
-INHERIT_MISSING_LEVELS = False
-
-HEATMAP_NUM_BATCHES = 10
-HEATMAP_STEPS = 32
-HEATMAP_MAX_PER_CLASS = 50
-HEATMAP_ROW_NORM = "max"
-HEATMAP_USE_TRAIN_LOADER = True
-HEATMAP_SEPARATE_CLASS_PLOTS = False
-
-
-def _heatmap_config():
-    return HeatmapConfig(
-        num_batches=HEATMAP_NUM_BATCHES,
-        steps=HEATMAP_STEPS,
-        max_per_class=HEATMAP_MAX_PER_CLASS,
-        row_norm=HEATMAP_ROW_NORM,
-        use_train_loader=HEATMAP_USE_TRAIN_LOADER,
-        separate_class_plots=HEATMAP_SEPARATE_CLASS_PLOTS,
-    )
+# MODE 取 run 或 parent_routed；分析默认参数在 ramanv2/core/config.py 中维护。
+MODE = "run"
+SOURCE_DIR = ""
+LEVEL_NAME = "level_1"
+PARENT = None
+CPU_ENABLE = False
 
 
 def main():
-    heatmap_cfg = _heatmap_config()
-    if ANALYSIS_MODE == "single_model":
-        if not RUN_DIR:
-            raise ValueError("single_model 模式请先填写 RUN_DIR")
-        result_dir = run_analysis_single_model(
-            RUN_DIR,
-            level=TARGET_LEVEL,
-            parent_idx=PARENT_IDX,
-            inherit_missing_levels=INHERIT_MISSING_LEVELS,
-            heatmap_cfg=heatmap_cfg,
-        )
-    elif ANALYSIS_MODE == "level_only":
-        if not EXP_DIR:
-            raise ValueError("level_only 模式请先填写 EXP_DIR")
-        result_dir = run_analysis_level_only(
-            EXP_DIR,
-            TARGET_LEVEL,
-            parent_idx=PARENT_IDX if PARENT_IDX is not None else "all",
-            inherit_missing_levels=INHERIT_MISSING_LEVELS,
-            heatmap_cfg=heatmap_cfg,
-        )
-    elif ANALYSIS_MODE == "cascade":
-        if not EXP_DIR:
-            raise ValueError("cascade 模式请先填写 EXP_DIR")
-        result_dir = run_analysis_cascade(
-            EXP_DIR,
-            TARGET_LEVEL,
-            parent_idx=PARENT_IDX if PARENT_IDX is not None else "all",
-            inherit_missing_levels=INHERIT_MISSING_LEVELS,
-            heatmap_cfg=heatmap_cfg,
+    """按单 run 或真实父类路由方式执行解释性分析。"""
+    if not SOURCE_DIR:
+        raise ValueError("请先在 analyze.py 里填写 SOURCE_DIR")
+
+    device = "cpu" if CPU_ENABLE else None
+    if MODE == "run":
+        result_dir = run_interpret_run(SOURCE_DIR, LEVEL_NAME, device)
+    elif MODE == "parent_routed":
+        result_dir = run_interpret_parent_routed(
+            SOURCE_DIR,
+            LEVEL_NAME,
+            PARENT,
+            device,
         )
     else:
-        raise ValueError("ANALYSIS_MODE 只能是 single_model / level_only / cascade")
+        raise ValueError("MODE 只能是 run / parent_routed")
 
     print("analysis_result_dir =", result_dir)
 

@@ -1,7 +1,7 @@
 import subprocess
 import sys
 
-from raman_temp.cli.main import build_parser
+from ramanv2.cli.main import build_parser
 
 
 def test_root_cli_registers_migrated_commands() -> None:
@@ -24,6 +24,7 @@ def test_root_cli_registers_migrated_commands() -> None:
             "level_1",
         ]
     )
+    zip_args = parser.parse_args(["zip"])
 
     assert audit_args.domain == "audit"
     assert audit_args.command == "clean"
@@ -46,6 +47,8 @@ def test_root_cli_registers_migrated_commands() -> None:
     assert evaluation_args.target == "baseline"
     assert evaluation_args.mode == "parent-routed"
     assert callable(evaluation_args.run_command)
+    assert zip_args.domain == "zip"
+    assert callable(zip_args.run_command)
 
 
 def test_root_help_does_not_load_torch() -> None:
@@ -53,7 +56,7 @@ def test_root_help_does_not_load_torch() -> None:
         [
             sys.executable,
             "-c",
-            "import sys; from raman_temp.cli.main import build_parser; build_parser(); print('torch' in sys.modules)",
+            "import sys; from ramanv2.cli.main import build_parser; build_parser(); print('torch' in sys.modules)",
         ],
         check=True,
         text=True,

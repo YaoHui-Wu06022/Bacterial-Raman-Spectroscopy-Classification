@@ -5,29 +5,29 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import raman_temp.audit.plots as target_plots
-import raman_temp.audit.similarity as target_similarity
-import raman_temp.audit.workflow as target_workflow
+import ramanv2.audit.plots as target_plots
+import ramanv2.audit.similarity as target_similarity
+import ramanv2.audit.workflow as target_workflow
 
 from raman.audit import workflow as reference_workflow
 from raman.audit import test_pool as reference_test_pool
 from raman.audit.common import preprocess_spectrum_for_audit as reference_preprocess_audit_spectrum
 from raman.data.profiles import get_profile as get_reference_profile
 from raman.tool.dataset import resolve_dataset
-from raman_temp.audit.config import DEFAULT_AUDIT_CONFIG
-from raman_temp.audit.cli import build_parser as build_audit_parser
-from raman_temp.audit.preprocess import preprocess_audit_spectrum
-from raman_temp.audit.preprocess import AuditSpectrum
-from raman_temp.audit.plots import PlotPaths, plot_prefix_dataset, plot_shift_folder
-from raman_temp.audit.raw_quality import run_stage1, score_raw_record
-from raman_temp.audit.records import RawRecord
-from raman_temp.audit.records import SimilarityRecord
-from raman_temp.audit.similarity import run_stage2, run_stage3, score_similarity_group
-from raman_temp.audit.reports import read_delta, write_delta
-from raman_temp.audit.shift import ManualShiftTarget, apply_folder_shift, apply_manual_shift, build_folder_curve, find_peak_anchor
-from raman_temp.audit.test_sync import build_candidate_commit_rows, build_work_pool, commit_candidate_rows, sync_work_test_init
-from raman_temp.data.test_transfer import TestTransferConfig, build_test_transfer
-from raman_temp.data.profiles import get_profile
+from ramanv2.audit.config import DEFAULT_AUDIT_CONFIG
+from ramanv2.audit.cli import build_parser as build_audit_parser
+from ramanv2.audit.preprocess import preprocess_audit_spectrum
+from ramanv2.audit.preprocess import AuditSpectrum
+from ramanv2.audit.plots import PlotPaths, plot_prefix_dataset, plot_shift_folder
+from ramanv2.audit.raw_quality import run_stage1, score_raw_record
+from ramanv2.audit.records import RawRecord
+from ramanv2.audit.records import SimilarityRecord
+from ramanv2.audit.similarity import run_stage2, run_stage3, score_similarity_group
+from ramanv2.audit.reports import read_delta, write_delta
+from ramanv2.audit.shift import ManualShiftTarget, apply_folder_shift, apply_manual_shift, build_folder_curve, find_peak_anchor
+from ramanv2.audit.test_sync import build_candidate_commit_rows, build_work_pool, commit_candidate_rows, sync_work_test_init
+from ramanv2.data.test_transfer import TestTransferConfig, build_test_transfer
+from ramanv2.data.profiles import get_profile
 
 
 def test_raw_quality_metrics_match_reference_on_random_raw_samples():
@@ -374,6 +374,31 @@ def test_plot_commands_generate_explicit_audit_figures(tmp_path, monkeypatch):
     assert outputs == [dataset_dir / "fig_init" / "Genus" / "AA.png"]
     assert outputs[0].is_file()
     assert shift_output.is_file()
+
+
+def test_prefix_plot_marks_bad_bands_and_breaks_normalized_curves(tmp_path, monkeypatch):
+    figures = []
+    original_close = target_plots.plt.close
+    monkeypatch.setattr(target_plots.plt, "close", figures.append)
+    axis = np.array([880.0, 890.0, 920.0, 950.0, 960.0], dtype=np.float32)
+    values = np.arange(axis.size, dtype=np.float32)
+
+    target_plots.plot_prefix_group(
+        {"AA01": (values, values, values)},
+        axis,
+        tmp_path / "prefix.png",
+        "prefix",
+        ((890.0, 950.0),),
+    )
+
+    figure = figures.pop()
+    try:
+        assert all(len(subplot.patches) == 1 for subplot in figure.axes)
+        np.testing.assert_array_equal(figure.axes[0].lines[0].get_ydata(), values)
+        assert np.isnan(figure.axes[1].lines[0].get_ydata()[1:4]).all()
+        assert np.isnan(figure.axes[2].lines[0].get_ydata()[1:4]).all()
+    finally:
+        original_close(figure)
 
 
 def test_audit_cli_only_exposes_confirmed_commands():

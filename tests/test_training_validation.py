@@ -9,10 +9,10 @@ from raman.metrics import compute_classification_metrics as reference_compute_cl
 from raman.runtime import mask_logits_by_parent as reference_mask_logits_by_parent
 from raman.runtime import resolve_allowed_indices as reference_resolve_allowed_indices
 from raman.runtime import select_level_targets as reference_select_level_targets
-from raman_temp.common.metrics import compute_classification_metrics
-from raman_temp.core.hierarchy import mask_logits_by_parent, resolve_allowed_indices, select_level_targets
-from raman_temp.modeling.layers import SEBlock1D
-from raman_temp.training.validation import evaluate_validation_loader
+from ramanv2.common.metrics import compute_classification_metrics
+from ramanv2.core.hierarchy import mask_logits_by_parent, resolve_allowed_indices, select_level_targets
+from ramanv2.modeling.layers import SEBlock1D
+from ramanv2.training.validation import evaluate_validation_loader
 
 
 class ValidationModel(torch.nn.Module):

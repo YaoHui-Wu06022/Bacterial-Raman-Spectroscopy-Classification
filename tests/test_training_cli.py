@@ -1,4 +1,4 @@
-from raman_temp.training.cli import _resolve_parent, build_parser
+from ramanv2.training.cli import _resolve_parent, build_parser
 
 
 def test_training_cli_parses_request_scope() -> None:

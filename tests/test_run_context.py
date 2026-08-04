@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from raman_temp.core.config import build_config
-from raman_temp.core.config_file import read_yaml_dict
-from raman_temp.core.run_context import (
+from ramanv2.core.config import build_config
+from ramanv2.core.config_file import read_yaml_dict
+from ramanv2.core.run_context import (
     open_experiment_context,
     open_run_context,
     resolve_run_dir,

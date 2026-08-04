@@ -7,12 +7,12 @@ torch = pytest.importorskip("torch")
 
 from raman.config import make_config
 from raman.model import RamanClassifier1D as ReferenceRamanClassifier1D
-from raman_temp.core.config import build_config
-from raman_temp.core.experiment_reader import load_run_snapshot
-from raman_temp.core.input_spec import InputSpec, build_input_spec
-from raman_temp.modeling.factory import build_model
-from raman_temp.modeling.factory import validate_model_input
-from raman_temp.modeling.spec import build_model_spec
+from ramanv2.core.config import build_config
+from ramanv2.core.experiment_reader import load_run_snapshot
+from ramanv2.core.input_spec import InputSpec, build_input_spec
+from ramanv2.modeling.factory import build_model
+from ramanv2.modeling.factory import validate_model_input
+from ramanv2.modeling.spec import build_model_spec
 
 
 def test_classifier_state_keys_and_logits_match_reference():

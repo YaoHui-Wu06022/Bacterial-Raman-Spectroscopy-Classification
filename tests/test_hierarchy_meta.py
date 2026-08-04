@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from raman_temp.core.hierarchy_meta import (
+from ramanv2.core.hierarchy_meta import (
     build_hierarchy_entry,
     compute_split_hash,
     merge_hierarchy_meta,

@@ -21,16 +21,17 @@ from raman.data.input import augment_raw_spectrum as reference_augment_raw_spect
 from raman.data.input import build_model_input as reference_build_model_input
 from raman.data.input import build_sg_kernels as reference_build_sg_kernels
 from raman.config import make_config
-from raman_temp.core.config import build_config
-from raman_temp.core.input_spec import build_input_spec
-from raman_temp.data.augmentation import build_augmentation_spec
-from raman_temp.data.augmentation import augment_normalized_spectrum, augment_raw_spectrum
-from raman_temp.data.input import build_model_input, build_sg_kernels
-from raman_temp.training.optimizer import build_loader, build_optimizer, build_scheduler
-from raman_temp.training.spec import build_execution_spec, build_training_spec
-from raman_temp.training.checkpoint import restore_training_checkpoint, save_training_checkpoint
-from raman_temp.training.losses import FocalLoss, SupConLoss, build_class_weights, compute_align_loss, compute_linear_weight
-from raman_temp.training.split import (
+from ramanv2.core.config import build_config
+from ramanv2.core.input_spec import build_input_spec
+from ramanv2.data.augmentation import build_augmentation_spec
+from ramanv2.data.augmentation import augment_normalized_spectrum, augment_raw_spectrum
+from ramanv2.data.input import build_model_input, build_sg_kernels
+from ramanv2.training.optimizer import build_loader, build_optimizer, build_scheduler
+from ramanv2.training.spec import build_execution_spec, build_training_spec
+from ramanv2.training.checkpoint import TrainingState, restore_training_checkpoint, save_training_checkpoint
+from ramanv2.training.loop import _update_ema_class_loss
+from ramanv2.training.losses import FocalLoss, SupConLoss, build_class_weights, compute_align_loss, compute_linear_weight
+from ramanv2.training.split import (
     apply_train_filter,
     build_global_train_task,
     build_parent_train_task,
@@ -144,6 +145,32 @@ def test_losses_match_reference_values_and_gradients() -> None:
     target_supcon = SupConLoss(0.2)(features.detach(), feature_labels)
     reference_supcon = ReferenceSupConLoss(0.2)(features.detach(), feature_labels)
     torch.testing.assert_close(target_supcon, reference_supcon)
+
+
+def test_ema_class_loss_uses_training_spec_alpha(tmp_path: Path) -> None:
+    train_task = build_global_train_task(
+        DemoDataset(tmp_path / "dataset"),
+        "genus",
+        [0, 1],
+        [2, 3],
+    )
+    config = build_config()
+    train_spec = build_training_spec(config.training, config.execution)
+    logits = torch.tensor([[2.0, 0.0], [0.0, 2.0]], requires_grad=True)
+    targets = torch.tensor([0, 1])
+    train_state = TrainingState(ema_class_ce=torch.ones(2))
+
+    _update_ema_class_loss(
+        train_state,
+        {"logits": logits, "targets": targets, "valid_mask": torch.tensor([True, True])},
+        train_task,
+        train_spec,
+    )
+
+    class_loss = torch.nn.functional.cross_entropy(logits, targets, reduction="none")
+    expected = train_spec.loss.ema_alpha + (1.0 - train_spec.loss.ema_alpha) * class_loss
+    torch.testing.assert_close(train_state.ema_class_ce, expected)
+    assert not train_state.ema_class_ce.requires_grad
 
 
 def test_train_scope_does_not_mutate_config_and_filters_like_reference(tmp_path: Path) -> None:

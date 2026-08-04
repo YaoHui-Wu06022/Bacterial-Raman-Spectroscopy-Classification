@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from raman_temp.core.config import build_config
-from raman_temp.core.config_file import (
+from ramanv2.core.config import build_config
+from ramanv2.core.config_file import (
     assert_shared_compatible,
     read_yaml_dict,
     save_model_config,

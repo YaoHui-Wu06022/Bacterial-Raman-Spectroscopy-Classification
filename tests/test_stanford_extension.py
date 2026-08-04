@@ -8,13 +8,13 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from raman_temp.core.config import InputConfig
-from raman_temp.data.build import build_train
-from raman_temp.data.config import DataBuildConfig
-from raman_temp.data.io import read_arc_data, write_arc_data
-from raman_temp.data.profiles import DatasetProfile
-from raman_temp.extensions.stanford_finetune.dataset import build_stanford_train
-from raman_temp.extensions.stanford_finetune.initializer import TransferInitializer
+from ramanv2.core.config import InputConfig
+from ramanv2.data.build import build_train
+from ramanv2.data.config import DataBuildConfig
+from ramanv2.data.io import read_arc_data, write_arc_data
+from ramanv2.data.profiles import DatasetProfile
+from ramanv2.extensions.stanford_finetune.dataset import build_stanford_train
+from ramanv2.extensions.stanford_finetune.initializer import TransferInitializer
 
 
 class TransferModel(torch.nn.Module):

@@ -16,12 +16,12 @@ from raman.tool.array import odd_window_points as reference_odd_window_points
 from raman.tool.path import PROJECT_ROOT as reference_project_root
 from raman.tool.spectrum import estimate_gap_indices as reference_gap_indices
 from raman.tool.spectrum import median_step_cm as reference_median_step
-from raman_temp.core.paths import PROJECT_ROOT, stanford_reference_wavenumbers_path
-from raman_temp.data.build import build_train as target_build_train
-from raman_temp.data.config import DataBuildConfig
-from raman_temp.data.io import pack_init, unpack_init
-from raman_temp.data.profiles import DatasetProfile, get_profile
-from raman_temp.spectra import axis, bands, filters, normalize, preprocess
+from ramanv2.core.paths import PROJECT_ROOT, stanford_reference_wavenumbers_path
+from ramanv2.data.build import build_train as target_build_train
+from ramanv2.data.config import DataBuildConfig
+from ramanv2.data.io import pack_init, unpack_init
+from ramanv2.data.profiles import DatasetProfile, get_profile
+from ramanv2.spectra import axis, bands, filters, normalize, preprocess
 
 
 def test_project_root_and_reference_location_match_contract():
@@ -110,7 +110,7 @@ def test_pack_and_unpack_round_trip(tmp_path):
     init_dir.mkdir(parents=True)
     source_axis = np.array([600.0, 601.0, 602.0])
     source_values = np.array([1.0, 2.0, 3.0])
-    from raman_temp.data.io import read_arc_data, write_arc_data
+    from ramanv2.data.io import read_arc_data, write_arc_data
 
     write_arc_data(init_dir / "sample.arc_data", source_axis, source_values)
     packed = tmp_path / "init.npz"
@@ -128,7 +128,7 @@ def test_train_build_matches_reference_and_skips_pca_log_when_disabled(tmp_path)
     for root in (tmp_path / "reference", tmp_path / "target"):
         source_dir = root / "init" / "AA01"
         source_dir.mkdir(parents=True)
-        from raman_temp.data.io import write_arc_data
+        from ramanv2.data.io import write_arc_data
 
         write_arc_data(source_dir / "sample.arc_data", axis_values, source_values)
 
@@ -149,7 +149,7 @@ def test_train_build_creates_pca_log_only_when_enabled(tmp_path):
     axis_values = np.linspace(500.0, 1900.0, 141)
     source_dir = tmp_path / "init" / "AA01"
     source_dir.mkdir(parents=True)
-    from raman_temp.data.io import write_arc_data
+    from ramanv2.data.io import write_arc_data
 
     write_arc_data(source_dir / "first.arc_data", axis_values, np.sin(axis_values / 80.0))
     write_arc_data(source_dir / "second.arc_data", axis_values, np.cos(axis_values / 80.0))

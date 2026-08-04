@@ -2,11 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from raman_temp.data.cli import build_parser
-from raman_temp.data.count import count_dataset
-from raman_temp.data.io import PackedArcDataset, pack_init, unpack_init, write_arc_data
-from raman_temp.data.plot import plot_train
-from raman_temp.data.profiles import DatasetProfile
+from ramanv2.data.cli import build_parser
+from ramanv2.data.count import count_dataset
+from ramanv2.data.io import PackedArcDataset, pack_init, unpack_init, write_arc_data
+from ramanv2.data.plot import plot_train
+from ramanv2.data.profiles import DatasetProfile
 
 
 def test_data_cli_parses_all_commands() -> None:

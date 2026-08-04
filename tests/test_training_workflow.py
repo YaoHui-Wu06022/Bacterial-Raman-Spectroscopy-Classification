@@ -7,9 +7,9 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from raman_temp.core.config import build_config
-from raman_temp.core.config_file import read_yaml_dict
-from raman_temp.training.workflow import TrainRequest, run_training
+from ramanv2.core.config import build_config
+from ramanv2.core.config_file import read_yaml_dict
+from ramanv2.training.workflow import TrainRequest, run_training
 
 
 class WorkflowModel(torch.nn.Module):
@@ -35,11 +35,11 @@ def test_workflow_writes_global_run_and_uses_plugin_callbacks(
     _write_spectra(train_dir / "GenusB" / "SpeciesB", "B", 3.0)
     config = _build_workflow_config()
     monkeypatch.setattr(
-        "raman_temp.training.workflow.build_model",
+        "ramanv2.training.workflow.build_model",
         lambda num_classes, model_spec: WorkflowModel(num_classes),
     )
     monkeypatch.setattr(
-        "raman_temp.training.workflow.get_dataset_dir",
+        "ramanv2.training.workflow.get_dataset_dir",
         lambda profile, project_root: tmp_path / "dataset",
     )
     initialized_tasks: list[str] = []
@@ -75,11 +75,11 @@ def test_workflow_writes_parent_model_entry(tmp_path: Path, monkeypatch: pytest.
     _write_spectra(train_dir / "SpeciesB", "B", 3.0)
     config = _build_workflow_config()
     monkeypatch.setattr(
-        "raman_temp.training.workflow.build_model",
+        "ramanv2.training.workflow.build_model",
         lambda num_classes, model_spec: WorkflowModel(num_classes),
     )
     monkeypatch.setattr(
-        "raman_temp.training.workflow.get_dataset_dir",
+        "ramanv2.training.workflow.get_dataset_dir",
         lambda profile, project_root: tmp_path / "dataset",
     )
     output_dir = tmp_path / "output"
@@ -109,7 +109,7 @@ def test_workflow_accepts_explicit_train_dir_without_a_profile(
     _write_spectra(train_dir / "SB01", "T", 3.0)
     config = _build_workflow_config(profile_id="Stanford")
     monkeypatch.setattr(
-        "raman_temp.training.workflow.build_model",
+        "ramanv2.training.workflow.build_model",
         lambda num_classes, model_spec: WorkflowModel(num_classes),
     )
 

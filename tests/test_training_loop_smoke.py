@@ -8,15 +8,15 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from raman_temp.core.config import build_config
-from raman_temp.training.loop import (
+from ramanv2.core.config import build_config
+from ramanv2.training.loop import (
     TrainArtifacts,
     run_train_loop,
 )
-from raman_temp.training.optimizer import build_loader
-from raman_temp.training.spec import build_execution_spec, build_training_spec
-from raman_temp.training.diagnostics import write_nonfinite_diagnostic
-from raman_temp.training.split import build_global_train_task
+from ramanv2.training.optimizer import build_loader
+from ramanv2.training.spec import build_execution_spec, build_training_spec
+from ramanv2.training.diagnostics import write_nonfinite_diagnostic
+from ramanv2.training.split import build_global_train_task
 
 
 class LoopDataset(torch.utils.data.Dataset):

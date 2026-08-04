@@ -1,33 +1,33 @@
-"""Raman 层级分类训练入口"""
+"""在 PyCharm 或 Colab 中直接运行的层级训练入口。"""
 
-from raman.config import config
-from raman.trainer import TrainOverrides, run_training
+from ramanv2.core.config import build_config
+from ramanv2.training.workflow import TrainRequest, run_training
 
-# 手动覆盖
-# 适合在 Colab 里快速单独训练某个层级/父类
-CURRENT_TRAIN_LEVEL = "level_1"
-TRAIN_ONLY_PARENT_NAME = None
-TRAIN_ONLY_PARENT = None
-# 可选：覆盖损失参数（单独训练时可能不同）
-OVERRIDE_ALIGN_LOSS_WEIGHT = None
-OVERRIDE_SUPCON_TAU = None
-OVERRIDE_SUPCON_LOSS_WEIGHT = None
 
-# 可选：固定输出目录，避免切换 config 导致输出分散
-OVERRIDE_OUTPUT_DIR = None
+# 本次训练任务范围；模型与训练默认参数在 ramanv2/core/config.py 中维护。
+PROFILE_ID = "GN"
+LEVEL_NAME = "level_1"
+PARENT_NAME = None
+PARENT_INDEX = None
+TRAIN_PER_PARENT_ENABLE = True
+EXPERIMENT_DIR = None
+RUN_NAME = None
+RESUME_RUN_DIR = None
 
 
 def main():
-    overrides = TrainOverrides(
-        current_train_level=CURRENT_TRAIN_LEVEL,
-        train_only_parent_name=TRAIN_ONLY_PARENT_NAME,
-        train_only_parent=TRAIN_ONLY_PARENT,
-        override_align_loss_weight=OVERRIDE_ALIGN_LOSS_WEIGHT,
-        override_supcon_tau=OVERRIDE_SUPCON_TAU,
-        override_supcon_loss_weight=OVERRIDE_SUPCON_LOSS_WEIGHT,
-        override_output_dir=OVERRIDE_OUTPUT_DIR,
+    """构建一次训练请求，并交由训练工作流完成编排。"""
+    request = TrainRequest(
+        config=build_config({"profile_id": PROFILE_ID}),
+        level_name=LEVEL_NAME,
+        only_parent=PARENT_INDEX,
+        only_parent_name=PARENT_NAME,
+        train_per_parent_enable=TRAIN_PER_PARENT_ENABLE,
+        experiment_dir=EXPERIMENT_DIR,
+        run_name=RUN_NAME,
+        resume_run_dir=RESUME_RUN_DIR,
     )
-    run_training(config, overrides=overrides)
+    run_training(request)
 
 
 if __name__ == "__main__":

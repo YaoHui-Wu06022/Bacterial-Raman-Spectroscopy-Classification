@@ -7,9 +7,9 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from raman_temp.analysis.integrated_gradients import compute_integrated_gradients
-from raman_temp.analysis.layer_attribution import compute_layer_attribution
-from raman_temp.analysis import runner
+from ramanv2.analysis.integrated_gradients import compute_integrated_gradients
+from ramanv2.analysis.layer_attribution import compute_layer_attribution
+from ramanv2.analysis import runner
 
 
 class AnalysisModel(torch.nn.Module):
@@ -76,11 +76,23 @@ def test_runner_writes_single_run_reports_without_umap_dependency(
                 ig_steps=4,
                 max_per_class=2,
                 row_norm="max",
+                separate_class_plots_use=True,
                 inherit_missing_levels_use=False,
             ),
             training=SimpleNamespace(batch_size=2),
-            execution=SimpleNamespace(seed=42),
-        )
+            execution=SimpleNamespace(seed=42, use_gpu=False),
+            input=SimpleNamespace(
+                cut_min=600.0,
+                cut_max=1800.0,
+                target_points=8,
+                bad_bands=(),
+            ),
+        ),
+        input_spec=SimpleNamespace(
+            norm_method="snv",
+            smooth_enable=False,
+            d1_enable=False,
+        ),
     )
 
     class PredictorStub:
@@ -94,4 +106,40 @@ def test_runner_writes_single_run_reports_without_umap_dependency(
     output_dir = runner._run_tasks(context, [task], "run", "cpu")
 
     assert (output_dir / "logs" / "analysis_log.txt").is_file()
-    assert (output_dir / "figures" / "band_importance_per_class_level_1.csv").is_file()
+    assert (output_dir / "figures" / "band_importance_per_class.csv").is_file()
+    assert (output_dir / "figures" / "band_importance_heatmap.png").is_file()
+    assert (output_dir / "figures" / "band_importance_heatmap__A.png").is_file()
+    log_text = (output_dir / "logs" / "analysis_log.txt").read_text(encoding="utf-8")
+    assert "Analysis target: level_1" in log_text
+    assert "=== Computing input channel importance and band importance ===" in log_text
+    assert "=== Layer Importance (merged by stage) ===" in log_text
+    assert "Saved band importance heatmap figures: 2" in log_text
+
+
+def test_aggregate_analysis_log_uses_aggregate_output_names(tmp_path) -> None:
+    tasks = [
+        SimpleNamespace(parent_id=0),
+        SimpleNamespace(parent_id=1),
+    ]
+    summaries = [
+        {"class_names": ("A",)},
+        {"class_names": ("B",)},
+    ]
+    output_path = tmp_path / "analysis_log.txt"
+    figure_dir = tmp_path / "figures"
+
+    runner._write_aggregate_analysis_log(
+        summaries,
+        output_path,
+        tasks,
+        "level_2",
+        torch.device("cpu"),
+        SimpleNamespace(use_gpu=False),
+        figure_dir,
+        True,
+    )
+
+    log_text = output_path.read_text(encoding="utf-8")
+    assert "Aggregate analysis for level_2 over 2 parents." in log_text
+    assert "layer_importance_aggregate.png" in log_text
+    assert "band_importance_per_class_aggregate.csv" in log_text
