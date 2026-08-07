@@ -31,6 +31,46 @@ def build_expected_label_lookup(
     }
 
 
+def build_test_input_selection(
+    folder_names: list[str],
+    meta: Mapping[str, Any],
+    level_name: str,
+    class_names: list[str],
+    transferred_names: set[str],
+) -> tuple[set[str], list[dict[str, str | bool]]]:
+    """按目标层标签和 alldata 迁入清单筛选可推理的 CS 文件夹。"""
+    expected_lookup = build_expected_label_lookup(meta, level_name)
+    model_labels = set(class_names)
+    selected_names = set()
+    rows = []
+    for folder_name in folder_names:
+        species_prefix = parse_test_folder_prefix(folder_name)
+        expected_label = expected_lookup.get(species_prefix)
+        expected_in_model = expected_label in model_labels
+        if folder_name in transferred_names:
+            reason = "transferred_to_alldata"
+        elif expected_label is None:
+            reason = "unmapped_species_prefix"
+        elif not expected_in_model:
+            reason = "outside_model_label_space"
+        else:
+            reason = "selected"
+            selected_names.add(folder_name)
+        rows.append(
+            {
+                "folder": folder_name,
+                "species_prefix": species_prefix,
+                "target_level": level_name,
+                "expected_label": expected_label or "",
+                "expected_in_model": expected_in_model,
+                "transferred_to_alldata": folder_name in transferred_names,
+                "selected": folder_name in selected_names,
+                "reason": reason,
+            }
+        )
+    return selected_names, rows
+
+
 def build_folder_summary(
     folder_name: str,
     expected_label: str | None,

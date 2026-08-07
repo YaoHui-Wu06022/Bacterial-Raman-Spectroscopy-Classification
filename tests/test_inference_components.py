@@ -7,7 +7,11 @@ torch = pytest.importorskip("torch")
 
 from ramanv2.core.config import build_config
 from ramanv2.core.input_spec import build_input_spec
-from ramanv2.inference.labels import build_expected_label_lookup, build_folder_summary
+from ramanv2.inference.labels import (
+    build_expected_label_lookup,
+    build_folder_summary,
+    build_test_input_selection,
+)
 from ramanv2.inference.predictor import Prediction, Predictor, _resolve_input_entry
 from ramanv2.inference.spectra import build_inference_preprocessor, preprocess_spectrum_path
 
@@ -40,6 +44,31 @@ def test_folder_summary_uses_majority_prediction() -> None:
     assert summary["predicted_label"] == "GenusA"
     assert summary["correct_count"] == 2
     assert summary["folder_correct"] is True
+
+
+def test_test_input_selection_excludes_transferred_and_outside_model_labels() -> None:
+    meta = {
+        "class_names_by_level": {
+            "level_1": ["GenusA", "GenusB"],
+            "level_2": ["GenusA/AA", "GenusB/BB"],
+        }
+    }
+
+    selected, rows = build_test_input_selection(
+        ["CS01AA", "CS02BB", "CS03CC", "CS04AA"],
+        meta,
+        "level_1",
+        ["GenusA"],
+        {"CS04AA"},
+    )
+
+    assert selected == {"CS01AA"}
+    assert [row["reason"] for row in rows] == [
+        "selected",
+        "outside_model_label_space",
+        "unmapped_species_prefix",
+        "transferred_to_alldata",
+    ]
 
 
 def test_preprocess_spectrum_path_accepts_bad_band_filtered_length(tmp_path: Path) -> None:
@@ -112,3 +141,28 @@ def test_resolve_input_entry_uses_available_parent_model(tmp_path: Path) -> None
     result = _resolve_input_entry(meta, tmp_path, None, "level_2")
 
     assert result is entry
+
+
+def test_resolve_input_entry_accepts_unregistered_global_run(tmp_path: Path) -> None:
+    run_dir = tmp_path / "level_1" / "run_history"
+    run_dir.mkdir(parents=True)
+    (run_dir / "level_1_model.pt").touch()
+    (run_dir / "model_config.yaml").touch()
+    (run_dir / "resolved_config.yaml").touch()
+    (run_dir / "logs").mkdir()
+    (run_dir / "logs" / "run.log").touch()
+    meta = {
+        "head_names": ["level_1"],
+        "level_models": {
+            "level_1": {
+                "run_dir": "level_1/current_run",
+                "model_path": "level_1/current_model.pt",
+            }
+        },
+        "parent_models": {},
+    }
+
+    entry = _resolve_input_entry(meta, tmp_path, run_dir, "level_1")
+
+    assert entry["run_dir"] == "level_1/run_history"
+    assert entry["model_path"] == "level_1/run_history/level_1_model.pt"

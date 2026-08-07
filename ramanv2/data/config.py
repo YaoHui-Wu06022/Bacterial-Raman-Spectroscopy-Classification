@@ -24,6 +24,15 @@ class DataBuildConfig:
     pca_center_enable: bool = True
     pca_outlier_ratio: float = 0.01
 
+    def build_cosmic_ray_options(self, profile_id: str) -> dict:
+        """按统一配置构建单谱宇宙射线处理参数。"""
+        return {
+            "cosmic_ray_enable": profile_id in set(self.cosmic_ray_profile_ids),
+            "cosmic_ray_window_points": int(self.cosmic_ray_window_points),
+            "cosmic_ray_threshold": float(self.cosmic_ray_threshold),
+            "cosmic_ray_max_iter": int(self.cosmic_ray_max_iter),
+        }
+
 DEFAULT_BUILD_CONFIG = DataBuildConfig()
 
 
@@ -32,33 +41,6 @@ def resolve_build_config(config: DataBuildConfig | None = None) -> DataBuildConf
     return DEFAULT_BUILD_CONFIG if config is None else config
 
 
-def resolve_cosmic_options(profile, config: DataBuildConfig, label: str) -> dict:
-    """合并 profile 路径覆盖，返回单谱宇宙射线处理参数。"""
-    options = {
-        "cosmic_ray_enable": profile.profile_id in set(config.cosmic_ray_profile_ids),
-        "cosmic_ray_window_points": int(config.cosmic_ray_window_points),
-        "cosmic_ray_threshold": float(config.cosmic_ray_threshold),
-        "cosmic_ray_max_iter": int(config.cosmic_ray_max_iter),
-    }
-    normalized_label = str(label).replace("\\", "/").strip("/")
-    key_map = {
-        "enable": "cosmic_ray_enable",
-        "window_points": "cosmic_ray_window_points",
-        "threshold": "cosmic_ray_threshold",
-        "max_iter": "cosmic_ray_max_iter",
-    }
-    matched = []
-    for scope, values in (profile.cosmic_ray_overrides or {}).items():
-        scope_key = str(scope).replace("\\", "/").strip("/")
-        if scope_key in {"", "*"}:
-            matched.append((0, values))
-        elif normalized_label == scope_key or normalized_label.startswith(f"{scope_key}/"):
-            matched.append((scope_key.count("/") + 1, values))
-    for _depth, override in sorted(matched, key=lambda item: item[0]):
-        for key, value in (override or {}).items():
-            option_key = key_map.get(key, key)
-            if option_key not in options:
-                raise KeyError(f"Unknown cosmic ray override key: {key}")
-            current = options[option_key]
-            options[option_key] = bool(value) if isinstance(current, bool) else type(current)(value)
-    return options
+def build_cosmic_ray_options(profile_id: str, config: DataBuildConfig) -> dict:
+    """按统一配置构建单谱宇宙射线处理参数。"""
+    return config.build_cosmic_ray_options(profile_id)

@@ -1,0 +1,456 @@
+import os
+from copy import deepcopy
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import torch
+
+from raman.config_io import assert_input_compatible, load_experiment, load_run_config
+from raman.model import RamanClassifier1D
+
+from raman.experiment import (
+    resolve_level_model_entry,
+    resolve_level_model_path,
+    resolve_model_sidecar_path,
+    scan_parent_model_files,
+)
+from raman.tool.hierarchy import load_hierarchy_meta
+from raman.tool.model import select_logits
+from raman.tool.path import resolve_path
+
+
+@dataclass
+class ExperimentRuntime:
+    """统一管理实验目录下模型的懒加载与缓存"""
+
+    exp_dir: str
+    config: object
+    device: torch.device
+    meta: dict
+    level_model_paths: dict[str, str] = field(default_factory=dict)
+    level_model_entries: dict[str, dict] = field(default_factory=dict)
+    parent_models: dict[str, dict] = field(default_factory=dict)
+    class_names_by_level: dict[str, list] = field(default_factory=dict)
+    parent_to_children: dict[str, dict] = field(default_factory=dict)
+    level_model_cache: dict[str, object] = field(default_factory=dict)
+    parent_model_cache: dict[tuple[str, int], object] = field(default_factory=dict)
+    run_config_cache: dict[str, object] = field(default_factory=dict)
+    se_stats_cache: dict[str, object] = field(default_factory=dict)
+    run_selection: dict[str, str] | None = None
+
+    def _resolve_model_path(self, model_path):
+        full_path = Path(model_path)
+        if not full_path.is_absolute():
+            full_path = Path(self.exp_dir) / full_path
+        return full_path
+
+    def _load_run_config_for_model(self, model_path):
+        run_dir = Path(model_path).parent
+        if not run_dir.name.startswith("run_"):
+            return self.config
+
+        cache_key = os.fspath(run_dir)
+        if cache_key in self.run_config_cache:
+            return self.run_config_cache[cache_key]
+
+        run_config = load_run_config(run_dir, exp_dir=self.exp_dir)
+        assert_input_compatible(self.config, run_config, context=os.fspath(run_dir))
+        self.run_config_cache[cache_key] = run_config
+        return run_config
+
+    def _load_model(self, model_path, num_classes):
+        full_path = self._resolve_model_path(model_path)
+        run_config = self._load_run_config_for_model(full_path)
+        model = RamanClassifier1D(num_classes=num_classes, config=run_config).to(self.device)
+        state = torch.load(full_path, map_location=self.device)
+        model.load_state_dict(state)
+        model.eval()
+        return model
+
+    def build_level_model_paths(self, level_order):
+        """为给定层级顺序补齐全局模型路径"""
+        level_models_meta = self.meta.get("level_models", {})
+        for level_name in level_order:
+            entry = resolve_level_model_entry(
+                self.exp_dir,
+                level_name,
+                level_models_meta,
+                run_selection=self.run_selection,
+            )
+            self.level_model_entries[level_name] = entry
+            self.level_model_paths[level_name] = resolve_level_model_path(
+                self.exp_dir,
+                level_name,
+                {level_name: entry},
+                run_selection=self.run_selection,
+            )
+        return {level_name: self.level_model_paths[level_name] for level_name in level_order}
+
+    def ensure_parent_models(self, level_name, fallback_parent_to_children=None):
+        """确保某层 parent 模型映射完整，并在缺失时扫描实验目录补齐"""
+        current = self.parent_models.setdefault(level_name, {})
+        fallback = fallback_parent_to_children if fallback_parent_to_children is not None else self.parent_to_children
+        scanned = scan_parent_model_files(
+            self.exp_dir,
+            level_name,
+            fallback,
+            run_selection=self.run_selection,
+        )
+
+        class_names = self.class_names_by_level.get(level_name, [])
+        for parent_idx, scanned_entry in scanned.items():
+            entry = dict(current.get(parent_idx, {}))
+            if not entry.get("child_ids"):
+                entry["child_ids"] = list(scanned_entry.get("child_ids", []))
+
+            # 目录中的最新 run 优先于 meta 中已有记录
+            if scanned_entry.get("run_dir"):
+                entry.update(scanned_entry)
+            elif entry.get("model_path") is None:
+                entry["model_path"] = scanned_entry.get("model_path")
+
+            if "child_names" not in entry and class_names and entry.get("child_ids"):
+                entry["child_names"] = [
+                    class_names[child_id]
+                    for child_id in entry["child_ids"]
+                    if 0 <= int(child_id) < len(class_names)
+                ]
+            current[int(parent_idx)] = entry
+
+        return current
+
+    def get_level_model(self, level_name, num_classes=None):
+        """懒加载某层全局模型"""
+        if level_name in self.level_model_cache:
+            return self.level_model_cache[level_name]
+
+        if num_classes is None:
+            num_classes = len(self.class_names_by_level.get(level_name, []))
+        if not num_classes:
+            raise ValueError(f"Cannot infer num_classes for level '{level_name}'.")
+
+        model_path = self.level_model_paths.get(level_name)
+        if not model_path:
+            self.build_level_model_paths([level_name])
+            model_path = self.level_model_paths.get(level_name)
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model not found for level '{level_name}': {model_path}")
+
+        model = self._load_model(model_path, int(num_classes))
+        self.level_model_cache[level_name] = model
+        return model
+
+    def prepare_cascade_step(
+        self,
+        level_name,
+        parent_pred,
+        *,
+        num_classes,
+        level_class_names,
+        parent_to_children,
+    ):
+        """为级联推理选择当前层的模型路径或单子类直通策略"""
+        if parent_pred is None:
+            return {
+                "mode": "global",
+                "model": self.get_level_model(level_name, num_classes=num_classes),
+                "class_names": level_class_names,
+                "child_ids": None,
+                "parent_labels": None,
+                "parent_to_children": None,
+            }
+
+        parent_idx = int(parent_pred)
+        level_parent_models = self.ensure_parent_models(level_name, parent_to_children)
+        has_parent_model = any(
+            entry.get("model_path") is not None
+            for entry in level_parent_models.values()
+        )
+
+        if has_parent_model:
+            entry = level_parent_models.get(parent_idx)
+            if entry is None:
+                return None
+
+            child_ids = list(entry.get("child_ids", []))
+            model_path = entry.get("model_path")
+            if not child_ids:
+                return None
+
+            if model_path is None:
+                if len(child_ids) != 1:
+                    return None
+                pred_global = int(child_ids[0])
+                return {
+                    "mode": "direct",
+                    "pred_global": pred_global,
+                    "class_names": [level_class_names[pred_global]],
+                    "child_ids": child_ids,
+                }
+
+            return {
+                "mode": "parent",
+                "model": self.get_parent_model(
+                    level_name,
+                    parent_idx,
+                    child_ids=child_ids,
+                    model_path=model_path,
+                ),
+                "class_names": [
+                    level_class_names[int(child_id)]
+                    for child_id in child_ids
+                ],
+                "child_ids": child_ids,
+                "parent_labels": None,
+                "parent_to_children": None,
+            }
+
+        return {
+            "mode": "global_parent_mask",
+            "model": self.get_level_model(level_name, num_classes=num_classes),
+            "class_names": level_class_names,
+            "child_ids": None,
+            "parent_labels": int(parent_pred),
+            "parent_to_children": parent_to_children.get(level_name),
+        }
+
+    def get_parent_model(self, level_name, parent_idx, child_ids=None, model_path=None):
+        """懒加载某个 parent 子模型"""
+        key = (level_name, int(parent_idx))
+        if key in self.parent_model_cache:
+            return self.parent_model_cache[key]
+
+        entry = self.ensure_parent_models(level_name).get(int(parent_idx), {})
+        if child_ids is None:
+            child_ids = entry.get("child_ids", [])
+        if model_path is None:
+            model_path = entry.get("model_path")
+
+        if not child_ids:
+            raise ValueError(
+                f"Missing child_ids for level='{level_name}', parent={parent_idx}."
+            )
+        if model_path is None:
+            raise FileNotFoundError(
+                f"Missing parent model path for level='{level_name}', parent={parent_idx}."
+            )
+
+        full_path = self._resolve_model_path(model_path)
+        if not full_path.exists():
+            raise FileNotFoundError(f"Parent model not found: {full_path}")
+
+        model = self._load_model(os.fspath(full_path), len(child_ids))
+        self.parent_model_cache[key] = model
+        return model
+
+    def load_model_se_stats(self, model_path):
+        """读取与模型并列保存的 SE 统计 sidecar"""
+        full_model_path = self._resolve_model_path(model_path)
+        sidecar_path = resolve_model_sidecar_path(full_model_path)
+        cache_key = os.fspath(sidecar_path)
+        if cache_key in self.se_stats_cache:
+            return self.se_stats_cache[cache_key]
+        if not os.path.exists(sidecar_path):
+            return None
+        se_stats = torch.load(sidecar_path, map_location="cpu")
+        self.se_stats_cache[cache_key] = se_stats
+        return se_stats
+
+
+def build_experiment_runtime(exp_dir, device, config=None, meta=None, run_selection=None):
+    """构建统一的实验运行时上下文"""
+    exp_dir = os.fspath(resolve_path(exp_dir))
+    if config is None:
+        config = load_experiment(exp_dir)
+    if meta is None:
+        meta = load_hierarchy_meta(exp_dir) or {}
+
+    return ExperimentRuntime(
+        exp_dir=exp_dir,
+        config=config,
+        device=device,
+        meta=meta,
+        level_model_paths={},
+        level_model_entries={},
+        parent_models=deepcopy(meta.get("parent_models", {})),
+        class_names_by_level=deepcopy(meta.get("class_names_by_level", {})),
+        parent_to_children=deepcopy(meta.get("parent_to_children", {})),
+        level_model_cache={},
+        parent_model_cache={},
+        run_config_cache={},
+        se_stats_cache={},
+        run_selection=run_selection,
+    )
+
+
+def mask_logits_by_parent(logits, parent_labels, parent_to_children):
+    """按父类约束对子类 logits 做遮罩。"""
+    if parent_labels is None or parent_to_children is None:
+        valid = torch.ones(logits.size(0), dtype=torch.bool, device=logits.device)
+        return logits, valid
+
+    device = logits.device
+    batch = logits.size(0)
+    mask = torch.zeros_like(logits, dtype=torch.bool)
+    valid = torch.zeros(batch, dtype=torch.bool, device=device)
+
+    for index, parent_id in enumerate(parent_labels.tolist()):
+        if parent_id < 0:
+            continue
+        child_ids = parent_to_children.get(parent_id)
+        if child_ids is None:
+            child_ids = parent_to_children.get(str(parent_id))
+        if not child_ids:
+            continue
+
+        invalid = [child_id for child_id in child_ids if child_id < 0 or child_id >= logits.size(1)]
+        if invalid:
+            raise ValueError(
+                f"parent_to_children index out of range: parent={parent_id}, "
+                f"invalid={invalid}, num_classes={logits.size(1)}"
+            )
+        mask[index, list(child_ids)] = True
+        valid[index] = True
+
+    masked_logits = logits.masked_fill(~mask, float("-inf"))
+    if (~valid).any():
+        masked_logits[~valid] = 0.0
+    return masked_logits, valid
+
+
+def mask_logits_by_allowed(logits, allowed_indices):
+    """按显式允许的类别索引集合做遮罩。"""
+    if not allowed_indices:
+        return logits, None
+    mask = torch.zeros_like(logits, dtype=torch.bool)
+    mask[:, allowed_indices] = True
+    masked_logits = logits.masked_fill(~mask, float("-inf"))
+    valid = mask.any(dim=1)
+    if (~valid).any():
+        masked_logits[~valid] = 0.0
+    return masked_logits, valid
+
+
+def resolve_allowed_indices(class_names, allowed):
+    """把类别名或类别索引形式的限制统一成索引列表。"""
+    if not allowed:
+        return []
+    items = list(allowed) if isinstance(allowed, (list, tuple, set)) else [allowed]
+    name_to_idx = {name: index for index, name in enumerate(class_names)}
+    return sorted({int(item) if isinstance(item, int) else name_to_idx[str(item)] for item in items if isinstance(item, int) or str(item) in name_to_idx})
+
+
+def select_level_targets(labels, head_index=None):
+    """从多层标签矩阵中取出当前层的目标标签。"""
+    if labels.ndim != 2:
+        return labels
+    return labels[:, labels.size(1) - 1 if head_index is None else head_index]
+
+
+def forward_level_with_probs(
+    model,
+    inputs,
+    *,
+    head_name=None,
+    parent_labels=None,
+    parent_to_children=None,
+    allowed_indices=None,
+):
+    """执行单层前向并统一施加父类和显式类别遮罩。"""
+    logits = select_logits(model(inputs), head_name=head_name)
+    valid_parts = []
+    if parent_labels is not None and parent_to_children is not None:
+        logits, valid_parent = mask_logits_by_parent(logits, parent_labels, parent_to_children)
+        valid_parts.append(valid_parent)
+    if allowed_indices:
+        logits, valid_allowed = mask_logits_by_allowed(logits, allowed_indices)
+        if valid_allowed is not None:
+            valid_parts.append(valid_allowed)
+
+    probs = torch.softmax(logits, dim=1)
+    valid = None
+    for part in valid_parts:
+        valid = part if valid is None else valid & part
+    return logits, probs, valid
+
+
+def run_cascade_inference(
+    runtime,
+    inputs,
+    *,
+    level_order,
+    target_level,
+    num_classes_by_level,
+    class_names_by_level,
+    parent_to_children,
+    allowed_names_by_level=None,
+    fallback_to_previous=False,
+):
+    """执行从顶层到目标层的共享级联推理。"""
+    parent_pred = None
+    last_result = None
+    allowed_names_by_level = allowed_names_by_level or {}
+
+    for level_name in level_order:
+        level_class_names = class_names_by_level.get(level_name, [])
+        allowed_global = resolve_allowed_indices(
+            level_class_names,
+            allowed_names_by_level.get(level_name),
+        )
+        step = runtime.prepare_cascade_step(
+            level_name,
+            parent_pred,
+            num_classes=num_classes_by_level[level_name],
+            level_class_names=level_class_names,
+            parent_to_children=parent_to_children,
+        )
+        if step is None:
+            return last_result if fallback_to_previous else None
+
+        if step["mode"] == "direct":
+            pred_global = int(step["pred_global"])
+            current = {
+                "resolved_level": level_name,
+                "probs": torch.ones((1, 1), device=inputs.device, dtype=torch.float32),
+                "class_names": step["class_names"],
+                "child_ids": list(step["child_ids"]),
+                "pred_global": pred_global,
+            }
+        else:
+            child_ids = step.get("child_ids")
+            allowed_indices = allowed_global
+            if child_ids is not None and allowed_global:
+                allowed_set = set(allowed_global)
+                allowed_indices = [
+                    local_index
+                    for local_index, child_id in enumerate(child_ids)
+                    if int(child_id) in allowed_set
+                ]
+            parent_labels = None
+            if step.get("parent_labels") is not None:
+                parent_labels = torch.tensor([step["parent_labels"]], device=inputs.device)
+            _, probs, valid = forward_level_with_probs(
+                step["model"],
+                inputs,
+                parent_labels=parent_labels,
+                parent_to_children=step.get("parent_to_children"),
+                allowed_indices=allowed_indices,
+            )
+            if valid is not None and not valid.any():
+                return last_result if fallback_to_previous else None
+            pred_local = int(probs.argmax(1).item())
+            pred_global = int(child_ids[pred_local]) if child_ids is not None else pred_local
+            current = {
+                "resolved_level": level_name,
+                "probs": probs,
+                "class_names": step["class_names"],
+                "child_ids": list(child_ids) if child_ids is not None else None,
+                "pred_global": pred_global,
+            }
+
+        if level_name == target_level:
+            return current
+        last_result = current
+        parent_pred = pred_global
+
+    return last_result if fallback_to_previous else None

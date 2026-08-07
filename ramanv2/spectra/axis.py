@@ -38,8 +38,8 @@ def build_wavenumber_axis(length: int, config):
                     full_axis = full_axis[mask]
                 if full_axis.shape[0] == length:
                     return full_axis
-        if hasattr(config, "delta"):
-            return config.cut_min + config.delta * np.arange(length)
+        if hasattr(config, "step_cm"):
+            return config.cut_min + config.step_cm * np.arange(length)
         return np.linspace(config.cut_min, config.cut_max, length)
     return np.arange(length)
 

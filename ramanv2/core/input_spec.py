@@ -18,7 +18,7 @@ class InputSpec:
     d1_enable: bool = False
     smooth_window: int = 15
     d1_window: int = 15
-    delta: float = 1.0
+    step_cm: float = 1.0
 
 
 def build_input_spec(input_config: InputConfig) -> InputSpec:
@@ -36,7 +36,7 @@ def build_input_spec(input_config: InputConfig) -> InputSpec:
         d1_enable=bool(input_config.d1_use),
         smooth_window=int(input_config.win_smooth),
         d1_window=int(input_config.win1),
-        delta=(float(input_config.cut_max) - float(input_config.cut_min))
+        step_cm=(float(input_config.cut_max) - float(input_config.cut_min))
         / (raw_point_count - 1),
     )
 

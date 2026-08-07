@@ -79,7 +79,7 @@ class TrainingConfig:
     train_split: float = 0.8
     epochs: int = 80
     patience: int = 50
-    batch_size: int = 64
+    batch_size: int = 48
     train_loader_num_workers: int = 2
     val_loader_num_workers: int = 2
     loader_pin_memory: bool = True
@@ -120,7 +120,7 @@ class TrainingConfig:
     p_broadening: float = 0.45
     p_cut: float = 0.20
     max_pre_augs: int = 4
-    max_post_augs: int = 2
+    max_post_augs: int = 0
 
 
 @dataclass(frozen=True)

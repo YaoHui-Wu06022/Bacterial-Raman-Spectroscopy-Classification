@@ -3,6 +3,7 @@
 /备份/
 /__pycache__/
 **/__pycache__/
+/.ua
 *.pyc
 *.pyo
 ramanv2.zip

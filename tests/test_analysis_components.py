@@ -7,8 +7,13 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from ramanv2.analysis.integrated_gradients import compute_integrated_gradients
+from ramanv2.analysis.integrated_gradients import (
+    compute_integrated_gradients,
+    select_balanced_class_inputs,
+    select_balanced_task_sample_indices,
+)
 from ramanv2.analysis.layer_attribution import compute_layer_attribution
+from ramanv2.analysis.se_summary import build_se_summary_lines
 from ramanv2.analysis import runner
 
 
@@ -49,6 +54,67 @@ def test_ig_and_layer_attribution_return_normalized_values() -> None:
     assert result.mean_spectra.shape == (2, 8)
     assert set(layers) == {"layer1"}
     assert np.isclose(sum(layers.values()), 1.0)
+
+
+def test_select_balanced_class_inputs_covers_ordered_classes() -> None:
+    inputs = torch.arange(18 * 4, dtype=torch.float32).reshape(18, 1, 4)
+    labels = torch.repeat_interleave(torch.arange(6), 3)
+
+    selected_inputs, selected_labels = select_balanced_class_inputs(
+        inputs,
+        labels,
+        total_limit=12,
+        max_per_class=5,
+    )
+
+    assert selected_inputs.size(0) == 12
+    assert selected_labels.tolist() == [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5]
+    assert torch.unique(selected_labels).tolist() == [0, 1, 2, 3, 4, 5]
+
+
+def test_select_balanced_task_sample_indices_preselects_classes() -> None:
+    context = SimpleNamespace(
+        dataset_index=SimpleNamespace(
+            head_name_to_idx={"level_1": 0},
+            level_labels=np.asarray([[0], [1], [0], [1], [2], [2]]),
+        )
+    )
+    task = SimpleNamespace(
+        level_name="level_1",
+        class_ids=(0, 1, 2),
+        train_indices=np.asarray([0, 1, 2, 3, 4, 5]),
+        validation_indices=np.asarray([], dtype=np.int64),
+    )
+
+    selected = select_balanced_task_sample_indices(
+        context,
+        task,
+        "train",
+        total_limit=3,
+        max_per_class=2,
+    )
+
+    assert selected.tolist() == [0, 1, 4]
+
+
+def test_build_se_summary_lines_reads_training_sidecar(tmp_path) -> None:
+    stats = {
+        "layer1.0.se": {
+            "channel_mean": torch.tensor([0.4, 0.6]),
+            "channel_std": torch.tensor([0.1, 0.2]),
+            "channel_min": torch.tensor([0.1, 0.2]),
+            "channel_max": torch.tensor([0.8, 0.9]),
+            "sample_count": 12,
+        }
+    }
+    torch.save(stats, tmp_path / "level_1_se_stats.pt")
+    task = SimpleNamespace(level_name="level_1", parent_id=None, run_dir=str(tmp_path))
+
+    lines = build_se_summary_lines([task])
+
+    assert lines == [
+        "layer1.0.se: mean=0.5000, std=0.1500, min=0.1000, max=0.9000, samples=12"
+    ]
 
 
 def test_runner_writes_single_run_reports_without_umap_dependency(
@@ -100,6 +166,11 @@ def test_runner_writes_single_run_reports_without_umap_dependency(
             return model
 
     monkeypatch.setattr(runner, "load_predictor", lambda *args: PredictorStub())
+    monkeypatch.setattr(
+        runner,
+        "select_balanced_task_sample_indices",
+        lambda *args: np.asarray([0, 1, 2, 3]),
+    )
     monkeypatch.setattr(runner, "collect_task_inputs", lambda *args: (inputs, labels))
     monkeypatch.setattr(runner, "_save_task_umap", lambda *args: None)
 

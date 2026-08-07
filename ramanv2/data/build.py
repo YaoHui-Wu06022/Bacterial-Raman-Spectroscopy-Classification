@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+from collections import deque
+from concurrent.futures import ProcessPoolExecutor
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -15,8 +18,11 @@ from ramanv2.core.config import InputConfig
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.preprocess import preprocess_single_spectrum
 
-from .config import DataBuildConfig, resolve_build_config, resolve_cosmic_options
+from .config import DataBuildConfig, build_cosmic_ray_options, resolve_build_config
 from .io import iter_init_groups, resolve_init_input, write_arc_data
+
+
+MAX_BUILD_WORKERS = 8
 
 
 def _build_temp_path(output_path: Path) -> Path:
@@ -132,7 +138,7 @@ def _physical_clean_group(
         if reference_wavenumbers is None
         else _validate_reference_wavenumbers(reference_wavenumbers, input_config)
     )
-    options = resolve_cosmic_options(profile, build_config, label_display)
+    options = build_cosmic_ray_options(profile.profile_id, build_config)
     cleaned = []
     for filename, wavenumbers, intensities in samples:
         if not wavenumbers.size or not intensities.size:
@@ -157,6 +163,55 @@ def _physical_clean_group(
     return cleaned
 
 
+def _resolve_build_worker_count() -> int:
+    """限制离线构建进程数，避免占满训练环境的全部 CPU。"""
+    return min(MAX_BUILD_WORKERS, max(1, os.cpu_count() or 1))
+
+
+def _iter_physical_clean_groups(
+    profile,
+    input_config: InputConfig,
+    build_config: DataBuildConfig,
+    groups,
+    reference_wavenumbers: np.ndarray | None,
+):
+    """按输入顺序并行清洗叶子目录，限制在途任务以控制内存。"""
+    worker_count = _resolve_build_worker_count()
+    if worker_count == 1:
+        for relative_dir, leaf_name, raw_samples in groups:
+            label_display = relative_dir.as_posix() if relative_dir != Path(".") else leaf_name
+            yield relative_dir, leaf_name, _physical_clean_group(
+                profile,
+                input_config,
+                build_config,
+                raw_samples,
+                label_display,
+                reference_wavenumbers,
+            )
+        return
+
+    pending = deque()
+    with ProcessPoolExecutor(max_workers=worker_count) as executor:
+        for relative_dir, leaf_name, raw_samples in groups:
+            label_display = relative_dir.as_posix() if relative_dir != Path(".") else leaf_name
+            future = executor.submit(
+                _physical_clean_group,
+                profile,
+                input_config,
+                build_config,
+                raw_samples,
+                label_display,
+                reference_wavenumbers,
+            )
+            pending.append((relative_dir, leaf_name, future))
+            if len(pending) >= worker_count * 2:
+                ready_relative_dir, ready_leaf_name, ready_future = pending.popleft()
+                yield ready_relative_dir, ready_leaf_name, ready_future.result()
+        while pending:
+            ready_relative_dir, ready_leaf_name, ready_future = pending.popleft()
+            yield ready_relative_dir, ready_leaf_name, ready_future.result()
+
+
 def _validate_reference_wavenumbers(
     reference_wavenumbers: np.ndarray,
     input_config: InputConfig,
@@ -171,9 +226,13 @@ def _validate_reference_wavenumbers(
 
 
 def _target_group_name(relative_dir: Path, leaf_name: str) -> Path:
-    """按旧规则合并叶子目录前缀相同的类别。"""
-    matched = re.match(r"([A-Za-z]+)([+-])?", str(leaf_name))
-    target = matched.group(1) + (matched.group(2) or "") if matched else leaf_name
+    """按物种简称合并叶子目录；CS 迁入来源沿用原物种类别。"""
+    transferred_match = re.fullmatch(r"([A-Za-z]+)CS\d+", str(leaf_name))
+    if transferred_match is not None:
+        target = transferred_match.group(1)
+    else:
+        matched = re.match(r"([A-Za-z]+)([+-])?", str(leaf_name))
+        target = matched.group(1) + (matched.group(2) or "") if matched else leaf_name
     return relative_dir.parent / target if relative_dir != Path(".") else Path(target)
 
 
@@ -223,16 +282,15 @@ def build_train(
     merged = {}
     skipped_sources = 0
     try:
-        for relative_dir, leaf_name, raw_samples in iter_init_groups(input_path):
-            label_display = relative_dir.as_posix() if relative_dir != Path(".") else leaf_name
-            physical_samples = _physical_clean_group(
-                profile,
-                input_config,
-                config,
-                raw_samples,
-                label_display,
-                reference_wavenumbers,
-            )
+        worker_count = _resolve_build_worker_count()
+        print(f"- Preprocess workers: {worker_count}")
+        for relative_dir, leaf_name, physical_samples in _iter_physical_clean_groups(
+            profile,
+            input_config,
+            config,
+            iter_init_groups(input_path),
+            reference_wavenumbers,
+        ):
             if len(physical_samples) < config.min_samples_per_class:
                 skipped_sources += 1
                 continue

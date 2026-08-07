@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ramanv2.common.arc_data import read_arc_data, read_raw_arc_data
 from ramanv2.core.paths import resolve_path
 
 
@@ -20,22 +21,6 @@ def iter_arc_dirs(root_dir: Path | str):
         arc_files = sorted(name for name in filenames if name.lower().endswith(".arc_data"))
         if arc_files:
             yield Path(root), arc_files
-
-
-def read_arc_data(path: Path | str):
-    """读取两列文本光谱，忽略格式错误行。"""
-    wavenumbers, intensities = [], []
-    with Path(path).open("r", encoding="utf-8", errors="ignore") as file:
-        for line in file:
-            fields = line.strip().split()
-            if len(fields) != 2:
-                continue
-            try:
-                wavenumbers.append(float(fields[0]))
-                intensities.append(float(fields[1]))
-            except ValueError:
-                continue
-    return np.asarray(wavenumbers), np.asarray(intensities)
 
 
 def load_arc_intensity(path: Path | str, dtype=np.float32):

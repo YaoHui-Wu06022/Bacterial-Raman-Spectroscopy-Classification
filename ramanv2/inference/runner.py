@@ -16,7 +16,11 @@ from ramanv2.core.paths import DATASET_ROOT
 from ramanv2.common.naming import parse_test_folder_prefix
 from ramanv2.data.profiles import get_dataset_dir, get_profile
 from ramanv2.inference.directory import list_spectrum_paths, resolve_input_dirs
-from ramanv2.inference.labels import build_expected_label_lookup, build_folder_summary
+from ramanv2.inference.labels import (
+    build_expected_label_lookup,
+    build_folder_summary,
+    build_test_input_selection,
+)
 from ramanv2.inference.predictor import Predictor, load_predictor
 from ramanv2.inference.report import (
     plot_folder_spectra,
@@ -34,27 +38,41 @@ def run_independent_inference(
     source_dir: Path | str,
     level_name: int | str,
     *,
+    model_run_dir: Path | str | None = None,
     input_dir: Path | str | None = None,
     one_dir: Path | str | None = None,
     top_k: int = 3,
     device: torch.device | str | None = None,
     evaluate_enable: bool = True,
     plot_train_mean_enable: bool = False,
-    skip_transferred_enable: bool = False,
-    transfer_manifest_path: Path | str | None = None,
 ) -> Path:
     """运行独立文件夹推理并发布 `test_result/` 产物目录。"""
     target_device = _resolve_device(device)
-    predictor = load_predictor(source_dir, target_device, level_name)
+    predictor = load_predictor(
+        source_dir,
+        target_device,
+        level_name,
+        model_run_dir=model_run_dir,
+    )
     preprocessor = build_inference_preprocessor(predictor.input_spec, target_device)
     test_dir = _resolve_test_dir(predictor, input_dir)
     input_dirs = resolve_input_dirs(test_dir, one_dir)
+    expected_lookup = build_expected_label_lookup(predictor.meta, predictor.predict_level)
+    selected_names, selection_rows = build_test_input_selection(
+        [path.name for path in input_dirs],
+        predictor.meta,
+        predictor.predict_level,
+        predictor.resolve_target_class_names(),
+        load_transferred_source_folder_names(test_dir),
+    )
+    input_dirs = [path for path in input_dirs if path.name in selected_names]
     if not input_dirs:
-        raise FileNotFoundError(f"推理输入目录没有子文件夹：{test_dir}")
+        raise FileNotFoundError(f"没有属于当前模型标签空间的推理文件夹：{test_dir}")
     target_dir = _resolve_result_dir(predictor)
     temp_dir = target_dir.parent / f".{target_dir.name}_building_{uuid4().hex[:8]}"
     temp_dir.mkdir(parents=True)
     try:
+        write_input_selection(temp_dir / "input_selection.csv", selection_rows)
         rows = _run_folder_predictions(
             input_dirs,
             temp_dir,
@@ -63,11 +81,7 @@ def run_independent_inference(
             top_k,
             evaluate_enable,
             plot_train_mean_enable,
-            _load_skip_lookup(
-                _resolve_manifest_path(predictor, transfer_manifest_path)
-                if skip_transferred_enable
-                else None
-            ),
+            expected_lookup,
         )
         write_summary_report(temp_dir / "summary.txt", rows, evaluate_enable)
         write_used_runs(
@@ -92,14 +106,9 @@ def _run_folder_predictions(
     top_k: int,
     evaluate_enable: bool,
     plot_train_mean_enable: bool,
-    skip_lookup: dict[str, set[str]],
+    expected_lookup: dict[str, str],
 ) -> list[dict[str, Any]]:
     """遍历所有输入文件夹，写入逐谱结果并返回有效汇总行。"""
-    expected_lookup = (
-        build_expected_label_lookup(predictor.meta, predictor.predict_level)
-        if evaluate_enable
-        else {}
-    )
     train_mean_bank = (
         _build_train_mean_bank(predictor, preprocessor)
         if plot_train_mean_enable
@@ -107,29 +116,39 @@ def _run_folder_predictions(
     )
     class_names = predictor.resolve_target_class_names()
     rows: list[dict[str, Any]] = []
-    skipped_rows: list[str] = []
     for folder_dir in input_dirs:
-        row, skipped = _run_single_folder(
+        row = _run_single_folder(
             folder_dir,
             output_dir,
             predictor,
             preprocessor,
             class_names,
-            expected_lookup,
+            expected_lookup if evaluate_enable else {},
             evaluate_enable,
             top_k,
             train_mean_bank,
-            skip_lookup,
         )
         if row is not None:
             rows.append(row)
-        skipped_rows.extend(skipped)
-    if skipped_rows:
-        (output_dir / "skipped_transferred_samples.txt").write_text(
-            "\n".join(skipped_rows) + "\n",
-            encoding="utf-8",
-        )
     return rows
+
+
+def write_input_selection(output_path: Path, rows: list[dict[str, str | bool]]) -> None:
+    """写入 CS 文件夹的标签匹配与筛选结果，供于追溯。"""
+    fields = (
+        "folder",
+        "species_prefix",
+        "target_level",
+        "expected_label",
+        "expected_in_model",
+        "transferred_to_alldata",
+        "selected",
+        "reason",
+    )
+    with output_path.open("w", encoding="utf-8-sig", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def _run_single_folder(
@@ -142,17 +161,11 @@ def _run_single_folder(
     evaluate_enable: bool,
     top_k: int,
     train_mean_bank: dict[str, np.ndarray],
-    skip_lookup: dict[str, set[str]],
-) -> tuple[dict[str, Any] | None, list[str]]:
+) -> dict[str, Any] | None:
     """预测一个文件夹的全部光谱，并保存文本和对照图。"""
     predictions: list[dict[str, Any]] = []
     signals: list[np.ndarray] = []
-    skipped_rows: list[str] = []
-    skip_files = skip_lookup.get(folder_dir.name, set())
     for spectrum_path in list_spectrum_paths(folder_dir):
-        if spectrum_path.name in skip_files:
-            skipped_rows.append(f"{folder_dir.name}/{spectrum_path.name}")
-            continue
         inputs = preprocess_spectrum_path(
             spectrum_path,
             preprocessor,
@@ -175,7 +188,7 @@ def _run_single_folder(
         )
         signals.append(inputs[0, 0].detach().cpu().numpy().astype(np.float32, copy=False))
     if not predictions:
-        return None, skipped_rows
+        return None
     expected_label = (
         expected_lookup.get(parse_test_folder_prefix(folder_dir.name))
         if evaluate_enable
@@ -207,7 +220,7 @@ def _run_single_folder(
         row["predicted_label"],
         train_mean_bank,
     )
-    return row, skipped_rows
+    return row
 
 
 def _resolve_test_dir(predictor: Predictor, input_dir: Path | str | None) -> Path:
@@ -218,6 +231,19 @@ def _resolve_test_dir(predictor: Predictor, input_dir: Path | str | None) -> Pat
     if profile.profile_id == "alldata":
         return get_dataset_dir(get_profile("test"), DATASET_ROOT.parent) / "init"
     return get_dataset_dir(profile, DATASET_ROOT.parent) / profile.root_test
+
+
+def load_transferred_source_folder_names(test_dir: Path) -> set[str]:
+    """读取已复制到 alldata 的 CS 来源目录名，供默认独立推理排除。"""
+    manifest_path = test_dir.parent / "alldata_transfer_manifest.csv"
+    if not manifest_path.is_file():
+        return set()
+    with manifest_path.open("r", encoding="utf-8-sig", newline="") as file:
+        return {
+            row["source_folder"]
+            for row in csv.DictReader(file)
+            if row.get("source_folder")
+        }
 
 
 def _resolve_result_dir(predictor: Predictor) -> Path:
@@ -232,32 +258,6 @@ def _resolve_device(device: torch.device | str | None) -> torch.device:
     if device is not None:
         return torch.device(device)
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-def _resolve_manifest_path(
-    predictor: Predictor,
-    manifest_path: Path | str | None,
-) -> Path:
-    """解析迁移样本清单的显式路径或测试菌默认清单路径。"""
-    if manifest_path is not None:
-        return Path(manifest_path).resolve()
-    return get_dataset_dir(get_profile("test"), DATASET_ROOT.parent) / "test_transfer_manifest.csv"
-
-
-def _load_skip_lookup(manifest_path: Path | None) -> dict[str, set[str]]:
-    """读取测试菌迁移清单，建立需跳过的源文件集合。"""
-    if manifest_path is None:
-        return {}
-    if not manifest_path.is_file():
-        raise FileNotFoundError(f"迁移清单不存在：{manifest_path}")
-    lookup: dict[str, set[str]] = defaultdict(set)
-    with manifest_path.open("r", encoding="utf-8-sig", newline="") as file:
-        for row in csv.DictReader(file):
-            folder = (row.get("source_folder") or "").strip()
-            filename = (row.get("source_file") or "").strip()
-            if folder and filename:
-                lookup[folder].add(filename)
-    return dict(lookup)
 
 
 def _build_train_mean_bank(predictor: Predictor, preprocessor) -> dict[str, np.ndarray]:

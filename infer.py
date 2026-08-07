@@ -8,18 +8,18 @@ from ramanv2.inference.runner import run_independent_inference
 
 
 # 本次推理任务范围；测试集重建沿用常规 data 服务。
-SOURCE_DIR = "output/GN/20260722_051934_div4_89%"
-LEVEL_NAME = "level_2"
-BUILD_TEST_ENABLE = True
+SOURCE_DIR = "output/GN/20260807_013457_90%"
+# 填写实验目录内的历史 run 时，推理仅加载该 run，不改写 hierarchy_meta.json。
+MODEL_RUN_DIR = "output/GN/20260807_013457_90%/level_1/run_20260807_013458"
+LEVEL_NAME = "level_1"
+BUILD_TEST_ENABLE = False
 PROFILE_ID = "test"
-TEST_DIR = "dataset/测试菌/test"
-FOLDER = None
+TEST_DIR = "dataset/CSdata/test"
+ONE_DIR = None
 TOP_K = 3
 CPU_ENABLE = False
 EVALUATE_ENABLE = True
 PLOT_TRAIN_MEAN_ENABLE = False
-SKIP_TRANSFERRED_ENABLE = True
-TRANSFER_MANIFEST_PATH = "dataset/测试菌/test_transfer_manifest.csv"
 
 
 def main():
@@ -35,14 +35,13 @@ def main():
     run_independent_inference(
         SOURCE_DIR,
         LEVEL_NAME,
+        model_run_dir=MODEL_RUN_DIR,
         input_dir=TEST_DIR,
-        folder=FOLDER,
+        one_dir=ONE_DIR,
         top_k=TOP_K,
         device="cpu" if CPU_ENABLE else None,
         evaluate_enable=EVALUATE_ENABLE,
         plot_train_mean_enable=PLOT_TRAIN_MEAN_ENABLE,
-        skip_transferred_enable=SKIP_TRANSFERRED_ENABLE,
-        transfer_manifest_path=TRANSFER_MANIFEST_PATH,
     )
 
 

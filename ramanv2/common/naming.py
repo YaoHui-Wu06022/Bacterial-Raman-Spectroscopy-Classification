@@ -9,8 +9,12 @@ from pathlib import Path
 def parse_folder_prefix(name: str, uppercase_enable: bool = False) -> str:
     """解析目录开头的字母前缀；无字母前缀时返回完整名称。"""
     text = str(name)
-    match = re.match(r"[A-Za-z]+", text)
-    prefix = match.group(0) if match else text
+    transferred_match = re.fullmatch(r"([A-Za-z]+)CS\d+", text, re.IGNORECASE)
+    if transferred_match is not None:
+        prefix = transferred_match.group(1)
+    else:
+        match = re.match(r"[A-Za-z]+", text)
+        prefix = match.group(0) if match else text
     return prefix.upper() if uppercase_enable else prefix
 
 

@@ -25,7 +25,6 @@ class DatasetProfile:
     root_train_fig: str = "fig_train"
     pca_log_name: str = "pca_log.txt"
     cosmic_ray_log_name: str = "cosmic_ray_removal_log.txt"
-    cosmic_ray_overrides: dict | None = None
 
 
 PROFILES = {
@@ -35,7 +34,7 @@ PROFILES = {
     "FUNG": DatasetProfile("FUNG", "FUNG"),
     "resistance": DatasetProfile("resistance", "耐药菌"),
     "anaerobe": DatasetProfile("anaerobe", "厌氧菌"),
-    "test": DatasetProfile("test", "测试菌"),
+    "test": DatasetProfile("test", "CSdata"),
     "alldata": DatasetProfile("alldata", "alldata"),
 }
 

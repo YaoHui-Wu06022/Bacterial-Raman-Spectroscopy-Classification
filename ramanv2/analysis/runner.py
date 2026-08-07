@@ -10,7 +10,11 @@ import torch
 
 from ramanv2.analysis.context import load_analysis_context, resolve_analysis_level
 from ramanv2.analysis.embedding import save_train_val_umap
-from ramanv2.analysis.integrated_gradients import collect_task_inputs, compute_integrated_gradients
+from ramanv2.analysis.integrated_gradients import (
+    collect_task_inputs,
+    compute_integrated_gradients,
+    select_balanced_task_sample_indices,
+)
 from ramanv2.analysis.layer_attribution import (
     compute_layer_attribution,
     merge_layer_attribution_scores,
@@ -22,11 +26,22 @@ from ramanv2.inference.predictor import load_predictor
 from ramanv2.spectra.axis import expected_wavenumbers
 
 
-def run_interpret_run(source_dir: str, level_name: str, device: str | None = None) -> Path:
+def run_interpret_run(
+    source_dir: str,
+    level_name: str,
+    device: str | None = None,
+    attribution_batch_count: int | None = None,
+) -> Path:
     """分析一个明确 global 或 parent 模型 run。"""
     context = load_analysis_context(source_dir)
     level = resolve_analysis_level(context, level_name)
-    return _run_tasks(context, [build_run_task(context, level)], "run", device)
+    return _run_tasks(
+        context,
+        [build_run_task(context, level)],
+        "run",
+        device,
+        attribution_batch_count,
+    )
 
 
 def run_interpret_parent_routed(
@@ -34,14 +49,27 @@ def run_interpret_parent_routed(
     level_name: str,
     parent: str | None = None,
     device: str | None = None,
+    attribution_batch_count: int | None = None,
 ) -> Path:
     """分析目标层全部或指定 parent 子模型并聚合归因。"""
     context = load_analysis_context(source_dir)
     level = resolve_analysis_level(context, level_name)
-    return _run_tasks(context, build_parent_tasks(context, level, parent), "parent-routed", device)
+    return _run_tasks(
+        context,
+        build_parent_tasks(context, level, parent),
+        "parent-routed",
+        device,
+        attribution_batch_count,
+    )
 
 
-def _run_tasks(context, tasks, mode: str, device_value: str | None) -> Path:
+def _run_tasks(
+    context,
+    tasks,
+    mode: str,
+    device_value: str | None,
+    attribution_batch_count: int | None = None,
+) -> Path:
     """执行单模型或多 parent 模型分析，并写入既定产物目录。"""
     device = torch.device(device_value or ("cuda" if torch.cuda.is_available() else "cpu"))
     output_dir = _resolve_output_dir(context, tasks[0], mode)
@@ -58,11 +86,20 @@ def _run_tasks(context, tasks, mode: str, device_value: str | None) -> Path:
             figure_dir,
             collect_embedding=len(tasks) == 1,
             write_reports_enable=task_report_enable,
+            attribution_batch_count=attribution_batch_count,
         )
         for task in tasks
     ]
     if mode == "parent-routed" and context.config.analysis.inherit_missing_levels_use:
-        summaries.extend(_inherit_single_child_summaries(context, tasks[0].level_name, device, figure_dir))
+        summaries.extend(
+            _inherit_single_child_summaries(
+                context,
+                tasks[0].level_name,
+                device,
+                figure_dir,
+                attribution_batch_count,
+            )
+        )
     write_aggregate_reports(
         summaries,
         figure_dir,
@@ -105,15 +142,36 @@ def _analyze_task(
     figure_dir: Path,
     collect_embedding: bool,
     write_reports_enable: bool,
+    attribution_batch_count: int | None = None,
 ) -> dict:
     """执行一个模型任务的 IG、层归因、图表和可选 UMAP。"""
     predictor = load_predictor(task.run_dir, device, task.level_name)
     model = predictor.load_model(task.level_name, task.entry, task.parent_id)
     config = context.config.analysis
-    inputs, labels = collect_task_inputs(context, task, config.attribution_split, device)
+    sample_count = len(
+        task.train_indices if config.attribution_split == "train" else task.validation_indices
+    )
     batch_size = context.config.training.batch_size
-    limit = min(len(inputs), max(1, config.attribution_batch_count) * batch_size)
-    inputs, labels = inputs[:limit], labels[:limit]
+    selected_batch_count = (
+        config.attribution_batch_count
+        if attribution_batch_count is None
+        else int(attribution_batch_count)
+    )
+    limit = min(sample_count, max(1, selected_batch_count) * batch_size)
+    selected_indices = select_balanced_task_sample_indices(
+        context,
+        task,
+        config.attribution_split,
+        limit,
+        config.max_per_class,
+    )
+    inputs, labels = collect_task_inputs(
+        context,
+        task,
+        config.attribution_split,
+        device,
+        selected_indices,
+    )
     result = compute_integrated_gradients(
         model,
         inputs,
@@ -184,7 +242,13 @@ def _resolve_channel_names(input_spec) -> tuple[str, ...]:
     return tuple(names)
 
 
-def _inherit_single_child_summaries(context, level_name: str, device, figure_dir: Path) -> list[dict]:
+def _inherit_single_child_summaries(
+    context,
+    level_name: str,
+    device,
+    figure_dir: Path,
+    attribution_batch_count: int | None,
+) -> list[dict]:
     """将单子类父分支的上级模型归因映射到唯一子类。"""
     parent_level = context.dataset_index.get_parent_level(level_name)
     mapping = (context.meta.get("parent_to_children") or {}).get(level_name) or {}
@@ -206,6 +270,7 @@ def _inherit_single_child_summaries(context, level_name: str, device, figure_dir
         figure_dir,
         collect_embedding=False,
         write_reports_enable=False,
+        attribution_batch_count=attribution_batch_count,
     )
     inherited = []
     class_names = context.dataset_index.get_class_names(level_name)

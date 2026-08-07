@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 from scipy import sparse
@@ -13,10 +14,17 @@ from .bands import build_valid_mask, normalize_bad_bands
 from .filters import median_filter_1d, odd_window_points
 
 
+@lru_cache(maxsize=32)
+def _build_baseline_penalty(length: int, lam: float):
+    """缓存相同谱长和惩罚系数对应的二阶差分稀疏矩阵。"""
+    difference = sparse.diags([1, -2, 1], [0, 1, 2], shape=(length - 2, length))
+    return (float(lam) * (difference.T @ difference)).tocsc()
+
+
 def asls_baseline(spectrum, lam: float = 1e5, p: float = 0.01, niter: int = 10, valid_mask=None):
     """使用 AsLS 估计基线；坏波段可通过掩码完全排除。"""
     length = len(spectrum)
-    difference = sparse.diags([1, -2, 1], [0, 1, 2], shape=(length - 2, length))
+    penalty = _build_baseline_penalty(length, float(lam))
     weights = np.ones(length)
     if valid_mask is not None:
         valid_mask = np.asarray(valid_mask, dtype=bool)
@@ -24,7 +32,7 @@ def asls_baseline(spectrum, lam: float = 1e5, p: float = 0.01, niter: int = 10, 
 
     for _ in range(niter):
         weight_matrix = sparse.diags(weights, 0)
-        baseline = spsolve((weight_matrix + lam * (difference.T @ difference)).tocsc(), weights * spectrum)
+        baseline = spsolve((weight_matrix + penalty).tocsc(), weights * spectrum)
         if valid_mask is None:
             weights = np.where(spectrum > baseline, p, 1 - p)
         else:
@@ -40,8 +48,7 @@ def arpls_baseline(spectrum, lam: float = 1e5, niter: int = 15, valid_mask=None)
     """使用 arPLS 估计基线，对正向拉曼峰保留较低权重。"""
     values = np.asarray(spectrum, dtype=np.float64)
     length = len(values)
-    difference = sparse.diags([1, -2, 1], [0, 1, 2], shape=(length - 2, length))
-    penalty = lam * (difference.T @ difference)
+    penalty = _build_baseline_penalty(length, float(lam))
     weights = np.ones(length, dtype=np.float64)
     if valid_mask is not None:
         valid_mask = np.asarray(valid_mask, dtype=bool)
@@ -72,8 +79,7 @@ def airpls_baseline(spectrum, lam: float = 1e5, niter: int = 15, valid_mask=None
     """使用 airPLS 估计基线，迭代提高负残差位置的拟合权重。"""
     values = np.asarray(spectrum, dtype=np.float64)
     length = len(values)
-    difference = sparse.diags([1, -2, 1], [0, 1, 2], shape=(length - 2, length))
-    penalty = lam * (difference.T @ difference)
+    penalty = _build_baseline_penalty(length, float(lam))
     weights = np.ones(length, dtype=np.float64)
     if valid_mask is not None:
         valid_mask = np.asarray(valid_mask, dtype=bool)

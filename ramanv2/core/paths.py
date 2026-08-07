@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 
-# ``raman/core/paths.py`` 的上两级目录就是仓库根目录。
+# 本模块位于 ``<项目根目录>/ramanv2/core/``，上两级目录即项目根目录。
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATASET_ROOT = PROJECT_ROOT / "dataset"
 _STANFORD_REFERENCE_WAVENUMBERS = (

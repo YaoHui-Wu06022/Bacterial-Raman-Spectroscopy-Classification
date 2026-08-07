@@ -1,0 +1,324 @@
+import os
+from pathlib import Path
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+from collections import defaultdict
+from raman.data.input import build_model_input, build_sg_kernels
+from raman.data.io import load_arc_intensity
+from raman.tool.dataset import iter_arc_dirs, resolve_dataset_stage
+from raman.tool.hierarchy import MISSING_TAG as HIER_MISSING_TAG
+from raman.tool.hierarchy import ROOT_TAG as HIER_ROOT_TAG
+from raman.tool.hierarchy import parts_to_key
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+class RamanDataset(Dataset):
+    """
+    层级自适应 Raman 数据集
+
+    目录结构示例：
+        root / ... / ... / *.arc_data
+
+    主要功能：
+        - 自动识别目录深度
+        - 生成各层级与 leaf 的标签映射
+        - 维护父类 -> 子类映射，便于级联训练/推理
+    """
+
+    ROOT_TAG = HIER_ROOT_TAG
+    MISSING_TAG = HIER_MISSING_TAG
+
+    def __init__(self, root_dir, augment=False, config=None):
+        resolved_root = resolve_dataset_stage(
+            root_dir,
+            stage="train",
+            project_root=PROJECT_ROOT,
+            must_exist=True,
+        )
+        self.root_dir = os.fspath(resolved_root)
+        self.augment = augment
+        assert config is not None, "RamanDataset 必须显式传入 config"
+        self.config = config
+
+        # 样本级基础状态：这是数据集真正长期持有的内容
+        self.samples = []          # 每个样本对应的 .arc_data 文件路径
+        self.level_labels = []     # 每个样本在各层上的整数标签，最后一列始终是 leaf
+        self.hier_names = []       # 每个样本的业务层级名称字典，如 {level_1: ..., level_2: ...}
+
+        # 层级级基础状态：业务层请优先使用 level_names；head_names 仅保留给内部 split/编码
+        self.head_names = []           # 内部层级顺序，如 [level_1, ..., leaf]
+        self.head_name_to_idx = {}     # 层级名 -> 列索引，便于从 level_labels 中定位某一层
+        self.label_maps_by_level = []  # 每层的名称 -> 整数标签映射，leaf 仍作为最后一层保留
+        self.parent_to_children = {}   # 仅业务层的父类 id -> 子类 id 列表，用于层级训练和级联推理
+
+        # SG kernel 预生成：避免 __getitem__ 每次重复创建平滑/一阶导卷积核
+        self.sg_smooth, self.sg_d1 = build_sg_kernels(self.config, device="cpu")
+
+        # 扫描数据
+        self._scan()
+
+    def _resolve_level_name(self, level_name, field_name="level_name"):
+        valid_levels = ", ".join(self.level_names)
+        if level_name is None:
+            raise ValueError(
+                f"{field_name} 必须显式提供，且只能是业务层级：{valid_levels}"
+            )
+        if not isinstance(level_name, str) or not level_name.startswith("level_"):
+            raise ValueError(
+                f"{field_name} 只能是形如 level_n 的业务层级，当前为：{level_name}"
+            )
+        if level_name not in self.level_names:
+            raise ValueError(
+                f"未知业务层级：{level_name}，可选值为：{valid_levels}"
+            )
+        return level_name
+
+    @property
+    def level_names(self):
+        # 非 leaf 的中间层名称；由 head_names 派生
+        return list(self.head_names[:-1])
+
+    @property
+    def inv_label_maps_by_level(self):
+        # 各层 label_maps 的反向视图：标签 id -> 层级名称
+        return [
+            {idx: name for name, idx in label_map.items()}
+            for label_map in self.label_maps_by_level
+        ]
+
+    @property
+    def class_names_by_level(self):
+        # 各层类别名列表，顺序与对应的整数标签保持一致
+        return [list(label_map.keys()) for label_map in self.label_maps_by_level]
+
+    def get_class_names(self, level_name):
+        """返回指定业务层级的类别名列表"""
+        level_name = self._resolve_level_name(level_name, field_name="level_name")
+        return list(self.class_names_by_level[self.head_name_to_idx[level_name]])
+
+    @property
+    def num_classes_by_level(self):
+        # 各层类别数，键使用层级名而不是层级索引
+        return {
+            level_name: len(self.label_maps_by_level[idx])
+            for idx, level_name in enumerate(self.head_names)
+        }
+
+    @property
+    def parent_level_name(self):
+        # 每个业务层对应的上一层名称；顶层没有父层，因此为 None
+        return {
+            level_name: (None if idx == 0 else self.level_names[idx - 1])
+            for idx, level_name in enumerate(self.level_names)
+        }
+
+    def _scan(self):
+        """
+        扫描整个目录树:
+            root / ... / ... / *.arc_data
+
+        说明:
+        - 扫描阶段与任务无关
+        - 标签映射按层级节点（路径前缀）构建
+        """
+        leaf_records = []
+        max_depth = 0
+
+        for leaf_dir, arc_files in iter_arc_dirs(self.root_dir):
+            rel_dir = os.path.relpath(leaf_dir, self.root_dir)
+            parts = [] if rel_dir == "." else Path(rel_dir).parts
+            max_depth = max(max_depth, len(parts))
+            for fname in arc_files:
+                leaf_records.append((os.path.join(leaf_dir, fname), parts))
+
+        # 层级名称（level_1 ... level_N）+ leaf
+        self.head_names = [f"level_{i + 1}" for i in range(max_depth)] + ["leaf"]
+        self.head_name_to_idx = {n: i for i, n in enumerate(self.head_names)}
+
+        level_maps = [dict() for _ in range(max_depth)]
+        leaf_map = {}
+
+        # 建立层级节点映射
+        for _, parts in leaf_records:
+            leaf_key = parts_to_key(parts)
+            if leaf_key not in leaf_map:
+                leaf_map[leaf_key] = len(leaf_map)
+            for i in range(len(parts)):
+                key = parts_to_key(parts[: i + 1])
+                if key not in level_maps[i]:
+                    level_maps[i][key] = len(level_maps[i])
+
+        # 保存映射与类名
+        self.label_maps_by_level = level_maps + [leaf_map]
+
+        # 构建业务层的父类 -> 子类映射（用于分层训练/推理）
+        for idx, name in enumerate(self.level_names):
+            if idx == 0:
+                self.parent_to_children[name] = {}
+                continue
+
+            mapping = defaultdict(set)
+
+            for _, parts in leaf_records:
+                if len(parts) < idx + 1:
+                    continue
+                parent_key = parts_to_key(parts[:idx])
+                child_key = parts_to_key(parts[: idx + 1])
+                parent_idx = self.label_maps_by_level[idx - 1][parent_key]
+                if child_key not in self.label_maps_by_level[idx]:
+                    continue
+                child_idx = self.label_maps_by_level[idx][child_key]
+                mapping[parent_idx].add(child_idx)
+
+            self.parent_to_children[name] = {
+                k: sorted(v) for k, v in mapping.items()
+            }
+
+        # 写入样本与标签
+        for fpath, parts in leaf_records:
+            labels = [-1] * len(self.head_names)
+            hier = {n: None for n in self.level_names}
+
+            for i in range(len(parts)):
+                key = parts_to_key(parts[: i + 1])
+                labels[i] = level_maps[i][key]
+                hier[self.level_names[i]] = key
+
+            leaf_key = parts_to_key(parts)
+            labels[self.head_name_to_idx["leaf"]] = leaf_map[leaf_key]
+            self.samples.append(fpath)
+            self.level_labels.append(labels)
+            self.hier_names.append(hier)
+
+        # numpy 化，方便上层使用
+        self.samples = np.array(self.samples)
+        self.level_labels = np.array(self.level_labels, dtype=np.int64)
+        self.hier_names = np.array(self.hier_names)
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        path = self.samples[idx]  # 路径
+        labels = self.level_labels[idx]  # 多层标签
+        hier = self.hier_names[idx]  # 层级
+        # DataLoader 默认的 collate 不能直接处理 dict 中的 None 值
+        if isinstance(hier, dict):
+            hier = {
+                k: (v if v is not None else self.MISSING_TAG)
+                for k, v in hier.items()
+            }
+
+        # 与 InputPreprocessor 复用同一套输入构建逻辑，避免训练/评估分支漂移
+        raw_intensity = load_arc_intensity(path)
+        X = build_model_input(
+            raw_intensity,
+            config=self.config,
+            sg_smooth=self.sg_smooth,
+            sg_d1=self.sg_d1,
+            device="cpu",
+            augment=self.augment,
+        )
+
+        return X, labels, hier
+
+    def get_hierarchy(self, idx):
+        """
+        返回某个样本的业务层级信息：
+            {level_1: ..., level_2: ...}
+
+        不参与 __getitem__，避免影响 DataLoader
+        """
+        return self.hier_names[idx]
+
+    def get_leaf_key(self, idx):
+        leaf_idx = self.head_name_to_idx["leaf"]
+        leaf_id = int(self.level_labels[idx][leaf_idx])
+        return self.inv_label_maps_by_level[leaf_idx].get(leaf_id)
+
+    def get_level_key(self, idx, level_name):
+        level = self._resolve_level_name(level_name)
+        hier = self.hier_names[idx]
+        return hier.get(level)
+
+    def get_parent_level(self, level_name):
+        level = self._resolve_level_name(level_name)
+        return self.parent_level_name.get(level)
+
+    def get_split_key(self, idx, split_mode):
+        """
+        根据 split_mode 构造分组键
+
+        示例：
+            split_mode = "level_2/leaf"
+            -> (hier["level_2"], leaf_key)
+        """
+        keys = split_mode.split("/")
+        if len(keys) == 1:
+            key = keys[0]
+            return self.get_leaf_key(idx) if key == "leaf" else self.get_level_key(idx, key)
+        return tuple(
+            self.get_leaf_key(idx) if k == "leaf" else self.get_level_key(idx, k)
+            for k in keys
+        )
+
+    def encode_hierarchy(self, hier_list, device=None):
+        """
+        将层级名称结构编码成各层的整数标签张量
+
+        输入允许两种形式：
+            - DataLoader 默认 collate 后得到的 dict[str, list]
+            - 调用方直接传入的 list[dict] 或 numpy array[dict]
+
+        返回：
+            - dict[str, torch.Tensor]
+            - 键为各层级名，值为对应的标签张量
+        """
+        # --------------------------------------------------
+        # 统一输入格式
+        # --------------------------------------------------
+        if isinstance(hier_list, dict):
+            batch_size = 0
+            for value in hier_list.values():
+                if hasattr(value, "__len__"):
+                    batch_size = len(value)
+                    break
+            names_by_level = {
+                k: hier_list.get(k, [None] * batch_size) for k in self.head_names
+            }
+        else:
+            if hasattr(hier_list, "tolist"):
+                hier_list = hier_list.tolist()
+
+            if len(hier_list) == 0:
+                names_by_level = {k: [] for k in self.head_names}
+            elif isinstance(hier_list[0], dict):
+                names_by_level = {
+                    k: [h.get(k) for h in hier_list] for k in self.head_names
+                }
+            else:
+                raise TypeError(
+                    "encode_hierarchy 只接受 DataLoader collate 后的 "
+                    "dict[str, list]，或由 __getitem__ 返回的 dict 列表/数组"
+                )
+
+        # --------------------------------------------------
+        # 名称 -> 稳定索引
+        # --------------------------------------------------
+        out = {}
+        for idx, name in enumerate(self.head_names):
+            label_map = self.label_maps_by_level[idx]
+            labels = []
+            for n in names_by_level[name]:
+                if n is None:
+                    labels.append(-1)
+                else:
+                    labels.append(label_map.get(n, -1))
+            out[name] = torch.tensor(labels, dtype=torch.long)
+
+        if device is not None:
+            out = {k: v.to(device) for k, v in out.items()}
+
+        return out

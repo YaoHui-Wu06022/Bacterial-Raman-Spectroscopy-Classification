@@ -20,7 +20,7 @@ def build_se_summary_lines(tasks) -> list[str]:
     lines: list[str] = []
     for task in tasks:
         model_tag = task.level_name if task.parent_id is None else f"{task.level_name}_{task.parent_id}"
-        stats_path = Path(task.run_dir) / f"{model_tag}_model.se_stats.pt"
+        stats_path = Path(task.run_dir) / f"{model_tag}_se_stats.pt"
         if not stats_path.is_file():
             continue
         stats = torch.load(stats_path, map_location="cpu")

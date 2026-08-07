@@ -22,9 +22,17 @@ class IntegratedGradientsResult:
     sample_count: int
 
 
-def collect_task_inputs(context, task, split_name: str, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+def collect_task_inputs(
+    context,
+    task,
+    split_name: str,
+    device: torch.device,
+    sample_indices: np.ndarray | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """将任务范围内 train 或 val 的原始谱转换为模型输入张量。"""
     indices = task.train_indices if split_name == "train" else task.validation_indices
+    if sample_indices is not None:
+        indices = np.asarray(sample_indices, dtype=np.int64)
     level_index = context.dataset_index.head_name_to_idx[task.level_name]
     local_ids = {class_id: index for index, class_id in enumerate(task.class_ids)}
     preprocessor = InputPreprocessor(context.input_spec, device)
@@ -40,6 +48,72 @@ def collect_task_inputs(context, task, split_name: str, device: torch.device) ->
     if not values:
         raise RuntimeError("分析范围没有有效样本")
     return torch.stack(values), torch.tensor(labels, dtype=torch.long, device=device)
+
+
+def select_balanced_task_sample_indices(
+    context,
+    task,
+    split_name: str,
+    total_limit: int,
+    max_per_class: int,
+) -> np.ndarray:
+    """在预处理前按类别均衡抽取样本索引，避免处理未参与 IG 的全部光谱。"""
+    if total_limit < 1:
+        raise ValueError("归因样本总数上限必须至少为 1")
+    if max_per_class < 1:
+        raise ValueError("每类归因样本上限必须至少为 1")
+    source_indices = (
+        task.train_indices if split_name == "train" else task.validation_indices
+    )
+    level_index = context.dataset_index.head_name_to_idx[task.level_name]
+    local_ids = {class_id: index for index, class_id in enumerate(task.class_ids)}
+    local_labels = np.asarray(
+        [
+            local_ids.get(int(context.dataset_index.level_labels[index, level_index]), -1)
+            for index in source_indices
+        ],
+        dtype=np.int64,
+    )
+    valid_positions = np.flatnonzero(local_labels >= 0)
+    valid_labels = local_labels[valid_positions]
+    class_ids = np.unique(valid_labels)
+    if class_ids.size == 0:
+        raise RuntimeError("分析范围没有有效样本")
+    if class_ids.size > total_limit:
+        raise ValueError("归因样本总数上限小于实际类别数")
+    quota = min(max_per_class, total_limit // class_ids.size)
+    selected_positions = np.sort(np.concatenate(
+        [
+            valid_positions[np.flatnonzero(valid_labels == class_id)[:quota]]
+            for class_id in class_ids
+        ]
+    ))
+    return np.asarray(source_indices[selected_positions], dtype=np.int64)
+
+
+def select_balanced_class_inputs(
+    inputs: torch.Tensor,
+    labels: torch.Tensor,
+    total_limit: int,
+    max_per_class: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """在归因预算内按类别稳定抽取输入，避免索引排序造成类别缺失。"""
+    if inputs.size(0) != labels.size(0):
+        raise ValueError("归因输入和标签数量不一致")
+    if total_limit < 1:
+        raise ValueError("归因样本总数上限必须至少为 1")
+    if max_per_class < 1:
+        raise ValueError("每类归因样本上限必须至少为 1")
+    class_ids = torch.unique(labels, sorted=True)
+    if len(class_ids) > total_limit:
+        raise ValueError("归因样本总数上限小于实际类别数")
+    quota = min(max_per_class, total_limit // len(class_ids))
+    selected = []
+    for class_id in class_ids:
+        class_indices = torch.nonzero(labels == class_id, as_tuple=False).flatten()
+        selected.append(class_indices[:quota])
+    selected_indices = torch.cat(selected).sort().values
+    return inputs.index_select(0, selected_indices), labels.index_select(0, selected_indices)
 
 
 def compute_integrated_gradients(

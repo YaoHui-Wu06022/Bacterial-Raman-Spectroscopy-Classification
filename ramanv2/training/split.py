@@ -16,9 +16,6 @@ from ramanv2.core.paths import normalize_relpath
 DEFAULT_SPLIT_LEVEL = "leaf"
 TRAIN_SPLIT_FILE_NAME = "train_split.json"
 VAL_SPLIT_FILE_NAME = "val_split.json"
-TRANSFERRED_SOURCE_SUFFIX = "t"
-
-
 @dataclass(frozen=True)
 class TrainScope:
     """一次训练使用的父类与样本筛选约束。"""
@@ -257,14 +254,11 @@ def _split_indices_by_sample(
     seed: int,
     min_train_samples: int,
 ) -> tuple[list[int], list[int]]:
-    """在每个层级与来源类型分组内随机切分样本。"""
+    """在每个层级分组内随机切分样本。"""
     random_state = np.random.RandomState(seed)
-    indices_by_group: dict[tuple[Any, bool], list[int]] = {}
+    indices_by_group: dict[Any, list[int]] = {}
     for index in range(len(dataset)):
-        group_key = (
-            _resolve_split_group_key(dataset, index, lowest_level),
-            _is_transferred_sample(dataset.samples[index]),
-        )
+        group_key = _resolve_split_group_key(dataset, index, lowest_level)
         indices_by_group.setdefault(group_key, []).append(index)
 
     train_indices: list[int] = []
@@ -290,19 +284,16 @@ def _split_indices_by_source_prefix(
 ) -> tuple[list[int], list[int]]:
     """以来源前缀为不可拆分分组，避免同源谱同时进入 train 和 val。"""
     random_state = np.random.RandomState(seed)
-    prefix_groups_by_bucket: dict[tuple[Any, bool], dict[str, list[int]]] = {}
+    prefix_groups_by_bucket: dict[Any, dict[str, list[int]]] = {}
     for index in range(len(dataset)):
         source_prefix = parse_source_prefix(dataset.samples[index])
-        bucket_key = (
-            _resolve_split_group_key(dataset, index, lowest_level),
-            str(source_prefix).lower().endswith(TRANSFERRED_SOURCE_SUFFIX),
-        )
+        bucket_key = _resolve_split_group_key(dataset, index, lowest_level)
         prefix_groups = prefix_groups_by_bucket.setdefault(bucket_key, {})
         prefix_groups.setdefault(source_prefix, []).append(index)
 
     train_indices: list[int] = []
     val_indices: list[int] = []
-    for (level_key, is_transferred), prefix_groups in prefix_groups_by_bucket.items():
+    for level_key, prefix_groups in prefix_groups_by_bucket.items():
         groups = [
             (prefix, np.array(indices, dtype=np.int64))
             for prefix, indices in prefix_groups.items()
@@ -311,10 +302,9 @@ def _split_indices_by_source_prefix(
         if len(groups) == 1:
             prefix, indices = groups[0]
             train_indices.extend(indices.tolist())
-            source_kind = "*t" if is_transferred else "non-*t"
             print(
                 "[Warn] 来源前缀切分："
-                f"{level_key!r}/{source_kind} 只有一个来源前缀 {prefix!r}。"
+                f"{level_key!r} 只有一个来源前缀 {prefix!r}。"
                 "全部归入 train。"
             )
             continue
@@ -356,11 +346,6 @@ def _resolve_split_group_key(dataset: Any, index: int, lowest_level: str) -> Any
     else:
         group_key = dataset.get_level_key(index, lowest_level)
     return dataset.get_leaf_key(index) if group_key is None else group_key
-
-
-def _is_transferred_sample(sample_path: Path | str) -> bool:
-    """判断样本是否来自名称以 ``t`` 结尾的迁移来源前缀。"""
-    return parse_source_prefix(sample_path).lower().endswith(TRANSFERRED_SOURCE_SUFFIX)
 
 
 def resolve_train_split(

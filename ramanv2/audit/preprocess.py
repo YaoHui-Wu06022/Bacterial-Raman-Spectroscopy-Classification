@@ -1,4 +1,4 @@
-"""Stage2 与 Stage3 共用的审核光谱预处理。"""
+"""近邻相似性审核共用的单谱预处理。"""
 
 from __future__ import annotations
 
@@ -7,70 +7,61 @@ from pathlib import Path
 
 import numpy as np
 
-from ramanv2.audit.config import AuditConfig, resolve_audit_config
+from ramanv2.common.arc_data import read_arc_data
 from ramanv2.spectra.axis import build_wn_ref
-from ramanv2.data.config import resolve_cosmic_options
-from ramanv2.data.io import read_arc_data
 from ramanv2.spectra.normalize import normalize_spectrum
 from ramanv2.spectra.preprocess import preprocess_single_spectrum
 
 
+__all__ = ("ComparisonSpectrum", "preprocess_comparison_spectrum")
+
+
 @dataclass(frozen=True)
-class AuditSpectrum:
-    """保存审核使用的统一波数轴、处理谱和 SNV 标准化向量。"""
+class ComparisonSpectrum:
+    """保存统一波数轴、预处理强度和 SNV 比较向量。"""
 
     wavenumbers: np.ndarray | None
     intensities: np.ndarray | None
     normalized: np.ndarray | None
     skip_reason: str = ""
-    cosmic_replaced: int = 0
 
 
-def preprocess_audit_spectrum(
+def preprocess_comparison_spectrum(
     path: Path,
-    profile,
-    config: AuditConfig | None = None,
+    profile_id: str,
+    input_config,
+    build_config,
     reference_wavenumbers: np.ndarray | None = None,
-    label: str = "",
-) -> AuditSpectrum:
-    """按训练一致的预处理参数生成供近邻审核比较的 SNV 谱向量。"""
-    audit_config = resolve_audit_config(config)
-    input_config = audit_config.input
-    cleaning_config = audit_config.cleaning
+) -> ComparisonSpectrum:
+    """按训练参数预处理一条谱，生成近邻比较使用的 SNV 向量。"""
     raw_wavenumbers, raw_intensities = read_arc_data(path)
     if not raw_wavenumbers.size or not raw_intensities.size:
-        return AuditSpectrum(None, None, None, "read_failed")
+        return ComparisonSpectrum(None, None, None, "read_failed")
     axis = (
-        build_wn_ref(
-            input_config.cut_min,
-            input_config.cut_max,
-            input_config.target_points,
-        )
+        build_wn_ref(input_config.cut_min, input_config.cut_max, input_config.target_points)
         if reference_wavenumbers is None
         else reference_wavenumbers
     )
-    options = resolve_cosmic_options(profile, cleaning_config, label)
-    wavenumbers, intensities, cosmic_stats = preprocess_single_spectrum(
+    options = build_config.build_cosmic_ray_options(profile_id)
+    wavenumbers, intensities, _ = preprocess_single_spectrum(
         raw_wavenumbers,
         raw_intensities,
         cut_min=input_config.cut_min,
         cut_max=input_config.cut_max,
         reference_wavenumbers=axis,
         bad_bands=input_config.bad_bands,
-        baseline_method=cleaning_config.baseline_method,
-        baseline_lam=cleaning_config.baseline_lam,
-        baseline_asls_p=cleaning_config.baseline_asls_p,
-        baseline_max_iter=cleaning_config.baseline_max_iter,
-        baseline_fit_min=cleaning_config.baseline_fit_min,
-        baseline_fit_max=cleaning_config.baseline_fit_max,
+        baseline_method=build_config.baseline_method,
+        baseline_lam=build_config.baseline_lam,
+        baseline_asls_p=build_config.baseline_asls_p,
+        baseline_max_iter=build_config.baseline_max_iter,
+        baseline_fit_min=build_config.baseline_fit_min,
+        baseline_fit_max=build_config.baseline_fit_max,
         **options,
     )
     if wavenumbers is None or intensities is None:
-        return AuditSpectrum(None, None, None, "preprocess_failed")
-    normalized = normalize_spectrum(intensities, "snv")
-    return AuditSpectrum(
+        return ComparisonSpectrum(None, None, None, "preprocess_failed")
+    return ComparisonSpectrum(
         np.asarray(wavenumbers, dtype=np.float32),
         np.asarray(intensities, dtype=np.float32),
-        np.asarray(normalized, dtype=np.float32),
-        cosmic_replaced=int(cosmic_stats),
+        np.asarray(normalize_spectrum(intensities, "snv"), dtype=np.float32),
     )

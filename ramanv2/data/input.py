@@ -77,7 +77,7 @@ def build_model_input(
             d1_kernel,
             padding=input_spec.d1_window // 2,
         )[0, 0]
-        d1_values = d1_values / input_spec.delta
+        d1_values = d1_values / input_spec.step_cm
         d1_values = normalize_spectrum(d1_values, input_spec.norm_method)
         d1_signal = d1_values.view(1, 1, -1)
 
