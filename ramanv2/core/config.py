@@ -116,11 +116,8 @@ class TrainingConfig:
     p_axis: float = 0.30
     p_baseline_weak: float = 0.55
     p_baseline_strong: float = 0.35
-    p_shift: float = 0.40
-    p_broadening: float = 0.45
-    p_cut: float = 0.20
+    p_cut: float = 0.0
     max_pre_augs: int = 4
-    max_post_augs: int = 0
 
 
 @dataclass(frozen=True)

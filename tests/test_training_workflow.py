@@ -162,8 +162,6 @@ def _build_workflow_config(profile_id: str = "GN"):
             "p_axis": 0.0,
             "p_baseline_weak": 0.0,
             "p_baseline_strong": 0.0,
-            "p_shift": 0.0,
-            "p_broadening": 0.0,
             "p_cut": 0.0,
         }
     )

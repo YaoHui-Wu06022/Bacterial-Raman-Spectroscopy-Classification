@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional
 
 from ramanv2.core.input_spec import InputSpec
-from ramanv2.data.augmentation import AugmentationSpec, augment_normalized_spectrum, augment_raw_spectrum
+from ramanv2.data.augmentation import AugmentationSpec, augment_raw_spectrum
 from ramanv2.spectra.filters import sg_coeff
 from ramanv2.spectra.normalize import normalize_spectrum
 
@@ -51,8 +51,6 @@ def build_model_input(
 
     source = torch.as_tensor(values, dtype=torch.float32, device=device).view(1, 1, -1)
     normalized = normalize_spectrum(values, input_spec.norm_method)
-    if augmentation_enable:
-        normalized = augment_normalized_spectrum(normalized, augmentation_spec)
     signal = torch.as_tensor(normalized, dtype=torch.float32, device=device).view(1, 1, -1)
 
     smooth_signal = None

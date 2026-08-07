@@ -37,11 +37,7 @@ BASELINE_STRONG_AMP_MAX = 0.15
 BASELINE_STRONG_KNOTS_MIN = 5
 BASELINE_STRONG_KNOTS_MAX = 9
 
-# 归一化后形状扰动：峰位最大平移点数、展宽核范围和局部遮罩参数。
-SHIFT_MAX = 3
-BROAD_SIGMA_MIN = 0.6
-BROAD_SIGMA_MAX = 1.2
-BROAD_TRUNCATE = 3.0
+# 原始强度上的局部遮罩参数。
 MASK_WIDTH_MIN = 20
 MASK_WIDTH_MAX = 50
 MASK_ATTEN_MIN = 0.5
@@ -57,11 +53,8 @@ class AugmentationSpec:
     p_axis: float
     p_baseline_weak: float
     p_baseline_strong: float
-    p_shift: float
-    p_broadening: float
     p_cut: float
     max_pre_augs: int
-    max_post_augs: int
 
 
 def build_augmentation_spec(training_config: TrainingConfig) -> AugmentationSpec:
@@ -72,11 +65,8 @@ def build_augmentation_spec(training_config: TrainingConfig) -> AugmentationSpec
         p_axis=float(training_config.p_axis),
         p_baseline_weak=float(training_config.p_baseline_weak),
         p_baseline_strong=float(training_config.p_baseline_strong),
-        p_shift=float(training_config.p_shift),
-        p_broadening=float(training_config.p_broadening),
         p_cut=float(training_config.p_cut),
         max_pre_augs=int(training_config.max_pre_augs),
-        max_post_augs=int(training_config.max_post_augs),
     )
 
 
@@ -91,6 +81,8 @@ def augment_raw_spectrum(values: np.ndarray, augmentation_spec: AugmentationSpec
         operations.append(augment_gaussian_noise)
     if np.random.rand() < augmentation_spec.p_axis:
         operations.append(augment_axis_warp)
+    if np.random.rand() < augmentation_spec.p_cut:
+        operations.append(augment_mask_attenuation)
     baseline_random = np.random.rand()
     if baseline_random < augmentation_spec.p_baseline_weak:
         operations.append(augment_weak_baseline)
@@ -99,25 +91,6 @@ def augment_raw_spectrum(values: np.ndarray, augmentation_spec: AugmentationSpec
 
     np.random.shuffle(operations)
     for operation in operations[: augmentation_spec.max_pre_augs]:
-        augmented = operation(augmented)
-    return augmented.astype(np.float32, copy=False)
-
-
-def augment_normalized_spectrum(
-    values: np.ndarray,
-    augmentation_spec: AugmentationSpec,
-) -> np.ndarray:
-    """在归一化后随机组合轻微形状扰动。"""
-    augmented = np.asarray(values, dtype=np.float32)
-    operations = []
-    if np.random.rand() < augmentation_spec.p_shift:
-        operations.append(augment_shift)
-    if np.random.rand() < augmentation_spec.p_broadening:
-        operations.append(augment_broadening)
-    if np.random.rand() < augmentation_spec.p_cut:
-        operations.append(augment_mask_attenuation)
-    np.random.shuffle(operations)
-    for operation in operations[: augmentation_spec.max_post_augs]:
         augmented = operation(augmented)
     return augmented.astype(np.float32, copy=False)
 
@@ -205,35 +178,6 @@ def augment_axis_warp(values: np.ndarray) -> np.ndarray:
     )
     warped = np.clip(positions + linear + nonlinear, 0, length - 1)
     return np.interp(positions, warped, values).astype(np.float32)
-
-
-def augment_shift(values: np.ndarray) -> np.ndarray:
-    """随机平移峰位，并以边界值填补空白位置。"""
-    values = np.asarray(values, dtype=np.float32)
-    shift = int(np.random.randint(-SHIFT_MAX, SHIFT_MAX + 1))
-    if shift == 0:
-        return values
-    augmented = np.empty_like(values)
-    if shift > 0:
-        augmented[:shift] = values[0]
-        augmented[shift:] = values[:-shift]
-    else:
-        shift = -shift
-        augmented[-shift:] = values[-1]
-        augmented[:-shift] = values[shift:]
-    return augmented
-
-
-def augment_broadening(values: np.ndarray) -> np.ndarray:
-    """通过小高斯核卷积模拟峰展宽。"""
-    values = np.asarray(values, dtype=np.float32)
-    sigma = float(np.random.uniform(BROAD_SIGMA_MIN, BROAD_SIGMA_MAX))
-    radius = max(int(BROAD_TRUNCATE * sigma + 0.5), 1)
-    positions = np.arange(-radius, radius + 1, dtype=np.float32)
-    kernel = np.exp(-(positions * positions) / (2.0 * sigma * sigma))
-    kernel /= kernel.sum() + 1e-8
-    padded = np.pad(values, (radius, radius), mode="reflect")
-    return np.convolve(padded, kernel, mode="valid").astype(np.float32)
 
 
 def augment_mask_attenuation(values: np.ndarray) -> np.ndarray:
