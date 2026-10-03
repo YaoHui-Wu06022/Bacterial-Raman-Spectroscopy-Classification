@@ -11,6 +11,11 @@ import torch
 from matplotlib.cm import ScalarMappable
 from matplotlib.lines import Line2D
 
+from ramanv2.common.plotting import configure_matplotlib_fonts
+
+
+configure_matplotlib_fonts()
+
 
 def save_train_val_umap(
     model: torch.nn.Module,

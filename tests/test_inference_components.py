@@ -46,7 +46,7 @@ def test_folder_summary_uses_majority_prediction() -> None:
     assert summary["folder_correct"] is True
 
 
-def test_test_input_selection_excludes_transferred_and_outside_model_labels() -> None:
+def test_test_input_selection_uses_current_model_labels() -> None:
     meta = {
         "class_names_by_level": {
             "level_1": ["GenusA", "GenusB"],
@@ -55,11 +55,10 @@ def test_test_input_selection_excludes_transferred_and_outside_model_labels() ->
     }
 
     selected, rows = build_test_input_selection(
-        ["CS01AA", "CS02BB", "CS03CC", "CS04AA"],
+        ["CS01AA", "CS02BB", "CS03CC"],
         meta,
         "level_1",
         ["GenusA"],
-        {"CS04AA"},
     )
 
     assert selected == {"CS01AA"}
@@ -67,7 +66,6 @@ def test_test_input_selection_excludes_transferred_and_outside_model_labels() ->
         "selected",
         "outside_model_label_space",
         "unmapped_species_prefix",
-        "transferred_to_alldata",
     ]
 
 

@@ -51,6 +51,7 @@ class RunContext:
     se_stats_path: Path
     checkpoint_path: Path
     diagnostic_path: Path
+    metrics_path: Path
     log_path: Path
     config_log_path: Path
     _log_file: TextIO
@@ -154,6 +155,7 @@ def open_run_context(
         se_stats_path=target_dir / f"{model_tag}_se_stats.pt",
         checkpoint_path=target_dir / f"{model_tag}_checkpoint.pt",
         diagnostic_path=log_dir / f"{model_tag}_numerical_diagnostic.json",
+        metrics_path=log_dir / "training_metrics.jsonl",
         log_path=log_path,
         config_log_path=config_log_path,
         _log_file=log_path.open(log_mode, buffering=1, encoding="utf-8"),

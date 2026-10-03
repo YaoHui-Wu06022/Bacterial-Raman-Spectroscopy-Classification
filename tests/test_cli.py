@@ -1,15 +1,16 @@
 import subprocess
 import sys
 
+import pytest
+
 from ramanv2.cli.main import build_parser
 
 
 def test_root_cli_registers_migrated_commands() -> None:
     parser = build_parser()
-    audit_args = parser.parse_args(["audit", "clean"])
+    pipeline_args = parser.parse_args(["pipeline", "audit", "--date", "20240101"])
     data_args = parser.parse_args(["data", "build", "train", "--profile", "GN"])
     train_args = parser.parse_args(["train", "--profile", "GN", "--level", "level_1"])
-    stanford_args = parser.parse_args(["stanford", "transfer", "--target-profile", "GN"])
     infer_args = parser.parse_args(
         ["infer", "test", "--source-dir", "output/example", "--level", "level_1"]
     )
@@ -26,9 +27,9 @@ def test_root_cli_registers_migrated_commands() -> None:
     )
     zip_args = parser.parse_args(["zip"])
 
-    assert audit_args.domain == "audit"
-    assert audit_args.command == "clean"
-    assert callable(audit_args.run_command)
+    assert pipeline_args.domain == "pipeline"
+    assert pipeline_args.command == "audit"
+    assert callable(pipeline_args.run_command)
     assert data_args.domain == "data"
     assert data_args.command == "build"
     assert data_args.build_target == "train"
@@ -37,10 +38,6 @@ def test_root_cli_registers_migrated_commands() -> None:
     assert train_args.level == "level_1"
     assert train_args.global_enable is False
     assert callable(train_args.run_command)
-    assert stanford_args.domain == "stanford"
-    assert stanford_args.command == "transfer"
-    assert stanford_args.target_profile == "GN"
-    assert callable(stanford_args.run_command)
     assert infer_args.domain == "infer"
     assert infer_args.command == "test"
     assert callable(infer_args.run_command)
@@ -49,6 +46,8 @@ def test_root_cli_registers_migrated_commands() -> None:
     assert callable(evaluation_args.run_command)
     assert zip_args.domain == "zip"
     assert callable(zip_args.run_command)
+    with pytest.raises(SystemExit):
+        parser.parse_args(["stanford", "transfer"])
 
 
 def test_root_help_does_not_load_torch() -> None:

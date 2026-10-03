@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -39,8 +40,8 @@ def test_workflow_writes_global_run_and_uses_plugin_callbacks(
         lambda num_classes, model_spec: WorkflowModel(num_classes),
     )
     monkeypatch.setattr(
-        "ramanv2.training.workflow.get_dataset_dir",
-        lambda profile, project_root: tmp_path / "dataset",
+        "ramanv2.training.workflow.resolve_training_dir",
+        lambda profile_key, project_root: tmp_path / "dataset" / "train",
     )
     initialized_tasks: list[str] = []
     mode_calls: list[bool] = []
@@ -65,6 +66,10 @@ def test_workflow_writes_global_run_and_uses_plugin_callbacks(
     assert entry["train_split_path"] == "train_split.json"
     assert entry["val_split_path"] == "val_split.json"
     assert entry["split_hash"]
+    run_dir = output_dir / entry["run_dir"]
+    manifest = json.loads((run_dir / "train_data" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["sample_count"] == len(manifest["samples"])
+    assert all((run_dir / "train_data" / sample["path"]).is_file() for sample in manifest["samples"])
     assert "leaf" in meta["class_names_by_level"]
     assert not (output_dir / "class_names.json").exists()
 
@@ -79,8 +84,8 @@ def test_workflow_writes_parent_model_entry(tmp_path: Path, monkeypatch: pytest.
         lambda num_classes, model_spec: WorkflowModel(num_classes),
     )
     monkeypatch.setattr(
-        "ramanv2.training.workflow.get_dataset_dir",
-        lambda profile, project_root: tmp_path / "dataset",
+        "ramanv2.training.workflow.resolve_training_dir",
+        lambda profile_key, project_root: tmp_path / "dataset" / "train",
     )
     output_dir = tmp_path / "output"
     meta = run_training(
@@ -96,6 +101,9 @@ def test_workflow_writes_parent_model_entry(tmp_path: Path, monkeypatch: pytest.
     assert entry["status"] == "trained"
     assert entry["child_ids"] == [0, 1]
     assert (output_dir / entry["model_path"]).is_file()
+    parent_run_dir = output_dir / entry["run_dir"]
+    parent_manifest = json.loads((parent_run_dir / "train_data" / "manifest.json").read_text(encoding="utf-8"))
+    assert parent_manifest["parent_id"] == 0
     model_config = read_yaml_dict(output_dir / entry["config_path"])
     assert model_config["only_parent"] == 0
 
@@ -104,10 +112,10 @@ def test_workflow_accepts_explicit_train_dir_without_a_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    train_dir = tmp_path / "stanford_train"
+    train_dir = tmp_path / "explicit_train"
     _write_spectra(train_dir / "SA01", "S", 1.0)
     _write_spectra(train_dir / "SB01", "T", 3.0)
-    config = _build_workflow_config(profile_id="Stanford")
+    config = _build_workflow_config(profile_id="GN")
     monkeypatch.setattr(
         "ramanv2.training.workflow.build_model",
         lambda num_classes, model_spec: WorkflowModel(num_classes),

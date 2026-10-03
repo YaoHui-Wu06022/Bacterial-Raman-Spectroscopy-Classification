@@ -19,7 +19,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
         target_parser.add_argument("--profile", required=True, help="常规数据集 profile 标识")
         target_parser.set_defaults(run_command=run_command)
 
-    for name, description in (("pack", "将 init 打包为 init.npz"), ("unpack", "将 init.npz 恢复为 init"), ("plot", "从 train 生成训练集均值图")):
+    for name, description in (("plot", "从 train 生成训练集均值图"),):
         command = commands.add_parser(name, help=description)
         command.add_argument("--profile", required=True, help="常规数据集 profile 标识")
         command.set_defaults(run_command=run_command)
@@ -50,22 +50,12 @@ def run_command(args: argparse.Namespace) -> int:
     profile, dataset_dir = _resolve_profile_dir(args.profile)
     if args.command == "build":
         from ramanv2.core.config import InputConfig
-        from ramanv2.data.build import build_test, build_train
+        from ramanv2.data.builders.stage import build_test, build_train
 
         if args.build_target == "train":
             build_train(profile, dataset_dir, input_config=InputConfig())
         else:
             build_test(profile, dataset_dir, input_config=InputConfig())
-        return 0
-    if args.command == "pack":
-        from ramanv2.data.io import pack_init
-
-        pack_init(dataset_dir / profile.root_init, dataset_dir / profile.root_init_pack)
-        return 0
-    if args.command == "unpack":
-        from ramanv2.data.io import unpack_init
-
-        unpack_init(dataset_dir / profile.root_init_pack, dataset_dir / profile.root_init)
         return 0
     if args.command == "count":
         from ramanv2.data.count import count_dataset, print_count_results
@@ -76,7 +66,7 @@ def run_command(args: argparse.Namespace) -> int:
         return 0
     if args.command == "plot":
         from ramanv2.core.config import InputConfig
-        from ramanv2.data.plot import plot_train
+        from ramanv2.data.plots.train import plot_train
 
         plot_train(profile, dataset_dir, InputConfig())
         return 0

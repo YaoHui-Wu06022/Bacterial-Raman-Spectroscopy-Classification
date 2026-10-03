@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import json
 from pathlib import Path
 
 import torch
@@ -11,6 +12,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from ramanv2.training.spec import ExecutionSpec, TrainingSpec
+from ramanv2.core.runtime import resolve_device
 from ramanv2.training.checkpoint import (
     TrainingState,
     remove_training_checkpoint,
@@ -38,6 +40,7 @@ class TrainArtifacts:
     se_stats_path: Path
     checkpoint_path: Path
     diagnostic_path: Path
+    metrics_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -63,7 +66,7 @@ def run_train_loop(
     apply_training_mode: Callable[[torch.nn.Module], None] | None = None,
 ) -> TrainResult:
     """执行单个层级或父类子模型的完整 epoch 训练与验证。"""
-    device = _resolve_device(runtime_spec)
+    device = resolve_device(use_gpu_enable=runtime_spec.use_gpu_enable)
     label_map_tensor = _build_label_map_tensor(train_task, device)
     model = model.to(device)
     optimizer = build_optimizer(model, train_spec.optimizer)
@@ -142,6 +145,17 @@ def run_train_loop(
                 train_spec,
                 score,
             )
+            if train_artifacts.metrics_path is not None:
+                write_training_metrics(
+                    train_artifacts.metrics_path,
+                    epoch,
+                    epoch_result,
+                    val_loss,
+                    val_accuracy,
+                    val_metrics,
+                    optimizer.param_groups[0]["lr"],
+                    score,
+                )
             _update_best_model(
                 model,
                 se_stats,
@@ -151,6 +165,10 @@ def run_train_loop(
                 score,
                 log_message,
             )
+            # 验证集已全部预测正确，无需继续消耗后续训练轮次。
+            if val_accuracy >= 1.0:
+                log_message("EarlyStopping Triggered by 100% validation accuracy!")
+                break
             if epoch % runtime_spec.checkpoint_interval == 0:
                 save_training_checkpoint(
                     train_artifacts.checkpoint_path,
@@ -614,6 +632,35 @@ def _log_epoch_result(
     )
 
 
+def write_training_metrics(
+    path: Path,
+    epoch: int,
+    epoch_result: dict[str, float],
+    val_loss: float,
+    val_accuracy: float,
+    val_metrics: dict[str, float],
+    learning_rate: float,
+    score: float,
+) -> None:
+    """追加单个 epoch 的机器可读指标，供界面实时绘制曲线。"""
+    values = {
+        "epoch": epoch,
+        "train_classification_loss": epoch_result["classification_loss"],
+        "train_alignment_loss": epoch_result["align_loss"],
+        "train_supcon_loss": epoch_result["supcon_loss"],
+        "train_accuracy": epoch_result["accuracy"],
+        "validation_loss": val_loss,
+        "validation_accuracy": val_accuracy,
+        "validation_macro_f1": val_metrics["macro_f1"],
+        "validation_macro_recall": val_metrics["macro_recall"],
+        "learning_rate": learning_rate,
+        "early_stop_score": score,
+        "skipped_batches": epoch_result["skipped_batches"],
+    }
+    with path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(values, ensure_ascii=False) + "\n")
+
+
 def _raise_if_model_parameters_are_nonfinite(model: torch.nn.Module, epoch: int) -> None:
     """在恢复后和每个 epoch 后检查模型参数是否均为有限值。"""
     if all(torch.isfinite(parameter).all().item() for parameter in model.parameters()):
@@ -624,12 +671,6 @@ def _raise_if_model_parameters_are_nonfinite(model: torch.nn.Module, epoch: int)
 def _zero_loss(values: torch.Tensor) -> torch.Tensor:
     """创建与当前计算图设备一致的零损失张量。"""
     return torch.zeros((), device=values.device, dtype=values.dtype)
-
-
-def _resolve_device(runtime_spec: ExecutionSpec) -> torch.device:
-    """按运行规格选择当前训练设备。"""
-    use_cuda_enable = runtime_spec.use_gpu_enable and torch.cuda.is_available()
-    return torch.device("cuda" if use_cuda_enable else "cpu")
 
 
 def _build_label_map_tensor(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .io import iter_arc_dirs
+from ramanv2.data.io import iter_arc_dirs
 
 
 def _compute_totals(node: dict) -> int:
@@ -38,6 +38,30 @@ def count_dataset(root_dir: Path | str) -> tuple[dict, int]:
         raise FileNotFoundError(f"缺少数据目录：{root_path}")
     tree = build_count_tree(root_path)
     return tree, tree.get("__total__", 0)
+
+
+def summarize_dataset(root_dir: Path | str) -> dict[str, int | bool]:
+    """返回页面和构建报告共用的数据集统计摘要。"""
+    root_path = Path(root_dir)
+    if not root_path.is_dir():
+        return {"exists": False, "genus_count": 0, "folder_count": 0, "file_count": 0}
+
+    tree, total_files = count_dataset(root_path)
+
+    def folder_count(node: dict) -> int:
+        count = 1 if node.get("__count__", 0) else 0
+        return count + sum(
+            folder_count(child)
+            for name, child in node.items()
+            if not name.startswith("__")
+        )
+
+    return {
+        "exists": True,
+        "genus_count": sum(1 for name in tree if not name.startswith("__")),
+        "folder_count": folder_count(tree),
+        "file_count": total_files,
+    }
 
 
 def _print_tree(node: dict, level: int = 0, name: str | None = None) -> None:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 
 def parse_folder_prefix(name: str, uppercase_enable: bool = False) -> str:
@@ -35,7 +34,3 @@ def build_natural_key(text: str) -> list[int | str]:
     return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", text)]
 
 
-def parse_source_prefix(path: Path | str) -> str:
-    """从转换谱文件名提取来源前缀，如 ``IgA01_xxx`` 中的 ``IgA01``。"""
-    stem = Path(path).stem
-    return stem.split("_", 1)[0]

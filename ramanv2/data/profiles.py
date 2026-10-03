@@ -1,7 +1,4 @@
-"""常规数据集 profile 映射。
-
-Stanford 预训练和微调不属于本映射，后续由扩展包独立配置。
-"""
+"""常规数据集 profile 映射。"""
 
 from __future__ import annotations
 
@@ -9,6 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ramanv2.core.paths import DATASET_ROOT
+
+
+PIPELINE_PROFILE_IDS = ("MICRO", "GN", "GP", "FUNG")
 
 
 @dataclass(frozen=True)
@@ -19,12 +19,9 @@ class DatasetProfile:
     dataset_name: str
     root_init: str = "init"
     root_init_test: str = "init_test"
-    root_init_pack: str = "init.npz"
     root_train_clean: str = "train"
     root_test: str = "test"
     root_train_fig: str = "fig_train"
-    pca_log_name: str = "pca_log.txt"
-    cosmic_ray_log_name: str = "cosmic_ray_removal_log.txt"
 
 
 PROFILES = {
@@ -32,10 +29,6 @@ PROFILES = {
     "GN": DatasetProfile("GN", "GN"),
     "GP": DatasetProfile("GP", "GP"),
     "FUNG": DatasetProfile("FUNG", "FUNG"),
-    "resistance": DatasetProfile("resistance", "耐药菌"),
-    "anaerobe": DatasetProfile("anaerobe", "厌氧菌"),
-    "test": DatasetProfile("test", "CSdata"),
-    "alldata": DatasetProfile("alldata", "alldata"),
 }
 
 PROFILE_LOOKUP = {
@@ -64,12 +57,19 @@ def get_dataset_dir(profile: DatasetProfile, project_root: Path | str | None = N
     return (root / profile.dataset_name).resolve()
 
 
-def resolve_training_dir(profile_key: str) -> Path:
+def resolve_training_dir(
+    profile_key: str,
+    project_root: Path | str | None = None,
+    *,
+    fallback_to_init_enable: bool = True,
+) -> Path:
     """优先解析构建后的 train 目录，缺失时使用可直接训练的 init 目录。"""
     profile = get_profile(profile_key)
-    dataset_dir = get_dataset_dir(profile)
+    dataset_dir = get_dataset_dir(profile, project_root)
     train_dir = dataset_dir / profile.root_train_clean
     if train_dir.is_dir():
+        return train_dir
+    if not fallback_to_init_enable:
         return train_dir
     init_dir = dataset_dir / profile.root_init
     return init_dir if init_dir.is_dir() else dataset_dir

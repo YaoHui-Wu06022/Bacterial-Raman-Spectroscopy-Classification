@@ -59,20 +59,34 @@ def write_summary_report(
     output_path: Path | str,
     rows: list[Mapping[str, Any]],
     evaluate_enable: bool,
-) -> None:
+) -> dict[str, Any]:
     """写入所有文件夹的独立推理汇总文本。"""
-    correct_count = sum(bool(row["folder_correct"]) for row in rows) if evaluate_enable else 0
+    evaluated_rows = [
+        row for row in rows
+        if evaluate_enable and bool(row.get("expected_in_model"))
+    ]
+    folder_correct_count = sum(bool(row["folder_correct"]) for row in evaluated_rows)
+    spectrum_correct_count = sum(int(row.get("correct_count", 0)) for row in evaluated_rows)
+    spectrum_total_count = sum(int(row.get("total_count", 0)) for row in evaluated_rows)
     lines = [
         "===== TEST SUMMARY =====",
         "",
         f"Folders        : {len(rows)}",
         (
             "Folder correct : "
-            f"{correct_count}/{len(rows)} "
-            f"({correct_count / len(rows) * 100 if rows else 0.0:.2f}%)"
+            f"{folder_correct_count}/{len(evaluated_rows)} "
+            f"({folder_correct_count / len(evaluated_rows) * 100 if evaluated_rows else 0.0:.2f}%)"
             if evaluate_enable
             else "Evaluation     : disabled"
         ),
+        (
+            f"Spectrum correct: {spectrum_correct_count}/{spectrum_total_count} "
+            f"({spectrum_correct_count / spectrum_total_count * 100 if spectrum_total_count else 0.0:.2f}%)"
+            if evaluate_enable
+            else ""
+        ),
+        f"Evaluated folders: {len(evaluated_rows)}",
+        f"Unevaluated folders: {len(rows) - len(evaluated_rows)}",
         "",
     ]
     columns = (
@@ -98,6 +112,26 @@ def write_summary_report(
         ]
         lines.append("\t".join(values))
     Path(output_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {
+        "folder_count": len(rows),
+        "evaluated_folder_count": len(evaluated_rows),
+        "unevaluated_folder_count": len(rows) - len(evaluated_rows),
+        "folder_correct_count": folder_correct_count,
+        "folder_accuracy": folder_correct_count / len(evaluated_rows) if evaluated_rows else None,
+        "spectrum_correct_count": spectrum_correct_count,
+        "spectrum_total_count": spectrum_total_count,
+        "spectrum_accuracy": spectrum_correct_count / spectrum_total_count if spectrum_total_count else None,
+        "evaluation_enable": bool(evaluate_enable),
+        "rows": rows,
+    }
+
+
+def write_summary_json(output_path: Path | str, summary: Mapping[str, Any]) -> None:
+    """写入供页面读取的结构化推理汇总。"""
+    Path(output_path).write_text(
+        json.dumps(dict(summary), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def write_used_runs(
@@ -133,6 +167,10 @@ def plot_folder_spectra(
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
+    from ramanv2.common.plotting import configure_matplotlib_fonts
+
+    configure_matplotlib_fonts()
 
     figure, axis = plt.subplots(figsize=(10, 5.5))
     for lower, upper in bad_bands:

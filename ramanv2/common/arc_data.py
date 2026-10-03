@@ -45,3 +45,13 @@ def read_raw_arc_data(path: Path | str) -> tuple[np.ndarray, np.ndarray, int]:
         np.asarray(intensities, dtype=np.float64),
         malformed_lines,
     )
+
+
+def write_arc_data(path: Path | str, wavenumbers, intensities, fmt: str = "%.8f") -> None:
+    """以两列文本格式写出一条光谱，并自动创建父目录。"""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    np.savetxt(target, np.column_stack([wavenumbers, intensities]), fmt=[fmt, fmt])
+
+
+__all__ = ["read_arc_data", "read_raw_arc_data", "write_arc_data"]

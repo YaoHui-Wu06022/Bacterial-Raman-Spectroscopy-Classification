@@ -13,6 +13,7 @@ from ramanv2.core.config_file import (
     SHARED_CONFIG_NAME,
     read_yaml_dict,
 )
+from ramanv2.core.paths import find_ancestor_dir
 
 
 @dataclass(frozen=True)
@@ -51,10 +52,7 @@ def _resolve_experiment_dir(run_path: Path, experiment_dir: Path | str | None) -
     """从显式路径或父目录链中定位 shared_config.yaml。"""
     if experiment_dir is not None:
         return Path(experiment_dir).resolve()
-    for parent in (run_path, *run_path.parents):
-        if (parent / SHARED_CONFIG_NAME).is_file():
-            return parent
-    raise FileNotFoundError(f"无法定位实验根 shared_config.yaml：{run_path}")
+    return find_ancestor_dir(run_path, SHARED_CONFIG_NAME)
 
 
 def _select_task_values(values: dict[str, Any]) -> dict[str, Any]:

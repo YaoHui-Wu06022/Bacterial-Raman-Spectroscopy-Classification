@@ -8,7 +8,6 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ramanv2.analysis.context import load_analysis_context, resolve_analysis_level
 from ramanv2.analysis.embedding import save_train_val_umap
 from ramanv2.analysis.integrated_gradients import (
     collect_task_inputs,
@@ -22,6 +21,7 @@ from ramanv2.analysis.layer_attribution import (
 from ramanv2.analysis.report import save_task_reports, write_aggregate_reports
 from ramanv2.analysis.se_summary import write_se_summary
 from ramanv2.analysis.task import build_parent_tasks, build_run_task
+from ramanv2.evaluation.context import load_evaluation_context, resolve_level_name
 from ramanv2.inference.predictor import load_predictor
 from ramanv2.spectra.axis import expected_wavenumbers
 
@@ -31,17 +31,37 @@ def run_interpret_run(
     level_name: str,
     device: str | None = None,
     attribution_batch_count: int | None = None,
+    umap_enable: bool = True,
 ) -> Path:
     """分析一个明确 global 或 parent 模型 run。"""
-    context = load_analysis_context(source_dir)
-    level = resolve_analysis_level(context, level_name)
+    context = load_evaluation_context(source_dir)
+    level = resolve_level_name(context, level_name)
     return _run_tasks(
         context,
         [build_run_task(context, level)],
         "run",
         device,
         attribution_batch_count,
+        umap_enable,
     )
+
+
+def run_umap_run(
+    source_dir: str,
+    level_name: str,
+    device: str | None = None,
+) -> Path:
+    """只为一个明确 run 重新生成 train/val 联合 UMAP。"""
+    context = load_evaluation_context(source_dir)
+    level = resolve_level_name(context, level_name)
+    task = build_run_task(context, level)
+    target_device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    predictor = load_predictor(task.run_dir, target_device, task.level_name)
+    model = predictor.load_model(task.level_name, task.entry, task.parent_id)
+    output_path = Path(task.run_dir) / "analysis_result" / "figures" / "umap_hier_train_val.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    _save_task_umap(context, task, model, target_device, output_path)
+    return output_path
 
 
 def run_interpret_parent_routed(
@@ -52,8 +72,8 @@ def run_interpret_parent_routed(
     attribution_batch_count: int | None = None,
 ) -> Path:
     """分析目标层全部或指定 parent 子模型并聚合归因。"""
-    context = load_analysis_context(source_dir)
-    level = resolve_analysis_level(context, level_name)
+    context = load_evaluation_context(source_dir)
+    level = resolve_level_name(context, level_name)
     return _run_tasks(
         context,
         build_parent_tasks(context, level, parent),
@@ -69,6 +89,7 @@ def _run_tasks(
     mode: str,
     device_value: str | None,
     attribution_batch_count: int | None = None,
+    umap_enable: bool = True,
 ) -> Path:
     """执行单模型或多 parent 模型分析，并写入既定产物目录。"""
     device = torch.device(device_value or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -84,7 +105,7 @@ def _run_tasks(
             task,
             device,
             figure_dir,
-            collect_embedding=len(tasks) == 1,
+            collect_embedding=umap_enable and len(tasks) == 1,
             write_reports_enable=task_report_enable,
             attribution_batch_count=attribution_batch_count,
         )

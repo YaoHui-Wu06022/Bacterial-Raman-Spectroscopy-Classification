@@ -36,9 +36,8 @@ def build_test_input_selection(
     meta: Mapping[str, Any],
     level_name: str,
     class_names: list[str],
-    transferred_names: set[str],
 ) -> tuple[set[str], list[dict[str, str | bool]]]:
-    """按目标层标签和 alldata 迁入清单筛选可推理的 CS 文件夹。"""
+    """按目标层标签空间筛选可推理的 CS 文件夹。"""
     expected_lookup = build_expected_label_lookup(meta, level_name)
     model_labels = set(class_names)
     selected_names = set()
@@ -47,9 +46,7 @@ def build_test_input_selection(
         species_prefix = parse_test_folder_prefix(folder_name)
         expected_label = expected_lookup.get(species_prefix)
         expected_in_model = expected_label in model_labels
-        if folder_name in transferred_names:
-            reason = "transferred_to_alldata"
-        elif expected_label is None:
+        if expected_label is None:
             reason = "unmapped_species_prefix"
         elif not expected_in_model:
             reason = "outside_model_label_space"
@@ -63,7 +60,6 @@ def build_test_input_selection(
                 "target_level": level_name,
                 "expected_label": expected_label or "",
                 "expected_in_model": expected_in_model,
-                "transferred_to_alldata": folder_name in transferred_names,
                 "selected": folder_name in selected_names,
                 "reason": reason,
             }

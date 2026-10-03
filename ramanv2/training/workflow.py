@@ -31,14 +31,15 @@ from ramanv2.core.run_context import (
     open_run_context,
     resolve_run_dir,
 )
-from ramanv2.data.augmentation import build_augmentation_spec
-from ramanv2.data.dataset import RamanDataset
-from ramanv2.data.index import DatasetIndex
-from ramanv2.data.profiles import get_dataset_dir, get_profile
+from ramanv2.data.runtime.augmentation import build_augmentation_spec
+from ramanv2.data.runtime.dataset import RamanDataset
+from ramanv2.data.runtime.index import DatasetIndex
+from ramanv2.data.profiles import get_profile, resolve_training_dir
 from ramanv2.modeling.factory import build_model, validate_model_input
 from ramanv2.modeling.spec import ModelSpec, build_model_spec
 from ramanv2.training.loop import TrainArtifacts, TrainResult, run_train_loop
 from ramanv2.training.optimizer import build_loader
+from ramanv2.training.snapshot import save_or_validate_train_snapshot
 from ramanv2.training.split import (
     TrainTask,
     apply_train_filter,
@@ -95,7 +96,6 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
         train_spec.train_ratio,
         train_spec.seed,
         experiment_context.experiment_dir,
-        split_by_source_prefix_enable=train_spec.split_by_source_prefix_enable,
     )
     train_scope = build_train_scope(
         dataset_index,
@@ -155,6 +155,7 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
                 f"validation={len(train_task.val_indices)}"
             )
             _validate_task_samples(train_task)
+            save_or_validate_train_snapshot(dataset_index, train_task, run_context)
             result = _run_train_task(
                 train_task,
                 train_dataset,
@@ -204,6 +205,7 @@ def build_train_artifacts(run_context: RunContext) -> TrainArtifacts:
         se_stats_path=run_context.se_stats_path,
         checkpoint_path=run_context.checkpoint_path,
         diagnostic_path=run_context.diagnostic_path,
+        metrics_path=run_context.metrics_path,
     )
 
 
@@ -223,13 +225,7 @@ def _resolve_train_dir(request: TrainRequest, config: Config) -> Path:
         if not train_dir.is_dir():
             raise FileNotFoundError(f"缺少显式训练目录：{train_dir}")
         return train_dir
-    profile = get_profile(config.dataset.profile_id)
-    dataset_dir = get_dataset_dir(profile, PROJECT_ROOT)
-    train_dir = dataset_dir / profile.root_train_clean
-    if train_dir.is_dir():
-        return train_dir
-    init_dir = dataset_dir / profile.root_init
-    return init_dir if init_dir.is_dir() else dataset_dir
+    return resolve_training_dir(config.dataset.profile_id, PROJECT_ROOT)
 
 
 def _set_random_seed(seed: int, deterministic_enable: bool) -> None:

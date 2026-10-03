@@ -9,7 +9,6 @@ from typing import Any
 
 import numpy as np
 
-from ramanv2.common.naming import parse_source_prefix
 from ramanv2.core.paths import normalize_relpath
 
 
@@ -239,11 +238,8 @@ def split_by_lowest_level_ratio(
     train_ratio: float = 0.8,
     seed: int = 42,
     min_train_samples: int = 1,
-    split_by_source_prefix_enable: bool = False,
 ) -> tuple[list[int], list[int]]:
-    """按指定层级分组，执行样本级或来源前缀的 train/val 切分。"""
-    if split_by_source_prefix_enable:
-        return _split_indices_by_source_prefix(dataset, lowest_level, train_ratio, seed)
+    """按指定层级分组，执行样本级 train/val 切分。"""
     return _split_indices_by_sample(dataset, lowest_level, train_ratio, seed, min_train_samples)
 
 
@@ -276,67 +272,6 @@ def _split_indices_by_sample(
     return train_indices, val_indices
 
 
-def _split_indices_by_source_prefix(
-    dataset: Any,
-    lowest_level: str,
-    train_ratio: float,
-    seed: int,
-) -> tuple[list[int], list[int]]:
-    """以来源前缀为不可拆分分组，避免同源谱同时进入 train 和 val。"""
-    random_state = np.random.RandomState(seed)
-    prefix_groups_by_bucket: dict[Any, dict[str, list[int]]] = {}
-    for index in range(len(dataset)):
-        source_prefix = parse_source_prefix(dataset.samples[index])
-        bucket_key = _resolve_split_group_key(dataset, index, lowest_level)
-        prefix_groups = prefix_groups_by_bucket.setdefault(bucket_key, {})
-        prefix_groups.setdefault(source_prefix, []).append(index)
-
-    train_indices: list[int] = []
-    val_indices: list[int] = []
-    for level_key, prefix_groups in prefix_groups_by_bucket.items():
-        groups = [
-            (prefix, np.array(indices, dtype=np.int64))
-            for prefix, indices in prefix_groups.items()
-        ]
-        random_state.shuffle(groups)
-        if len(groups) == 1:
-            prefix, indices = groups[0]
-            train_indices.extend(indices.tolist())
-            print(
-                "[Warn] 来源前缀切分："
-                f"{level_key!r} 只有一个来源前缀 {prefix!r}。"
-                "全部归入 train。"
-            )
-            continue
-
-        group_train: list[tuple[str, np.ndarray]] = []
-        group_val: list[tuple[str, np.ndarray]] = []
-        target_train = sum(len(indices) for _, indices in groups) * float(train_ratio)
-        current_train = 0
-        for group_index, group in enumerate(groups):
-            if not group_train:
-                group_train.append(group)
-                current_train += len(group[1])
-                continue
-            if group_index == len(groups) - 1 and not group_val:
-                group_val.append(group)
-                continue
-            add_error = abs(target_train - (current_train + len(group[1])))
-            current_error = abs(target_train - current_train)
-            if add_error <= current_error:
-                group_train.append(group)
-                current_train += len(group[1])
-            else:
-                group_val.append(group)
-        if not group_val:
-            group_val.append(group_train.pop())
-        for _, indices in group_train:
-            train_indices.extend(indices.tolist())
-        for _, indices in group_val:
-            val_indices.extend(indices.tolist())
-    return train_indices, val_indices
-
-
 def _resolve_split_group_key(dataset: Any, index: int, lowest_level: str) -> Any:
     """读取样本在指定 split 层级中的分组键，并在缺失时回退到 leaf。"""
     if "/" in str(lowest_level):
@@ -354,20 +289,27 @@ def resolve_train_split(
     seed: int,
     split_dir: Path | str,
     reuse_existing_enable: bool = True,
-    split_by_source_prefix_enable: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """生成或复用训练切分，返回排序后的索引数组。"""
     existing_split = load_split_files(dataset, split_dir) if reuse_existing_enable else None
     if existing_split is not None:
+        train_indices, val_indices = existing_split
+        print(
+            f"[Split] 复用已有 train_split.json/val_split.json："
+            f"train={len(train_indices)}, val={len(val_indices)}"
+        )
         return existing_split
 
     train_indices, val_indices = split_by_lowest_level_ratio(
         dataset,
         train_ratio=train_ratio,
         seed=seed,
-        split_by_source_prefix_enable=split_by_source_prefix_enable,
     )
     save_split_files(dataset, train_indices, val_indices, split_dir)
+    print(
+        f"[Split] 新建 train_split.json/val_split.json："
+        f"train={len(train_indices)}, val={len(val_indices)}"
+    )
     return np.array(sorted(train_indices)), np.array(sorted(val_indices))
 
 

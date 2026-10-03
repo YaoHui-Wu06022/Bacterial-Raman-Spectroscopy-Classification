@@ -9,9 +9,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.collections import PolyCollection
 
-from ramanv2.common.plotting import shorten_class_names
+from ramanv2.common.plotting import add_bad_band_spans, configure_matplotlib_fonts, shorten_class_names
 from ramanv2.spectra.axis import estimate_gap_indices
 from ramanv2.spectra.bands import normalize_bad_bands
+
+
+configure_matplotlib_fonts()
 
 
 def save_task_reports(
@@ -157,14 +160,17 @@ def save_channel_importance_plot(
     aggregate_enable: bool,
 ) -> None:
     """保存输入通道相对归因柱状图。"""
-    figure, axis = plt.subplots(figsize=(7, 4))
+    figure, axis = plt.subplots(figsize=(4.5, 4))
     names = channel_names[: len(values)]
     colors = plt.cm.tab10(np.linspace(0, 1, len(names)))
-    axis.bar(names, values, color=colors)
+    positions = np.arange(len(names)) * 0.55
+    axis.bar(positions, values, color=colors, width=0.24)
+    axis.set_xticks(positions, names)
+    axis.set_xlim(positions[0] - 0.24, positions[-1] + 0.24)
     title = (
         "Input Channel Contribution (Aggregated)"
         if aggregate_enable
-        else "Input Channel Contribution (Integrated Gradients)"
+        else "Input Channel Contribution (IG)"
     )
     axis.set_title(title)
     axis.set_ylabel("Relative Importance")
@@ -302,7 +308,7 @@ def save_class_band_heatmap(
     display_name = shorten_class_names((class_name,))[0]
     normalized_spectrum = _normalize_spectrum(mean_spectrum)
     figure, axis = plt.subplots(figsize=(12, 4.5))
-    _add_bad_band_spans(axis, bad_bands)
+    add_bad_band_spans(axis, normalize_bad_bands(bad_bands), alpha=0.15, zorder=0)
     _add_colored_band_fill(axis, wavenumbers, normalized_spectrum, importance)
     _plot_spectrum_segments(axis, wavenumbers, normalized_spectrum)
     axis.set_xlim(wavenumbers[0], wavenumbers[-1])
@@ -343,12 +349,6 @@ def _normalize_spectrum(values: np.ndarray) -> np.ndarray:
     lower = float(np.min(values))
     upper = float(np.max(values))
     return np.zeros_like(values) if upper - lower < 1e-8 else (values - lower) / (upper - lower)
-
-
-def _add_bad_band_spans(axis, bad_bands) -> None:
-    """在单类别归因图中以灰色区域标记被排除的坏波段。"""
-    for lower, upper in normalize_bad_bands(bad_bands):
-        axis.axvspan(lower, upper, color="gray", alpha=0.15, zorder=0)
 
 
 def _add_colored_band_fill(

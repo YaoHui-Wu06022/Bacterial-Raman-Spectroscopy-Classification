@@ -10,26 +10,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m ramanv2", description="Raman 光谱分类工具")
     domains = parser.add_subparsers(dest="domain", required=True)
 
-    import ramanv2.audit.cli
     import ramanv2.analysis.cli
     import ramanv2.data.cli
     import ramanv2.evaluation.cli
     import ramanv2.inference.cli
-    import ramanv2.package_archive
+    import ramanv2.packaging.source_archive
+    import ramanv2.pipeline.cli
     import ramanv2.training.cli
-    import ramanv2.extensions.stanford_finetune.cli
 
-    audit_parser = domains.add_parser("audit", help="执行数据审核")
-    ramanv2.audit.cli.configure_parser(audit_parser)
+    pipeline_parser = domains.add_parser("pipeline", help="执行前置数据流水线")
+    ramanv2.pipeline.cli.configure_parser(pipeline_parser)
 
     data_parser = domains.add_parser("data", help="构建、打包和检查常规数据集")
     ramanv2.data.cli.configure_parser(data_parser)
 
     train_parser = domains.add_parser("train", help="训练层级分类模型")
     ramanv2.training.cli.configure_parser(train_parser)
-
-    stanford_parser = domains.add_parser("stanford", help="Stanford 预训练与迁移扩展")
-    ramanv2.extensions.stanford_finetune.cli.configure_parser(stanford_parser)
 
     infer_parser = domains.add_parser("infer", help="执行独立推理")
     infer_commands = infer_parser.add_subparsers(dest="command", required=True)
@@ -43,8 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
     analysis_parser = domains.add_parser("analyze", help="运行模型可解释性分析")
     ramanv2.analysis.cli.configure_parser(analysis_parser)
 
-    zip_parser = domains.add_parser("zip", help="仅打包 ramanv2，不包含 Stanford 扩展和数据集")
-    zip_parser.set_defaults(run_command=ramanv2.package_archive.run_command)
+    zip_parser = domains.add_parser("zip", help="仅打包 ramanv2，不包含数据集")
+    zip_parser.set_defaults(run_command=ramanv2.packaging.source_archive.run_command)
     return parser
 
 

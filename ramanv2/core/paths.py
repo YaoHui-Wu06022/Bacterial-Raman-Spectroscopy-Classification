@@ -12,9 +12,6 @@ from pathlib import Path
 # 本模块位于 ``<项目根目录>/ramanv2/core/``，上两级目录即项目根目录。
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATASET_ROOT = PROJECT_ROOT / "dataset"
-_STANFORD_REFERENCE_WAVENUMBERS = (
-    DATASET_ROOT / "Stanforddataset" / "reference_wavenumbers.npy"
-)
 
 
 def resolve_path(path: Path | str | None, base_dir: Path | str | None = None) -> Path | None:
@@ -26,11 +23,6 @@ def resolve_path(path: Path | str | None, base_dir: Path | str | None = None) ->
         return candidate.resolve()
     root = PROJECT_ROOT if base_dir is None else Path(base_dir)
     return (root / candidate).resolve()
-
-
-def stanford_reference_wavenumbers_path() -> Path:
-    """返回固定的 Stanford 共享参考波数文件位置，不检查文件是否存在。"""
-    return _STANFORD_REFERENCE_WAVENUMBERS
 
 
 def normalize_relpath(path: Path | str) -> str:
@@ -49,6 +41,20 @@ def safe_relative_to(path: Path | str, parent: Path | str) -> Path | None:
 def is_relative_to(path: Path | str, parent: Path | str) -> bool:
     """以布尔形式判断路径是否位于父目录内。"""
     return safe_relative_to(path, parent) is not None
+
+
+def find_ancestor_dir(start_path: Path | str, marker_name: str) -> Path:
+    """从路径自身向上查找包含指定标记文件或目录的祖先目录。"""
+    start = Path(start_path).resolve()
+    candidates = (
+        (start, *start.parents)
+        if start.is_dir()
+        else (start.parent, *start.parent.parents)
+    )
+    for candidate in candidates:
+        if (candidate / marker_name).exists():
+            return candidate
+    raise FileNotFoundError(f"无法定位包含 {marker_name} 的目录：{start}")
 
 
 def relpath(path: Path | str, start: Path | str) -> str:

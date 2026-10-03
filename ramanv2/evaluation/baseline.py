@@ -11,16 +11,16 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
-from ramanv2.data.input import InputPreprocessor
+from ramanv2.data.runtime.input import InputPreprocessor
 from ramanv2.evaluation.context import (
     EvaluationContext,
-    RunEntry,
     load_evaluation_context,
     resolve_level_name,
     resolve_result_dir,
     resolve_run_entry,
 )
 from ramanv2.evaluation.report import write_baseline_report, write_pca_scatter
+from ramanv2.evaluation.scope import resolve_run_class_ids, select_parent_indices
 
 
 @dataclass(frozen=True)
@@ -48,7 +48,7 @@ def evaluate_baseline_run(
         raise ValueError(
             f"run 属于 {run_entry.level_name}，不能按 {level_name} 评估"
         )
-    class_ids = _resolve_run_class_ids(context, run_entry)
+    class_ids = resolve_run_class_ids(context.dataset_index, run_entry)
     train_indices = _select_class_indices(context, context.train_indices, level_name, class_ids)
     validation_indices = _select_class_indices(context, context.validation_indices, level_name, class_ids)
     class_names = [context.dataset_index.get_class_names(level_name)[index] for index in class_ids]
@@ -86,14 +86,14 @@ def evaluate_baseline_parent_routed(
     for parent_text, child_values in sorted(mapping.items(), key=lambda item: int(item[0])):
         parent_id = int(parent_text)
         child_ids = [int(item) for item in child_values]
-        train_indices = _select_parent_indices(
+        train_indices = select_parent_indices(
             context.dataset_index.level_labels,
             context.train_indices,
             parent_index,
             level_index,
             parent_id,
         )
-        validation_indices = _select_parent_indices(
+        validation_indices = select_parent_indices(
             context.dataset_index.level_labels,
             context.validation_indices,
             parent_index,
@@ -229,26 +229,6 @@ def _select_class_indices(
     level_index = context.dataset_index.head_name_to_idx[level_name]
     labels = context.dataset_index.level_labels[indices, level_index]
     return indices[np.isin(labels, list(class_ids))]
-
-
-def _select_parent_indices(
-    labels: np.ndarray,
-    indices: np.ndarray,
-    parent_index: int,
-    level_index: int,
-    parent_id: int,
-) -> np.ndarray:
-    """筛选属于一个父类且目标层标签有效的样本索引。"""
-    values = labels[indices]
-    mask = (values[:, parent_index] == parent_id) & (values[:, level_index] >= 0)
-    return indices[mask]
-
-
-def _resolve_run_class_ids(context: EvaluationContext, run_entry: RunEntry) -> list[int]:
-    """解析一个 global 或 parent run 的目标层全局类别标识。"""
-    if run_entry.parent_id is None:
-        return list(range(context.dataset_index.num_classes_by_level[run_entry.level_name]))
-    return [int(item) for item in run_entry.values.get("child_ids") or []]
 
 
 def _write_pca_summary(result_dir: Path, pca: PCA) -> None:

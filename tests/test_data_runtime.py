@@ -8,9 +8,9 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from ramanv2.core.input_spec import InputSpec
-from ramanv2.data.dataset import RamanDataset
-from ramanv2.data.index import DatasetIndex
-from ramanv2.data.input import InputPreprocessor
+from ramanv2.data.runtime.dataset import RamanDataset
+from ramanv2.data.runtime.index import DatasetIndex
+from ramanv2.data.runtime.input import InputPreprocessor
 
 
 def test_dataset_scans_hierarchy_and_builds_input(tmp_path: Path) -> None:

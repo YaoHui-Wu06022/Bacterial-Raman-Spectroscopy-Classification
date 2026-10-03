@@ -13,9 +13,11 @@ import numpy as np
 import torch
 
 from ramanv2.core.paths import DATASET_ROOT
+from ramanv2.core.runtime import resolve_device
 from ramanv2.common.naming import parse_test_folder_prefix
-from ramanv2.data.profiles import get_dataset_dir, get_profile
+from ramanv2.data.profiles import resolve_training_dir
 from ramanv2.inference.directory import list_spectrum_paths, resolve_input_dirs
+from ramanv2.inference.cache import CachedFolder, load_test_cache
 from ramanv2.inference.labels import (
     build_expected_label_lookup,
     build_folder_summary,
@@ -25,6 +27,7 @@ from ramanv2.inference.predictor import Predictor, load_predictor
 from ramanv2.inference.report import (
     plot_folder_spectra,
     write_file_report,
+    write_summary_json,
     write_summary_report,
     write_used_runs,
 )
@@ -38,6 +41,7 @@ def run_independent_inference(
     source_dir: Path | str,
     level_name: int | str,
     *,
+    predictor: Predictor | None = None,
     model_run_dir: Path | str | None = None,
     input_dir: Path | str | None = None,
     one_dir: Path | str | None = None,
@@ -45,29 +49,53 @@ def run_independent_inference(
     device: torch.device | str | None = None,
     evaluate_enable: bool = True,
     plot_train_mean_enable: bool = False,
+    cached_test_root: Path | str | None = None,
+    folder_names: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> Path:
     """运行独立文件夹推理并发布 `test_result/` 产物目录。"""
-    target_device = _resolve_device(device)
-    predictor = load_predictor(
-        source_dir,
-        target_device,
-        level_name,
-        model_run_dir=model_run_dir,
-    )
+    target_device = predictor.device if predictor is not None else resolve_device(device)
+    if predictor is None:
+        predictor = load_predictor(
+            source_dir,
+            target_device,
+            level_name,
+            model_run_dir=model_run_dir,
+        )
     preprocessor = build_inference_preprocessor(predictor.input_spec, target_device)
+    cached_folders: list[CachedFolder] | None = None
     test_dir = _resolve_test_dir(predictor, input_dir)
-    input_dirs = resolve_input_dirs(test_dir, one_dir)
+    if cached_test_root is not None:
+        if folder_names is None:
+            raise ValueError("使用测试缓存时必须指定文件夹")
+        selected_names = sorted({str(name) for name in folder_names})
+        cached_folders = load_test_cache(cached_test_root, selected_names, predictor)
+        input_dirs: list[Path] = []
+    else:
+        input_dirs = resolve_input_dirs(test_dir, one_dir)
     expected_lookup = build_expected_label_lookup(predictor.meta, predictor.predict_level)
+    available_names = (
+        [folder.folder_name for folder in cached_folders]
+        if cached_folders is not None
+        else [path.name for path in input_dirs]
+    )
     selected_names, selection_rows = build_test_input_selection(
-        [path.name for path in input_dirs],
+        available_names,
         predictor.meta,
         predictor.predict_level,
         predictor.resolve_target_class_names(),
-        load_transferred_source_folder_names(test_dir),
     )
-    input_dirs = [path for path in input_dirs if path.name in selected_names]
-    if not input_dirs:
+    if folder_names is not None:
+        selected_names = {str(name) for name in folder_names}
+        for row in selection_rows:
+            row["selected"] = row["folder"] in selected_names
+        if cached_folders is None:
+            input_dirs = [path for path in input_dirs if path.name in selected_names]
+    else:
+        input_dirs = [path for path in input_dirs if path.name in selected_names]
+    if not selected_names:
         raise FileNotFoundError(f"没有属于当前模型标签空间的推理文件夹：{test_dir}")
+    if cached_folders is None and folder_names is not None and not input_dirs:
+        raise FileNotFoundError(f"没有找到选定的推理文件夹：{sorted(selected_names)}")
     target_dir = _resolve_result_dir(predictor)
     temp_dir = target_dir.parent / f".{target_dir.name}_building_{uuid4().hex[:8]}"
     temp_dir.mkdir(parents=True)
@@ -82,8 +110,10 @@ def run_independent_inference(
             evaluate_enable,
             plot_train_mean_enable,
             expected_lookup,
+            cached_folders,
         )
-        write_summary_report(temp_dir / "summary.txt", rows, evaluate_enable)
+        summary = write_summary_report(temp_dir / "summary.txt", rows, evaluate_enable)
+        write_summary_json(temp_dir / "summary.json", summary)
         write_used_runs(
             temp_dir / "used_runs.json",
             "single_run" if predictor.run_dir is not None else "cascade",
@@ -107,6 +137,7 @@ def _run_folder_predictions(
     evaluate_enable: bool,
     plot_train_mean_enable: bool,
     expected_lookup: dict[str, str],
+    cached_folders: list[CachedFolder] | None = None,
 ) -> list[dict[str, Any]]:
     """遍历所有输入文件夹，写入逐谱结果并返回有效汇总行。"""
     train_mean_bank = (
@@ -116,9 +147,20 @@ def _run_folder_predictions(
     )
     class_names = predictor.resolve_target_class_names()
     rows: list[dict[str, Any]] = []
-    for folder_dir in input_dirs:
+    if cached_folders is None:
+        folder_inputs = [
+            (folder_dir.name, [(path.name, path) for path in list_spectrum_paths(folder_dir)])
+            for folder_dir in input_dirs
+        ]
+    else:
+        folder_inputs = [
+            (folder.folder_name, [(item.file_name, item.path) for item in folder.files])
+            for folder in cached_folders
+        ]
+    for folder_name, spectrum_items in folder_inputs:
         row = _run_single_folder(
-            folder_dir,
+            folder_name,
+            spectrum_items,
             output_dir,
             predictor,
             preprocessor,
@@ -141,7 +183,6 @@ def write_input_selection(output_path: Path, rows: list[dict[str, str | bool]]) 
         "target_level",
         "expected_label",
         "expected_in_model",
-        "transferred_to_alldata",
         "selected",
         "reason",
     )
@@ -152,7 +193,8 @@ def write_input_selection(output_path: Path, rows: list[dict[str, str | bool]]) 
 
 
 def _run_single_folder(
-    folder_dir: Path,
+    folder_name: str,
+    spectrum_items: list[tuple[str, Path]],
     output_dir: Path,
     predictor: Predictor,
     preprocessor,
@@ -165,16 +207,22 @@ def _run_single_folder(
     """预测一个文件夹的全部光谱，并保存文本和对照图。"""
     predictions: list[dict[str, Any]] = []
     signals: list[np.ndarray] = []
-    for spectrum_path in list_spectrum_paths(folder_dir):
-        inputs = preprocess_spectrum_path(
-            spectrum_path,
-            preprocessor,
-            predictor.input_config.bad_bands,
-        )
+    for file_name, spectrum_path in spectrum_items:
+        if spectrum_path.suffix.lower() == ".pt":
+            payload = torch.load(spectrum_path, map_location="cpu")
+            if not isinstance(payload, dict) or not isinstance(payload.get("input"), torch.Tensor):
+                raise ValueError(f"测试缓存内容无效：{spectrum_path}")
+            inputs = payload["input"]
+        else:
+            inputs = preprocess_spectrum_path(
+                spectrum_path,
+                preprocessor,
+                predictor.input_config.bad_bands,
+            )
         top_predictions = predictor.predict_tensor(inputs, top_k)
         predictions.append(
             {
-                "file": spectrum_path.name,
+                "file": file_name,
                 "predictions": [
                     {
                         "label": item.label,
@@ -190,18 +238,20 @@ def _run_single_folder(
     if not predictions:
         return None
     expected_label = (
-        expected_lookup.get(parse_test_folder_prefix(folder_dir.name))
+        expected_lookup.get(parse_test_folder_prefix(folder_name))
         if evaluate_enable
         else None
     )
-    row = build_folder_summary(folder_dir.name, expected_label, class_names, predictions)
-    folder_output_dir = output_dir / folder_dir.name
+    row = build_folder_summary(folder_name, expected_label, class_names, predictions)
+    row["file_predictions"] = predictions
+    folder_output_dir = output_dir / folder_name
     folder_output_dir.mkdir(parents=True)
+    evaluation_row = row if evaluate_enable and row["expected_in_model"] else None
     write_file_report(
-        folder_output_dir / f"{folder_dir.name}_file.txt",
-        folder_dir.name,
+        folder_output_dir / f"{folder_name}_file.txt",
+        folder_name,
         predictions,
-        row if evaluate_enable else None,
+        evaluation_row,
     )
     values = np.stack(signals, axis=0)
     wavenumbers = np.linspace(
@@ -212,11 +262,11 @@ def _run_single_folder(
     )
     plot_folder_spectra(
         folder_output_dir / "spectra.png",
-        folder_dir.name,
+        folder_name,
         values,
         wavenumbers,
         predictor.input_config.bad_bands,
-        row["expected_label"] if evaluate_enable else None,
+        row["expected_label"] if evaluation_row is not None else None,
         row["predicted_label"],
         train_mean_bank,
     )
@@ -224,26 +274,10 @@ def _run_single_folder(
 
 
 def _resolve_test_dir(predictor: Predictor, input_dir: Path | str | None) -> Path:
-    """解析显式输入目录或 profile 对应的独立测试目录。"""
+    """解析显式输入目录；缺省时始终使用 CSdata。"""
     if input_dir is not None:
         return Path(input_dir).resolve()
-    profile = get_profile(predictor.profile_id)
-    if profile.profile_id == "alldata":
-        return get_dataset_dir(get_profile("test"), DATASET_ROOT.parent) / "init"
-    return get_dataset_dir(profile, DATASET_ROOT.parent) / profile.root_test
-
-
-def load_transferred_source_folder_names(test_dir: Path) -> set[str]:
-    """读取已复制到 alldata 的 CS 来源目录名，供默认独立推理排除。"""
-    manifest_path = test_dir.parent / "alldata_transfer_manifest.csv"
-    if not manifest_path.is_file():
-        return set()
-    with manifest_path.open("r", encoding="utf-8-sig", newline="") as file:
-        return {
-            row["source_folder"]
-            for row in csv.DictReader(file)
-            if row.get("source_folder")
-        }
+    return (DATASET_ROOT / "CSdata").resolve()
 
 
 def _resolve_result_dir(predictor: Predictor) -> Path:
@@ -253,17 +287,13 @@ def _resolve_result_dir(predictor: Predictor) -> Path:
     return predictor.experiment_dir / predictor.predict_level / "test_result"
 
 
-def _resolve_device(device: torch.device | str | None) -> torch.device:
-    """选择用户指定设备，缺省时优先使用可用 CUDA。"""
-    if device is not None:
-        return torch.device(device)
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
 def _build_train_mean_bank(predictor: Predictor, preprocessor) -> dict[str, np.ndarray]:
     """按目标层级汇总训练集每个类别的均值输入谱。"""
-    profile = get_profile(predictor.profile_id)
-    train_dir = get_dataset_dir(profile, DATASET_ROOT.parent) / profile.root_train_clean
+    train_dir = resolve_training_dir(
+        predictor.profile_id,
+        DATASET_ROOT.parent,
+        fallback_to_init_enable=False,
+    )
     if not train_dir.is_dir():
         raise FileNotFoundError(f"训练目录不存在：{train_dir}")
     values_by_label: dict[str, list[np.ndarray]] = defaultdict(list)

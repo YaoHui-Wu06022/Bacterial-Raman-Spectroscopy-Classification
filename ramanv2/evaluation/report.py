@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Sequence
 
@@ -13,11 +14,15 @@ from sklearn.metrics import classification_report, confusion_matrix
 
 from ramanv2.common.metrics import compute_classification_metrics
 from ramanv2.common.plotting import (
+    configure_matplotlib_fonts,
     resolve_confusion_matrix_figsize,
     resolve_confusion_matrix_font_sizes,
     resolve_confusion_matrix_left_margin,
     shorten_class_names,
 )
+
+
+configure_matplotlib_fonts()
 
 
 def write_model_report(
@@ -126,6 +131,41 @@ def _write_classification_outputs(
         pd.DataFrame(
             {"path": list(paths), "label_true": label_values, "label_pred": prediction_values}
         ).to_csv(result_dir / sample_name, index=False)
+    _write_metrics_json(result_dir, class_names, report, metrics, matrix)
+
+
+def _write_metrics_json(
+    result_dir: Path,
+    class_names: Sequence[str],
+    report: dict,
+    metrics: dict[str, float],
+    matrix: np.ndarray,
+) -> None:
+    """写入供界面稳定读取的评估摘要，不替代现有文本与 CSV 报告。"""
+    support = int(matrix.sum())
+    classes = [
+        {
+            "name": name,
+            "precision": float(report[name]["precision"]),
+            "recall": float(report[name]["recall"]),
+            "f1_score": float(report[name]["f1-score"]),
+            "support": int(report[name]["support"]),
+        }
+        for name in class_names
+    ]
+    values = {
+        "summary": {
+            "accuracy": float(metrics["accuracy"]),
+            "macro_f1": float(metrics["macro_f1"]),
+            "macro_recall": float(metrics["macro_recall"]),
+            "support": support,
+        },
+        "classes": classes,
+        "matrix": matrix.astype(int).tolist(),
+    }
+    (result_dir / "metrics.json").write_text(
+        json.dumps(values, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def _format_report(report: dict, class_names: Sequence[str], metrics: dict[str, float]) -> str:

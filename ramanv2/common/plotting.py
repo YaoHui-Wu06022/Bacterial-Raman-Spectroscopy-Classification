@@ -5,6 +5,46 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 
+CHINESE_FONT_CANDIDATES = (
+    "Microsoft YaHei",
+    "Noto Sans SC",
+    "SimHei",
+    "Source Han Sans SC",
+    "WenQuanYi Zen Hei",
+)
+
+
+def configure_matplotlib_fonts() -> str | None:
+    """选择可用中文字体，避免导出的 Matplotlib 图片出现方框。"""
+    from matplotlib import font_manager, rcParams
+
+    available = {font.name for font in font_manager.fontManager.ttflist}
+    selected = next((name for name in CHINESE_FONT_CANDIDATES if name in available), None)
+    if selected is not None:
+        rcParams["font.family"] = [selected]
+        rcParams["font.sans-serif"] = [selected, "DejaVu Sans"]
+    rcParams["axes.unicode_minus"] = False
+    return selected
+
+
+def add_bad_band_spans(
+    axis,
+    bad_bands,
+    *,
+    alpha: float = 0.2,
+    label: str | None = None,
+    zorder: int | None = None,
+) -> None:
+    """在图中标记已经规范化的坏波段。"""
+    for index, (lower, upper) in enumerate(bad_bands):
+        options = {"color": "gray", "alpha": alpha}
+        if label is not None and index == 0:
+            options["label"] = label
+        if zorder is not None:
+            options["zorder"] = zorder
+        axis.axvspan(lower, upper, **options)
+
+
 def shorten_class_names(class_names: Sequence[str]) -> list[str]:
     """提取层级类别路径的末级名称，用于紧凑显示坐标轴标签。"""
     return [_shorten_class_name(name) for name in class_names]

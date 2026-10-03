@@ -19,11 +19,6 @@ class DataBuildConfig:
     cosmic_ray_threshold: float = 7.0
     cosmic_ray_max_iter: int = 2
     min_samples_per_class: int = 8
-    pca_enable: bool = False
-    pca_components: float | int = 0.95
-    pca_center_enable: bool = True
-    pca_outlier_ratio: float = 0.01
-
     def build_cosmic_ray_options(self, profile_id: str) -> dict:
         """按统一配置构建单谱宇宙射线处理参数。"""
         return {

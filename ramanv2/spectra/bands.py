@@ -32,10 +32,3 @@ def build_valid_mask(wavenumbers, bad_bands):
     return mask
 
 
-def get_config_bad_bands(config) -> tuple[tuple[float, float], ...]:
-    """兼容读取配置对象中的 ``BAD_BANDS`` 或 ``bad_bands`` 字段。"""
-    if hasattr(config, "BAD_BANDS"):
-        return normalize_bad_bands(config.BAD_BANDS)
-    if hasattr(config, "bad_bands"):
-        return normalize_bad_bands(config.bad_bands)
-    return ()

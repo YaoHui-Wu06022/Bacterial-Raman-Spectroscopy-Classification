@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; background: transparent; color: #172033; }
+    #grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .card { border: 2px solid #d7dce5; border-radius: 10px; padding: 8px; background: #fff; cursor: pointer; min-height: 196px; box-sizing: border-box; }
+    .card.selected { border-color: #2563eb; background: #eff6ff; }
+    .card.marked { border-color: #dc2626; background: #fff1f2; }
+    .card.error { border-color: #d97706; background: #fffbeb; }
+    .card-head { display: flex; align-items: flex-start; gap: 7px; }
+    .card-head input { margin-top: 3px; accent-color: #2563eb; }
+    .label { flex: 1; min-width: 0; font-size: 12px; line-height: 1.3; overflow-wrap: anywhere; }
+    .status { color: #b91c1c; font-weight: 600; white-space: nowrap; }
+    .plot { display: block; width: 100%; height: 150px; object-fit: contain; margin-top: 5px; background: #fff; }
+    .error-text { padding: 36px 6px; font-size: 12px; color: #92400e; }
+    @media (max-width: 780px) { #grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div id="grid"></div>
+  <script>
+    const grid = document.getElementById("grid");
+    let args = {cards: [], selected_paths: [], marked_paths: []};
+    let selected = new Set();
+    let lastRenderSignature = "";
+    let eventCounter = 0;
+
+    function send(event, payload) {
+      eventCounter += 1;
+      window.parent.postMessage({
+        isStreamlitMessage: true,
+        type: "streamlit:setComponentValue",
+        value: Object.assign({event, event_id: String(Date.now()) + "-" + eventCounter}, payload || {})
+      }, "*");
+    }
+
+    function resize() {
+      window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: document.body.scrollHeight + 4}, "*");
+    }
+
+    function toggle(path) {
+      if (selected.has(path)) selected.delete(path); else selected.add(path);
+      send("selection", {selected_paths: Array.from(selected)});
+      render();
+    }
+
+    function render() {
+      const signature = JSON.stringify([args.cards, args.selected_paths, args.marked_paths]);
+      if (signature === lastRenderSignature) return;
+      lastRenderSignature = signature;
+      selected = new Set(args.selected_paths || []);
+      grid.replaceChildren();
+      (args.cards || []).forEach((card) => {
+        const marked = (args.marked_paths || []).includes(card.relative_path);
+        const chosen = selected.has(card.relative_path);
+        const wrapper = document.createElement("div");
+        wrapper.className = "card" + (chosen ? " selected" : "") + (marked ? " marked" : "") + (card.error ? " error" : "");
+        const head = document.createElement("div");
+        head.className = "card-head";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = chosen;
+        checkbox.disabled = Boolean(card.error);
+        checkbox.addEventListener("click", (event) => { event.stopPropagation(); if (!card.error) toggle(card.relative_path); });
+        const label = document.createElement("div");
+        label.className = "label";
+        label.textContent = card.label || card.relative_path;
+        head.appendChild(checkbox);
+        head.appendChild(label);
+        if (marked) {
+          const status = document.createElement("span");
+          status.className = "status";
+          status.textContent = card.status_text || "待移除";
+          head.appendChild(status);
+        }
+        wrapper.appendChild(head);
+        if (card.error) {
+          const error = document.createElement("div");
+          error.className = "error-text";
+          error.textContent = card.error;
+          wrapper.appendChild(error);
+        } else {
+          const image = document.createElement("img");
+          image.className = "plot";
+          image.alt = card.label || card.relative_path;
+          image.src = card.image_data;
+          wrapper.appendChild(image);
+        }
+        if (!card.error) wrapper.addEventListener("click", () => toggle(card.relative_path));
+        grid.appendChild(wrapper);
+      });
+      resize();
+    }
+
+    window.addEventListener("message", (event) => {
+      if (!event.data || event.data.type !== "streamlit:render") return;
+      args = event.data.args || args;
+      render();
+    });
+    window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1}, "*");
+    resize();
+  </script>
+</body>
+</html>

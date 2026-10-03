@@ -13,6 +13,7 @@ from ramanv2.core.config import InputConfig
 from ramanv2.core.hierarchy import normalize_level_name, resolve_allowed_indices
 from ramanv2.core.hierarchy_meta import load_hierarchy_meta
 from ramanv2.core.input_spec import InputSpec, build_input_spec
+from ramanv2.core.paths import find_ancestor_dir
 from ramanv2.modeling.factory import build_model, validate_model_input
 from ramanv2.modeling.spec import build_model_spec
 
@@ -216,7 +217,7 @@ def load_predictor(
 ) -> Predictor:
     """从实验目录和可选历史 run 构建独立推理预测器。"""
     source_path = Path(source_dir).resolve()
-    experiment_dir = _resolve_experiment_dir(source_path)
+    experiment_dir = find_ancestor_dir(source_path, "hierarchy_meta.json")
     meta = load_hierarchy_meta(experiment_dir / "hierarchy_meta.json")
     if meta is None:
         raise FileNotFoundError(f"缺少 hierarchy_meta.json：{experiment_dir}")
@@ -250,14 +251,6 @@ def load_predictor(
         predict_level=level_name,
         level_order=tuple(level_order),
     )
-
-
-def _resolve_experiment_dir(source_path: Path) -> Path:
-    """从输入实验目录或 run 目录向上定位层级元数据。"""
-    for candidate in (source_path, *source_path.parents):
-        if (candidate / "hierarchy_meta.json").is_file():
-            return candidate
-    raise FileNotFoundError(f"无法定位 hierarchy_meta.json：{source_path}")
 
 
 def _resolve_input_entry(

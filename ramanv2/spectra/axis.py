@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .bands import build_valid_mask, get_config_bad_bands
+from .bands import build_valid_mask
 
 
 def build_wn_ref(cut_min, cut_max, target_points):
@@ -24,7 +24,7 @@ def median_step_cm(wavenumbers) -> float:
 
 def build_wavenumber_axis(length: int, config):
     """按输入配置构造与模型输入长度对齐的有效波数轴。"""
-    bad_bands = get_config_bad_bands(config)
+    bad_bands = config.bad_bands
     if hasattr(config, "cut_min") and hasattr(config, "cut_max"):
         if hasattr(config, "target_points"):
             try:
@@ -47,7 +47,7 @@ def build_wavenumber_axis(length: int, config):
 def expected_wavenumbers(config):
     """按配置生成严格匹配模型有效输入长度的波数轴。"""
     axis = np.linspace(float(config.cut_min), float(config.cut_max), int(config.target_points))
-    mask = build_valid_mask(axis, get_config_bad_bands(config))
+    mask = build_valid_mask(axis, config.bad_bands)
     return axis[mask] if mask is not None else axis
 
 

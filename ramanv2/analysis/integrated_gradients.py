@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from ramanv2.data.input import InputPreprocessor
+from ramanv2.data.runtime.input import InputPreprocessor
 
 
 @dataclass(frozen=True)

@@ -61,7 +61,6 @@ class TrainingSpec:
     epochs: int
     patience: int
     train_ratio: float
-    split_by_source_prefix_enable: bool
     train_loader: LoaderSpec
     validation_loader: LoaderSpec
     optimizer: OptimizerSpec
@@ -90,7 +89,6 @@ def build_training_spec(
         epochs=int(training_config.epochs),
         patience=int(training_config.patience),
         train_ratio=float(training_config.train_split),
-        split_by_source_prefix_enable=bool(training_config.split_by_source_prefix),
         train_loader=_build_loader_spec(training_config, True),
         validation_loader=_build_loader_spec(training_config, False),
         optimizer=OptimizerSpec(

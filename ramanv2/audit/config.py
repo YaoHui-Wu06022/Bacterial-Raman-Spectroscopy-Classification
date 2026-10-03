@@ -1,4 +1,4 @@
-"""审核流程的阈值与光谱范围配置。"""
+"""文件夹级审核的光谱范围和近邻阈值配置。"""
 
 from __future__ import annotations
 
@@ -6,17 +6,15 @@ from dataclasses import dataclass
 
 from ramanv2.core.config import InputConfig
 from ramanv2.data.config import DEFAULT_BUILD_CONFIG, DataBuildConfig
-from ramanv2.audit.raw_quality import RawQualityConfig
 from ramanv2.audit.similarity import NeighborConfig
 
 
 @dataclass(frozen=True)
 class AuditConfig:
-    """定义审核阶段共用的原始质量、近邻与平移参数。"""
+    """定义文件夹审核和总览图共用的输入、预处理与近邻参数。"""
 
     input: InputConfig = InputConfig()
     cleaning: DataBuildConfig = DEFAULT_BUILD_CONFIG
-    raw_quality: RawQualityConfig = RawQualityConfig()
     neighbor: NeighborConfig = NeighborConfig()
 
 

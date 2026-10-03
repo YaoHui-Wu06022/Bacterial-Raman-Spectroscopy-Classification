@@ -1,4 +1,4 @@
-"""共享近邻相似性审核。"""
+"""文件夹内部近邻相似性审核。"""
 
 from __future__ import annotations
 
@@ -26,7 +26,10 @@ def compute_mad_limit(values: np.ndarray, direction: str) -> float:
 
 
 def score_neighbor_group(records: list[CleanRecord], config: NeighborConfig) -> None:
-    """以相关性、RMSE 和 MAD 评分一个已预处理的同组光谱集合。"""
+    """只在一个文件夹内部以相关性、RMSE 和 MAD 评分光谱。"""
+    records = [record for record in records if record.spectrum is not None]
+    if not records:
+        return
     if len(records) - 1 < config.minimum_references:
         for record in records:
             record.state = "insufficient_reference"
@@ -51,13 +54,17 @@ def score_neighbor_group(records: list[CleanRecord], config: NeighborConfig) -> 
         np.asarray([record.rmse for record in records]), "high"
     )
     for record in records:
+        record.corr_limit = corr_limit
+        record.rmse_limit = rmse_limit
+        record.state = "keep"
+        record.reasons = ()
         if record.neighbor_corr < corr_limit and record.rmse > rmse_limit:
             record.state = "candidate"
             record.reasons = ("low_neighbor_agreement", "high_neighbor_rmse")
 
 
 def score_folder_neighbor_groups(records: list[CleanRecord], config: NeighborConfig) -> int:
-    """按文件夹分别执行已预处理光谱的近邻评分，并返回参与审核的文件夹数。"""
+    """按文件夹分别评分，并返回参与审核的文件夹数。"""
     folders = {}
     for record in records:
         if record.spectrum is not None:
@@ -74,13 +81,19 @@ def preprocess_similarity_records(
     build_config,
 ) -> None:
     """按训练参数预处理记录，并保留无法比较的原因。"""
+    profile_id = profile.profile_id if hasattr(profile, "profile_id") else str(profile)
     for record in records:
-        spectrum = preprocess_comparison_spectrum(
-            record.path,
-            profile.profile_id,
-            input_config,
-            build_config,
-        )
+        try:
+            spectrum = preprocess_comparison_spectrum(
+                record.path,
+                profile_id,
+                input_config,
+                build_config,
+            )
+        except (OSError, RuntimeError, ValueError, TypeError, IndexError):
+            record.state = "unscorable"
+            record.reasons = ("preprocess_failed",)
+            continue
         if spectrum.normalized is None:
             record.state = "unscorable"
             record.reasons = (spectrum.skip_reason,)

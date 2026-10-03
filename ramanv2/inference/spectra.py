@@ -8,8 +8,8 @@ import numpy as np
 import torch
 
 from ramanv2.core.input_spec import InputSpec
-from ramanv2.data.input import InputPreprocessor
-from ramanv2.data.io import read_arc_data
+from ramanv2.common.arc_data import read_arc_data
+from ramanv2.data.runtime.input import InputPreprocessor
 from ramanv2.spectra.bands import build_valid_mask
 
 

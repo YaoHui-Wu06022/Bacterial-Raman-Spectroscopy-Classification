@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from ramanv2.audit.plots import build_changed_plot_groups, build_plot_state
+from ramanv2.data.plots.prefix import build_changed_plot_groups, build_plot_state
+
+
+def test_prefix_plot_implementation_lives_in_data_module() -> None:
+    assert Path("ramanv2/audit/plots.py").exists() is False
 
 
 def test_deleted_folder_marks_previous_prefix_group() -> None:

@@ -12,7 +12,8 @@ from ramanv2.core.config import Config, build_config
 from ramanv2.core.config_file import SHARED_CONFIG_NAME, read_yaml_dict
 from ramanv2.core.hierarchy_meta import load_hierarchy_meta
 from ramanv2.core.input_spec import InputSpec, build_input_spec
-from ramanv2.data.index import DatasetIndex
+from ramanv2.core.paths import find_ancestor_dir
+from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.data.profiles import resolve_training_dir
 from ramanv2.training.split import load_split_files
 
@@ -71,10 +72,7 @@ def load_evaluation_context(source_dir: Path | str) -> EvaluationContext:
 def resolve_experiment_dir(source_dir: Path | str) -> Path:
     """从实验根或其子目录向上定位共享配置快照。"""
     source_path = Path(source_dir).resolve()
-    for candidate in (source_path, *source_path.parents):
-        if (candidate / SHARED_CONFIG_NAME).is_file():
-            return candidate
-    raise FileNotFoundError(f"无法定位实验根 shared_config.yaml：{source_path}")
+    return find_ancestor_dir(source_path, SHARED_CONFIG_NAME)
 
 
 def resolve_level_name(context: EvaluationContext, level_value: str) -> str:

@@ -51,7 +51,6 @@ class ModelConfig:
     cardinality: int = 4
     base_width: int = 4
     resnet_bottleneck_ratio: int = 4
-    identity_pool_kernel: int = 8
     # CNN 输出后的序列编码器；none 用于纯 CNN 对照。
     encoder_type: str = "transformer"
     transformer_nhead: int = 8
@@ -75,7 +74,6 @@ class TrainingConfig:
     """数据划分、增强、优化、损失与早停参数。"""
 
     # 数据划分与 DataLoader 参数。
-    split_by_source_prefix: bool = False
     train_split: float = 0.8
     epochs: int = 80
     patience: int = 50

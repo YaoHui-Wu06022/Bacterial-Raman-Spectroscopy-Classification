@@ -1,8 +1,10 @@
 /dataset/
+/固定数据集/
 /output/
 /备份/
 /__pycache__/
 **/__pycache__/
+ramanv2/ui/frontend/node_modules/
 /.ua
 /raman
 *.pyc
