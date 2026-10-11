@@ -7,7 +7,7 @@ from ramanv2.common.arc_data import read_arc_data, write_arc_data
 from ramanv2.data.builders.init import build_init_datasets
 from ramanv2.data.calibration.affine import apply_folder_affine_compensation
 from ramanv2.data.catalog import DatasetMapping
-from ramanv2.pipeline.lineage import initialize_folder_lineage, load_folder_lineage, remove_source_folder
+from ramanv2.pipeline.lineage import initialize_folder_lineage, list_lineage_folders, load_folder_lineage, remove_source_folder
 
 
 def _spectrum(path: Path, start: float = 100.0) -> None:
@@ -71,8 +71,30 @@ def test_source_folder_delete_removes_downstream_recorded_outputs(tmp_path: Path
     result = remove_source_folder(cosmic, "20240101/EAB01", shift_root=shift)
     assert result["status"] == "ready"
     assert not (cosmic / "20240101" / "EAB01").exists()
-    assert (cosmic / "delete" / "manual" / "20240101" / "EAB01" / "a.arc_data").is_file()
+    assert (cosmic / "delete" / "folder_delete" / "20240101" / "EAB01" / "a.arc_data").is_file()
     assert not output.exists()
+
+
+def test_source_folder_delete_merges_existing_manual_folder(tmp_path: Path) -> None:
+    cosmic = tmp_path / "cosmic_data"
+    source = cosmic / "20240101" / "EAB01"
+    manual = cosmic / "delete" / "manual" / "20240101" / "EAB01"
+    _spectrum(source / "remaining.arc_data")
+    _spectrum(manual / "already_deleted.arc_data", 110.0)
+    initialize_folder_lineage(cosmic, _mapping())
+
+    result = remove_source_folder(cosmic, "20240101/EAB01")
+
+    assert result["status"] == "ready"
+    assert not source.exists()
+    archived = cosmic / "delete" / "folder_delete" / "20240101" / "EAB01"
+    assert (archived / "remaining.arc_data").is_file()
+    assert (archived / "already_deleted.arc_data").is_file()
+    assert not manual.exists()
+    record = load_folder_lineage(cosmic)["folders"]["20240101/EAB01"]
+    assert record["folder_status"] == "folder_deleted"
+    assert {item["reason"] for item in record["files"].values()} == {"folder_remove"}
+    assert list_lineage_folders(cosmic) == []
 
 
 def test_source_folder_delete_removes_audit_record(tmp_path: Path) -> None:
@@ -90,3 +112,18 @@ def test_source_folder_delete_removes_audit_record(tmp_path: Path) -> None:
     remove_source_folder(cosmic, "20240101/EAB01", shift_root=shift)
 
     assert not run_dir.exists()
+
+
+def test_source_folder_delete_removes_date_shift_outputs(tmp_path: Path) -> None:
+    cosmic = tmp_path / "cosmic_data"
+    shift = tmp_path / "shift_data"
+    _spectrum(cosmic / "20240101" / "EAB01" / "a.arc_data")
+    initialize_folder_lineage(cosmic, _mapping())
+    (shift / "20240101" / "shift").mkdir(parents=True)
+    (shift / "20240101" / "shift" / "affine.json").write_text("{}", encoding="utf-8")
+    (shift / "20240101" / "EAB01" / "a.arc_data").parent.mkdir(parents=True)
+    (shift / "20240101" / "EAB01" / "a.arc_data").write_text("1 2\n", encoding="utf-8")
+
+    remove_source_folder(cosmic, "20240101/EAB01", shift_root=shift)
+
+    assert not (shift / "20240101").exists()

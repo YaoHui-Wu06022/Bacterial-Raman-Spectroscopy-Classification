@@ -102,9 +102,9 @@ def find_run_dirs(level_dir: Path | str) -> list[Path]:
 def _render_confusion_section(run_dir: Path, level_name: str) -> None:
     st.subheader("混淆矩阵")
     actions = st.columns(2)
-    if actions[0].button("读取已有混淆矩阵", use_container_width=True):
+    if actions[0].button("读取已有混淆矩阵", width="stretch"):
         st.session_state["result_analysis_confusion_read"] = str(run_dir)
-    if actions[1].button("重新计算混淆矩阵", type="primary", use_container_width=True):
+    if actions[1].button("重新计算混淆矩阵", type="primary", width="stretch"):
         try:
             evaluate_model_run(run_dir, level_name)
             invalidate_ui_cache("analysis")
@@ -122,7 +122,7 @@ def _render_confusion_section(run_dir: Path, level_name: str) -> None:
         st.caption("已有评估结果；点击读取已有混淆矩阵后查看。")
         return
     if image_path.is_file():
-        st.image(str(image_path), caption="Confusion matrix", use_container_width=True)
+        st.image(str(image_path), caption="Confusion matrix", width="stretch")
     if metrics_path.is_file():
         stat = metrics_path.stat()
         payload = cached_json_file(str(metrics_path.resolve()), stat.st_mtime_ns, stat.st_size)
@@ -134,15 +134,15 @@ def _render_confusion_section(run_dir: Path, level_name: str) -> None:
         columns[1].metric("Macro F1", _format_metric(summary.get("macro_f1")))
         columns[2].metric("Macro Recall", _format_metric(summary.get("macro_recall")))
         with st.expander("分类报告", expanded=False):
-            st.dataframe(payload.get("classes", []), use_container_width=True)
+            st.dataframe(payload.get("classes", []), width="stretch")
 
 
 def _render_analysis_section(run_dir: Path, level_name: str) -> None:
     st.subheader("Analysis")
     actions = st.columns(2)
-    if actions[0].button("读取已有 Analysis", use_container_width=True):
+    if actions[0].button("读取已有 Analysis", width="stretch"):
         st.session_state["result_analysis_analysis_read"] = str(run_dir)
-    if actions[1].button("重新计算 Analysis", type="primary", use_container_width=True):
+    if actions[1].button("重新计算 Analysis", type="primary", width="stretch"):
         try:
             run_interpret_run(run_dir, level_name, umap_enable=False)
             invalidate_ui_cache("analysis")
@@ -167,9 +167,9 @@ def _render_analysis_section(run_dir: Path, level_name: str) -> None:
 def _render_umap_section(run_dir: Path, level_name: str) -> None:
     st.subheader("UMAP")
     actions = st.columns(2)
-    if actions[0].button("读取已有 UMAP", use_container_width=True):
+    if actions[0].button("读取已有 UMAP", width="stretch"):
         st.session_state["result_analysis_umap_read"] = str(run_dir)
-    if actions[1].button("重新计算 UMAP", type="primary", use_container_width=True):
+    if actions[1].button("重新计算 UMAP", type="primary", width="stretch"):
         try:
             run_umap_run(run_dir, level_name)
             invalidate_ui_cache("analysis")
@@ -181,7 +181,7 @@ def _render_umap_section(run_dir: Path, level_name: str) -> None:
     if not image_path.is_file():
         st.info("尚无 UMAP 图，请点击重新计算。")
     elif st.session_state.get("result_analysis_umap_read") == str(run_dir):
-        st.image(str(image_path), caption="Train / Val UMAP", use_container_width=True)
+        st.image(str(image_path), caption="Train / Val UMAP", width="stretch")
     else:
         st.caption("已有 UMAP 图；点击读取已有 UMAP 后查看。")
 
@@ -193,7 +193,7 @@ def _render_figures(figure_dir: Path, caption: str) -> None:
         return
     names = [path.name for path in figures]
     selected = st.selectbox(caption, names, key=f"result_analysis_figure_{caption}")
-    st.image(str(figures[names.index(selected)]), use_container_width=True)
+    st.image(str(figures[names.index(selected)]), width="stretch")
 
 
 def _selected_index(key: str, options: list[str]) -> int:

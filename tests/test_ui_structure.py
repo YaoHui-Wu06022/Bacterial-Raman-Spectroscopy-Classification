@@ -98,3 +98,18 @@ def test_affine_page_only_returns_incremental_dates() -> None:
         {"20240101", "20240102"},
         {"20240101"},
     ) == ["20240102", "20240103"]
+
+
+def test_affine_gate_requires_active_source_folder(tmp_path) -> None:
+    from ramanv2.ui.pages.affine_calibration import _has_active_source_folder
+
+    date_dir = tmp_path / "20240101"
+    (date_dir / "小球").mkdir(parents=True)
+    (date_dir / "EC01" / "cell.arc_data").parent.mkdir(parents=True)
+    (date_dir / "EC01" / "cell.arc_data").write_text("1 2\n", encoding="utf-8")
+    assert _has_active_source_folder(tmp_path, "20240101")
+
+    archive = tmp_path / "delete" / "folder_delete" / "20240101"
+    archive.mkdir(parents=True)
+    (date_dir / "EC01").rename(archive / "EC01")
+    assert not _has_active_source_folder(tmp_path, "20240101")

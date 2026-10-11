@@ -16,6 +16,8 @@ __all__ = [
     "run_affine_calibration",
     "run_shift_folder_audit",
     "DeletedSpectrum",
+    "DeletedFolder",
+    "scan_deleted_folders",
     "scan_deleted_spectra",
     "restore_deleted_spectra",
     "restore_deleted_folder",
@@ -41,15 +43,19 @@ def __getattr__(name: str):
             "load_folder_lineage": load_folder_lineage,
             "save_folder_lineage": save_folder_lineage,
         }[name]
-    if name in {"DeletedSpectrum", "scan_deleted_spectra", "restore_deleted_spectra", "restore_deleted_folder"}:
+    if name in {"DeletedSpectrum", "DeletedFolder", "scan_deleted_folders", "scan_deleted_spectra", "restore_deleted_spectra", "restore_deleted_folder"}:
         from ramanv2.pipeline.restoration import (
+            DeletedFolder,
             DeletedSpectrum,
             restore_deleted_folder,
             restore_deleted_spectra,
+            scan_deleted_folders,
             scan_deleted_spectra,
         )
         return {
+            "DeletedFolder": DeletedFolder,
             "DeletedSpectrum": DeletedSpectrum,
+            "scan_deleted_folders": scan_deleted_folders,
             "scan_deleted_spectra": scan_deleted_spectra,
             "restore_deleted_spectra": restore_deleted_spectra,
             "restore_deleted_folder": restore_deleted_folder,

@@ -17,6 +17,7 @@ from ramanv2.common.naming import build_natural_key, is_test_source_folder, pars
 LINEAGE_FILE_NAME = "folder_lineage.json"
 LINEAGE_VERSION = 1
 MANUAL_DELETE_RELATIVE = Path("delete") / "manual"
+FOLDER_DELETE_RELATIVE = Path("delete") / "folder_delete"
 SPECIAL_NAMES = {"delete", "shift", "audit", "audit_runs", ".raman_pipeline", "小球"}
 
 
@@ -88,7 +89,7 @@ def initialize_folder_lineage(
     data_root: Path | str,
     mapping: object | None = None,
 ) -> dict[str, object]:
-    """从 cosmic 活动区和 delete/manual 建立或刷新源头记录。
+    """从 cosmic 活动区、人工删除区和整夹删除区建立或刷新源头记录。
 
     小球目录只用于日期级仿射校准，不进入样本走向树。
     """
@@ -129,7 +130,12 @@ def initialize_folder_lineage(
                 key = f"{date_dir.name}/{folder_dir.name}"
                 discovered.add(key)
                 record["genus"] = prefix_to_genus.get(str(record.get("prefix", "")).upper(), record.get("genus", ""))
-                record["folder_status"] = "active" if status == "active" else "manual_deleted"
+                if status == "active":
+                    record["folder_status"] = "active"
+                elif status == "folder_deleted":
+                    record["folder_status"] = "folder_deleted"
+                elif record.get("folder_status") != "folder_deleted":
+                    record["folder_status"] = "manual_deleted"
                 file_records = record.setdefault("files", {})
                 if not isinstance(file_records, dict):
                     file_records = {}
@@ -139,15 +145,25 @@ def initialize_folder_lineage(
                     file_records.setdefault(
                         relative,
                         {
-                            "status": status,
+                            "status": "active" if status == "active" else "manual_deleted",
                             "source_path": f"{date_dir.name}/{folder_dir.name}/{relative}",
+                            "deleted_path": (
+                                f"{FOLDER_DELETE_RELATIVE.as_posix()}/{date_dir.name}/{folder_dir.name}/{relative}"
+                                if status == "folder_deleted"
+                                else (
+                                    f"{MANUAL_DELETE_RELATIVE.as_posix()}/{date_dir.name}/{folder_dir.name}/{relative}"
+                                    if status != "active"
+                                    else None
+                                )
+                            ),
                             "recorded_at": datetime.now(timezone.utc).isoformat(),
-                            "reason": "imported_history" if imported else None,
+                            "reason": "folder_remove" if status == "folder_deleted" else ("imported_history" if imported else None),
                         },
                     )
 
     scan_base(root, "active")
     scan_base(root / MANUAL_DELETE_RELATIVE, "manual_deleted", imported=True)
+    scan_base(root / FOLDER_DELETE_RELATIVE, "folder_deleted", imported=True)
 
     for key, record in folders.items():
         if not isinstance(record, dict):
@@ -199,6 +215,40 @@ def record_manual_move(
             {"operation": reason, "path": relative, "recorded_at": now}
         )
         record.setdefault("history", []).append({"operation": reason, "path": relative, "recorded_at": now})
+        record["updated_at"] = now
+    payload["updated_at"] = now
+    save_folder_lineage(data_root, payload)
+    return payload
+
+
+def record_folder_move(
+    data_root: Path | str,
+    relative_paths: list[str] | tuple[str, ...] | set[str],
+) -> dict[str, object]:
+    """记录整夹删除，覆盖同一文件夹此前的人工删除状态。"""
+    payload = load_folder_lineage(data_root)
+    now = datetime.now(timezone.utc).isoformat()
+    for item in relative_paths:
+        normalized = str(item).replace("\\", "/")
+        parts = normalized.split("/")
+        if len(parts) < 3:
+            continue
+        date_name, folder_name = parts[0], parts[1]
+        relative = "/".join(parts[2:])
+        record = _ensure_folder(payload, date_name, folder_name)
+        files = record.setdefault("files", {})
+        if not isinstance(files, dict):
+            files = {}
+            record["files"] = files
+        files[relative] = {
+            "status": "manual_deleted",
+            "source_path": normalized,
+            "deleted_path": f"{FOLDER_DELETE_RELATIVE.as_posix()}/{normalized}",
+            "reason": "folder_remove",
+            "recorded_at": now,
+        }
+        record["folder_status"] = "folder_deleted"
+        record.setdefault("history", []).append({"operation": "folder_remove", "path": normalized, "recorded_at": now})
         record["updated_at"] = now
     payload["updated_at"] = now
     save_folder_lineage(data_root, payload)
@@ -417,8 +467,12 @@ def list_lineage_folders(
     result = []
     if not isinstance(folders, dict):
         return result
+    root = Path(data_root).resolve()
     for record in folders.values():
         if not isinstance(record, dict) or record.get("folder_status") == "folder_deleted":
+            continue
+        source_path = root / str(record.get("date", "")) / str(record.get("folder", ""))
+        if not source_path.is_dir():
             continue
         if genus is not None and str(record.get("genus", "")) != str(genus):
             continue
@@ -442,26 +496,123 @@ def remove_source_folder(
     date_name, folder_name = parts
     source_folder = root / date_name / folder_name
     manual_folder = root / "delete" / "manual" / date_name / folder_name
-    if not source_folder.is_dir():
+    folder_delete = root / FOLDER_DELETE_RELATIVE / date_name / folder_name
+    if folder_delete.exists() and not folder_delete.is_dir():
+        raise FileExistsError(f"整夹删除目标不是文件夹：{folder_delete}")
+    if not source_folder.is_dir() and not manual_folder.is_dir():
+        if folder_delete.is_dir():
+            files = sorted(
+                (item for item in folder_delete.rglob("*.arc_data") if item.is_file()),
+                key=lambda item: build_natural_key(item.relative_to(folder_delete).as_posix()),
+            )
+            relative_paths = [
+                f"{date_name}/{folder_name}/{item.relative_to(folder_delete).as_posix()}"
+                for item in files
+            ]
+            removed = remove_downstream_outputs(
+                root,
+                source_id,
+                shift_root=shift_root,
+                invalidate_date_enable=True,
+            )
+            return {"status": "already_ready", "source_id": source_id, "moved_paths": relative_paths, **removed}
         raise FileNotFoundError(f"源文件夹不存在：{source_folder}")
-    files = sorted((item for item in source_folder.rglob("*.arc_data") if item.is_file()), key=lambda item: build_natural_key(item.relative_to(source_folder).as_posix()))
-    if not files:
-        raise ValueError(f"源文件夹没有光谱：{source_folder}")
-    if manual_folder.exists():
-        raise FileExistsError(f"人工删除目标已存在：{manual_folder}")
-    relative_paths = [f"{date_name}/{folder_name}/{item.relative_to(source_folder).as_posix()}" for item in files]
+
+    manual_to_source_folder = False
+    manual_to_source_files: list[tuple[Path, Path]] = []
+    source_to_archive_folder = False
+    source_to_archive_files: list[tuple[Path, Path]] = []
+    all_relative_paths: list[str] = []
     try:
-        manual_folder.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(source_folder), str(manual_folder))
-        record_manual_move(root, relative_paths, "prefix_folder_remove")
-        removed = remove_downstream_outputs(root, source_id, shift_root=shift_root)
-        return {"status": "ready", "source_id": source_id, "moved_paths": relative_paths, **removed}
-    except Exception:
-        if manual_folder.exists() and not source_folder.exists():
+        if manual_folder.exists():
+            if not manual_folder.is_dir():
+                raise FileExistsError(f"人工删除目标不是文件夹：{manual_folder}")
             source_folder.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(manual_folder), str(source_folder))
-        record_restore(root, relative_paths)
+            if source_folder.exists():
+                manual_to_source_files = _move_folder_contents(manual_folder, source_folder)
+            else:
+                shutil.move(str(manual_folder), str(source_folder))
+                manual_to_source_folder = True
+        if not source_folder.is_dir():
+            raise FileNotFoundError(f"源文件夹不存在：{source_folder}")
+        source_files = sorted(
+            (item for item in source_folder.rglob("*.arc_data") if item.is_file()),
+            key=lambda item: build_natural_key(item.relative_to(source_folder).as_posix()),
+        )
+        if not source_files:
+            raise ValueError(f"源文件夹没有光谱：{source_folder}")
+        all_relative_paths = [
+            f"{date_name}/{folder_name}/{item.relative_to(source_folder).as_posix()}"
+            for item in source_files
+        ]
+        folder_delete.parent.mkdir(parents=True, exist_ok=True)
+        if folder_delete.exists():
+            source_to_archive_files = _move_folder_contents(source_folder, folder_delete)
+        else:
+            shutil.move(str(source_folder), str(folder_delete))
+            source_to_archive_folder = True
+        record_folder_move(root, all_relative_paths)
+        removed = remove_downstream_outputs(
+            root,
+            source_id,
+            shift_root=shift_root,
+            invalidate_date_enable=True,
+        )
+        return {"status": "ready", "source_id": source_id, "moved_paths": all_relative_paths, **removed}
+    except Exception:
+        if source_to_archive_folder and folder_delete.exists() and not source_folder.exists():
+            source_folder.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(folder_delete), str(source_folder))
+        elif source_to_archive_files:
+            for source, target in reversed(source_to_archive_files):
+                if target.exists() and not source.exists():
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(target), str(source))
+        if manual_to_source_folder and source_folder.exists() and not manual_folder.exists():
+            manual_folder.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source_folder), str(manual_folder))
+        elif manual_to_source_files:
+            for source, target in reversed(manual_to_source_files):
+                if target.exists() and not source.exists():
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(target), str(source))
+        if all_relative_paths:
+            record_restore(root, all_relative_paths)
         raise
+
+
+def _move_folder_contents(source_folder: Path, target_folder: Path) -> list[tuple[Path, Path]]:
+    """将源文件夹内容合并到已有目标，并在冲突前完成预检查。"""
+    source_files = sorted(
+        (item for item in source_folder.rglob("*") if item.is_file()),
+        key=lambda item: build_natural_key(item.relative_to(source_folder).as_posix()),
+    )
+    conflicts = [
+        target_folder / item.relative_to(source_folder)
+        for item in source_files
+        if (target_folder / item.relative_to(source_folder)).exists()
+    ]
+    if conflicts:
+        names = "; ".join(str(path) for path in conflicts[:5])
+        if len(conflicts) > 5:
+            names += f"；另有 {len(conflicts) - 5} 个冲突"
+        raise FileExistsError(f"人工删除目标存在同名文件：{names}")
+
+    moved: list[tuple[Path, Path]] = []
+    try:
+        for source in source_files:
+            target = target_folder / source.relative_to(source_folder)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(target))
+            moved.append((source, target))
+        shutil.rmtree(source_folder)
+    except Exception:
+        for source, target in reversed(moved):
+            if target.exists() and not source.exists():
+                source.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(target), str(source))
+        raise
+    return moved
 
 
 def _prepare_audit_cleanup(
@@ -534,6 +685,7 @@ def remove_downstream_outputs(
     source_id: str,
     *,
     shift_root: Path | str | None = None,
+    invalidate_date_enable: bool = False,
 ) -> dict[str, object]:
     """按走向记录删除一个源文件夹的 shift、init、Profile 和 CSdata 目录。"""
     root = Path(data_root).resolve()
@@ -554,11 +706,15 @@ def remove_downstream_outputs(
         parts = str(source_id).split("/", 1)
         if len(parts) == 2:
             shift_base = Path(shift_root).resolve()
-            output_paths.extend(
-                path
-                for path in (shift_base / parts[0] / parts[1], shift_base / "delete" / parts[0] / parts[1])
-                if path not in output_paths
-            )
+            if invalidate_date_enable:
+                output_paths.extend(
+                    path
+                    for path in (
+                        shift_base / parts[0],
+                        shift_base / "delete" / parts[0],
+                    )
+                    if path not in output_paths
+                )
     try:
         for path in output_paths:
             if not path.exists():
@@ -578,6 +734,16 @@ def remove_downstream_outputs(
             record["outputs"] = {"shift": None, "init": None, "profiles": {}, "csdata": None, "prefix_groups": []}
             record["audit"] = {"status": "removed", "reason": "source_folder_removed", "history": []}
             record["updated_at"] = datetime.now(timezone.utc).isoformat()
+        if invalidate_date_enable and len(str(source_id).split("/", 1)) == 2:
+            date_name = str(source_id).split("/", 1)[0]
+            folders = payload.get("folders", {})
+            if isinstance(folders, dict):
+                for item in folders.values():
+                    if not isinstance(item, dict) or str(item.get("date", "")) != date_name:
+                        continue
+                    item["affine"] = {"status": "pending", "version": None, "scale": None, "offset": None}
+                    item["audit"] = {"status": "pending", "history": []}
+                    item["updated_at"] = datetime.now(timezone.utc).isoformat()
         payload["updated_at"] = datetime.now(timezone.utc).isoformat()
         save_folder_lineage(root, payload)
     except Exception:
@@ -649,6 +815,7 @@ def remove_downstream_files(
 
 
 __all__ = [
+    "FOLDER_DELETE_RELATIVE",
     "LINEAGE_FILE_NAME",
     "folder_compensation",
     "initialize_folder_lineage",
@@ -658,6 +825,7 @@ __all__ = [
     "record_affine_approval",
     "record_audit_result",
     "record_manual_move",
+    "record_folder_move",
     "record_restore",
     "record_output_path",
     "list_lineage_folders",

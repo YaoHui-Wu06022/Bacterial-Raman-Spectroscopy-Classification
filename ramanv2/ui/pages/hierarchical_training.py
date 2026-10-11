@@ -50,7 +50,7 @@ def render_hierarchical_training_page() -> None:
     values = _render_config_controls(profile_id)
     run_options = _render_run_options(profile_id)
 
-    if st.button("开始本地训练", type="primary", disabled=index is None, use_container_width=True):
+    if st.button("开始本地训练", type="primary", disabled=index is None, width="stretch"):
         try:
             request = _build_train_request(values, scope, run_options)
             with st.status("正在准备训练…", expanded=True) as status:
@@ -223,7 +223,7 @@ def _render_colab_export(profiles) -> None:
     )
     output_dir = PROJECT_ROOT / "output" / "colab" / profile_id
     st.caption(f"输出目录：{output_dir}")
-    if st.button("生成 data.zip 和 ramanv2.zip", use_container_width=True):
+    if st.button("生成 data.zip 和 ramanv2.zip", width="stretch"):
         try:
             with st.spinner("正在生成 Colab 压缩包…"):
                 report = build_colab_bundle(profile_id, output_dir)

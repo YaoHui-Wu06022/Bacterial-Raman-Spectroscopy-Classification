@@ -64,7 +64,7 @@ def _render_source_folder_removal(
         st.info("当前没有可移除的源头文件夹。")
         return
     source_id = st.selectbox(label, source_ids, key=f"{key}_source_folder")
-    if not st.button("从 cosmic 源头整夹删除", key=f"{key}_remove_source_folder", use_container_width=True):
+    if not st.button("从 cosmic 源头整夹删除", key=f"{key}_remove_source_folder", width="stretch"):
         return
     try:
         result = remove_source_folder(
@@ -72,6 +72,9 @@ def _render_source_folder_removal(
             source_id,
             shift_root=context.shift_root,
         )
+        date_name = source_id.split("/", 1)[0]
+        state.affine_completed_dates.discard(date_name)
+        state.audit_completed_dates.discard(date_name)
         state.dataset_builds.pop("profiles", None)
         state.dataset_builds.pop("prefix_plots", None)
         invalidate_ui_cache("cleaning")
@@ -79,6 +82,7 @@ def _render_source_folder_removal(
         invalidate_ui_cache("training")
         invalidate_ui_cache("inference")
         _save_state(context, state)
+        st.session_state.pop(f"{key}_source_folder", None)
         st.success(f"已从源头删除 {source_id}，并清理对应下游产物。")
         st.rerun()
     except (OSError, ValueError, RuntimeError) as error:
@@ -97,8 +101,8 @@ def _render_prefix_plot_section(
         return
     with st.expander("prefix-plot", expanded=False):
         controls = st.columns(2)
-        view_clicked = controls[0].button("查看已有图信息", key=f"{key}_view", use_container_width=True)
-        update_clicked = controls[1].button("更新图信息", key=f"{key}_update", use_container_width=True)
+        view_clicked = controls[0].button("查看已有图信息", key=f"{key}_view", width="stretch")
+        update_clicked = controls[1].button("更新图信息", key=f"{key}_update", width="stretch")
         if view_clicked or update_clicked:
             st.session_state[f"{key}_show"] = True
         if update_clicked:
@@ -131,7 +135,7 @@ def _render_prefix_plot_section(
         prefix_name = st.selectbox("选择查看的种前缀", [path.stem for path in plot_paths], key=f"{key}_prefix")
         selected = figure_root / genus_name / f"{prefix_name}.png"
         if selected.is_file():
-            st.image(str(selected), caption=f"{genus_name} / {prefix_name}", use_container_width=True)
+            st.image(str(selected), caption=f"{genus_name} / {prefix_name}", width="stretch")
         source_records = list_lineage_folders(context.data_root, genus_name, prefix_name)
         _render_source_folder_removal(context, state, source_records, key, "选择源头文件夹")
 
@@ -176,7 +180,7 @@ def _render_affine_compensation(context: PageContext, state, catalog: DatasetMap
         key=f"affine_compensation_{date_name}_{selected_folder}",
     )
     offsets = {selected_folder: float(value)}
-    if st.button("应用文件夹补偿", key="apply_affine_compensation", use_container_width=True):
+    if st.button("应用文件夹补偿", key="apply_affine_compensation", width="stretch"):
         try:
             result = apply_folder_affine_compensation(
                 context.data_root,
@@ -413,7 +417,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         format_func=lambda value: value.replace("/", " / "),
         key=cs_selection_key,
     )
-    if st.button("从 shift_data 重建全量 init", disabled=catalog is None, use_container_width=True):
+    if st.button("从 shift_data 重建全量 init", disabled=catalog is None, width="stretch"):
         try:
             with st.status("正在重建全量 init…", expanded=True) as status:
                 status.write("正在校验日期门禁并复制普通光谱。")
@@ -468,7 +472,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                 format_func=lambda value: value.replace("/", " / "),
                 key=cs_selection_key,
             )
-            if st.button("增量更新 init", disabled=catalog is None, use_container_width=True):
+            if st.button("增量更新 init", disabled=catalog is None, width="stretch"):
                 try:
                     with st.status("正在增量更新 init…", expanded=True) as status:
                         status.write("正在检查新增日期和目标目录。")
@@ -534,7 +538,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         "从 init 生成数据集",
         type="primary",
         disabled=not full_init_ready,
-        use_container_width=True,
+        width="stretch",
     ):
         try:
             with st.status(f"正在生成 {profile_name} 数据集…", expanded=True) as status:

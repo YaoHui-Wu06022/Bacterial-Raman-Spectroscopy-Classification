@@ -111,9 +111,9 @@ def render_sample_inference_page() -> None:
     cache_root = get_dataset_dir(profile, PROJECT_ROOT) / profile.root_test
     st.caption(f"测试数据缓存：{cache_root}")
     actions = st.columns(2)
-    if actions[0].button("构建/更新测试数据", use_container_width=True):
+    if actions[0].button("构建/更新测试数据", width="stretch"):
         _build_cache(experiment_dir, level_name, selected_folders, cache_root)
-    if actions[1].button("开始样本推理", type="primary", use_container_width=True):
+    if actions[1].button("开始样本推理", type="primary", width="stretch"):
         _run_inference(experiment_dir, level_name, selected_folders, cache_root)
     _render_existing_result(experiment_dir, level_name)
 
@@ -258,7 +258,7 @@ def _render_existing_result(experiment_dir: Path, level_name: str) -> None:
             for row in rows
             if isinstance(row, dict)
         ]
-        st.dataframe(display_rows, use_container_width=True, hide_index=True)
+        st.dataframe(display_rows, width="stretch", hide_index=True)
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -268,7 +268,7 @@ def _render_existing_result(experiment_dir: Path, level_name: str) -> None:
             with st.expander(f"查看 {folder_name} 的逐谱结果", expanded=False):
                 image_path = result_dir / folder_name / "spectra.png"
                 if image_path.is_file():
-                    st.image(str(image_path), use_container_width=True)
+                    st.image(str(image_path), width="stretch")
                 file_predictions = row.get("file_predictions")
                 if isinstance(file_predictions, list) and file_predictions:
                     st.dataframe(
@@ -285,7 +285,7 @@ def _render_existing_result(experiment_dir: Path, level_name: str) -> None:
                             for item in file_predictions
                             if isinstance(item, dict)
                         ],
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                     )
     with st.expander("查看结果目录", expanded=False):

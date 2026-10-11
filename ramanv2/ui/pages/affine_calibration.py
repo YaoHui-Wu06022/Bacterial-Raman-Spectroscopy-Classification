@@ -18,6 +18,20 @@ def _number(value: object) -> str:
     return "-" if value is None else f"{float(value):.8f}"
 
 
+def _has_active_source_folder(data_root: Path, date_name: str) -> bool:
+    """日期必须仍有普通源文件夹，整夹删除后不再进入仿射门禁。"""
+    date_dir = data_root / date_name
+    excluded = {"小球", "shift", "delete", "audit", "audit_runs", ".raman_pipeline"}
+    if not date_dir.is_dir():
+        return False
+    return any(
+        folder.is_dir()
+        and folder.name not in excluded
+        and any(folder.rglob("*.arc_data"))
+        for folder in date_dir.iterdir()
+    )
+
+
 def _pending_date_names(
     eligible_dates: list[str],
     affine_dates: set[str],
@@ -38,7 +52,7 @@ def _render_images(report: dict[str, object]) -> None:
         return
     with st.expander("小球校准图", expanded=False):
         for path in paths:
-            st.image(str(path), caption=path.name, use_container_width=True)
+            st.image(str(path), caption=path.name, width="stretch")
 
 
 def render_affine_calibration_page(context: PageContext) -> None:
@@ -52,13 +66,23 @@ def render_affine_calibration_page(context: PageContext) -> None:
         date_name for date_name in cleaned_dates
         if (context.data_root / date_name / "小球").is_dir()
         and any((context.data_root / date_name / "小球").glob("*.arc_data"))
+        and _has_active_source_folder(context.data_root, date_name)
     ]
-    affine_dates = sorted(state.affine_completed_dates & set(eligible_dates))
-    audit_dates = sorted(state.audit_completed_dates & set(affine_dates))
     reports = {
         date_name: load_calibration_report(context.shift_root, date_name)
         for date_name in eligible_dates
     }
+    report_affine_dates = {
+        date_name
+        for date_name, report in reports.items()
+        if report is not None and str(report.get("status", "")) == "manual_approved"
+    }
+    affine_dates = sorted(report_affine_dates)
+    audit_dates = sorted(state.audit_completed_dates & report_affine_dates)
+    if state.affine_completed_dates != report_affine_dates:
+        state.affine_completed_dates = set(report_affine_dates)
+        state.audit_completed_dates.intersection_update(report_affine_dates)
+        _save(context, state)
     failed_dates = [
         date_name
         for date_name, report in reports.items()
@@ -89,7 +113,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
     metrics[4].metric("审核完成", f"{len(audit_dates)} 个")
 
     controls = st.columns(2)
-    if controls[0].button("一键分析并校准", type="primary", disabled=not pending_affine, use_container_width=True):
+    if controls[0].button("一键分析并校准", type="primary", disabled=not pending_affine, width="stretch"):
         with st.spinner("正在分析小球并发布通过校验的校正数据……"):
             reports = run_affine_calibration(context.data_root, pending_affine, context.shift_root)
         for report in reports:
@@ -105,7 +129,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
         _save(context, state)
         st.session_state["affine_reports"] = reports
         st.rerun()
-    if controls[1].button("运行文件夹审核", disabled=not pending_audit, use_container_width=True):
+    if controls[1].button("运行文件夹审核", disabled=not pending_audit, width="stretch"):
         with st.spinner("正在运行文件夹级 audit 并应用候选移除……"):
             reports = run_shift_folder_audit(context.shift_root, pending_audit, state, context.state_file)
         state.dataset_builds.pop("latest", None)
@@ -147,7 +171,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
                 st.warning("；".join(str(error) for error in report["errors"]))
             if status in {"needs_review", "error"}:
                 st.error("该日期无法通过仿射校准，不能进入后续数据流程。")
-                if st.button("整日期移除", key=f"remove-failed-calibration-{date_name}", use_container_width=True):
+                if st.button("整日期移除", key=f"remove-failed-calibration-{date_name}", width="stretch"):
                     folders = scan_review_folders(context.data_root, [date_name])
                     with st.spinner(f"正在移除失败日期 {date_name} 的全部原始光谱……"):
                         result = commit_date_items(

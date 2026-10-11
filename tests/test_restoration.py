@@ -5,8 +5,14 @@ from pathlib import Path
 
 from ramanv2.common.arc_data import read_arc_data
 from ramanv2.data.catalog import DatasetMapping
-from ramanv2.pipeline.restoration import _prefix_for_folder, restore_deleted_spectra, scan_deleted_spectra
-from ramanv2.pipeline.state import PipelineState, save_pipeline_state
+from ramanv2.pipeline.restoration import (
+    _prefix_for_folder,
+    restore_deleted_folder,
+    restore_deleted_spectra,
+    scan_deleted_folders,
+    scan_deleted_spectra,
+)
+from ramanv2.pipeline.state import PipelineState, load_pipeline_state, save_pipeline_state
 
 
 def _mapping() -> DatasetMapping:
@@ -31,6 +37,68 @@ def test_scan_deleted_spectra_ignores_bead_folder(tmp_path: Path) -> None:
     records = scan_deleted_spectra(tmp_path / "cosmic_data", _mapping())
 
     assert [record.relative_path for record in records] == ["20240101/EC01/cell3.arc_data"]
+
+
+def test_scan_deleted_folders_reads_only_complete_archives(tmp_path: Path) -> None:
+    root = tmp_path / "cosmic_data" / "delete" / "folder_delete" / "20240101" / "EC01"
+    root.mkdir(parents=True)
+    (root / "cell1.arc_data").write_text("1 2\n", encoding="utf-8")
+
+    records = scan_deleted_folders(tmp_path / "cosmic_data")
+
+    assert [(item.relative_path, item.file_count) for item in records] == [("20240101/EC01", 1)]
+
+
+def test_restore_folder_moves_archive_without_rebuilding_outputs(tmp_path: Path) -> None:
+    data_root = tmp_path / "cosmic_data"
+    archive = data_root / "delete" / "folder_delete" / "20240101" / "EC01"
+    archive.mkdir(parents=True)
+    (archive / "cell1.arc_data").write_text("1 2\n", encoding="utf-8")
+    (archive / "cell2.arc_data").write_text("2 3\n", encoding="utf-8")
+    state_path = tmp_path / "state.json"
+    state = PipelineState()
+    state.affine_completed_dates.add("20240101")
+    state.audit_completed_dates.add("20240101")
+    save_pipeline_state(state_path, state)
+
+    result = restore_deleted_folder(
+        data_root,
+        tmp_path / "shift_data",
+        tmp_path / "init",
+        state_path,
+        None,
+        "20240101/EC01",
+    )
+
+    assert result["status"] == "folder_restored"
+    assert (data_root / "20240101" / "EC01" / "cell1.arc_data").is_file()
+    assert not archive.exists()
+    assert not (tmp_path / "shift_data").exists()
+    restored_state = load_pipeline_state(state_path)
+    assert "20240101" not in restored_state.affine_completed_dates
+    assert "20240101" not in restored_state.audit_completed_dates
+
+
+def test_restore_spectra_does_not_read_folder_delete(tmp_path: Path) -> None:
+    archive = tmp_path / "cosmic_data" / "delete" / "folder_delete" / "20240101" / "EC01"
+    archive.mkdir(parents=True)
+    (archive / "cell1.arc_data").write_text("1 2\n", encoding="utf-8")
+    state_path = tmp_path / "state.json"
+    save_pipeline_state(state_path, PipelineState())
+
+    try:
+        restore_deleted_spectra(
+            tmp_path / "cosmic_data",
+            tmp_path / "shift_data",
+            tmp_path / "init",
+            state_path,
+            _mapping(),
+            ["20240101/EC01/cell1.arc_data"],
+        )
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("人工恢复接口不应读取 folder_delete")
 
 
 def test_restore_bead_without_affine_only_restores_cosmic_data(tmp_path: Path) -> None:

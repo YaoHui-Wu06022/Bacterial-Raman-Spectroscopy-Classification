@@ -19,11 +19,12 @@ from ramanv2.common.naming import (
 from ramanv2.common.publishing import create_temporary_path, rename_directory
 from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.data.catalog import DatasetMapping
-from ramanv2.pipeline.lineage import record_audit_result, record_restore
+from ramanv2.pipeline.lineage import FOLDER_DELETE_RELATIVE, record_audit_result, record_restore
 from ramanv2.pipeline.state import load_pipeline_state, save_pipeline_state
 
 
 MANUAL_DELETE_DIR = "delete/manual"
+FOLDER_DELETE_DIR = FOLDER_DELETE_RELATIVE.as_posix()
 RESTORE_LOG_NAME = "restore_log.jsonl"
 BEAD_DIR_NAME = "小球"
 
@@ -39,6 +40,17 @@ class DeletedSpectrum:
     file_name: str
     genus: str
     prefix: str
+
+
+@dataclass(frozen=True)
+class DeletedFolder:
+    """一个整夹删除归档目录。"""
+
+    relative_path: str
+    source_relative_path: str
+    date_name: str
+    folder_name: str
+    file_count: int
 
 
 def _prefix_for_folder(folder_name: str) -> str:
@@ -97,6 +109,36 @@ def scan_deleted_spectra(
                         prefix=prefix,
                     )
                 )
+    return records
+
+
+def scan_deleted_folders(data_root: Path | str) -> list[DeletedFolder]:
+    """只扫描 ``cosmic_data/delete/folder_delete`` 中的完整文件夹。"""
+    root = Path(data_root).resolve() / FOLDER_DELETE_RELATIVE
+    if not root.is_dir():
+        return []
+    records: list[DeletedFolder] = []
+    for date_dir in sorted(
+        (item for item in root.iterdir() if item.is_dir() and item.name.isdigit()),
+        key=lambda item: build_natural_key(item.name),
+    ):
+        for folder_dir in sorted(
+            (item for item in date_dir.iterdir() if item.is_dir()),
+            key=lambda item: build_natural_key(item.name),
+        ):
+            file_count = sum(1 for item in folder_dir.rglob("*.arc_data") if item.is_file())
+            if not file_count:
+                continue
+            relative = f"{date_dir.name}/{folder_dir.name}"
+            records.append(
+                DeletedFolder(
+                    relative_path=relative,
+                    source_relative_path=f"{FOLDER_DELETE_DIR}/{relative}",
+                    date_name=date_dir.name,
+                    folder_name=folder_dir.name,
+                    file_count=file_count,
+                )
+            )
     return records
 
 
@@ -467,31 +509,59 @@ def restore_deleted_folder(
     profile_catalog: DatasetMapping,
     source_id: str,
 ) -> dict[str, object]:
-    """只恢复该次整夹删除记录中的文件，不恢复更早的独立删除谱。"""
-    from ramanv2.pipeline.lineage import load_folder_lineage
-
-    payload = load_folder_lineage(data_root)
-    record = payload.get("folders", {}).get(str(source_id), {})
-    files = record.get("files", {}) if isinstance(record, dict) else {}
-    if not isinstance(files, dict):
-        raise ValueError(f"没有可恢复的整夹删除记录：{source_id}")
-    selected = []
-    for relative, item in files.items():
-        if not isinstance(item, dict) or item.get("status") != "manual_deleted":
-            continue
-        if item.get("reason") not in {"folder_remove", "date_remove", "prefix_folder_remove"}:
-            continue
-        selected.append(f"{source_id}/{relative}")
-    if not selected:
-        raise ValueError(f"没有可恢复的整夹删除记录：{source_id}")
-    return restore_deleted_spectra(
-        data_root,
-        shift_root,
-        init_root,
-        state_path,
-        profile_catalog,
-        selected,
+    """将整夹删除归档整体移回 cosmic_data，不自动重建下游产物。"""
+    del shift_root, init_root, profile_catalog
+    root = Path(data_root).resolve()
+    parts = str(source_id).replace("\\", "/").split("/", 1)
+    if len(parts) != 2:
+        raise ValueError("source_id 必须是 日期/文件夹")
+    date_name, folder_name = parts
+    archive = root / FOLDER_DELETE_RELATIVE / date_name / folder_name
+    target = root / date_name / folder_name
+    if not archive.is_dir():
+        raise FileNotFoundError(f"整夹删除归档不存在：{archive}")
+    if target.exists():
+        raise FileExistsError(f"源文件夹目标已存在：{target}")
+    files = sorted(
+        (item for item in archive.rglob("*.arc_data") if item.is_file()),
+        key=lambda item: build_natural_key(item.relative_to(archive).as_posix()),
     )
+    if not files:
+        raise ValueError(f"整夹删除归档没有光谱：{archive}")
+    relative_paths = [
+        f"{date_name}/{folder_name}/{item.relative_to(archive).as_posix()}"
+        for item in files
+    ]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(archive), str(target))
+    try:
+        record_restore(root, relative_paths)
+        state = load_pipeline_state(state_path)
+        state.affine_completed_dates.discard(date_name)
+        state.audit_completed_dates.discard(date_name)
+        state.dataset_builds.pop("latest", None)
+        state.dataset_builds.pop("profiles", None)
+        state.dataset_builds.pop("prefix_plots", None)
+        save_pipeline_state(state_path, state)
+    except Exception:
+        if target.exists() and not archive.exists():
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(target), str(archive))
+        raise
+    return {
+        "status": "folder_restored",
+        "source_id": source_id,
+        "restored_file_count": len(files),
+        "paths": relative_paths,
+    }
 
 
-__all__ = ["DeletedSpectrum", "RESTORE_LOG_NAME", "restore_deleted_folder", "restore_deleted_spectra", "scan_deleted_spectra"]
+__all__ = [
+    "DeletedFolder",
+    "DeletedSpectrum",
+    "RESTORE_LOG_NAME",
+    "restore_deleted_folder",
+    "restore_deleted_spectra",
+    "scan_deleted_folders",
+    "scan_deleted_spectra",
+]
