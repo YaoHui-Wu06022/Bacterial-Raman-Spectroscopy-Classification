@@ -133,7 +133,7 @@ def _list_cs_folders() -> list[str]:
 
 @st.cache_resource(show_spinner=False)
 def _load_cached_predictor(experiment_dir: str, level_name: str, meta_modified_ns: int):
-    """在当前会话复用同一实验层级的已加载模型。"""
+    """复用通过统一种标签版本校验的实验模型。"""
     del meta_modified_ns
     return load_predictor(experiment_dir, resolve_device("cpu"), level_name)
 

@@ -14,7 +14,7 @@ import numpy as np
 
 from ramanv2.common.arc_data import read_arc_data
 from ramanv2.common.naming import build_natural_key, is_test_source_folder, parse_test_folder_prefix
-from ramanv2.common.publishing import create_temporary_path, publish_directory, rename_directory, preserve_paths
+from ramanv2.common.publishing import create_temporary_path, publish_directory, rename_directory, preserve_paths, _remove_path
 from ramanv2.data.count import summarize_dataset
 from ramanv2.data.catalog import DatasetMapping
 from ramanv2.pipeline.lineage import initialize_folder_lineage, load_folder_lineage, record_output_path, save_folder_lineage, lineage_path
@@ -23,7 +23,7 @@ from ramanv2.pipeline.lineage import initialize_folder_lineage, load_folder_line
 SPECIAL_NAMES = {"小球", "shift", "delete", "audit_runs", ".raman_pipeline"}
 CANONICAL_FOLDER_PATTERN = re.compile(r"^([A-Za-z]+)(\d{8})_(\d+)$")
 DATE_PATTERN = re.compile(r"^\d{8}$")
-BuildMode = Literal["full", "incremental"]
+BuildMode = Literal["full", "incremental", "replace_dates"]
 
 
 @dataclass(frozen=True)
@@ -106,13 +106,22 @@ def build_full_init(
 
 def build_cs_folder(source_folder: Path, target_folder: Path) -> int:
     """原样发布一组已校正的 CS 谱；先完整复制校验，失败保留旧组。"""
+    return build_spectrum_folder(source_folder, target_folder)
+
+
+def build_spectrum_folder(source_folder: Path, target_folder: Path, filenames: set[str] | None = None) -> int:
+    """原样发布一组 shift 谱；可限定活动文件，先验证再替换目标组。"""
     source = source_folder.resolve()
     target = target_folder.resolve()
     if target == source or source in target.parents or target in source.parents:
         raise ValueError("CS 来源与输出目录不能互相包含")
     files = sorted((path for path in source.iterdir() if path.is_file() and path.suffix.lower() == ".arc_data"), key=lambda path: build_natural_key(path.name))
+    if filenames is not None:
+        if filenames - {path.name for path in files}:
+            raise ValueError("shift 缺少活动光谱，请先更新对应 shift 文件夹")
+        files = [path for path in files if path.name in filenames]
     if not files:
-        raise ValueError(f"CS 来源没有光谱：{source}")
+        raise ValueError(f"来源没有光谱：{source}")
     temporary = create_temporary_path(target)
     temporary.mkdir()
     try:
@@ -230,9 +239,11 @@ def build_init_datasets(
     *,
     publish_test_enable: bool = True,
 ) -> dict[str, object]:
-    """按批准日期原子构建全量 init 或增量追加 init。"""
-    if mode not in {"full", "incremental"}:
-        raise ValueError("mode 必须是 full 或 incremental")
+    """按批准日期构建 init；replace_dates 仅替换已生成日期及已导出的 CS 组。"""
+    if mode not in {"full", "incremental", "replace_dates"}:
+        raise ValueError("mode 必须是 full、incremental 或 replace_dates")
+    if mode == "replace_dates" and (date_names is None or profile_roots):
+        raise ValueError("按日期替换必须指定日期，且不能更新 Profile")
     source_root = Path(shift_root).resolve()
     full_root = Path(init_root).resolve()
     roots = {name: Path(path).resolve() for name, path in profile_roots.items()}
@@ -250,6 +261,8 @@ def build_init_datasets(
         for prefix in prefixes
     }
     selected_names = _select_date_names(source_root, date_names)
+    if mode == "replace_dates" and len(selected_names) != 1:
+        raise ValueError("按日期替换一次只能更新一个日期")
     affine_dates = {str(name) for name in affine_completed_dates}
     eligible_dates: list[str] = []
     skipped_dates: list[str] = []
@@ -273,6 +286,12 @@ def build_init_datasets(
     selected_keys = set() if selected_test_folders is None else {
         str(item).replace("\\", "/") for item in selected_test_folders
     }
+    cosmic_root = source_root.parent / "cosmic_data"
+    test_target_names = {
+        source_id: Path(record["outputs"]["csdata"]).name
+        for source_id, record in load_folder_lineage(cosmic_root)["folders"].items()
+        if record.get("outputs", {}).get("csdata")
+    }
     for date_name in eligible_dates:
         groups.extend(
             _collect_source_groups(
@@ -280,9 +299,9 @@ def build_init_datasets(
                 prefix_to_genus,
                 selected_keys,
                 include_unknown_tests=resolved_test_root is not None or not publish_test_enable,
+                test_target_names=test_target_names,
             )
         )
-    cosmic_root = source_root.parent / "cosmic_data"
     if cosmic_root.is_dir():
         # cosmic 活动区是准据；不能因旧 shift 或旧走向记录让已删谱回流。
         active_groups = []
@@ -296,6 +315,33 @@ def build_init_datasets(
     destination_roots = {"__all__": full_root, **roots}
     if resolved_test_root is not None:
         destination_roots["__test__"] = resolved_test_root
+    replaced_init_dirs: list[Path] = []
+    replaced_cs_names: set[str] = set()
+    if mode == "replace_dates":
+        replaced_init_dirs = [
+            path.relative_to(full_root)
+            for path in full_root.glob("*/*")
+            if path.is_dir() and (match := CANONICAL_FOLDER_PATTERN.fullmatch(path.name))
+            and match.group(2) in eligible_dates
+        ]
+        if not replaced_init_dirs:
+            destination_roots.pop("__all__", None)
+        if resolved_test_root is not None:
+            replaced_cs_names = {
+                name for key in selected_keys
+                if "/" in key and key.split("/", 1)[0] in eligible_dates
+                for name in [test_target_names.get(key, key.split("/", 1)[1])]
+                if (resolved_test_root / name).is_dir()
+            }
+            if any(Path(name).name != name or name in {".", ".."} for name in replaced_cs_names):
+                raise ValueError("无效的 CSdata 输出文件夹")
+            if not replaced_cs_names:
+                destination_roots.pop("__test__", None)
+        groups = [
+            group for group in groups
+            if (group.is_test and group.target_name in replaced_cs_names)
+            or (not group.is_test and replaced_init_dirs)
+        ]
     _validate_test_group_targets(groups)
     if mode == "incremental":
         conflicts = _find_incremental_conflicts(eligible_dates, groups, destination_roots)
@@ -314,6 +360,11 @@ def build_init_datasets(
     test_folders: set[str] = set()
     cs_exports: list[dict[str, object]] = []
     try:
+        if mode == "replace_dates":
+            for relative in replaced_init_dirs:
+                _remove_path(temporary_roots["__all__"] / relative)
+            for name in replaced_cs_names:
+                _remove_path(temporary_roots["__test__"] / name)
         for group in groups:
             date_stats[group.date_name]["folder_count"] += 1
             destinations = _resolve_destinations(group, mapping, temporary_roots)
@@ -370,7 +421,11 @@ def build_init_datasets(
             "selected_cs_folders": sorted(selected_keys or set(), key=build_natural_key),
         }
         with preserve_paths([*destination_roots.values(), lineage_path(cosmic_root)]):
-            _publish_all(temporary_roots, destination_roots)
+            if mode == "replace_dates":
+                for name, target in destination_roots.items():
+                    publish_directory(temporary_roots[name], target)
+            else:
+                _publish_all(temporary_roots, destination_roots)
             if cosmic_root.is_dir():
                 for group in groups:
                     relative = _target_relative(group)
@@ -397,7 +452,7 @@ def build_init_datasets(
             if cosmic_root.is_dir():
                 payload = load_folder_lineage(cosmic_root)
                 for record in payload.get("folders", {}).values():
-                    if record.get("date") in eligible_dates:
+                    if record.get("date") in eligible_dates and (mode != "replace_dates" or replaced_init_dirs):
                         record["init_pending"] = False
                 save_folder_lineage(cosmic_root, payload)
         return report
@@ -422,6 +477,7 @@ def _collect_source_groups(
     *,
     include_unknown_tests: bool = False,
     source_folder_names: set[str] | None = None,
+    test_target_names: dict[str, str] | None = None,
 ) -> list[_SourceGroup]:
     by_prefix: dict[str, list[tuple[Path, tuple[Path, ...]]]] = {}
     groups: list[_SourceGroup] = []
@@ -439,33 +495,27 @@ def _collect_source_groups(
         if not files:
             continue
         source_key = f"{date_dir.name}/{source_dir.name}"
-        if is_test_source_folder(source_dir.name):
-            prefix = parse_test_folder_prefix(source_dir.name)
-            genus = prefix_to_genus.get(prefix)
-            is_unknown_test = genus is None
-            is_selected_test = (include_unknown_tests and is_unknown_test) or source_key in selected_test_folders
-            if is_selected_test:
-                for source_path in files:
-                    _validate_spectrum(source_path)
-                groups.append(
-                    _SourceGroup(
-                        date_name=date_dir.name,
-                        source_dir=source_dir,
-                        genus=genus or "",
-                        target_name=source_dir.name,
-                        files=files,
-                        is_test=True,
-                        source_name=source_dir.name,
-                    )
-                )
-                continue
-            if is_unknown_test:
-                # 未映射的 CS 没有普通属目录，只能留在默认的 CSdata 流程中。
-                continue
-            # 已映射但未选择进入 CSdata 的 CS，继续按普通来源目录处理。
         prefix = _source_prefix(source_dir.name)
-        if prefix not in prefix_to_genus:
+        genus = prefix_to_genus.get(prefix)
+        is_cs_source = is_test_source_folder(source_dir.name)
+        if not is_cs_source and genus is None:
             raise ValueError(f"名单未映射来源前缀：{date_dir.name}/{source_dir.name} ({prefix})")
+        is_selected_test = source_key in selected_test_folders or (include_unknown_tests and is_cs_source and genus is None)
+        if is_selected_test:
+            for source_path in files:
+                _validate_spectrum(source_path)
+            # 普通 init 也可显式分流；后续重建沿用快速迁移时保存的目录名。
+            default_name = source_dir.name if is_cs_source else f"{prefix}{date_dir.name}_{source_dir.name}"
+            target_name = (test_target_names or {}).get(source_key, default_name)
+            if Path(target_name).name != target_name or target_name in {".", ".."}:
+                raise ValueError("无效的 CSdata 输出文件夹")
+            groups.append(_SourceGroup(
+                date_name=date_dir.name, source_dir=source_dir, genus=genus or "",
+                target_name=target_name, files=files, is_test=True, source_name=source_dir.name,
+            ))
+            continue
+        if is_cs_source and genus is None:
+            continue
         for source_path in files:
             _validate_spectrum(source_path)
         by_prefix.setdefault(prefix, []).append((source_dir, files))
@@ -584,7 +634,7 @@ def _create_temporary_roots(destination_roots: dict[str, Path], mode: BuildMode)
             temporary = create_temporary_path(root)
             temporary.mkdir(parents=True, exist_ok=False)
             temporary_roots[name] = temporary
-            if mode == "incremental" and root.exists():
+            if mode in {"incremental", "replace_dates"} and root.exists():
                 if not root.is_dir():
                     raise NotADirectoryError(f"输出目录不是目录：{root}")
                 shutil.copytree(root, temporary, dirs_exist_ok=True)
@@ -666,6 +716,7 @@ __all__ = [
     "InitBuildReport",
     "build_full_init",
     "build_cs_folder",
+    "build_spectrum_folder",
     "build_profile_dataset",
     "build_init_datasets",
     "build_profile_datasets",

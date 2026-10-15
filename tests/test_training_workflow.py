@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +11,11 @@ torch = pytest.importorskip("torch")
 
 from ramanv2.core.config import build_config
 from ramanv2.core.config_file import read_yaml_dict
+from ramanv2.core.hierarchy_meta import LABEL_SCHEMA
+from ramanv2.data.runtime.index import DatasetIndex
+from ramanv2.evaluation.context import load_evaluation_context, resolve_run_entry
+from ramanv2.evaluation.model_eval import _predict_run
+from ramanv2.inference.predictor import load_predictor
 from ramanv2.training.workflow import TrainRequest, run_training
 
 
@@ -132,6 +138,89 @@ def test_workflow_accepts_explicit_train_dir_without_a_profile(
     )
 
     assert result["level_models"]["level_1"]["status"] == "trained"
+
+
+def test_species_run_can_train_reload_and_evaluate_across_dates(tmp_path, monkeypatch):
+    train_dir = tmp_path / "train"
+    for folder in ("GenusA/AB20231212_01", "GenusA/ab20231214_01", "GenusA/AJO20231214_01"):
+        _write_spectra(train_dir / folder, "cell", 1.0)
+    config = _build_workflow_config()
+    monkeypatch.setattr("ramanv2.training.workflow.build_model", lambda n, spec: WorkflowModel(n))
+    monkeypatch.setattr("ramanv2.inference.predictor.build_model", lambda n, spec: WorkflowModel(n))
+    monkeypatch.setattr("ramanv2.evaluation.context.resolve_training_dir", lambda profile: train_dir)
+    output = tmp_path / "experiment"
+    meta = run_training(TrainRequest(
+        config, "level_2", train_per_parent_enable=False,
+        train_dir=train_dir, experiment_dir=output,
+    ))
+    assert meta["label_schema"] == LABEL_SCHEMA
+    assert meta["class_names_by_level"]["level_2"] == ["GenusA/AB", "GenusA/AJO"]
+    assert len(meta["class_names_by_level"]["leaf"]) == 3
+    entry = meta["level_models"]["level_2"]
+    run = output / entry["run_dir"]
+    snapshot = json.loads((run / "train_data/manifest.json").read_text(encoding="utf-8"))
+    assert {row["target_class"] for row in snapshot["samples"]} == {"GenusA/AB", "GenusA/AJO"}
+    assert all("2023" in row["path"] for row in snapshot["samples"])
+    context = load_evaluation_context(run)
+    predictor = load_predictor(run, "cpu", "level_2")
+    names, paths, labels, predictions = _predict_run(context, predictor, resolve_run_entry(context))
+    assert names == ["GenusA/AB", "GenusA/AJO"]
+    assert len(paths) == len(labels) == len(predictions) == len(context.validation_indices)
+
+    # 同一实验可补训练另一个层，已经训练的种级条目不得丢失。
+    combined = run_training(TrainRequest(
+        config, "level_1", train_per_parent_enable=False,
+        train_dir=train_dir, experiment_dir=output,
+    ))
+    assert combined["level_models"]["level_2"] == entry
+    assert "level_1" in combined["level_models"]
+
+
+@pytest.mark.parametrize("legacy_enable", [False, True])
+def test_workflow_rejects_incompatible_hierarchy_before_writing(tmp_path, monkeypatch, legacy_enable):
+    train_dir = tmp_path / "train"
+    _write_spectra(train_dir / "Genus/AB20231212_01", "cell", 1.0)
+    index = DatasetIndex(train_dir, load_intensity_enable=False)
+    meta = deepcopy(index.hierarchy_metadata)
+    meta["label_schema"] = LABEL_SCHEMA
+    if legacy_enable:
+        meta.pop("label_schema")
+    else:
+        meta["class_names_by_level"]["level_2"] = ["Genus/OTHER"]
+    output = tmp_path / "experiment"
+    output.mkdir()
+    meta_path = output / "hierarchy_meta.json"
+    original = json.dumps(meta).encode("utf-8")
+    meta_path.write_bytes(original)
+    monkeypatch.setattr("ramanv2.training.workflow.build_model", lambda *args: pytest.fail("model constructed"))
+    expected = "label_schema" if legacy_enable else "class_names_by_level"
+    with pytest.raises(ValueError, match=expected):
+        run_training(TrainRequest(
+            _build_workflow_config(), "level_1", train_per_parent_enable=False,
+            train_dir=train_dir, experiment_dir=output,
+        ))
+    assert meta_path.read_bytes() == original
+    assert sorted(p.name for p in output.iterdir()) == ["hierarchy_meta.json"]
+
+
+def test_workflow_rejects_old_resume_before_creating_experiment(tmp_path):
+    from ramanv2.core.config_file import write_yaml_dict
+
+    previous = tmp_path / "previous"
+    previous.mkdir()
+    values = _build_workflow_config().to_dict()
+    values.pop("label_schema")
+    write_yaml_dict(previous / "shared_config.yaml", values)
+    run = previous / "level_1/run_old"
+    run.mkdir(parents=True)
+    write_yaml_dict(run / "model_config.yaml", values)
+    output = tmp_path / "new_experiment"
+    with pytest.raises(ValueError, match="label_schema"):
+        run_training(TrainRequest(
+            _build_workflow_config(), "level_1", train_per_parent_enable=False,
+            experiment_dir=output, resume_run_dir=run,
+        ))
+    assert not output.exists()
 
 
 def _write_spectra(directory: Path, prefix: str, value: float) -> None:

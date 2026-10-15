@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import streamlit.components.v1 as components
@@ -18,6 +19,7 @@ def render_spectrum_grid(
     selected_paths: set[str],
     marked_paths: set[str],
     key: str,
+    on_change: Callable[[], None] | None = None,
 ) -> dict[str, object] | None:
     """渲染光谱网格并返回最近一次点击事件。"""
     return _COMPONENT(
@@ -25,5 +27,6 @@ def render_spectrum_grid(
         selected_paths=sorted(selected_paths),
         marked_paths=sorted(marked_paths),
         key=key,
+        on_change=on_change,
         default={"event": "none", "event_id": "initial"},
     )

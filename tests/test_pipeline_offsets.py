@@ -52,15 +52,18 @@ def test_offset_updates_sources_and_init_preserving_audit_cs_and_profiles(tmp_pa
     args = _layout(tmp_path)
     cosmic, shift, init, mapping, state, state_file, figures = args
     audit_before = (shift / "audit_runs" / "run" / "summary.json").read_bytes()
+    affine_before = (shift / DATE / "shift" / "affine.json").read_bytes()
     cs_before, gn_before = _snapshot(tmp_path / "CSdata"), _snapshot(tmp_path / "GN")
     original_axis, original_intensity = read_arc_data(cosmic / DATE / "EC01" / "a.arc_data")
     plotted = []
 
-    def plot(source, output):
-        plotted.append(Path(source))
-        (output / "new.png").write_bytes(b"updated init plot")
+    def plot(source, output, groups):
+        plotted.append((Path(source), groups))
+        target = output / "Escherichia" / "EC.png"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"updated init plot")
 
-    monkeypatch.setattr(calibration, "build_prefix_plots", plot)
+    monkeypatch.setattr(calibration, "build_prefix_plots_for_groups", plot)
     result = run_folder_offset(cosmic, shift, init, mapping, state, state_file, f"{DATE}/EC01", 2.5, figures)
     assert result == {"changed_folders": ["EC01"], "spectrum_count": 3}
     for relative in (f"{DATE}/EC01/a.arc_data", f"delete/manual/{DATE}/EC01/b.arc_data", f"delete/folder_delete/{DATE}/EC01/c.arc_data"):
@@ -75,13 +78,13 @@ def test_offset_updates_sources_and_init_preserving_audit_cs_and_profiles(tmp_pa
     assert _snapshot(tmp_path / "CSdata") == cs_before
     assert _snapshot(tmp_path / "GN") == gn_before
     assert state.dataset_builds["profiles"] == {"GN": {"status": "ready"}}
-    assert plotted == [init]
+    assert plotted == [(init, {("Escherichia", "EC")})]
     saved = state_file.read_text(encoding="utf-8")
     assert "affine_compensations" not in saved
-    assert "folder_compensations" not in (shift / DATE / "shift" / "affine.json").read_text(encoding="utf-8")
+    assert (shift / DATE / "shift" / "affine.json").read_bytes() == affine_before
 
 
-@pytest.mark.parametrize("failure", ["read", "shift", "init", "plot", "state"])
+@pytest.mark.parametrize("failure", ["read", "shift", "shift_publish", "init", "plot", "state"])
 def test_offset_failure_restores_sources_outputs_and_state(tmp_path, monkeypatch, failure):
     cosmic, shift, init, mapping, state, state_file, figures = _layout(tmp_path)
     before = _snapshot(tmp_path)
@@ -94,13 +97,16 @@ def test_offset_failure_restores_sources_outputs_and_state(tmp_path, monkeypatch
         from ramanv2.data.calibration import affine
         monkeypatch.setattr(affine, "read_arc_data", fail)
     elif failure == "shift":
-        monkeypatch.setattr(calibration, "rebuild_shift_data", lambda *a, **kw: [{"status": "error", "error": "injected failure"}])
+        monkeypatch.setattr(calibration, "rebuild_shift_folder", fail)
+    elif failure == "shift_publish":
+        import ramanv2.pipeline.shift
+        monkeypatch.setattr(ramanv2.pipeline.shift, "publish_directory", fail)
     elif failure == "init":
-        monkeypatch.setattr(calibration, "build_full_init", fail)
+        monkeypatch.setattr(calibration, "build_spectrum_folder", fail)
     elif failure == "plot":
-        monkeypatch.setattr(calibration, "build_prefix_plots", fail)
+        monkeypatch.setattr(calibration, "build_prefix_plots_for_groups", fail)
     else:
-        monkeypatch.setattr(calibration, "build_prefix_plots", lambda *a: [])
+        monkeypatch.setattr(calibration, "build_prefix_plots_for_groups", lambda *a: [])
         monkeypatch.setattr(calibration, "save_pipeline_state", fail)
     with pytest.raises((OSError, RuntimeError), match="injected failure"):
         run_folder_offset(cosmic, shift, init, mapping, state, state_file, f"{DATE}/EC01", 2, figures)
@@ -108,14 +114,88 @@ def test_offset_failure_restores_sources_outputs_and_state(tmp_path, monkeypatch
     assert json.dumps(state.to_payload(), sort_keys=True) == state_before
 
 
-def test_offset_refuses_to_drop_an_unready_init_date(tmp_path, monkeypatch):
+def test_offset_does_not_rebuild_init_or_depend_on_other_dates(tmp_path, monkeypatch):
     cosmic, shift, init, mapping, state, state_file, figures = _layout(tmp_path)
     write_arc_data(cosmic / "20240102" / "EC01" / "other.arc_data", [600, 700], [1, 2])
+    other = init / "Escherichia" / "EC20240102_01" / "other.arc_data"
+    write_arc_data(other, [600, 700], [1, 2])
     state.dataset_builds["full_init"]["source_dates"].append("20240102")
-    before = _snapshot(tmp_path)
-    with pytest.raises(ValueError, match="20240102"):
-        run_folder_offset(cosmic, shift, init, mapping, state, state_file, f"{DATE}/EC01", 2, figures)
-    assert _snapshot(tmp_path) == before
+    before = other.read_bytes(), other.stat().st_ino, other.stat().st_mtime_ns
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("单文件夹频移不应重建全量 init")
+
+    monkeypatch.setattr(calibration, "build_full_init", unexpected, raising=False)
+    monkeypatch.setattr(calibration, "build_prefix_plots_for_groups", lambda *args: [])
+    preserve = calibration.preserve_paths
+
+    def preserve_only_affected_paths(paths):
+        assert init not in paths
+        assert figures not in paths
+        return preserve(paths)
+
+    monkeypatch.setattr(calibration, "preserve_paths", preserve_only_affected_paths)
+    run_folder_offset(cosmic, shift, init, mapping, state, state_file, f"{DATE}/EC01", 2, figures)
+    assert (other.read_bytes(), other.stat().st_ino, other.stat().st_mtime_ns) == before
+
+
+def test_offset_updates_only_its_counts_and_keeps_sibling_pending(tmp_path, monkeypatch):
+    from ramanv2.pipeline.lineage import load_folder_lineage, record_restore
+
+    cosmic, shift, init, mapping, state, state_file, figures = _layout(tmp_path)
+    write_arc_data(cosmic / DATE / "EC01/new.arc_data", [600, 700], [1, 2])
+    write_arc_data(cosmic / DATE / "EC02/other.arc_data", [600, 700], [3, 4])
+    record_restore(cosmic, [f"{DATE}/EC02/other.arc_data"])
+    state.dataset_builds["full_init"]["pending_dates"] = [DATE]
+    state.dataset_builds["full_init"]["status"] = "pending"
+    cs_before = _snapshot(tmp_path / "CSdata")
+    monkeypatch.setattr(calibration, "build_prefix_plots_for_groups", lambda *args: [])
+    run_folder_offset(cosmic, shift, init, mapping, state, state_file, f"{DATE}/EC01", 2, figures)
+    assert len(list(init.rglob("*.arc_data"))) == 2
+    assert _snapshot(tmp_path / "CSdata") == cs_before
+    report = state.dataset_builds["full_init"]
+    assert report["init_source_files"] == report["init_output_files"] == report["count"]["file_count"] == 2
+    assert report["test_files"] == 1
+    assert report["source_files"] == report["output_files"] == 3
+    assert report["pending_dates"] == [DATE]
+    assert report["status"] == "pending"
+    records = load_folder_lineage(cosmic)["folders"]
+    assert not records[f"{DATE}/EC01"]["init_pending"]
+    assert records[f"{DATE}/EC02"]["init_pending"]
+
+
+@pytest.mark.parametrize("selected_folder", ["EC01", "CS01EC"])
+def test_offset_preserves_same_date_sibling_files_and_shift_report(tmp_path, monkeypatch, selected_folder):
+    from ramanv2.pipeline.lineage import load_folder_lineage
+
+    cosmic, shift, init, mapping, state, state_file, figures = _layout(tmp_path)
+    sibling = "CS01EC" if selected_folder == "EC01" else "EC01"
+    # 若仍按整日期重建，会把这个尚未同步的变化一起写入 sibling 的 shift。
+    write_arc_data(cosmic / DATE / sibling / "new.arc_data", [610, 710], [3, 4])
+    protected = [cosmic / DATE / sibling, shift / DATE / sibling, shift / DATE / "shift"]
+    before = {
+        path: (path.read_bytes(), path.stat().st_mtime_ns, path.stat().st_ino)
+        for root in protected for path in root.rglob("*") if path.is_file()
+    }
+    records = load_folder_lineage(cosmic)["folders"]
+    sibling_before = records[f"{DATE}/{sibling}"]
+    monkeypatch.setattr(calibration, "build_prefix_plots_for_groups", lambda *args: [])
+    preserve = calibration.preserve_paths
+
+    def preserve_selected_paths(paths):
+        assert shift / DATE not in paths
+        assert shift / DATE / selected_folder in paths
+        return preserve(paths)
+
+    monkeypatch.setattr(calibration, "preserve_paths", preserve_selected_paths)
+    run_folder_offset(cosmic, shift, init, mapping, state, state_file, f"{DATE}/{selected_folder}", 2, figures)
+    after = {
+        path: (path.read_bytes(), path.stat().st_mtime_ns, path.stat().st_ino)
+        for root in protected for path in root.rglob("*") if path.is_file()
+    }
+    assert after == before
+    assert load_folder_lineage(cosmic)["folders"][f"{DATE}/{sibling}"] == sibling_before
+    assert not (shift / DATE / sibling / "new.arc_data").exists()
 
 
 def test_offset_ui_resets_to_zero_and_calls_pipeline(tmp_path, monkeypatch):
@@ -194,8 +274,8 @@ def test_exported_cs_offset_updates_only_its_csdata_group(tmp_path, monkeypatch,
     def unexpected(*args, **kwargs):
         raise AssertionError("CSdata 分支不应重建 init 或审核图")
 
-    monkeypatch.setattr(calibration, "build_full_init", unexpected)
-    monkeypatch.setattr(calibration, "build_prefix_plots", unexpected)
+    monkeypatch.setattr(calibration, "build_full_init", unexpected, raising=False)
+    monkeypatch.setattr(calibration, "build_prefix_plots_for_groups", unexpected)
     for _ in range(2):
         result = run_folder_offset(cosmic, shift, init, mapping, state, state_file, f"{DATE}/{cs_folder}", 1.5, figures)
         assert result["csdata_updated"] is True
@@ -217,7 +297,7 @@ def test_unexported_cs_prefix_folder_still_updates_init(tmp_path, monkeypatch, c
     cosmic, shift, init, mapping, state, state_file, figures = _layout(tmp_path, cs_folder, False)
     axis, _ = read_arc_data(cosmic / DATE / cs_folder / "test.arc_data")
     cs_before = _snapshot(tmp_path / "CSdata")
-    monkeypatch.setattr(calibration, "build_prefix_plots", lambda *args: [])
+    monkeypatch.setattr(calibration, "build_prefix_plots_for_groups", lambda *args: [])
     result = run_folder_offset(cosmic, shift, init, mapping, state, state_file, f"{DATE}/{cs_folder}", 2, figures)
     assert not result.get("csdata_updated")
     target = next(init.rglob("test.arc_data"))
@@ -260,7 +340,7 @@ render_affine_calibration_page(context)
     app = AppTest.from_string(script).run(timeout=30)
     assert not app.exception
     assert len(app.metric) == 3
-    assert [button.label for button in app.button] == ["一键分析并校准"]
+    assert [button.label for button in app.button] == ["一键分析并校准", "更新所选日期"]
     app.button[0].click().run(timeout=30)
     assert not app.exception
     assert not app.error

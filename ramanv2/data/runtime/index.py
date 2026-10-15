@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from ramanv2.core.hierarchy import parts_to_key
+from ramanv2.common.naming import parse_folder_prefix
 from ramanv2.data.io import iter_arc_dirs, load_arc_intensity
 
 
@@ -68,6 +69,19 @@ class DatasetIndex:
         return {
             level_name: None if index == 0 else self.head_names[index - 1]
             for index, level_name in enumerate(self.head_names)
+        }
+
+    @property
+    def hierarchy_metadata(self) -> dict:
+        """导出训练与评估共同校验的类别顺序和父子关系。"""
+        return {
+            "head_names": list(self.head_names),
+            "class_names_by_level": dict(zip(self.head_names, self.class_names_by_level)),
+            "parent_to_children": {
+                name: {str(parent): children for parent, children in mapping.items()}
+                for name, mapping in self.parent_to_children.items()
+            },
+            "parent_level_name": self.parent_level_name,
         }
 
     def get_raw_intensity(self, index: int) -> np.ndarray:
@@ -139,10 +153,16 @@ class DatasetIndex:
         self.head_name_to_idx = {
             name: index for index, name in enumerate(self.head_names)
         }
+        # 业务种标签去掉日期和批次；leaf 始终从原始目录生成，用于切分和追溯。
+        label_records = [
+            (path, parts[:1] + (parse_folder_prefix(parts[1], uppercase_enable=True),) + parts[2:]
+             if len(parts) >= 2 else parts)
+            for path, parts in records
+        ]
         level_maps = [dict() for _ in range(max_depth)]
         leaf_map: dict[str, int] = {}
-        for _, parts in records:
-            leaf_key = parts_to_key(parts)
+        for (_, source_parts), (_, parts) in zip(records, label_records):
+            leaf_key = parts_to_key(source_parts)
             leaf_map.setdefault(leaf_key, len(leaf_map))
             for level_index in range(len(parts)):
                 level_key = parts_to_key(parts[: level_index + 1])
@@ -150,7 +170,7 @@ class DatasetIndex:
 
         self.label_maps_by_level = level_maps + [leaf_map]
         self.parent_to_children = _build_parent_to_children(
-            records,
+            label_records,
             level_maps,
             self.level_names,
         )
@@ -158,14 +178,14 @@ class DatasetIndex:
         samples: list[Path] = []
         labels: list[list[int]] = []
         hierarchies: list[dict[str, str | None]] = []
-        for path, parts in records:
+        for (path, source_parts), (_, parts) in zip(records, label_records):
             row = [-1] * len(self.head_names)
             hierarchy = {name: None for name in self.level_names}
             for level_index in range(len(parts)):
                 level_key = parts_to_key(parts[: level_index + 1])
                 row[level_index] = level_maps[level_index][level_key]
                 hierarchy[self.level_names[level_index]] = level_key
-            row[-1] = leaf_map[parts_to_key(parts)]
+            row[-1] = leaf_map[parts_to_key(source_parts)]
             samples.append(path)
             labels.append(row)
             hierarchies.append(hierarchy)

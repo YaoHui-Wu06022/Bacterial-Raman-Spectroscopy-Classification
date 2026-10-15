@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ramanv2.core.hierarchy_meta import (
+    LABEL_SCHEMA,
     build_hierarchy_entry,
     compute_split_hash,
     merge_hierarchy_meta,
@@ -24,13 +25,19 @@ def test_hierarchy_meta_merges_entries_and_run_history(tmp_path) -> None:
         "level_2/level_2_0/run_two/level_2_0_model.pt",
         child_ids=[0, 1],
     )
-    existing_meta = {
+    hierarchy = {
+        "label_schema": LABEL_SCHEMA,
+        "head_names": ["level_1", "level_2", "leaf"],
+        "class_names_by_level": {"level_1": ["Genus"], "level_2": ["Genus/AB", "Genus/AJO"]},
+        "parent_to_children": {"level_2": {"0": [0, 1]}},
+        "parent_level_name": {"level_1": None, "level_2": "level_1"},
+    }
+    existing_meta = hierarchy | {
         "level_models": {"level_1": first_entry},
         "parent_models": {},
         "runs": {"level_1": [first_entry]},
     }
-    current_meta = {
-        "head_names": ["level_1", "level_2", "leaf"],
+    current_meta = hierarchy | {
         "level_models": {},
         "parent_models": {"level_2": {"0": second_entry}},
         "runs": {"level_2_0": [second_entry]},

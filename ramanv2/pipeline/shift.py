@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ramanv2.common.naming import build_natural_key
 from ramanv2.common.publishing import create_temporary_path, preserve_paths, publish_directory
-from ramanv2.data.calibration.affine import build_corrected_date, load_calibration_report
+from ramanv2.data.calibration.affine import build_corrected_date, build_corrected_folder, load_calibration_report
 from ramanv2.pipeline.lineage import lineage_path, record_affine_approval, record_output_path
 
 
@@ -63,9 +63,7 @@ def rebuild_shift_data(
             with preserve_paths(snapshots):
                 publish_directory(temporary, target)
                 report = load_calibration_report(output, date_name)
-                record_affine_approval(cosmic, date_name, report.get("approved_at"), *parameters)
-                for name in folders:
-                    record_output_path(cosmic, date_name, name, shift_path=str(target / name))
+                record_affine_approval(cosmic, date_name, report.get("approved_at"), *parameters, shift_dir=target)
             reports.append({"date": date_name, "status": "rebuilt", "spectrum_count": count, "folders": folders})
         except (OSError, RuntimeError, ValueError, TypeError) as error:
             reports.append({"date": date_name, "status": "error", "error": str(error), "spectrum_count": 0, "folders": []})
@@ -75,4 +73,34 @@ def rebuild_shift_data(
     return reports
 
 
-__all__ = ["EXCLUDED_FOLDER_NAMES", "load_date_affine_parameters", "rebuild_shift_data"]
+def rebuild_shift_folder(data_root: Path, shift_root: Path, date_name: str, folder_name: str) -> int:
+    """只重建一个来源文件夹；保留同日其他组及日期校准报告，失败恢复旧组。"""
+    parameters = load_date_affine_parameters(shift_root, date_name)
+    if parameters is None:
+        raise ValueError("缺少已确认的仿射参数")
+    if not folder_name or folder_name in EXCLUDED_FOLDER_NAMES or folder_name in {".", ".."} or Path(folder_name).name != folder_name or "/" in folder_name or "\\" in folder_name:
+        raise ValueError("无效的源文件夹")
+    cosmic = data_root.resolve()
+    output = shift_root.resolve()
+    source = (cosmic / date_name / folder_name).resolve()
+    target = (output / date_name / folder_name).resolve()
+    if not source.is_relative_to(cosmic) or not target.is_relative_to(output):
+        raise ValueError("文件夹超出数据根目录")
+    if not source.is_dir():
+        raise FileNotFoundError(f"cosmic 来源不存在：{source}")
+    temporary = create_temporary_path(target)
+    temporary.mkdir()
+    try:
+        count = build_corrected_folder(source, temporary, *parameters)
+        if count == 0:
+            raise ValueError("所选文件夹没有活动光谱")
+        with preserve_paths([target, lineage_path(cosmic)]):
+            publish_directory(temporary, target)
+            record_output_path(cosmic, date_name, folder_name, shift_path=str(target))
+        return count
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+
+
+__all__ = ["EXCLUDED_FOLDER_NAMES", "load_date_affine_parameters", "rebuild_shift_data", "rebuild_shift_folder"]

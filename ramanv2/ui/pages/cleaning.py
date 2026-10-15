@@ -44,7 +44,6 @@ from ramanv2.pipeline.restoration import (
     scan_deleted_spectra,
 )
 from ramanv2.pipeline.state import PipelineState
-from ramanv2.pipeline.lineage import list_lineage_folders
 from ramanv2.ui.components.spectrum_grid import render_spectrum_grid
 from ramanv2.ui.cache import cached_directory_names
 from ramanv2.ui.page_context import PageContext
@@ -404,7 +403,15 @@ def _render_folder_removal_section(context: PageContext, state: PipelineState) -
     """选择任意活动源文件夹，整夹归档并标记 init 待重建。"""
     with st.expander("文件夹移除", expanded=False):
         st.caption("整夹移入 cosmic_data/delete/folder_delete；shift、init 和 Profile 等你显式重建。")
-        source_ids = [str(item["source_id"]) for item in list_lineage_folders(context.data_root)]
+        # 下拉框只需要目录名，不能为每次选谱扫描全库并重写走向记录。
+        dates = cached_directory_names(str(context.data_root.resolve()), ui_cache_version("cleaning"))
+        source_ids = [
+            f"{date_name}/{folder.name}"
+            for date_name in dates
+            for folder in sorted((context.data_root / date_name).glob("*"), key=lambda path: build_natural_key(path.name))
+            if folder.is_dir() and folder.name not in SPECIAL_FOLDER_NAMES | {"小球", "audit"}
+            and not folder.name.startswith(".")
+        ]
         if not source_ids:
             st.info("当前没有可移除的文件夹。")
             return
@@ -474,6 +481,22 @@ def _render_folder_restore_section(context: PageContext) -> None:
             st.rerun()
         except (OSError, ValueError, RuntimeError) as error:
             st.error(f"整夹恢复失败：{error}")
+
+
+def _save_grid_selection(context: PageContext, grid_key: str, page_paths: set[str]) -> None:
+    """在页面重跑前保存选谱事件，让计数、按钮和卡片一次刷新到位。"""
+    event = st.session_state.get(grid_key)
+    if not isinstance(event, dict) or event.get("event") != "selection":
+        return
+    state = _load_state(context)
+    marked = state.cleaning.marked_paths.intersection(page_paths)
+    chosen = {str(path).replace("\\", "/") for path in event.get("selected_paths", [])}.intersection(page_paths)
+    if chosen == marked:
+        return
+    unmark_paths(state.cleaning, marked - chosen)
+    for path in chosen - marked:
+        toggle_mark_path(state.cleaning, path)
+    _save(context, state)
 
 
 def render_cleaning_page(context: PageContext) -> None:
@@ -644,24 +667,14 @@ def render_cleaning_page(context: PageContext) -> None:
     items = _folder_items(current_folder)[page_index * PAGE_SIZE:(page_index + 1) * PAGE_SIZE]
     page_paths = {item.relative_path for item in items}
     page_marked = state.cleaning.marked_paths.intersection(page_paths)
-    event = render_spectrum_grid(
+    grid_key = f"pipeline-grid-{current_folder.key}-{page_index}"
+    render_spectrum_grid(
         _build_cards(context.data_root, items),
         selected_paths=page_marked,
         marked_paths=page_marked,
-        key=f"pipeline-grid-{current_folder.key}-{page_index}",
+        key=grid_key,
+        on_change=lambda: _save_grid_selection(context, grid_key, page_paths),
     )
-    if isinstance(event, dict):
-        event_id = str(event.get("event_id", ""))
-        if event_id and event_id != st.session_state.get("pipeline_grid_event"):
-            st.session_state["pipeline_grid_event"] = event_id
-            if event.get("event") == "selection":
-                chosen = {str(path).replace("\\", "/") for path in event.get("selected_paths", [])}
-                for path in page_marked - chosen:
-                    unmark_paths(state.cleaning, [path])
-                for path in chosen - page_marked:
-                    toggle_mark_path(state.cleaning, path)
-                _save(context, state)
-                st.rerun()
 
     _render_folder_restore_section(context)
     _render_folder_removal_section(context, state)

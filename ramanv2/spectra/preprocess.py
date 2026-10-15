@@ -44,42 +44,6 @@ def asls_baseline(spectrum, lam: float = 1e5, p: float = 0.01, niter: int = 10, 
     return baseline
 
 
-def arpls_baseline(spectrum, lam: float = 1e5, niter: int = 15, valid_mask=None):
-    """原始轴 arPLS；坏段不参与求解或残差统计，权重变化小于 1e-3 时停止。"""
-    values = np.asarray(spectrum, dtype=np.float64)
-    valid_mask = (
-        np.ones(values.shape, dtype=bool)
-        if valid_mask is None
-        else np.asarray(valid_mask, dtype=bool)
-    )
-    if valid_mask.sum() < 3:
-        raise ValueError("arPLS 基线拟合至少需要三个有效点")
-    # 常数中心化保持 PLS 目标不变，改善高背景及近平直谱的平移不变性。
-    offset = float(np.median(values[valid_mask]))
-    values = np.where(valid_mask, values - offset, 0.0)
-    length = len(values)
-    penalty = _build_baseline_penalty(length, float(lam))
-    weights = valid_mask.astype(np.float64)
-
-    for _ in range(int(niter)):
-        baseline = spsolve((sparse.diags(weights, 0) + penalty).tocsc(), weights * values)
-        residual = values - baseline
-        negative = residual[valid_mask & (residual < 0)]
-        if negative.size < 2:
-            break
-        mean_negative = float(np.mean(negative))
-        std_negative = float(np.std(negative))
-        if std_negative <= 1e-12:
-            break
-        logits = 2.0 * (residual - (2.0 * std_negative - mean_negative)) / std_negative
-        next_weights = 1.0 / (1.0 + np.exp(np.clip(logits, -60.0, 60.0)))
-        next_weights[~valid_mask] = 0.0
-        if np.linalg.norm(next_weights - weights) / max(np.linalg.norm(weights), 1e-12) < 1e-3:
-            break
-        weights = next_weights
-    return baseline + offset
-
-
 def airpls_baseline(spectrum, lam: float = 1e5, niter: int = 15, valid_mask=None):
     """使用 airPLS 估计基线，迭代提高负残差位置的拟合权重。"""
     values = np.asarray(spectrum, dtype=np.float64)
@@ -134,8 +98,6 @@ def estimate_baseline(
     method = str(method).lower()
     if method == "asls":
         return asls_baseline(spectrum, lam=lam, p=p, niter=niter, valid_mask=valid_mask)
-    if method == "arpls":
-        return arpls_baseline(spectrum, lam=lam, niter=niter, valid_mask=valid_mask)
     if method == "airpls":
         return airpls_baseline(spectrum, lam=lam, niter=niter, valid_mask=valid_mask)
     raise ValueError(f"Unknown baseline method: {method}")

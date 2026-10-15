@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ramanv2.common.naming import build_natural_key, parse_folder_prefix
 from ramanv2.data.io import iter_arc_dirs
 
 
@@ -62,6 +63,31 @@ def summarize_dataset(root_dir: Path | str) -> dict[str, int | bool]:
         "folder_count": folder_count(tree),
         "file_count": total_files,
     }
+
+
+def collect_taxon_counts(root_dir: Path | str) -> dict[str, list[dict[str, str | int]]]:
+    """按 init 的属/来源目录计数；同属内同一种前缀跨日期合并，不读取谱内容。"""
+    tree = build_count_tree(root_dir)
+    species = {}
+    for genus, genus_tree in tree.items():
+        if genus.startswith("__"):
+            continue
+        for folder, group in genus_tree.items():
+            if folder.startswith("__") or not group["__total__"]:
+                continue
+            prefix = parse_folder_prefix(folder, uppercase_enable=True)
+            row = species.setdefault((genus, prefix), {"genus": genus, "prefix": prefix, "folder_count": 0, "file_count": 0})
+            row["folder_count"] += 1
+            row["file_count"] += group["__total__"]
+    species_rows = sorted(species.values(), key=lambda row: (build_natural_key(row["genus"]), build_natural_key(row["prefix"])))
+    genera = {}
+    for row in species_rows:
+        genus = row["genus"]
+        summary = genera.setdefault(genus, {"genus": genus, "species_count": 0, "folder_count": 0, "file_count": 0})
+        summary["species_count"] += 1
+        summary["folder_count"] += row["folder_count"]
+        summary["file_count"] += row["file_count"]
+    return {"genera": list(genera.values()), "species": species_rows}
 
 
 def _print_tree(node: dict, level: int = 0, name: str | None = None) -> None:

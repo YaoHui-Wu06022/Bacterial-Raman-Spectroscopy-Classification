@@ -14,6 +14,7 @@ from ramanv2.core.config_file import (
     read_yaml_dict,
 )
 from ramanv2.core.paths import find_ancestor_dir
+from ramanv2.core.hierarchy_meta import validate_label_schema
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,7 @@ def load_run_snapshot(
         values = read_yaml_dict(resolved_path)
     else:
         raise FileNotFoundError(f"缺少配置快照：{run_path}")
+    validate_label_schema(values)
     task_values = _select_task_values(values)
     path_values = _select_path_values(values)
     return RunSnapshot(build_config(values), experiment_path, run_path, task_values, path_values)

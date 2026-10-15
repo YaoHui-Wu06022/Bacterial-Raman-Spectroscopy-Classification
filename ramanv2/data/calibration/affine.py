@@ -660,20 +660,20 @@ def invalidate_calibration_report(output_root: Path | str, date_name: str) -> bo
     return True
 
 
-def build_corrected_date(
-    source_date: Path,
-    temporary_date: Path,
+def build_corrected_folder(
+    source_folder: Path,
+    temporary_folder: Path,
     scale: float,
     offset: float,
-    shift_source: Path,
 ) -> int:
+    """将指定来源目录应用日期仿射，写入临时目录；日期与单夹重建共用此内核。"""
     count = 0
     excluded = {BEAD_DIR_NAME, SHIFT_DIR_NAME, "delete", "audit", "audit_runs", ".raman_pipeline"}
-    for source in sorted(source_date.rglob("*"), key=lambda path: build_natural_key(str(path.relative_to(source_date)))):
-        relative = source.relative_to(source_date)
+    for source in sorted(source_folder.rglob("*"), key=lambda path: build_natural_key(str(path.relative_to(source_folder)))):
+        relative = source.relative_to(source_folder)
         if any(part in excluded or part.startswith(".") for part in relative.parts):
             continue
-        target = temporary_date / relative
+        target = temporary_folder / relative
         if source.is_dir():
             target.mkdir(parents=True, exist_ok=True)
             continue
@@ -687,6 +687,17 @@ def build_corrected_date(
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
+    return count
+
+
+def build_corrected_date(
+    source_date: Path,
+    temporary_date: Path,
+    scale: float,
+    offset: float,
+    shift_source: Path,
+) -> int:
+    count = build_corrected_folder(source_date, temporary_date, scale, offset)
     shutil.copytree(shift_source, temporary_date / SHIFT_DIR_NAME)
     report_path = temporary_date / SHIFT_DIR_NAME / "affine.json"
     if report_path.is_file():

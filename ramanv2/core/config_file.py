@@ -10,6 +10,7 @@ from typing import Any, Mapping
 import yaml
 
 from ramanv2.core.config import Config
+from ramanv2.core.hierarchy_meta import validate_label_schema
 
 
 SHARED_CONFIG_NAME = "shared_config.yaml"
@@ -75,6 +76,7 @@ def save_resolved_config(
 
 def assert_shared_compatible(config: Config, shared_values: Mapping[str, Any]) -> None:
     """确认当前输入快照与实验根已有快照一致。"""
+    validate_label_schema(shared_values)
     current = config.to_shared_dict()
     mismatches = [
         key

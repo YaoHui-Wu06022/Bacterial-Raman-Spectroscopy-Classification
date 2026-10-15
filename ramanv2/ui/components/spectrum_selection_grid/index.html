@@ -43,8 +43,15 @@
 
     function toggle(path) {
       if (selected.has(path)) selected.delete(path); else selected.add(path);
+      // 点击先在本地反馈，不等待 Python 保存，也不重建光谱图片。
+      for (const card of grid.children) {
+        const chosen = selected.has(card.dataset.path);
+        card.classList.toggle("selected", chosen);
+        card.classList.toggle("marked", chosen);
+        card.querySelector("input").checked = chosen;
+        card.querySelector(".status").hidden = !chosen;
+      }
       send("selection", {selected_paths: Array.from(selected)});
-      render();
     }
 
     function render() {
@@ -57,6 +64,7 @@
         const marked = (args.marked_paths || []).includes(card.relative_path);
         const chosen = selected.has(card.relative_path);
         const wrapper = document.createElement("div");
+        wrapper.dataset.path = card.relative_path;
         wrapper.className = "card" + (chosen ? " selected" : "") + (marked ? " marked" : "") + (card.error ? " error" : "");
         const head = document.createElement("div");
         head.className = "card-head";
@@ -70,12 +78,11 @@
         label.textContent = card.label || card.relative_path;
         head.appendChild(checkbox);
         head.appendChild(label);
-        if (marked) {
-          const status = document.createElement("span");
-          status.className = "status";
-          status.textContent = card.status_text || "待移除";
-          head.appendChild(status);
-        }
+        const status = document.createElement("span");
+        status.className = "status";
+        status.textContent = card.status_text || "待移除";
+        status.hidden = !marked;
+        head.appendChild(status);
         wrapper.appendChild(head);
         if (card.error) {
           const error = document.createElement("div");

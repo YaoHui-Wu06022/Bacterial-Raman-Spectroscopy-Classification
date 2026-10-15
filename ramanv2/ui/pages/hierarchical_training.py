@@ -75,11 +75,13 @@ def _load_dataset_index(train_dir: Path) -> DatasetIndex | None:
 
 def _render_dataset_summary(index: DatasetIndex, train_dir: Path) -> None:
     st.caption(f"训练目录：{train_dir}")
-    metrics = st.columns(4)
-    metrics[0].metric("光谱数量", f"{len(index)} 条")
-    metrics[1].metric("层级数量", f"{len(index.level_names)} 层")
-    metrics[2].metric("末级类别数", f"{len(index.class_names_by_level[-1])} 个")
-    metrics[3].metric("父子映射", f"{sum(len(v) for v in index.parent_to_children.values())} 组")
+    metrics = st.columns(2 + len(index.level_names))
+    metrics[0].metric("数量", f"{len(index)} 条")
+    metrics[1].metric("层数", f"{len(index.level_names)} 层")
+    class_counts = index.num_classes_by_level
+    for number, level_name in enumerate(index.level_names, 1):
+        metrics[number + 1].metric(f"第{number}层总类别数", f"{class_counts[level_name]} 个")
+    st.caption("第1层按属统计，第2层按规范种前缀去重；同一种的不同日期、批次合并计数。")
 
 
 def _render_training_scope(index: DatasetIndex | None) -> dict[str, object]:

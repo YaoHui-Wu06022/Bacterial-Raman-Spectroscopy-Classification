@@ -122,10 +122,12 @@ def _ensure_folder(payload: dict[str, object], date_name: str, folder_name: str)
 def initialize_folder_lineage(
     data_root: Path | str,
     mapping: object | None = None,
+    date_names: set[str] | None = None,
 ) -> dict[str, object]:
     """从 cosmic 活动区、人工删除区和整夹删除区建立或刷新源头记录。
 
     小球目录只用于日期级仿射校准，不进入样本走向树。
+    指定 date_names 时只扫描和刷新这些日期，保留其他日期的记录。
     """
     root = Path(data_root).resolve()
     if not root.is_dir():
@@ -150,7 +152,7 @@ def initialize_folder_lineage(
     def scan_base(base: Path, status: str, imported: bool = False) -> None:
         if not base.is_dir():
             return
-        for date_dir in sorted((item for item in base.iterdir() if item.is_dir() and item.name.isdigit()), key=lambda item: build_natural_key(item.name)):
+        for date_dir in sorted((item for item in base.iterdir() if item.is_dir() and item.name.isdigit() and (date_names is None or item.name in date_names)), key=lambda item: build_natural_key(item.name)):
             for folder_dir in sorted((item for item in date_dir.iterdir() if item.is_dir()), key=lambda item: build_natural_key(item.name)):
                 if folder_dir.name in SPECIAL_NAMES or folder_dir.name.startswith("."):
                     continue
@@ -201,6 +203,8 @@ def initialize_folder_lineage(
 
     for key, record in folders.items():
         if not isinstance(record, dict):
+            continue
+        if date_names is not None and record.get("date") not in date_names:
             continue
         file_records = record.get("files", {})
         if isinstance(file_records, dict):
@@ -323,8 +327,11 @@ def record_affine_approval(
     version: str | int | None,
     scale: float,
     offset: float,
+    *,
+    shift_dir: Path | None = None,
 ) -> dict[str, object]:
-    payload = initialize_folder_lineage(data_root)
+    """仅刷新所选日期的仿射记录，重建时一并保存 shift 路径，避免逐夹写盘。"""
+    payload = initialize_folder_lineage(data_root, date_names={str(date_name)})
     now = datetime.now(timezone.utc).isoformat()
     folders = payload.get("folders", {})
     if isinstance(folders, dict):
@@ -341,6 +348,12 @@ def record_affine_approval(
                 "offset": float(offset),
                 "approved_at": now,
             }
+            if shift_dir is not None:
+                outputs = record.setdefault("outputs", {})
+                # 整日发布也同步了已删除组的移除，不能只给仍存在的组记时间。
+                outputs["shift_updated_at"] = now
+                if (shift_dir / str(record["folder"])).is_dir():
+                    outputs["shift"] = str(shift_dir / str(record["folder"]))
             record.setdefault("history", []).append({"operation": "affine_approved", "recorded_at": now})
             record["updated_at"] = now
     payload["updated_at"] = now
@@ -375,6 +388,8 @@ def record_output_path(
     if shift_path is not None:
         outputs["shift"] = str(shift_path)
     record["updated_at"] = datetime.now(timezone.utc).isoformat()
+    if shift_path is not None:
+        outputs["shift_updated_at"] = record["updated_at"]
     payload["updated_at"] = record["updated_at"]
     save_folder_lineage(data_root, payload)
     return payload
@@ -421,7 +436,7 @@ def sync_pipeline_state_from_lineage(data_root: Path | str, state: object) -> ob
         output_records = [item for item in records if item.get("folder_status") != "folder_deleted"]
         if output_records and not any(item.get("init_pending") for item in records) and all(
             isinstance(item.get("outputs"), dict)
-            and ((item["outputs"].get("init") if not is_test_source_folder(str(item.get("folder", ""))) else item["outputs"].get("csdata")))
+            and (item["outputs"].get("init") or item["outputs"].get("csdata"))
             for item in output_records
         ):
             init_dates.add(date_name)

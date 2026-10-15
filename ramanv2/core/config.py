@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, fields
 from typing import Any, Mapping
 
+from ramanv2.core.hierarchy_meta import LABEL_SCHEMA
+
 
 DEFAULT_BAD_BANDS = ((890.0, 950.0),)
 
@@ -161,6 +163,7 @@ class Config:
         """导出实验根共享的 profile 与输入快照。"""
         data = _yaml_ready(asdict(self.dataset) | asdict(self.input))
         data["dataset_name"] = data.pop("profile_id")
+        data["label_schema"] = LABEL_SCHEMA
         return data
 
     def to_model_dict(self) -> dict[str, Any]:

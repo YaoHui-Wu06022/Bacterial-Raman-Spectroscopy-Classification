@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import streamlit as st
 
 from ramanv2.data.calibration.affine import load_calibration_report
-from ramanv2.pipeline.calibration import run_affine_calibration
+from ramanv2.pipeline.calibration import run_affine_calibration, run_date_rebuild
 from ramanv2.pipeline.cleaning import commit_date_items, reconcile_cleaning_records, scan_review_folders
 from ramanv2.pipeline.invalidation import invalidate_downstream
-from ramanv2.pipeline.lineage import has_active_source_folders
+from ramanv2.pipeline.lineage import has_active_source_folders, load_folder_lineage
 from ramanv2.pipeline.shift import rebuild_shift_data
 from ramanv2.ui.page_context import PageContext
 from ramanv2.ui.state import (
@@ -95,6 +96,99 @@ def _render_analyze_reports(reports: dict[str, list[dict[str, object]]] | None) 
     for item in rebuild:
         if item.get("status") == "error":
             st.error(f"{item.get('date')}：{item.get('error')}")
+
+
+def _parse_change_time(value: str) -> datetime:
+    """统一操作记录的时区，兼容旧记录中的无时区 UTC 时间。"""
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _collect_folder_changes(data_root: Path) -> list[dict[str, object]]:
+    """按日期/文件夹展示删除恢复批次，shift 时间只用于判断同步状态。"""
+    operation_labels = {
+        "manual_selection": "删除光谱",
+        "default_cell1_cell2": "删除光谱",
+        "folder_remove": "整夹删除",
+        "date_remove": "日期删除",
+        "prefix_folder_remove": "按前缀删除",
+        "restore": "恢复光谱",
+    }
+    rows = []
+    for record in load_folder_lineage(data_root)["folders"].values():
+        # 同一批次逐谱写入的历史只展示一行，删除与恢复批次分别保留。
+        events = {
+            (_parse_change_time(event["recorded_at"]), operation_labels[event["operation"]])
+            for event in record.get("history", [])
+            if event.get("operation") in operation_labels and event.get("recorded_at")
+        }
+        if not events:
+            continue
+        shift_times = [
+            _parse_change_time(value) for value in (
+                record.get("outputs", {}).get("shift_updated_at"),
+                record.get("affine", {}).get("approved_at"),
+            ) if value
+        ]
+        shift_time = max(shift_times, default=None)
+        for changed_at, operation in events:
+            rows.append({
+                "source_id": f"{record['date']}/{record['folder']}",
+                "date": str(record["date"]),
+                "folder": str(record["folder"]),
+                "operation": operation,
+                "changed_at": changed_at,
+                "is_shift_pending": shift_time is None or changed_at > shift_time,
+            })
+    return sorted(rows, key=lambda row: row["changed_at"], reverse=True)
+
+
+def _render_date_rebuild_section(context: PageContext, state) -> None:
+    """按日期复用已有参数，只更新对应 shift 数据。"""
+    with st.expander("按日期更新", expanded=False):
+        message = st.session_state.pop("affine_date_rebuild_message", None)
+        if message:
+            st.success(message)
+        changes = _collect_folder_changes(context.data_root)
+        pending = list(dict.fromkeys(row["date"] for row in changes if row["is_shift_pending"]))
+        if pending:
+            st.warning("删除/恢复后待更新 shift 的日期：" + "、".join(pending))
+        if changes:
+            st.caption("删除/恢复影响的日期与文件夹（按操作时间倒序，同一批次多条光谱合并展示）")
+            st.dataframe([
+                {
+                    "日期": row["date"],
+                    "文件夹": row["folder"],
+                    "操作": row["operation"],
+                    "操作时间（北京时间）": row["changed_at"].astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S"),
+                    "shift 状态": "待更新" if row["is_shift_pending"] else "已更新",
+                }
+                for row in changes
+            ], hide_index=True, width="stretch")
+        else:
+            st.caption("暂无删除/恢复操作记录。")
+        dates = [
+            path.name for path in sorted(context.shift_root.glob("*"))
+            if path.is_dir() and len(path.name) == 8 and path.name.isascii() and path.name.isdigit()
+            and (context.data_root / path.name).is_dir()
+            and (load_calibration_report(context.shift_root, path.name) or {}).get("status") == "manual_approved"
+        ]
+        if not dates:
+            st.info("当前没有可复用仿射参数的日期。")
+            return
+        st.caption("复用已有仿射参数，从 cosmic_data 更新所选日期的 shift_data。init/CSdata 请到「数据集获取」页按文件夹更新。")
+        selected = st.selectbox("选择更新日期", dates, key="affine_rebuild_date")
+        if not st.button("更新所选日期", key="affine_rebuild_date_confirm", width="stretch"):
+            return
+        try:
+            with st.spinner(f"正在更新 {selected} 的 shift_data……"):
+                result = run_date_rebuild(context.data_root, context.shift_root, state, context.state_file, selected)
+            for name in ("cleaning", "affine", "dataset"):
+                invalidate_ui_cache(name)
+            st.session_state["affine_date_rebuild_message"] = f"{selected} 的 shift_data 已更新（{result['spectrum_count']} 条光谱）。init/CSdata 可到「数据集获取」页按文件夹更新。"
+            st.rerun()
+        except (OSError, ValueError, RuntimeError, TypeError) as error:
+            st.error(f"日期更新失败：{error}")
 
 
 def render_affine_calibration_page(context: PageContext) -> None:
@@ -183,6 +277,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
         st.session_state["affine_analyze_reports"] = reports
         st.rerun()
     _render_analyze_reports(st.session_state.pop("affine_analyze_reports", None))
+    _render_date_rebuild_section(context, state)
 
     if not eligible_dates:
         st.info("当前没有满足清洗完成和小球数据门禁的日期。")

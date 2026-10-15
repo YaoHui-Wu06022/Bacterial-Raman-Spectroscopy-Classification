@@ -8,12 +8,13 @@ from pathlib import Path
 
 from ramanv2.common.publishing import preserve_paths
 from ramanv2.data.calibration.affine import analyze_date, approve_and_apply_date, apply_folder_affine_compensation, load_calibration_report
-from ramanv2.pipeline.lineage import lineage_path, record_affine_approval, record_output_path
-from ramanv2.data.builders.init import build_cs_folder, build_full_init
+from ramanv2.pipeline.lineage import lineage_path, load_folder_lineage, save_folder_lineage, record_affine_approval, record_output_path
+from ramanv2.data.builders.init import CANONICAL_FOLDER_PATTERN, build_cs_folder, build_spectrum_folder
 from ramanv2.data.catalog import DatasetMapping
-from ramanv2.data.plots.prefix import build_prefix_plots
+from ramanv2.data.plots.prefix import build_prefix_plots_for_groups
+from ramanv2.pipeline.invalidation import invalidate_downstream
 from ramanv2.pipeline.state import PipelineState, save_pipeline_state
-from ramanv2.pipeline.shift import load_date_affine_parameters, rebuild_shift_data
+from ramanv2.pipeline.shift import load_date_affine_parameters, rebuild_shift_data, rebuild_shift_folder
 
 
 def run_affine_calibration(
@@ -65,6 +66,32 @@ def rebuild_shift_dates(
     return rebuild_shift_data(source_root, output_root, date_names)
 
 
+def run_date_rebuild(
+    data_root: Path,
+    shift_root: Path,
+    state: PipelineState,
+    state_file: Path,
+    date_name: str,
+) -> dict[str, object]:
+    """仅复用参数重建所选日期的 shift；下游沿用已有待同步标记。"""
+    if load_date_affine_parameters(shift_root, date_name) is None:
+        raise ValueError("缺少已确认的仿射参数，请先完成该日期校准")
+    working = PipelineState.from_payload(deepcopy(state.to_payload()))
+    snapshots = [shift_root / date_name, lineage_path(data_root), state_file]
+    with preserve_paths(snapshots):
+        rebuilt = rebuild_shift_data(data_root, shift_root, [date_name])[0]
+        if rebuilt["status"] != "rebuilt":
+            raise RuntimeError(str(rebuilt.get("error", "shift 重建失败")))
+        records = load_folder_lineage(data_root)["folders"]
+        if any(record.get("date") == date_name and record.get("init_pending") for record in records.values()):
+            invalidate_downstream(working, [date_name])
+        working.affine_completed_dates.add(date_name)
+        working.dataset_builds.pop("latest", None)
+        save_pipeline_state(state_file, working)
+    state.__dict__.update(working.__dict__)
+    return rebuilt
+
+
 def run_folder_offset(
     data_root: Path,
     shift_root: Path,
@@ -111,19 +138,27 @@ def run_folder_offset(
             raise ValueError("无效的 CSdata 输出文件夹")
         if cs_target.is_relative_to(init_root.resolve()) or init_root.resolve().is_relative_to(cs_target):
             raise ValueError("CSdata 输出不能覆盖 init")
-    previous_dates = set(previous.get("source_dates", [])) if cs_target is None else set()
-    for name in previous_dates:
-        if any(folder.is_dir() and folder.name not in {"小球", "shift", "delete"} and any(folder.rglob("*.arc_data")) for folder in (root / name).glob("*")):
-            if name not in completed or load_date_affine_parameters(shift_root, name) is None:
-                raise ValueError(f"已有 init 日期未满足重建门禁：{name}")
-    selected_cs = previous.get("selected_cs_folders", [])
-    snapshots = [*folders, shift_root / date_name, lineage_path(root), state_file]
-    snapshots.extend([cs_target] if cs_target is not None else [init_root, figure_root])
+    init_target = None
+    plot_groups = set()
+    if cs_target is None:
+        record = load_folder_lineage(root).get("folders", {}).get(source_id, {})
+        output = record.get("outputs", {}).get("init")
+        if not output:
+            raise ValueError("缺少该文件夹的 init 来源记录，请先按日期更新")
+        init_target = Path(output).resolve()
+        match = CANONICAL_FOLDER_PATTERN.fullmatch(init_target.name)
+        if init_target.parent.parent != init_root.resolve() or not match or match.group(2) != date_name:
+            raise ValueError("该文件夹的 init 输出路径无效")
+        if not init_target.is_dir():
+            raise ValueError("该文件夹尚未生成 init，请先按日期更新")
+        plot_groups = {(init_target.parent.name, match.group(1).upper())}
+    old_count = len(list(init_target.glob("*.arc_data"))) if init_target is not None else 0
+    snapshots = [*folders, shift_root / date_name / folder_name, lineage_path(root), state_file]
+    snapshots.append(cs_target if cs_target is not None else init_target)
+    snapshots.extend(figure_root / genus / f"{prefix}.png" for genus, prefix in plot_groups)
     with preserve_paths(snapshots):
         result = apply_folder_affine_compensation(root, shift_root, date_name, {folder_name: delta})
-        rebuilt = rebuild_shift_data(root, shift_root, [date_name])[0]
-        if rebuilt["status"] != "rebuilt":
-            raise RuntimeError(str(rebuilt.get("error", "shift 重建失败")))
+        rebuild_shift_folder(root, shift_root, date_name, folder_name)
         if cs_target is not None:
             count = build_cs_folder(shift_root / date_name / folder_name, cs_target)
             change = count - int(cs_export["file_count"])
@@ -138,18 +173,31 @@ def run_folder_offset(
             record_output_path(root, date_name, folder_name, csdata_path=str(cs_target))
             result["csdata_updated"] = True
         else:
-            report = build_full_init(shift_root, init_root, mapping, completed, selected_cs_folders=selected_cs, rebuild_csdata_enable=False)
-            # init 分支不发布 CSdata，保留上次成功导出信息。
-            for key in ("test_root", "test_files", "test_folders", "cs_folder_count", "test_output_files", "cs_source_files", "cs_output_files", "cs_exports"):
+            count = build_spectrum_folder(shift_root / date_name / folder_name, init_target)
+            change = count - old_count
+            for key in ("source_files", "output_files", "init_source_files", "init_output_files"):
                 if key in previous:
-                    report[key] = previous[key]
-            working.dataset_builds["full_init"] = report
-            working.init_generated_dates = set(report["source_dates"])
-            build_prefix_plots(init_root, figure_root)
+                    previous[key] += change
+            stats = previous.get("date_stats", {}).get(date_name, {})
+            for key in ("source_files", "output_files"):
+                if key in stats:
+                    stats[key] += change
+            if isinstance(previous.get("count"), dict):
+                previous["count"]["file_count"] += change
+            payload = load_folder_lineage(root)
+            payload["folders"][source_id]["init_pending"] = False
+            save_folder_lineage(root, payload)
+            pending = set(previous.get("pending_dates", []))
+            if not any(record.get("date") == date_name and record.get("init_pending") for record in payload["folders"].values()):
+                pending.discard(date_name)
+                working.init_generated_dates.add(date_name)
+            previous["pending_dates"] = sorted(pending)
+            previous["status"] = "pending" if pending else "ready"
+            build_prefix_plots_for_groups(init_root, figure_root, plot_groups)
         working.dataset_builds.pop("affine_compensations", None)
         save_pipeline_state(state_file, working)
     state.__dict__.update(working.__dict__)
     return result
 
 
-__all__ = ["rebuild_shift_dates", "run_affine_calibration", "run_folder_offset"]
+__all__ = ["rebuild_shift_dates", "run_affine_calibration", "run_date_rebuild", "run_folder_offset"]

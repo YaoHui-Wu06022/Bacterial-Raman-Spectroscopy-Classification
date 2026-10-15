@@ -14,7 +14,9 @@ import torch
 from torch.utils.data import Subset
 
 from ramanv2.core.config import Config
+from ramanv2.core.experiment_reader import load_run_snapshot
 from ramanv2.core.hierarchy_meta import (
+    assert_hierarchy_compatible,
     build_hierarchy_entry,
     build_hierarchy_meta,
     compute_split_hash,
@@ -85,12 +87,26 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
     validate_model_input(model_spec, input_spec)
     _set_random_seed(train_spec.seed, runtime_spec.deterministic_enable)
 
-    experiment_context = open_experiment_context(
-        _resolve_experiment_dir(request, config),
-        config,
-    )
+    experiment_dir = _resolve_experiment_dir(request, config)
+    existing_meta = load_hierarchy_meta(experiment_dir / "hierarchy_meta.json")
+    if request.resume_run_dir is not None:
+        load_run_snapshot(request.resume_run_dir)
     dataset_index = DatasetIndex(_resolve_train_dir(request, config))
     level_name = dataset_index.resolve_level_name(request.level_name)
+    level_models: dict[str, dict[str, Any]] = {}
+    parent_models: dict[str, dict[str, dict[str, Any]]] = {}
+    runs: dict[str, list[dict[str, Any]]] = {}
+    current_meta = build_hierarchy_meta(
+        **dataset_index.hierarchy_metadata,
+        current_train_level=level_name,
+        level_models=level_models,
+        parent_models=parent_models,
+        runs=runs,
+    )
+    # 先检查历史标签空间，避免创建 run、改写快照后才发现分类头不兼容。
+    if existing_meta is not None:
+        assert_hierarchy_compatible(existing_meta, current_meta)
+    experiment_context = open_experiment_context(experiment_dir, config)
     train_indices, validation_indices = resolve_train_split(
         dataset_index,
         train_spec.train_ratio,
@@ -134,9 +150,6 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
         augmentation_enable=True,
     )
     validation_dataset = RamanDataset(dataset_index, input_spec)
-    level_models: dict[str, dict[str, Any]] = {}
-    parent_models: dict[str, dict[str, dict[str, Any]]] = {}
-    runs: dict[str, list[dict[str, Any]]] = {}
     if skipped_entries:
         parent_models[level_name] = skipped_entries
 
@@ -172,24 +185,6 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
         finally:
             run_context.close()
 
-    current_meta = build_hierarchy_meta(
-        head_names=dataset_index.head_names,
-        class_names_by_level={
-            name: dataset_index.class_names_by_level[
-                dataset_index.head_name_to_idx[name]
-            ]
-            for name in dataset_index.head_names
-        },
-        parent_to_children={
-            name: {str(parent_id): child_ids for parent_id, child_ids in mapping.items()}
-            for name, mapping in dataset_index.parent_to_children.items()
-        },
-        parent_level_name=dataset_index.parent_level_name,
-        current_train_level=level_name,
-        level_models=level_models,
-        parent_models=parent_models,
-        runs=runs,
-    )
     merged_meta = merge_hierarchy_meta(
         load_hierarchy_meta(experiment_context.hierarchy_meta_path),
         current_meta,

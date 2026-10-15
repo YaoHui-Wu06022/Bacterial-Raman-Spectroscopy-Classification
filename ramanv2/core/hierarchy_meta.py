@@ -4,8 +4,29 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+
+LABEL_SCHEMA = "genus_species_prefix_v1"
+
+
+def validate_label_schema(values: Mapping[str, Any]) -> None:
+    """只接受统一种标签实验；旧产物保留，但不按新语义解释。"""
+    if values.get("label_schema") != LABEL_SCHEMA:
+        raise ValueError(
+            f"label_schema 不兼容：{values.get('label_schema')!r}；"
+            f"当前仅支持 {LABEL_SCHEMA}，请使用新实验目录重新训练。"
+        )
+
+
+def assert_hierarchy_compatible(existing_meta: Mapping[str, Any], current_meta: Mapping[str, Any]) -> None:
+    """保证补训练、评估和元数据合并不会改变分类头对应的标签顺序。"""
+    validate_label_schema(existing_meta)
+    for key in ("head_names", "class_names_by_level", "parent_to_children", "parent_level_name"):
+        if existing_meta.get(key) != current_meta.get(key):
+            raise ValueError(f"实验标签空间不一致：{key}，请使用新实验目录。")
 
 
 def load_hierarchy_meta(path: Path | str) -> dict[str, Any] | None:
@@ -13,7 +34,9 @@ def load_hierarchy_meta(path: Path | str) -> dict[str, Any] | None:
     target = Path(path)
     if not target.is_file():
         return None
-    return json.loads(target.read_text(encoding="utf-8"))
+    meta = json.loads(target.read_text(encoding="utf-8"))
+    validate_label_schema(meta)
+    return meta
 
 
 def build_hierarchy_entry(
@@ -90,6 +113,7 @@ def build_hierarchy_meta(
 ) -> dict[str, Any]:
     """构建 ``hierarchy_meta.json`` 的完整可读取内容。"""
     return {
+        "label_schema": LABEL_SCHEMA,
         "head_names": list(head_names),
         "level_names": list(head_names),
         "class_names_by_level": class_names_by_level,
@@ -109,6 +133,8 @@ def merge_hierarchy_meta(
     """以当前数据集结构为准，合并已有模型条目与 run 历史。"""
     if existing_meta is None:
         return current_meta
+    validate_label_schema(current_meta)
+    assert_hierarchy_compatible(existing_meta, current_meta)
     merged_meta = dict(current_meta)
     merged_meta["level_models"] = _merge_entries(
         existing_meta.get("level_models"),

@@ -46,7 +46,7 @@ def test_pipeline_modules_keep_data_flow_separation() -> None:
     # shift 重建入口在仿射校准页，且是整夹重建。
     assert "rebuild_shift_data" in affine_page
     assert "scan_shift_pending_folders" not in affine_page
-    # 重建不再是独立入口：已并入「一键分析并校准」，页面上只有一个按钮。
+    # 保留一键校准，单日期更新另设入口；旧的全量独立重建区域不再使用。
     assert "_render_shift_rebuild_section" not in affine_page
     assert "整夹重建 shift 数据" not in affine_page
 

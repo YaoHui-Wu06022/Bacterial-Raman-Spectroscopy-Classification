@@ -14,7 +14,7 @@ import numpy as np
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
-from ramanv2.common.naming import parse_folder_prefix
+from ramanv2.common.naming import build_natural_key, parse_folder_prefix
 from ramanv2.common.arc_data import read_raw_arc_data
 from ramanv2.common.plotting import add_bad_band_spans, configure_matplotlib_fonts
 from ramanv2.core.config import InputConfig

@@ -16,12 +16,9 @@ from ramanv2.pipeline.calibration import run_folder_offset
 from ramanv2.data.catalog import DatasetMapping, ensure_dataset_mapping
 from ramanv2.common.naming import build_natural_key, is_test_source_folder, parse_test_folder_prefix
 from ramanv2.data.profiles import PIPELINE_PROFILE_IDS, get_dataset_dir, get_profile
-from ramanv2.pipeline.cleaning import reconcile_cleaning_records
-from ramanv2.pipeline.lineage import (
-    initialize_folder_lineage,
-)
+from ramanv2.pipeline.dataset import collect_cs_return_sources, collect_dataset_source_folders, collect_init_export_sources, run_cs_to_init, run_folder_dataset_update, run_init_to_cs
 from ramanv2.ui.page_context import PageContext
-from ramanv2.ui.cache import cached_dataset_summary
+from ramanv2.ui.cache import cached_dataset_summary, cached_dataset_taxon_counts
 from ramanv2.ui.state import (
     invalidate_ui_cache,
     load_page_state as _load_state,
@@ -47,6 +44,27 @@ def _render_count_metrics(summary: dict[str, int | bool]) -> None:
     metrics[0].metric("属数量", f"{summary['genus_count']} 个")
     metrics[1].metric("来源文件夹", f"{summary['folder_count']} 个")
     metrics[2].metric("光谱数量", f"{summary['file_count']} 条")
+
+
+def _render_taxon_counts(init_root: Path) -> None:
+    """展示当前 init 的属汇总及种前缀明细，普通交互复用缓存。"""
+    with st.expander("属／种数量统计", expanded=False):
+        counts = cached_dataset_taxon_counts(str(init_root.resolve()), ui_cache_version("dataset"))
+        if not counts["species"]:
+            st.info("当前 init 中没有可统计的光谱。")
+            return
+        st.caption("仅统计当前 init；种按规范前缀区分，同一种跨日期合并。CSdata 不计入。")
+        genus_tab, species_tab = st.tabs(["各属汇总", "各种明细"])
+        with genus_tab:
+            st.dataframe([
+                {"属": row["genus"], "种数": row["species_count"], "来源文件夹数": row["folder_count"], "光谱数": row["file_count"]}
+                for row in counts["genera"]
+            ], hide_index=True, width="stretch")
+        with species_tab:
+            st.dataframe([
+                {"属": row["genus"], "种前缀": row["prefix"], "来源文件夹数": row["folder_count"], "光谱数": row["file_count"]}
+                for row in counts["species"]
+            ], hide_index=True, width="stretch")
 
 
 def _render_prefix_plot_section(
@@ -98,6 +116,92 @@ def _render_prefix_plot_section(
             st.image(str(selected), caption=f"{genus_name} / {prefix_name}", width="stretch")
 
 
+def _render_folder_dataset_update(context: PageContext, state) -> None:
+    """已有日期恢复光谱后，按原走向从 shift 更新一个目标组。"""
+    with st.expander("按文件夹更新 init/CSdata", expanded=False):
+        message = st.session_state.pop("dataset_update_message", None)
+        if message:
+            st.success(message)
+        folders = collect_dataset_source_folders(context.data_root, context.shift_root, state)
+        if not folders:
+            st.info("当前没有已有输出走向的 shift 文件夹，请先生成全量 init。")
+            return
+        st.caption("活动来源从 shift_data 更新；已整夹删除的来源同步移除旧产物。沿用原输出目录和 CS 分流，其他组编号不变。")
+        selected = st.selectbox(
+            "选择更新文件夹", folders, key="dataset_update_source",
+            format_func=lambda value: value if (context.data_root / value).is_dir() else f"{value}（已整夹删除）",
+        )
+        is_deleted = not (context.data_root / selected).exists()
+        if is_deleted:
+            st.info("此来源已整夹删除；同步将移除它对应的旧 init/CSdata 文件夹，cosmic 删除归档保留。")
+        if not st.button("同步所选文件夹删除" if is_deleted else "从 shift_data 更新所选文件夹", key="dataset_update_confirm", width="stretch"):
+            return
+        try:
+            with st.spinner(f"正在同步 {selected}……"):
+                result = run_folder_dataset_update(context.data_root, context.shift_root, context.init_root, state, context.state_file, selected)
+            for name in ("dataset", "training", "inference", "analysis"):
+                invalidate_ui_cache(name)
+            destination = "CSdata" if result["csdata_updated"] else "init 及对应前缀图"
+            if result.get("deleted"):
+                target_name = "CSdata" if result["csdata_updated"] else "init"
+                st.session_state["dataset_update_message"] = f"{selected} 已同步整夹删除，移除对应旧 {target_name} 文件夹（{result['removed_file_count']} 条光谱），其他组编号不变。"
+            else:
+                st.session_state["dataset_update_message"] = f"{selected} 已更新 {destination}（{result['spectrum_count']} 条光谱）。"
+            st.rerun()
+        except (OSError, ValueError, RuntimeError, TypeError) as error:
+            st.error(f"文件夹更新失败：{error}")
+
+
+def _render_cs_return(context: PageContext, state, catalog: DatasetMapping | None) -> None:
+    """渲染 CSdata 到 init 的快速迁移。"""
+    _render_dataset_transfer(context, state, catalog, False)
+
+
+def _render_init_export(context: PageContext, state, catalog: DatasetMapping | None) -> None:
+    """渲染 init 到 CSdata 的快速迁移。"""
+    _render_dataset_transfer(context, state, catalog, True)
+
+
+def _render_dataset_transfer(context: PageContext, state, catalog: DatasetMapping | None, to_csdata_enable: bool) -> None:
+    """双向迁移只提交所选目录，普通控件交互不写入数据。"""
+    key = "init_export" if to_csdata_enable else "cs_return"
+    title = "init 快速移入 CSdata" if to_csdata_enable else "CSdata 快速移回 init"
+    destination = "CSdata" if to_csdata_enable else "init"
+    with st.expander(title, expanded=False):
+        message = st.session_state.pop(f"{key}_message", None)
+        if message:
+            st.success(message)
+        sources = collect_init_export_sources(context.data_root, context.init_root, state) if to_csdata_enable else {
+            source: source for source in collect_cs_return_sources(context.init_root, state)
+        }
+        if not sources:
+            st.info(f"当前没有带来源记录、可迁移的 {'init' if to_csdata_enable else 'CSdata'} 文件夹。")
+            return
+        selected = st.selectbox("选择移入 CSdata 的 init 文件夹" if to_csdata_enable else "选择移回的 CSdata 文件夹",
+                                list(sources), format_func=lambda value: sources[value], key=f"{key}_source")
+        prefix = parse_test_folder_prefix(selected.rsplit("/", 1)[-1])
+        genus = next((name for name, prefixes in catalog.genera.items() if prefix in prefixes), None) if catalog is not None else None
+        if genus is None:
+            st.info(f"种前缀 {prefix} 未映射到属，请先补充分类名单。")
+        else:
+            caption = "整夹移入 CSdata；原 CS 来源沿用 CS 名称，普通来源保留现有文件夹名。" if to_csdata_enable else f"整夹移入 init/{genus}，按 {prefix} 和采集日期追加编号。"
+            st.caption(caption + "仅更新对应审核图，已有 Profile 不变。")
+        label = "将所选 init 直接移入 CSdata" if to_csdata_enable else "将所选 CSdata 直接移回 init"
+        if not st.button(label, key=f"{key}_confirm", disabled=genus is None, width="stretch"):
+            return
+        try:
+            with st.spinner("正在迁移所选文件夹并更新分流记录……"):
+                run_transfer = run_init_to_cs if to_csdata_enable else run_cs_to_init
+                result = run_transfer(context.data_root, context.init_root, catalog, state, context.state_file, selected)
+            for name in ("dataset", "training", "inference", "analysis"):
+                invalidate_ui_cache(name)
+            st.session_state["cs_export_added_source" if to_csdata_enable else "cs_return_removed_source"] = selected
+            st.session_state[f"{key}_message"] = f"{selected} 已直接{'移入' if to_csdata_enable else '移回'} {destination}（{result['spectrum_count']} 条）：{Path(result['target_dir']).name}。"
+            st.rerun()
+        except (OSError, ValueError, RuntimeError, TypeError) as error:
+            st.error(f"迁移到 {destination} 失败：{error}")
+
+
 def _render_affine_compensation(context: PageContext, state, catalog: DatasetMapping) -> None:
     """输入只表示本次 cosmic 原轴增量，提交成功或切换文件夹后归零。"""
     st.subheader("补充频移")
@@ -130,7 +234,7 @@ def _render_affine_compensation(context: PageContext, state, catalog: DatasetMap
             for name in ("cleaning", "affine", "dataset"):
                 invalidate_ui_cache(name)
             st.session_state["folder_offset_reset"] = True
-            destination = "对应 CSdata 文件夹" if result.get("csdata_updated") else "init 及审核图"
+            destination = "对应 CSdata 文件夹" if result.get("csdata_updated") else "对应 init 文件夹及审核图"
             st.session_state["folder_offset_message"] = f"{selected} 已同步平移活动谱及归档谱，并更新{destination}。"
             st.rerun()
         except (OSError, ValueError, RuntimeError, TypeError) as error:
@@ -252,8 +356,6 @@ def _merge_incremental_init_report(
 
 def render_dataset_acquisition_page(context: PageContext) -> None:
     state = _load_state(context)
-    if reconcile_cleaning_records(context.data_root, state.cleaning):
-        _save_state(context, state)
 
     st.title("数据集获取")
     st.caption("先生成全量 dataset/init，再选择固定 Profile 生成对应数据集。")
@@ -263,7 +365,6 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     except (OSError, ValueError, RuntimeError) as error:
         catalog = None
         st.error(f"Profile 配置加载失败：{error}")
-    initialize_folder_lineage(context.data_root, catalog)
 
     st.subheader("全量 init")
     full_summary = cached_dataset_summary(
@@ -277,13 +378,27 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     )
     st.metric("状态", "待重建" if full_summary["exists"] and not full_init_ready else ("已生成" if full_summary["exists"] else "未生成"))
     _render_count_metrics(full_summary)
+    _render_taxon_counts(context.init_root)
     eligible_dates = sorted(state.affine_completed_dates, key=build_natural_key)
     cs_candidates = _list_cs_sources(context, eligible_dates)
+    if isinstance(full_report, dict):
+        cs_candidates = sorted(set(cs_candidates) | {
+            entry["source"] for entry in full_report.get("cs_exports", []) if entry["date"] in eligible_dates
+        }, key=build_natural_key)
     cs_selection_key = "full_init_cs_selection"
     initialized_key = "full_init_cs_selection_initialized"
+    if not st.session_state.get(initialized_key, False) and isinstance(full_report, dict):
+        st.session_state[cs_selection_key] = list(full_report.get("selected_cs_folders", []))
+        st.session_state[initialized_key] = True
+    returned_source = st.session_state.pop("cs_return_removed_source", None)
+    if returned_source is not None:
+        st.session_state[cs_selection_key] = [value for value in st.session_state.get(cs_selection_key, []) if value != returned_source]
+    exported_source = st.session_state.pop("cs_export_added_source", None)
+    if exported_source is not None:
+        st.session_state[cs_selection_key] = sorted(set(st.session_state.get(cs_selection_key, [])) | {exported_source}, key=build_natural_key)
     _sync_cs_selection(cs_candidates, catalog, cs_selection_key, initialized_key)
     selected_cs = st.multiselect(
-        "选择进入 CSdata 的 CS 文件夹",
+        "选择进入 CSdata 的来源文件夹",
         cs_candidates,
         format_func=lambda value: value.replace("/", " / "),
         key=cs_selection_key,
@@ -312,6 +427,10 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
             st.rerun()
         except (OSError, ValueError, RuntimeError) as error:
             st.error(f"全量 init 生成失败：{error}")
+
+    _render_folder_dataset_update(context, state)
+    _render_cs_return(context, state, catalog)
+    _render_init_export(context, state, catalog)
 
     if full_init_ready:
         st.success("全量 init 已生成；后续新增日期可以增量更新。")

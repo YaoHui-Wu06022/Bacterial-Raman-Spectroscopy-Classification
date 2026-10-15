@@ -16,7 +16,9 @@ def build_expected_label_lookup(
     """从层级类别名构建测试菌前缀到目标层标签的唯一映射。"""
     prefixes: dict[str, set[str]] = {}
     target_depth = int(normalize_level_name(level_name).removeprefix("level_"))
-    for labels in (meta.get("class_names_by_level") or {}).values():
+    for source_level, labels in (meta.get("class_names_by_level") or {}).items():
+        if source_level == "leaf":
+            continue
         for source_label in labels:
             parts = [part for part in str(source_label).split("/") if part]
             if len(parts) < target_depth:

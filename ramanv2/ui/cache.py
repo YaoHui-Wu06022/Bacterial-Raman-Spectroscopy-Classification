@@ -8,7 +8,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from ramanv2.data.count import summarize_dataset
+from ramanv2.data.count import collect_taxon_counts, summarize_dataset
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.common.naming import build_natural_key
 
@@ -18,6 +18,13 @@ def cached_dataset_summary(root_dir: str, version: int) -> dict[str, int | bool]
     """缓存数据集统计；版本由页面写入操作主动递增。"""
     del version
     return summarize_dataset(Path(root_dir))
+
+
+@st.cache_data(show_spinner=False)
+def cached_dataset_taxon_counts(root_dir: str, version: int) -> dict[str, list[dict[str, str | int]]]:
+    """缓存属/种明细；构建、补偿及删除同步后沿用 dataset 版本失效。"""
+    del version
+    return collect_taxon_counts(Path(root_dir))
 
 
 @st.cache_data(show_spinner=False)
@@ -41,7 +48,7 @@ def cached_directory_names(root_dir: str, version: int) -> tuple[str, ...]:
 
 @st.cache_resource(show_spinner=False)
 def cached_dataset_index(train_dir: str, version: int) -> DatasetIndex | None:
-    """缓存训练页只读目录索引，不加载全部强度数组。"""
+    """缓存统一种标签的只读目录索引，不加载全部强度数组。"""
     del version
     path = Path(train_dir)
     if not path.is_dir():
@@ -162,6 +169,7 @@ def cached_approved_affine_dates(shift_root: str, data_root: str, version: int) 
 __all__ = [
     "cached_dataset_index",
     "cached_dataset_summary",
+    "cached_dataset_taxon_counts",
     "cached_directory_names",
     "cached_cs_folder_names",
     "cached_approved_affine_dates",

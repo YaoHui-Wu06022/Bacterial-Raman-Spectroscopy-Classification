@@ -10,7 +10,7 @@ import numpy as np
 
 from ramanv2.core.config import Config, build_config
 from ramanv2.core.config_file import SHARED_CONFIG_NAME, read_yaml_dict
-from ramanv2.core.hierarchy_meta import load_hierarchy_meta
+from ramanv2.core.hierarchy_meta import assert_hierarchy_compatible, load_hierarchy_meta, validate_label_schema
 from ramanv2.core.input_spec import InputSpec, build_input_spec
 from ramanv2.core.paths import find_ancestor_dir
 from ramanv2.data.runtime.index import DatasetIndex
@@ -46,16 +46,19 @@ def load_evaluation_context(source_dir: Path | str) -> EvaluationContext:
     """从实验或 run 目录读取评估所需的不可变输入。"""
     source_path = Path(source_dir).resolve()
     experiment_dir = resolve_experiment_dir(source_path)
-    config = build_config(read_yaml_dict(experiment_dir / SHARED_CONFIG_NAME))
+    shared_values = read_yaml_dict(experiment_dir / SHARED_CONFIG_NAME)
+    validate_label_schema(shared_values)
+    meta = load_hierarchy_meta(experiment_dir / "hierarchy_meta.json")
+    if meta is None:
+        raise FileNotFoundError(f"缺少 hierarchy_meta.json：{experiment_dir}")
+    config = build_config(shared_values)
     dataset_index = DatasetIndex(resolve_training_dir(config.dataset.profile_id))
+    assert_hierarchy_compatible(meta, dataset_index.hierarchy_metadata)
     split = load_split_files(dataset_index, experiment_dir)
     if split is None:
         raise FileNotFoundError(
             f"实验根缺少 train_split.json/val_split.json：{experiment_dir}"
         )
-    meta = load_hierarchy_meta(experiment_dir / "hierarchy_meta.json")
-    if meta is None:
-        raise FileNotFoundError(f"缺少 hierarchy_meta.json：{experiment_dir}")
     train_indices, validation_indices = split
     return EvaluationContext(
         experiment_dir=experiment_dir,
