@@ -115,7 +115,6 @@ class PipelineState:
     active_page: str = "数据清洗"
     cleaning: CleaningState = field(default_factory=CleaningState)
     affine_completed_dates: set[str] = field(default_factory=set)
-    audit_completed_dates: set[str] = field(default_factory=set)
     init_generated_dates: set[str] = field(default_factory=set)
     dataset_builds: dict[str, dict[str, object]] = field(default_factory=dict)
     updated_at: str | None = None
@@ -126,7 +125,6 @@ class PipelineState:
             "active_page": self.active_page,
             "cleaning": self.cleaning.to_payload(),
             "affine_completed_dates": sorted(self.affine_completed_dates),
-            "audit_completed_dates": sorted(self.audit_completed_dates),
             "init_generated_dates": sorted(self.init_generated_dates),
             "dataset_builds": self.dataset_builds,
             "updated_at": self.updated_at,
@@ -143,7 +141,6 @@ class PipelineState:
             active_page=str(payload.get("active_page", "数据清洗")),
             cleaning=cleaning,
             affine_completed_dates=_read_string_set(payload.get("affine_completed_dates", []), "affine_completed_dates"),
-            audit_completed_dates=_read_string_set(payload.get("audit_completed_dates", []), "audit_completed_dates"),
             init_generated_dates=_read_string_set(payload.get("init_generated_dates", []), "init_generated_dates"),
             dataset_builds=_read_dict(payload.get("dataset_builds", {}), "dataset_builds"),
             updated_at=_optional_string(payload.get("updated_at")),

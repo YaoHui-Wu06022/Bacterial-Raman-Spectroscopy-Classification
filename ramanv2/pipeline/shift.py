@@ -1,0 +1,78 @@
+"""复用日期级仿射参数，从 cosmic 原子重建 shift；不计算参数、不执行审核。"""
+
+from __future__ import annotations
+
+import math
+import shutil
+from pathlib import Path
+
+from ramanv2.common.naming import build_natural_key
+from ramanv2.common.publishing import create_temporary_path, preserve_paths, publish_directory
+from ramanv2.data.calibration.affine import build_corrected_date, load_calibration_report
+from ramanv2.pipeline.lineage import lineage_path, record_affine_approval, record_output_path
+
+
+EXCLUDED_FOLDER_NAMES = {"小球", "shift", "delete", "audit", "audit_runs", ".raman_pipeline"}
+
+
+def load_date_affine_parameters(shift_root: Path | str, date_name: str) -> tuple[float, float] | None:
+    """缺参数返回 None；已有报告不合格则报错，不能静默重算或使用坏参数。"""
+    if len(date_name) != 8 or not date_name.isascii() or not date_name.isdigit():
+        raise ValueError("日期必须是八位数字")
+    report = load_calibration_report(shift_root, date_name)
+    if report is None:
+        return None
+    if report.get("status") == "pending" and report.get("invalidated_reason") == "restore_invalidated":
+        return None
+    if report.get("status") != "manual_approved":
+        raise ValueError(f"日期仿射参数尚未通过校验：{date_name}")
+    scale = float(report.get("base_scale", report.get("scale", float("nan"))))
+    offset = float(report.get("base_offset", report.get("offset", float("nan"))))
+    if not math.isfinite(scale) or scale <= 0 or not math.isfinite(offset):
+        raise ValueError(f"日期仿射参数无效：{date_name}")
+    return scale, offset
+
+
+def rebuild_shift_data(
+    data_root: Path | str,
+    shift_root: Path | str,
+    date_names: list[str] | tuple[str, ...] | set[str],
+) -> list[dict[str, object]]:
+    """先完整生成日期临时目录再发布，成功后可直接构建 init。"""
+    cosmic = Path(data_root).resolve()
+    output = Path(shift_root).resolve()
+    reports = []
+    for date_name in sorted(set(date_names), key=build_natural_key):
+        temporary = None
+        try:
+            parameters = load_date_affine_parameters(output, date_name)
+            if parameters is None:
+                reports.append({"date": date_name, "status": "needs_calibration", "spectrum_count": 0, "folders": []})
+                continue
+            source = (cosmic / date_name).resolve()
+            target = (output / date_name).resolve()
+            if source.parent != cosmic or target.parent != output:
+                raise ValueError("日期目录超出数据根目录")
+            if not source.is_dir():
+                raise FileNotFoundError(f"cosmic 日期不存在：{date_name}")
+            temporary = create_temporary_path(target)
+            temporary.mkdir()
+            count = build_corrected_date(source, temporary, *parameters, target / "shift")
+            folders = sorted(path.name for path in temporary.iterdir() if path.is_dir() and path.name != "shift")
+            snapshots = [target, lineage_path(cosmic)]
+            with preserve_paths(snapshots):
+                publish_directory(temporary, target)
+                report = load_calibration_report(output, date_name)
+                record_affine_approval(cosmic, date_name, report.get("approved_at"), *parameters)
+                for name in folders:
+                    record_output_path(cosmic, date_name, name, shift_path=str(target / name))
+            reports.append({"date": date_name, "status": "rebuilt", "spectrum_count": count, "folders": folders})
+        except (OSError, RuntimeError, ValueError, TypeError) as error:
+            reports.append({"date": date_name, "status": "error", "error": str(error), "spectrum_count": 0, "folders": []})
+        finally:
+            if temporary is not None and temporary.exists():
+                shutil.rmtree(temporary)
+    return reports
+
+
+__all__ = ["EXCLUDED_FOLDER_NAMES", "load_date_affine_parameters", "rebuild_shift_data"]

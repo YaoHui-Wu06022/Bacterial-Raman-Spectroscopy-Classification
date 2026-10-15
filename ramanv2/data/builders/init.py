@@ -1,4 +1,4 @@
-"""从仿射校正并完成审核的数据构建 init 数据集。"""
+"""从已确认仿射校正的 shift 数据直接构建 init 数据集。"""
 
 from __future__ import annotations
 
@@ -6,19 +6,18 @@ import re
 import json
 import shutil
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
 import numpy as np
 
-from ramanv2.common.arc_data import read_arc_data, write_arc_data
+from ramanv2.common.arc_data import read_arc_data
 from ramanv2.common.naming import build_natural_key, is_test_source_folder, parse_test_folder_prefix
-from ramanv2.common.publishing import create_temporary_path, publish_directory, publish_file, rename_directory
+from ramanv2.common.publishing import create_temporary_path, publish_directory, rename_directory, preserve_paths
 from ramanv2.data.count import summarize_dataset
 from ramanv2.data.catalog import DatasetMapping
-from ramanv2.pipeline.lineage import folder_compensation, initialize_folder_lineage, load_folder_lineage, record_output_path
+from ramanv2.pipeline.lineage import initialize_folder_lineage, load_folder_lineage, record_output_path, save_folder_lineage, lineage_path
 
 
 SPECIAL_NAMES = {"小球", "shift", "delete", "audit_runs", ".raman_pipeline"}
@@ -64,11 +63,26 @@ def build_full_init(
     completed_dates: list[str] | set[str] | tuple[str, ...],
     test_root: Path | str | None = None,
     selected_cs_folders: list[str] | set[str] | tuple[str, ...] | None = None,
+    *,
+    rebuild_csdata_enable: bool = True,
 ) -> dict[str, object]:
     """从通过门禁的 shift 日期构建普通 init 与选定的独立 CSdata。"""
     cosmic_root = Path(shift_root).resolve().parent / "cosmic_data"
     if cosmic_root.is_dir():
         initialize_folder_lineage(cosmic_root, mapping)
+    # 既有 init 日期若仍有活动源谱，必须继续通过门禁，不能重建时静默丢失。
+    required_dates = {
+        match.group(2)
+        for folder in Path(init_root).glob("*/*")
+        if folder.is_dir() and (match := CANONICAL_FOLDER_PATTERN.fullmatch(folder.name))
+    }
+    allowed_dates = set(completed_dates)
+    blocked = [date for date in required_dates if (date not in allowed_dates or not _is_manual_approved(Path(shift_root) / date / "shift" / "affine.json")) and any(
+        path.is_dir() and path.name not in SPECIAL_NAMES and any(path.rglob("*.arc_data"))
+        for path in (cosmic_root / date).glob("*")
+    )]
+    if blocked:
+        raise ValueError(f"已有 init 日期尚未通过重建门禁：{sorted(blocked)}")
     resolved_test_root = (
         Path(test_root).resolve()
         if test_root is not None
@@ -82,11 +96,33 @@ def build_full_init(
         completed_dates,
         test_root=resolved_test_root,
         selected_test_folders=selected_cs_folders,
+        publish_test_enable=rebuild_csdata_enable,
     )
     report["generated_profiles"] = []
     report["profile_stats"] = {}
     report["count"] = summarize_dataset(Path(init_root).resolve())
     return report
+
+
+def build_cs_folder(source_folder: Path, target_folder: Path) -> int:
+    """原样发布一组已校正的 CS 谱；先完整复制校验，失败保留旧组。"""
+    source = source_folder.resolve()
+    target = target_folder.resolve()
+    if target == source or source in target.parents or target in source.parents:
+        raise ValueError("CS 来源与输出目录不能互相包含")
+    files = sorted((path for path in source.iterdir() if path.is_file() and path.suffix.lower() == ".arc_data"), key=lambda path: build_natural_key(path.name))
+    if not files:
+        raise ValueError(f"CS 来源没有光谱：{source}")
+    temporary = create_temporary_path(target)
+    temporary.mkdir()
+    try:
+        for path in files:
+            _copy_source_file(path, temporary / path.name)
+        publish_directory(temporary, target)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    return len(files)
 
 
 def build_profile_dataset(
@@ -107,129 +143,6 @@ def build_profile_dataset(
     report["profile"] = profile_name
     report["count"] = summarize_dataset(Path(profile_root).resolve())
     return report
-
-
-def update_compensated_init(
-    shift_root: Path | str,
-    date_name: str,
-    folder_names: list[str] | tuple[str, ...] | set[str],
-    init_root: Path | str,
-    profile_roots: dict[str, Path | str],
-    mapping: DatasetMapping,
-    test_root: Path | str | None = None,
-) -> dict[str, object]:
-    """只替换文件夹补偿涉及的 init、Profile init 和 CSdata 目录。
-
-    shift_data 已经完成日期级校正；这里按相同的前缀和日期序号定位目标目录，
-    只发布选中文件夹对应的目标目录，不重新构建其他日期或文件夹。
-    """
-    source_root = Path(shift_root).resolve()
-    cosmic_root = source_root.parent / "cosmic_data"
-    if cosmic_root.is_dir() and not load_folder_lineage(cosmic_root).get("folders"):
-        initialize_folder_lineage(cosmic_root)
-    source_date = source_root / str(date_name)
-    if not source_date.is_dir():
-        raise FileNotFoundError(f"shift 日期目录不存在：{source_date}")
-    if not _is_manual_approved(source_date / "shift" / "affine.json"):
-        raise ValueError(f"日期尚未完成仿射校准：{date_name}")
-
-    selected = {
-        str(name)
-        for name in (folder_names.keys() if isinstance(folder_names, dict) else folder_names)
-    }
-    if not selected:
-        return {"status": "ready", "date": str(date_name), "updated_targets": [], "skipped_targets": []}
-    prefix_to_genus = {
-        prefix: genus
-        for genus, prefixes in mapping.genera.items()
-        for prefix in prefixes
-    }
-    groups = [
-        group
-        for group in _collect_source_groups(
-            source_date,
-            prefix_to_genus,
-            selected,
-            source_folder_names=selected,
-        )
-        if group.source_name in selected
-    ]
-    missing = sorted(selected - {group.source_name for group in groups}, key=build_natural_key)
-    if missing:
-        raise ValueError(f"shift_data 中不存在补偿文件夹：{missing}")
-
-    destinations: dict[str, Path] = {"init": Path(init_root).resolve()}
-    destinations.update({str(name): Path(path).resolve() for name, path in profile_roots.items()})
-    if test_root is not None:
-        destinations["CSdata"] = Path(test_root).resolve()
-
-    staged: list[tuple[Path, Path, str, _SourceGroup]] = []
-    skipped: list[dict[str, str]] = []
-    try:
-        for group in groups:
-            relative = _target_relative(group)
-            for label, root in destinations.items():
-                target = root / relative
-                if not target.is_dir():
-                    skipped.append({"root": label, "path": relative.as_posix(), "reason": "target_missing"})
-                    continue
-                temporary = create_temporary_path(target)
-                temporary.mkdir(parents=True, exist_ok=False)
-                try:
-                    for source in group.files:
-                        _validate_spectrum(source)
-                        _copy_source_file(
-                            source,
-                            temporary / source.name,
-                            _source_folder_compensation(source_root, date_name, group.source_name),
-                        )
-                    staged.append((temporary, target, label, group))
-                except Exception:
-                    shutil.rmtree(temporary, ignore_errors=True)
-                    raise
-
-        backups: list[tuple[Path, Path]] = []
-        published: list[Path] = []
-        try:
-            for temporary, target, _, _ in staged:
-                backup = create_temporary_path(target)
-                rename_directory(target, backup)
-                backups.append((target, backup))
-                rename_directory(temporary, target)
-                published.append(target)
-        except Exception:
-            for target in reversed(published):
-                shutil.rmtree(target, ignore_errors=True)
-            for target, backup in reversed(backups):
-                if backup.exists() and not target.exists():
-                    rename_directory(backup, target)
-            raise
-        finally:
-            for _, backup in backups:
-                shutil.rmtree(backup, ignore_errors=True)
-            for temporary, _, _, _ in staged:
-                shutil.rmtree(temporary, ignore_errors=True)
-
-        updated_targets = [
-            {
-                "root": label,
-                "path": target.relative_to(destinations[label]).as_posix(),
-                "file_count": len(group.files),
-            }
-            for _, target, label, group in staged
-        ]
-        return {
-            "status": "ready",
-            "date": str(date_name),
-            "folder_names": sorted(selected, key=build_natural_key),
-            "updated_targets": updated_targets,
-            "skipped_targets": skipped,
-            "updated_file_count": sum(int(item["file_count"]) for item in updated_targets),
-        }
-    except Exception:
-        for temporary, _, _, _ in staged:
-            shutil.rmtree(temporary, ignore_errors=True)
-        raise
 
 
 def build_profile_datasets(
@@ -309,11 +222,13 @@ def build_init_datasets(
     init_root: Path | str,
     profile_roots: dict[str, Path | str],
     mapping: DatasetMapping,
-    audit_completed_dates: list[str] | set[str] | tuple[str, ...],
+    affine_completed_dates: list[str] | set[str] | tuple[str, ...],
     mode: BuildMode = "full",
     date_names: list[str] | set[str] | tuple[str, ...] | None = None,
     test_root: Path | str | None = None,
     selected_test_folders: list[str] | set[str] | tuple[str, ...] | None = None,
+    *,
+    publish_test_enable: bool = True,
 ) -> dict[str, object]:
     """按批准日期原子构建全量 init 或增量追加 init。"""
     if mode not in {"full", "incremental"}:
@@ -321,7 +236,7 @@ def build_init_datasets(
     source_root = Path(shift_root).resolve()
     full_root = Path(init_root).resolve()
     roots = {name: Path(path).resolve() for name, path in profile_roots.items()}
-    resolved_test_root = Path(test_root).resolve() if test_root is not None else None
+    resolved_test_root = Path(test_root).resolve() if test_root is not None and publish_test_enable else None
     _validate_output_roots(full_root, roots, resolved_test_root)
     unknown_profiles = set(roots) - set(mapping.datasets)
     if unknown_profiles:
@@ -335,7 +250,7 @@ def build_init_datasets(
         for prefix in prefixes
     }
     selected_names = _select_date_names(source_root, date_names)
-    audit_dates = {str(name) for name in audit_completed_dates}
+    affine_dates = {str(name) for name in affine_completed_dates}
     eligible_dates: list[str] = []
     skipped_dates: list[str] = []
     date_status: dict[str, dict[str, str]] = {}
@@ -344,9 +259,9 @@ def build_init_datasets(
         if not date_dir.is_dir():
             skipped_dates.append(date_name)
             date_status[date_name] = {"status": "skipped", "reason": "missing_source_date"}
-        elif date_name not in audit_dates:
+        elif date_name not in affine_dates:
             skipped_dates.append(date_name)
-            date_status[date_name] = {"status": "skipped", "reason": "audit_not_completed"}
+            date_status[date_name] = {"status": "skipped", "reason": "affine_not_completed"}
         elif not _is_manual_approved(date_dir / "shift" / "affine.json"):
             skipped_dates.append(date_name)
             date_status[date_name] = {"status": "skipped", "reason": "affine_not_approved"}
@@ -364,32 +279,20 @@ def build_init_datasets(
                 source_root / date_name,
                 prefix_to_genus,
                 selected_keys,
-                include_unknown_tests=resolved_test_root is not None,
+                include_unknown_tests=resolved_test_root is not None or not publish_test_enable,
             )
         )
     cosmic_root = source_root.parent / "cosmic_data"
     if cosmic_root.is_dir():
-        lineage = load_folder_lineage(cosmic_root)
-        records = lineage.get("folders", {})
-        if isinstance(records, dict):
-            filtered_groups: list[_SourceGroup] = []
-            for group in groups:
-                record = records.get(f"{group.date_name}/{group.source_name or group.source_dir.name}")
-                if not isinstance(record, dict) or record.get("folder_status") != "folder_deleted":
-                    file_records = record.get("files", {}) if isinstance(record, dict) else {}
-                    if isinstance(file_records, dict):
-                        files = tuple(
-                            source
-                            for source in group.files
-                            if not isinstance(file_records.get(source.name), dict)
-                            or file_records.get(source.name, {}).get("status") == "active"
-                        )
-                        if files:
-                            group = replace(group, files=files)
-                        else:
-                            continue
-                    filtered_groups.append(group)
-            groups = filtered_groups
+        # cosmic 活动区是准据；不能因旧 shift 或旧走向记录让已删谱回流。
+        active_groups = []
+        for group in groups:
+            files = tuple(path for path in group.files if (cosmic_root / group.date_name / group.source_name / path.name).is_file())
+            if files:
+                active_groups.append(replace(group, files=files))
+        groups = active_groups
+    if not publish_test_enable:
+        groups = [group for group in groups if not group.is_test]
     destination_roots = {"__all__": full_root, **roots}
     if resolved_test_root is not None:
         destination_roots["__test__"] = resolved_test_root
@@ -419,11 +322,7 @@ def build_init_datasets(
                 date_stats[group.date_name]["source_files"] += 1
                 for profile_name, destination in destinations:
                     target = destination / source_path.name
-                    _copy_source_file(
-                        source_path,
-                        target,
-                        _source_folder_compensation(source_root, group.date_name, group.source_name),
-                    )
+                    _copy_source_file(source_path, target)
                     output_files += 1
                     date_stats[group.date_name]["output_files"] += 1
                     if profile_name != "__all__":
@@ -470,31 +369,37 @@ def build_init_datasets(
             "cs_exports": cs_exports,
             "selected_cs_folders": sorted(selected_keys or set(), key=build_natural_key),
         }
-        _publish_all(temporary_roots, destination_roots)
-        cosmic_root = source_root.parent / "cosmic_data"
-        if cosmic_root.is_dir():
-            for group in groups:
-                relative = _target_relative(group)
-                if group.is_test:
+        with preserve_paths([*destination_roots.values(), lineage_path(cosmic_root)]):
+            _publish_all(temporary_roots, destination_roots)
+            if cosmic_root.is_dir():
+                for group in groups:
+                    relative = _target_relative(group)
+                    if group.is_test:
+                        record_output_path(
+                            cosmic_root,
+                            group.date_name,
+                            group.source_name or group.source_dir.name,
+                            csdata_path=str(resolved_test_root / relative) if resolved_test_root is not None else None,
+                        )
+                        continue
+                    profile_paths = {
+                        name: str(root / relative)
+                        for name, root in roots.items()
+                        if group.genus in mapping.datasets.get(name, ())
+                    }
                     record_output_path(
                         cosmic_root,
                         group.date_name,
                         group.source_name or group.source_dir.name,
-                        csdata_path=str(resolved_test_root / relative) if resolved_test_root is not None else None,
+                        init_path=str(full_root / relative),
+                        profile_paths=profile_paths,
                     )
-                    continue
-                profile_paths = {
-                    name: str(root / relative)
-                    for name, root in roots.items()
-                    if group.genus in mapping.datasets.get(name, ())
-                }
-                record_output_path(
-                    cosmic_root,
-                    group.date_name,
-                    group.source_name or group.source_dir.name,
-                    init_path=str(full_root / relative),
-                    profile_paths=profile_paths,
-                )
+            if cosmic_root.is_dir():
+                payload = load_folder_lineage(cosmic_root)
+                for record in payload.get("folders", {}).values():
+                    if record.get("date") in eligible_dates:
+                        record["init_pending"] = False
+                save_folder_lineage(cosmic_root, payload)
         return report
     except Exception:
         for temporary in temporary_roots.values():
@@ -521,7 +426,7 @@ def _collect_source_groups(
     by_prefix: dict[str, list[tuple[Path, tuple[Path, ...]]]] = {}
     groups: list[_SourceGroup] = []
     for source_dir in sorted(date_dir.iterdir(), key=lambda path: build_natural_key(path.name)):
-        if not source_dir.is_dir() or source_dir.name in SPECIAL_NAMES:
+        if not source_dir.is_dir() or source_dir.name in SPECIAL_NAMES or source_dir.name.startswith("."):
             continue
         if source_folder_names is not None and source_dir.name not in source_folder_names:
             continue
@@ -690,30 +595,19 @@ def _create_temporary_roots(destination_roots: dict[str, Path], mode: BuildMode)
     return temporary_roots
 
 
-def _copy_source_file(source: Path, target: Path, wavenumber_offset: float = 0.0) -> None:
-    """验证源谱后复制；仅在 init/CSdata 发布阶段叠加文件夹补偿。"""
+def _copy_source_file(source: Path, target: Path) -> None:
+    """验证源谱后原样复制；文件夹补偿已在 cosmic 源谱阶段写入，这里不再叠加。"""
     wavenumbers, intensities = read_arc_data(source)
     if not wavenumbers.size or wavenumbers.size != intensities.size:
         raise ValueError(f"无效光谱：{source}")
     target.parent.mkdir(parents=True, exist_ok=True)
-    if float(wavenumber_offset) == 0.0:
-        shutil.copy2(source, target)
-    else:
-        write_arc_data(target, wavenumbers + float(wavenumber_offset), intensities)
+    shutil.copy2(source, target)
 
 
 def _validate_spectrum(path: Path) -> None:
     wavenumbers, intensities = read_arc_data(path)
     if not wavenumbers.size or wavenumbers.size != intensities.size:
         raise ValueError(f"无效光谱：{path}")
-
-
-def _source_folder_compensation(shift_root: Path, date_name: str, folder_name: str) -> float:
-    """读取 cosmic 源头记录中的绝对补偿；测试目录没有源头记录时返回零。"""
-    cosmic_root = Path(shift_root).resolve().parent / "cosmic_data"
-    if not cosmic_root.is_dir():
-        return 0.0
-    return folder_compensation(cosmic_root, str(date_name), str(folder_name))
 
 
 def _is_manual_approved(path: Path) -> bool:
@@ -771,8 +665,8 @@ __all__ = [
     "InitBuildConflictError",
     "InitBuildReport",
     "build_full_init",
+    "build_cs_folder",
     "build_profile_dataset",
     "build_init_datasets",
     "build_profile_datasets",
-    "update_compensated_init",
 ]

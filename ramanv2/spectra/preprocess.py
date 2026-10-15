@@ -45,19 +45,26 @@ def asls_baseline(spectrum, lam: float = 1e5, p: float = 0.01, niter: int = 10, 
 
 
 def arpls_baseline(spectrum, lam: float = 1e5, niter: int = 15, valid_mask=None):
-    """使用 arPLS 估计基线，对正向拉曼峰保留较低权重。"""
+    """原始轴 arPLS；坏段不参与求解或残差统计，权重变化小于 1e-3 时停止。"""
     values = np.asarray(spectrum, dtype=np.float64)
+    valid_mask = (
+        np.ones(values.shape, dtype=bool)
+        if valid_mask is None
+        else np.asarray(valid_mask, dtype=bool)
+    )
+    if valid_mask.sum() < 3:
+        raise ValueError("arPLS 基线拟合至少需要三个有效点")
+    # 常数中心化保持 PLS 目标不变，改善高背景及近平直谱的平移不变性。
+    offset = float(np.median(values[valid_mask]))
+    values = np.where(valid_mask, values - offset, 0.0)
     length = len(values)
     penalty = _build_baseline_penalty(length, float(lam))
-    weights = np.ones(length, dtype=np.float64)
-    if valid_mask is not None:
-        valid_mask = np.asarray(valid_mask, dtype=bool)
-        weights[~valid_mask] = 0.0
+    weights = valid_mask.astype(np.float64)
 
     for _ in range(int(niter)):
         baseline = spsolve((sparse.diags(weights, 0) + penalty).tocsc(), weights * values)
         residual = values - baseline
-        negative = residual[residual < 0]
+        negative = residual[valid_mask & (residual < 0)]
         if negative.size < 2:
             break
         mean_negative = float(np.mean(negative))
@@ -66,13 +73,11 @@ def arpls_baseline(spectrum, lam: float = 1e5, niter: int = 15, valid_mask=None)
             break
         logits = 2.0 * (residual - (2.0 * std_negative - mean_negative)) / std_negative
         next_weights = 1.0 / (1.0 + np.exp(np.clip(logits, -60.0, 60.0)))
-        if valid_mask is not None:
-            next_weights[~valid_mask] = 0.0
+        next_weights[~valid_mask] = 0.0
         if np.linalg.norm(next_weights - weights) / max(np.linalg.norm(weights), 1e-12) < 1e-3:
-            weights = next_weights
             break
         weights = next_weights
-    return baseline.astype(np.float32, copy=False)
+    return baseline + offset
 
 
 def airpls_baseline(spectrum, lam: float = 1e5, niter: int = 15, valid_mask=None):
@@ -199,6 +204,30 @@ def remove_cosmic_rays(
     return cleaned, CosmicRayStats(cosmic_ray=int(replaced_mask.sum()))
 
 
+def interpolate_valid_bands(wavenumbers, spectrum, target_axis, bad_bands):
+    """分有效波段插值，边界取本段端点值，禁止跨坏段借用另一侧采样点。"""
+    bands = normalize_bad_bands(bad_bands)
+    if not bands:
+        return np.interp(target_axis, wavenumbers, spectrum)
+    wavenumbers = np.asarray(wavenumbers)
+    spectrum = np.asarray(spectrum)
+    target_axis = np.asarray(target_axis)
+    source_mask = build_valid_mask(wavenumbers, bands)
+    if not build_valid_mask(target_axis, bands).all():
+        raise ValueError("插值目标轴不能包含坏波段")
+    upper_edges = sorted(upper for _, upper in bands)
+    source_groups = np.searchsorted(upper_edges, wavenumbers)
+    target_groups = np.searchsorted(upper_edges, target_axis)
+    result = np.empty(len(target_axis), dtype=np.float64)
+    for group in np.unique(target_groups):
+        source = source_mask & (source_groups == group)
+        target = target_groups == group
+        if not source.any():
+            raise ValueError("插值目标波段没有有效源采样点")
+        result[target] = np.interp(target_axis[target], wavenumbers[source], spectrum[source])
+    return result
+
+
 def preprocess_single_spectrum(
     wavenumbers,
     spectrum,
@@ -260,4 +289,7 @@ def preprocess_single_spectrum(
         target_axis = target_axis[target_mask]
     if cropped_wavenumbers.size < 10 or target_axis.size == 0:
         return None, None, cosmic_stats
-    return target_axis, np.interp(target_axis, cropped_wavenumbers, cropped_spectrum), cosmic_stats
+    interpolated = interpolate_valid_bands(
+        cropped_wavenumbers, cropped_spectrum, target_axis, normalized_bands,
+    )
+    return target_axis, interpolated, cosmic_stats

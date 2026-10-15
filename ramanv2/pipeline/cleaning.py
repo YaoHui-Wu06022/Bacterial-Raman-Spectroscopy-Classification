@@ -4,19 +4,18 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from ramanv2.common.naming import build_natural_key
+from ramanv2.common.publishing import move_files, preserve_paths
+from ramanv2.pipeline.invalidation import invalidate_downstream
 from ramanv2.pipeline.lineage import (
     initialize_folder_lineage,
-    load_folder_lineage,
     record_manual_move,
-    record_restore,
-    remove_downstream_files,
-    remove_downstream_outputs,
+    remove_source_folder,
+    lineage_path,
 )
 from ramanv2.pipeline.state import COMMIT_LOG_NAME, CleaningState, PipelineState, save_pipeline_state
 
@@ -297,87 +296,51 @@ def commit_paths(
     reason: str | None = None,
 ) -> CommitResult:
     """把指定光谱移入可恢复目录，并立刻保存状态和提交日志。"""
-    cleaning = state.cleaning
     root = Path(root_dir).resolve()
-    # 每次源头操作前刷新走向记录，确保历史删除和当前活动文件都可追踪。
-    initialize_folder_lineage(root)
     target_root = root / "delete" / "manual"
-    moved: list[str] = []
-    missing: list[str] = []
-    reasons: dict[str, list[str]] = {}
-    cleanup_sources: list[Path] = []
-
-    normalized_paths = sorted({str(path).replace("\\", "/") for path in paths})
-    lineage = load_folder_lineage(root)
-    folders = lineage.get("folders", {})
-    if isinstance(folders, dict):
-        approved_dates = {
-            str(record.get("date", ""))
-            for relative_path in normalized_paths
-            for record in [folders.get("/".join(relative_path.split("/")[:2]), {})]
-            if isinstance(record, dict)
-            and isinstance(record.get("affine"), dict)
-            and record["affine"].get("status") == "approved"
-        }
-        if approved_dates:
-            raise RuntimeError(
-                "日期已完成仿射校正，清洗页不能继续修改源谱；请使用 prefix 图的源头整夹删除入口："
-                + ", ".join(sorted(approved_dates, key=build_natural_key))
-            )
-    for relative_path in normalized_paths:
-        source = (root / relative_path).resolve()
-        target = (target_root / relative_path).resolve()
-        if root not in source.parents or root not in target.parents:
-            raise ValueError(f"拒绝处理根目录之外的路径：{relative_path}")
-        if not source.is_file():
-            if target.is_file():
-                cleaning.marked_paths.discard(relative_path)
-                cleaning.committed_paths.add(relative_path)
-                reasons[relative_path] = sorted(cleaning.mark_reasons.pop(relative_path, set()))
-                cleanup_sources.append(source)
-            else:
-                missing.append(relative_path)
-            continue
-        if target.exists():
-            raise FileExistsError(f"移除目标已存在：{target}")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(source), str(target))
-        moved.append(relative_path)
-        cleaning.marked_paths.discard(relative_path)
-        cleaning.committed_paths.add(relative_path)
-        path_reasons = set(cleaning.mark_reasons.pop(relative_path, set()))
-        if reason:
-            path_reasons.add(reason)
-        reasons[relative_path] = sorted(path_reasons)
-        cleanup_sources.append(source)
-
-    for source in cleanup_sources:
-        _remove_empty_parents(source, root)
-    if moved:
-        try:
+    normalized = sorted({str(path).replace("\\\\", "/") for path in paths})
+    moved, missing, moves = [], [], {}
+    for relative in normalized:
+        source, target = (root / relative).resolve(), (target_root / relative).resolve()
+        if not source.is_relative_to(root) or not target.is_relative_to(target_root) or source.is_relative_to(root / "delete"):
+            raise ValueError(f"拒绝处理源目录之外的路径：{relative}")
+        if source.is_file():
+            moves[source] = target
+            moved.append(relative)
+        elif not target.is_file():
+            missing.append(relative)
+    dates = {relative.split("/", 1)[0] for relative in moved}
+    snapshots = [lineage_path(root), Path(state_path), Path(state_path).parent / COMMIT_LOG_NAME]
+    snapshots.extend(root / date for date in dates)
+    snapshots.extend(target_root / date for date in dates)
+    working = PipelineState.from_payload(state.to_payload())
+    cleaning = working.cleaning
+    with preserve_paths(snapshots):
+        initialize_folder_lineage(root)
+        move_files(moves)
+        if moved:
             record_manual_move(root, moved, reason or "manual_selection")
-            remove_downstream_files(
-                root,
-                moved,
-                shift_root=root.parent / "shift_data",
-            )
-        except Exception:
-            # 走向记录写入失败时恢复已经移动的源文件，避免文件和记录分叉。
-            for relative_path in reversed(moved):
-                source = root / relative_path
-                target = target_root / relative_path
-                if target.is_file() and not source.exists():
-                    source.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(target), str(source))
-            record_restore(root, moved)
-            raise
-    refresh_completed_dates(cleaning)
-    save_pipeline_state(state_path, state)
-    if reasons:
-        log_path = Path(state_path).parent / COMMIT_LOG_NAME
-        with log_path.open("a", encoding="utf-8") as file:
-            timestamp = datetime.now().astimezone().isoformat()
-            file.write(json.dumps({"committed_at": timestamp, "paths": moved, "reasons": reasons}, ensure_ascii=False) + "\n")
+        reasons = {}
+        for relative in normalized:
+            if relative in missing:
+                continue
+            cleaning.marked_paths.discard(relative)
+            cleaning.committed_paths.add(relative)
+            path_reasons = set(cleaning.mark_reasons.pop(relative, set()))
+            if reason:
+                path_reasons.add(reason)
+            reasons[relative] = sorted(path_reasons)
+        for relative in moved:
+            _remove_empty_parents(root / relative, root)
+        invalidate_downstream(working, dates)
+        refresh_completed_dates(cleaning)
+        save_pipeline_state(state_path, working)
+        if moved:
+            log_path = Path(state_path).parent / COMMIT_LOG_NAME
+            with log_path.open("a", encoding="utf-8") as file:
+                timestamp = datetime.now().astimezone().isoformat()
+                file.write(json.dumps({"committed_at": timestamp, "paths": moved, "reasons": reasons}, ensure_ascii=False) + "\\n")
+    state.__dict__.update(working.__dict__)
     return CommitResult(tuple(moved), tuple(missing))
 
 
@@ -391,13 +354,26 @@ def commit_folder_items(
     state_path: Path | str,
     folder: ReviewFolder,
 ) -> CommitResult:
-    """立即移动当前文件夹全部光谱，供文件夹移除操作使用。"""
-    mark_paths(state.cleaning, folder.relative_paths, "folder_remove")
-    result = commit_paths(root_dir, state, state_path, folder.relative_paths)
-    remove_downstream_outputs(root_dir, folder.key, shift_root=Path(root_dir).resolve().parent / "shift_data")
-    discard_removed_folder(state.cleaning, folder)
-    save_pipeline_state(state_path, state)
-    return result
+    """整夹归档到 cosmic/delete/folder_delete，只标记 init 待重建。"""
+    root = Path(root_dir).resolve()
+    working = PipelineState.from_payload(state.to_payload())
+    source = root / folder.date_name / folder.folder_name
+    manual = root / "delete" / "manual" / folder.date_name / folder.folder_name
+    archive = root / "delete" / "folder_delete" / folder.date_name / folder.folder_name
+    if any(not path.resolve().is_relative_to(root) for path in (source, manual, archive)):
+        raise ValueError("删除路径超出 cosmic 目录")
+    with preserve_paths([source, manual, archive, lineage_path(root), Path(state_path)]):
+        result = remove_source_folder(root, folder.key)
+        paths = tuple(result["moved_paths"])
+        working.cleaning.marked_paths.difference_update(paths)
+        working.cleaning.committed_paths.update(paths)
+        for path in paths:
+            working.cleaning.mark_reasons.pop(path, None)
+        discard_removed_folder(working.cleaning, folder)
+        invalidate_downstream(working, [folder.date_name])
+        save_pipeline_state(state_path, working)
+    state.__dict__.update(working.__dict__)
+    return CommitResult(paths, ())
 
 
 def commit_date_items(
@@ -410,8 +386,6 @@ def commit_date_items(
     paths = [path for folder in folders for path in folder.relative_paths]
     mark_paths(state.cleaning, paths, "date_remove")
     result = commit_paths(root_dir, state, state_path, paths)
-    for folder in folders:
-        remove_downstream_outputs(root_dir, folder.key, shift_root=Path(root_dir).resolve().parent / "shift_data")
     root = Path(root_dir).resolve()
     date_names = {folder.date_name for folder in folders}
     for folder in folders:
@@ -419,6 +393,8 @@ def commit_date_items(
     for date_name in date_names:
         _remove_empty_directories(root / date_name, root)
         discard_removed_date(state.cleaning, date_name)
+    # 整日期移除后该日期已消失，其 shift 输出由重建入口清理；审核结论保持原样。
+    invalidate_downstream(state, date_names)
     # commit_paths 已经保存过移动记录；目录清理后再保存一次，确保状态落盘顺序完整。
     save_pipeline_state(state_path, state)
     return result
@@ -428,6 +404,7 @@ __all__ = [
     "CommitResult",
     "DEFAULT_CELL_PATTERN",
     "ReviewFolder",
+    "SPECIAL_FOLDER_NAMES",
     "SpectrumItem",
     "commit_marked_items",
     "commit_date_items",

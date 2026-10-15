@@ -1,4 +1,4 @@
-"""仿射校准和校正后文件夹审核页面。"""
+"""复用或计算仿射参数，生成可直接构建 init 的 shift 数据。"""
 
 from __future__ import annotations
 
@@ -7,40 +7,29 @@ from pathlib import Path
 import streamlit as st
 
 from ramanv2.data.calibration.affine import load_calibration_report
-from ramanv2.pipeline.audit import reconcile_audit_completed_dates, run_shift_folder_audit
 from ramanv2.pipeline.calibration import run_affine_calibration
 from ramanv2.pipeline.cleaning import commit_date_items, reconcile_cleaning_records, scan_review_folders
+from ramanv2.pipeline.invalidation import invalidate_downstream
+from ramanv2.pipeline.lineage import has_active_source_folders
+from ramanv2.pipeline.shift import rebuild_shift_data
 from ramanv2.ui.page_context import PageContext
-from ramanv2.ui.state import invalidate_ui_cache, load_page_state as _load_state, save_page_state as _save
+from ramanv2.ui.state import (
+    invalidate_ui_cache,
+    load_page_state as _load_state,
+    save_page_state as _save,
+)
 
 
 def _number(value: object) -> str:
     return "-" if value is None else f"{float(value):.8f}"
 
 
-def _has_active_source_folder(data_root: Path, date_name: str) -> bool:
-    """日期必须仍有普通源文件夹，整夹删除后不再进入仿射门禁。"""
-    date_dir = data_root / date_name
-    excluded = {"小球", "shift", "delete", "audit", "audit_runs", ".raman_pipeline"}
-    if not date_dir.is_dir():
-        return False
-    return any(
-        folder.is_dir()
-        and folder.name not in excluded
-        and any(folder.rglob("*.arc_data"))
-        for folder in date_dir.iterdir()
-    )
-
-
 def _pending_date_names(
     eligible_dates: list[str],
     affine_dates: set[str],
-    audit_dates: set[str],
 ) -> list[str]:
-    """只返回尚未完成仿射或文件夹审核的日期，供页面增量显示。"""
-    affine_pending = set(eligible_dates) - affine_dates
-    audit_pending = (set(eligible_dates) & affine_dates) - audit_dates
-    return sorted(affine_pending | audit_pending)
+    """返回尚未完成仿射的日期。"""
+    return sorted(set(eligible_dates) - affine_dates)
 
 
 def _render_images(report: dict[str, object]) -> None:
@@ -55,18 +44,68 @@ def _render_images(report: dict[str, object]) -> None:
             st.image(str(path), caption=path.name, width="stretch")
 
 
+def _run_analyze_and_rebuild(
+    context: PageContext,
+    pending_affine: list[str],
+    reuse_dates: list[str],
+) -> dict[str, list[dict[str, object]]]:
+    """一键分析并校准：缺参数的日期算参数，已有参数的日期复用参数，两者都重建 shift。
+
+    等价于「从 cosmic_data 重建 shift_data」：输出只由 cosmic_data 的当前内容与已确认的
+    ``affine.json`` 参数决定，不会重复分析小球、不会重算已有参数。
+    """
+    calibration_reports: list[dict[str, object]] = []
+    if pending_affine:
+        calibration_reports = run_affine_calibration(
+            context.data_root,
+            pending_affine,
+            context.shift_root,
+        )
+    rebuild_reports: list[dict[str, object]] = []
+    if reuse_dates:
+        rebuild_reports = rebuild_shift_data(context.data_root, context.shift_root, reuse_dates)
+    return {"calibration": calibration_reports, "rebuild": rebuild_reports}
+
+
+def _render_analyze_reports(reports: dict[str, list[dict[str, object]]] | None) -> None:
+    """显示上一次「一键分析并校准」的结果。"""
+    if not reports:
+        return
+    calibration = list(reports.get("calibration") or [])
+    rebuild = list(reports.get("rebuild") or [])
+    approved = [item for item in calibration if item.get("status") == "manual_approved"]
+    rejected = [
+        item for item in calibration
+        if item.get("status") in {"needs_review", "error"}
+    ]
+    rebuilt = [item for item in rebuild if item.get("status") == "rebuilt"]
+    spectra = sum(int(item.get("spectrum_count", 0) or 0) for item in rebuilt)
+    if approved:
+        st.success(f"已分析并发布 {len(approved)} 个日期的小球仿射参数。")
+    if rebuilt:
+        st.success(
+            f"已复用已有参数、从 cosmic_data 重建 {len(rebuilt)} 个日期的 shift"
+            f"（{spectra} 条光谱）。"
+        )
+    if approved or rebuilt:
+        st.info("shift 数据已生成，可直接到数据集获取页建立 init。")
+    for item in rejected:
+        detail = item.get("error") or "；".join(str(error) for error in item.get("errors") or [])
+        st.error(f"{item.get('date')}：{item.get('status')}{' · ' + str(detail) if detail else ''}")
+    for item in rebuild:
+        if item.get("status") == "error":
+            st.error(f"{item.get('date')}：{item.get('error')}")
+
+
 def render_affine_calibration_page(context: PageContext) -> None:
     state = _load_state(context)
     if reconcile_cleaning_records(context.data_root, state.cleaning):
         _save(context, state)
-    if reconcile_audit_completed_dates(context.shift_root, state):
-        _save(context, state)
     cleaned_dates = sorted(state.cleaning.completed_date_names)
     eligible_dates = [
         date_name for date_name in cleaned_dates
-        if (context.data_root / date_name / "小球").is_dir()
-        and any((context.data_root / date_name / "小球").glob("*.arc_data"))
-        and _has_active_source_folder(context.data_root, date_name)
+        if has_active_source_folders(context.data_root, date_name)
+        and (load_calibration_report(context.shift_root, date_name) is not None or any((context.data_root / date_name / "小球").glob("*.arc_data")))
     ]
     reports = {
         date_name: load_calibration_report(context.shift_root, date_name)
@@ -78,10 +117,8 @@ def render_affine_calibration_page(context: PageContext) -> None:
         if report is not None and str(report.get("status", "")) == "manual_approved"
     }
     affine_dates = sorted(report_affine_dates)
-    audit_dates = sorted(state.audit_completed_dates & report_affine_dates)
     if state.affine_completed_dates != report_affine_dates:
         state.affine_completed_dates = set(report_affine_dates)
-        state.audit_completed_dates.intersection_update(report_affine_dates)
         _save(context, state)
     failed_dates = [
         date_name
@@ -95,55 +132,64 @@ def render_affine_calibration_page(context: PageContext) -> None:
         for date_name in eligible_dates
         if date_name not in affine_dates and date_name not in failed_dates
     ]
-    pending_audit = [date_name for date_name in affine_dates if date_name not in audit_dates]
     pending_dates = _pending_date_names(
         eligible_dates,
         set(affine_dates),
-        set(audit_dates),
     )
     pending_dates = sorted(set(pending_dates) | set(failed_dates))
 
     st.title("仿射校准")
-    st.caption("校准只处理清洗完成且存在小球光谱的日期。文件夹审核需要单独点击。")
-    metrics = st.columns(5)
+    st.caption("校准处理清洗完成的日期；缺少参数时计算小球，已有合格参数直接复用；完成后直接建立 init。")
+    st.caption(
+        "一键分析并校准 = 从 cosmic_data 重建 shift_data：没有仿射参数的日期先分析小球算参数，"
+        "已有参数的日期直接复用、不重算；两者都会重建该日期的 shift 派生谱，随后可直接建立 init。"
+    )
+    st.caption(
+        f"本次将复用参数重建 {len(affine_dates)} 个已校准日期，分析 {len(pending_affine)} 个待校准日期。"
+    )
+    metrics = st.columns(3)
     metrics[0].metric("清洗完成日期", f"{len(cleaned_dates)} 个")
     metrics[1].metric("可校准日期", f"{len(eligible_dates)} 个")
     metrics[2].metric("待校准日期", f"{len(pending_affine)} 个")
-    metrics[3].metric("待文件夹审核", f"{len(pending_audit)} 个")
-    metrics[4].metric("审核完成", f"{len(audit_dates)} 个")
 
-    controls = st.columns(2)
-    if controls[0].button("一键分析并校准", type="primary", disabled=not pending_affine, width="stretch"):
-        with st.spinner("正在分析小球并发布通过校验的校正数据……"):
-            reports = run_affine_calibration(context.data_root, pending_affine, context.shift_root)
-        for report in reports:
+    if st.button(
+        "一键分析并校准",
+        type="primary",
+        disabled=not (pending_affine or affine_dates),
+        help="缺参数的分析小球算参数，已有参数的直接复用；两者都从 cosmic_data 重建 shift。",
+        width="stretch",
+    ):
+        with st.spinner("正在分析小球并从 cosmic_data 重建 shift 数据……"):
+            reports = _run_analyze_and_rebuild(context, pending_affine, list(affine_dates))
+        for report in reports["calibration"]:
             date_name = str(report["date"])
             if report.get("status") == "manual_approved":
                 state.affine_completed_dates.add(date_name)
-                if not report.get("skipped"):
-                    state.audit_completed_dates.discard(date_name)
             elif not report.get("skipped"):
                 state.affine_completed_dates.discard(date_name)
+        rebuilt_dates = {
+            str(report["date"])
+            for report in reports["rebuild"]
+            if report.get("status") == "rebuilt"
+        }
+        changed_dates = rebuilt_dates | {str(report["date"]) for report in reports["calibration"] if report.get("status") == "manual_approved" and not report.get("skipped")}
+        if changed_dates:
+            invalidate_downstream(state, changed_dates)
         state.dataset_builds.pop("latest", None)
         invalidate_ui_cache("dataset")
+        invalidate_ui_cache("cleaning")
+        invalidate_ui_cache("affine")
         _save(context, state)
-        st.session_state["affine_reports"] = reports
+        st.session_state["affine_analyze_reports"] = reports
         st.rerun()
-    if controls[1].button("运行文件夹审核", disabled=not pending_audit, width="stretch"):
-        with st.spinner("正在运行文件夹级 audit 并应用候选移除……"):
-            reports = run_shift_folder_audit(context.shift_root, pending_audit, state, context.state_file)
-        state.dataset_builds.pop("latest", None)
-        invalidate_ui_cache("dataset")
-        _save(context, state)
-        st.session_state["audit_reports"] = reports
-        st.rerun()
+    _render_analyze_reports(st.session_state.pop("affine_analyze_reports", None))
 
     if not eligible_dates:
         st.info("当前没有满足清洗完成和小球数据门禁的日期。")
         return
 
     if not pending_dates:
-        st.success("所有可用日期都已完成仿射校准和文件夹审核。")
+        st.success("所有可用日期都已完成仿射校准，可直接建立 init。")
         return
 
     for date_name in pending_dates:
@@ -166,7 +212,6 @@ def render_affine_calibration_page(context: PageContext) -> None:
             if residuals:
                 st.write("残差：" + "；".join(f"{key}={float(value):.3f}" for key, value in residuals.items()))
             st.write(f"有效重复数：{report.get('valid_repeat_count', 0)}")
-            st.write(f"文件夹审核：{'已完成' if date_name in audit_dates else '待审核'}")
             if report.get("errors"):
                 st.warning("；".join(str(error) for error in report["errors"]))
             if status in {"needs_review", "error"}:
@@ -181,7 +226,6 @@ def render_affine_calibration_page(context: PageContext) -> None:
                             tuple(folders),
                         )
                     state.affine_completed_dates.discard(date_name)
-                    state.audit_completed_dates.discard(date_name)
                     state.dataset_builds.pop("latest", None)
                     invalidate_ui_cache("cleaning")
                     invalidate_ui_cache("dataset")

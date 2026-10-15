@@ -20,15 +20,7 @@ from matplotlib import pyplot as plt
 from ramanv2.common.arc_data import read_arc_data, write_arc_data
 from ramanv2.common.naming import build_natural_key
 from ramanv2.common.plotting import configure_matplotlib_fonts
-from ramanv2.common.publishing import create_temporary_path, publish_file, rename_directory
-from ramanv2.pipeline.lineage import (
-    initialize_folder_lineage,
-    load_folder_lineage,
-    record_affine_approval,
-    record_folder_compensation,
-    record_output_path,
-    save_folder_lineage,
-)
+from ramanv2.common.publishing import create_temporary_path, publish_file, publish_files, rename_directory
 from ramanv2.core.paths import PROJECT_ROOT
 
 
@@ -468,6 +460,7 @@ def _publish_shift(temp_shift: Path, output_date: Path) -> Path:
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
+    payload = {key: value for key, value in payload.items() if key not in {"folder_compensations", "effective_offsets", "operator_input", "compensation_history", "compensated_at", "compensation_record_only", "changed_folders"}}
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
@@ -639,7 +632,35 @@ def load_calibration_report(output_root: Path | str, date_name: str) -> dict[str
     return payload
 
 
-def _copy_corrected_date(
+def invalidate_calibration_report(output_root: Path | str, date_name: str) -> bool:
+    """把日期的仿射报告状态改为 pending，使其重新进入校准队列；返回是否发生变更。
+
+    保留原有参数与历史，只改状态，便于追溯。报告不存在或已非 manual_approved 时不改动。
+    恢复流程专用：源谱变化后旧校准不再适用，日期必须重新分析并确认。
+    """
+    report_path = Path(output_root).resolve() / str(date_name) / SHIFT_DIR_NAME / "affine.json"
+    if not report_path.is_file():
+        return False
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("status") != "manual_approved":
+        return False
+    updated = {
+        **payload,
+        "status": "pending",
+        "invalidated_reason": "restore_invalidated",
+        "invalidated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    updated.pop("shift_dir", None)
+    temporary = create_temporary_path(report_path)
+    try:
+        _write_json(temporary, updated)
+        publish_file(temporary, report_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return True
+
+
+def build_corrected_date(
     source_date: Path,
     temporary_date: Path,
     scale: float,
@@ -650,7 +671,7 @@ def _copy_corrected_date(
     excluded = {BEAD_DIR_NAME, SHIFT_DIR_NAME, "delete", "audit", "audit_runs", ".raman_pipeline"}
     for source in sorted(source_date.rglob("*"), key=lambda path: build_natural_key(str(path.relative_to(source_date)))):
         relative = source.relative_to(source_date)
-        if any(part in excluded for part in relative.parts):
+        if any(part in excluded or part.startswith(".") for part in relative.parts):
             continue
         target = temporary_date / relative
         if source.is_dir():
@@ -658,17 +679,18 @@ def _copy_corrected_date(
             continue
         if source.suffix.lower() == ".arc_data":
             wavenumbers, intensities = read_arc_data(source)
-            if not wavenumbers.size or wavenumbers.size != intensities.size:
+            if not wavenumbers.size or wavenumbers.size != intensities.size or not np.isfinite(wavenumbers).all() or not np.isfinite(intensities).all():
                 raise ValueError(f"无效光谱：{source}")
-            # shift_data 只保存日期级仿射结果，文件夹补偿在 init/CSdata 发布时应用。
-            write_arc_data(target, scale * wavenumbers + offset, intensities)
+            # 文件夹平移已经写入 cosmic，派生时只应用日期级仿射。
+            write_arc_data(target, scale * wavenumbers + offset, intensities, fmt="%.17g")
             count += 1
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
-    if count == 0:
-        raise RuntimeError(f"日期没有可校正的普通光谱：{source_date}")
     shutil.copytree(shift_source, temporary_date / SHIFT_DIR_NAME)
+    report_path = temporary_date / SHIFT_DIR_NAME / "affine.json"
+    if report_path.is_file():
+        _write_json(report_path, json.loads(report_path.read_text(encoding="utf-8")))
     return count
 
 
@@ -678,83 +700,50 @@ def apply_folder_affine_compensation(
     date_name: str,
     folder_offsets: dict[str, float],
 ) -> dict[str, object]:
-    """只记录文件夹补偿；shift_data 光谱始终保持日期级校正结果。"""
-    source_root_path = Path(source_root).resolve()
-    output_root_path = Path(output_root).resolve()
-    report = load_calibration_report(output_root_path, str(date_name))
-    if report is None:
-        raise FileNotFoundError(f"尚未分析日期：{date_name}")
-    if report.get("status") != "manual_approved":
-        raise ValueError(f"日期尚未完成仿真校准：{date_name}")
-    requested = {str(name): float(value) for name, value in folder_offsets.items()}
-    if any(not math.isfinite(value) for value in requested.values()):
-        raise ValueError("文件夹补偿必须是有限数值")
-    source_date = source_root_path / str(date_name)
-    lineage = load_folder_lineage(source_root_path)
-    if not lineage.get("folders"):
-        lineage = initialize_folder_lineage(source_root_path)
-    lineage_before = load_folder_lineage(source_root_path)
-    records = lineage.get("folders", {})
-    known = set()
-    if isinstance(records, dict):
-        known.update(
-            key.split("/", 1)[1]
-            for key in records
-            if str(key).startswith(f"{date_name}/") and "/" in str(key)
-        )
-    if source_date.is_dir():
-        known.update(
-            item.name
-            for item in source_date.iterdir()
-            if item.is_dir() and item.name not in {BEAD_DIR_NAME, SHIFT_DIR_NAME, "delete", "audit", "audit_runs", ".raman_pipeline"}
-        )
-    unknown = sorted(set(requested) - known, key=build_natural_key)
-    if unknown:
-        raise ValueError(f"补偿文件夹不存在：{unknown}")
-    previous_raw = report.get("folder_compensations", {})
-    previous = {str(name): float(value) for name, value in previous_raw.items()} if isinstance(previous_raw, dict) else {}
-    changed = {name: value for name, value in requested.items() if value != previous.get(name, 0.0)}
-    if not changed:
-        return {**report, "changed_folders": [], "compensation_record_only": True}
-    current = dict(previous)
-    for name, value in changed.items():
-        if value == 0.0:
-            current.pop(name, None)
-        else:
-            current[name] = value
-    history = list(report.get("compensation_history", []))
-    history.append({"previous": previous, "changed": changed, "recorded_at": datetime.now(timezone.utc).isoformat()})
-    updated = {
-        **report,
-        "status": "manual_approved",
-        "folder_compensations": current,
-        "operator_input": changed,
-        "effective_offsets": {name: float(report.get("offset", 0.0)) + value for name, value in current.items()},
-        "compensation_history": history,
-        "compensation_record_only": True,
-        "compensated_at": datetime.now(timezone.utc).isoformat(),
-        "changed_folders": sorted(changed, key=build_natural_key),
-    }
-    updated.pop("shift_dir", None)
-    report_path = output_root_path / str(date_name) / SHIFT_DIR_NAME / "affine.json"
-    temporary = create_temporary_path(report_path)
+    """按本次增量平移 cosmic 原轴及同来源归档谱，不读取或保存累计补偿。"""
+    del output_root  # 保留原调用接口；原轴平移不依赖仿射 scale。
+    root = Path(source_root).resolve()
+    if len(date_name) != 8 or not date_name.isascii() or not date_name.isdigit():
+        raise ValueError("日期必须是八位数字")
+    temporary_files: dict[Path, Path] = {}
+    changed = []
     try:
-        for name, value in changed.items():
-            record_folder_compensation(source_root_path, str(date_name), name, value)
-        _write_json(temporary, updated)
-        publish_file(temporary, report_path)
-    except Exception:
-        save_folder_lineage(source_root_path, lineage_before)
-        restore_report = create_temporary_path(report_path)
-        try:
-            _write_json(restore_report, report)
-            publish_file(restore_report, report_path)
-        finally:
-            restore_report.unlink(missing_ok=True)
-        raise
+        for name, requested in folder_offsets.items():
+            delta = float(requested)
+            if not math.isfinite(delta):
+                raise ValueError("频移量必须是有限数值")
+            if not name or name in {"小球", "shift", "delete", "audit", "audit_runs", ".raman_pipeline"} or Path(name).name != name or "/" in name or "\\" in name or name in {".", ".."}:
+                raise ValueError("无效的补偿文件夹")
+            if delta == 0:
+                continue
+            folders = [
+                root / date_name / name,
+                root / "delete" / "manual" / date_name / name,
+                root / "delete" / "folder_delete" / date_name / name,
+            ]
+            sources = []
+            for folder in folders:
+                if not folder.resolve().is_relative_to(root):
+                    raise ValueError("补偿目标超出 cosmic 目录")
+                sources.extend(sorted(folder.rglob("*.arc_data")))
+            if not sources:
+                raise FileNotFoundError(f"补偿文件夹没有光谱：{date_name}/{name}")
+            for source in sources:
+                if not source.resolve().is_relative_to(root):
+                    raise ValueError("补偿谱超出 cosmic 目录")
+                axis, intensity = read_arc_data(source)
+                if not axis.size or axis.size != intensity.size or not np.isfinite(axis).all() or not np.isfinite(intensity).all():
+                    raise ValueError(f"无效光谱：{source}")
+                temporary = create_temporary_path(source)
+                temporary_files[source] = temporary
+                write_arc_data(temporary, axis + delta, intensity, fmt="%.17g")
+            changed.append(name)
+        publish_files(temporary_files)
     finally:
-        temporary.unlink(missing_ok=True)
-    return updated
+        for temporary in temporary_files.values():
+            temporary.unlink(missing_ok=True)
+    return {"changed_folders": changed, "spectrum_count": len(temporary_files)}
+
 
 def approve_and_apply_date(
     date_dir: Path | str,
@@ -771,13 +760,15 @@ def approve_and_apply_date(
     scale, offset = report.get("scale"), report.get("offset")
     if scale is None or offset is None:
         raise ValueError("仿射参数不完整")
+    if not math.isfinite(float(scale)) or float(scale) <= 0 or not math.isfinite(float(offset)):
+        raise ValueError("仿射参数必须有限且 scale 为正数")
 
     output_date = output_root_path / source_date.name
     shift_source = output_date / SHIFT_DIR_NAME
     temporary_date = output_root_path / f".{source_date.name}_building_{uuid4().hex}"
     temporary_date.mkdir(parents=True, exist_ok=False)
     try:
-        _copy_corrected_date(
+        build_corrected_date(
             source_date,
             temporary_date,
             float(scale),
@@ -789,22 +780,6 @@ def approve_and_apply_date(
         report["approved_at"] = datetime.now(timezone.utc).isoformat()
         report["base_scale"] = float(scale)
         report["base_offset"] = float(offset)
-        lineage = initialize_folder_lineage(source_date.parent)
-        records = lineage.get("folders", {})
-        resolved_offsets = {}
-        if isinstance(records, dict):
-            for key, record in records.items():
-                if not str(key).startswith(f"{source_date.name}/") or not isinstance(record, dict):
-                    continue
-                compensation = record.get("compensation", {})
-                value = compensation.get("value", 0.0) if isinstance(compensation, dict) else 0.0
-                if float(value) != 0.0:
-                    resolved_offsets[str(key).split("/", 1)[1]] = float(value)
-        report["folder_compensations"] = resolved_offsets
-        report["effective_offsets"] = {
-            name: float(offset) + value
-            for name, value in resolved_offsets.items()
-        }
         report.pop("shift_dir", None)
         _write_json(temporary_date / SHIFT_DIR_NAME / "affine.json", report)
         backup = output_root_path / f"{source_date.name}_previous_{uuid4().hex[:8]}"
@@ -821,23 +796,6 @@ def approve_and_apply_date(
     except Exception:
         shutil.rmtree(temporary_date, ignore_errors=True)
         raise
-    record_affine_approval(
-        source_date.parent,
-        source_date.name,
-        report.get("approved_at"),
-        float(report["scale"]),
-        float(report["offset"]),
-    )
-    initialize_folder_lineage(source_date.parent)
-    for folder in source_date.iterdir():
-        if folder.is_dir() and folder.name not in {BEAD_DIR_NAME, SHIFT_DIR_NAME, "delete", "audit", "audit_runs", ".raman_pipeline"}:
-            if any(folder.rglob("*.arc_data")):
-                record_output_path(
-                    source_date.parent,
-                    source_date.name,
-                    folder.name,
-                    shift_path=str(output_date / folder.name),
-                )
     return report
 
 
@@ -848,6 +806,8 @@ __all__ = [
     "analyze_all_dates",
     "analyze_date",
     "apply_folder_affine_compensation",
+    "build_corrected_date",
     "approve_and_apply_date",
+    "invalidate_calibration_report",
     "load_calibration_report",
 ]

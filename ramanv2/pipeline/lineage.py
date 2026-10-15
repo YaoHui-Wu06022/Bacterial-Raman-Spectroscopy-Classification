@@ -6,11 +6,14 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from ramanv2.common.publishing import preserve_paths
 from ramanv2.common.naming import build_natural_key, is_test_source_folder, parse_folder_prefix, parse_test_folder_prefix
 
 
@@ -40,11 +43,44 @@ def load_folder_lineage(data_root: Path | str) -> dict[str, object]:
 
 
 def save_folder_lineage(data_root: Path | str, payload: dict[str, object]) -> None:
+    for record in payload.get("folders", {}).values():
+        if isinstance(record, dict):
+            record.pop("compensation", None)
+            record.pop("audit", None)
+            record["history"] = [item for item in record.get("history", []) if item.get("operation") != "folder_compensation"]
     path = lineage_path(data_root)
     path.parent.mkdir(parents=True, exist_ok=True)
+    # 采集目录在 Windows 上可能继承只读属性，先确保目录与旧记录文件可写。
+    try:
+        path.parent.chmod(0o700)
+    except OSError:
+        pass
+    if path.exists():
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+    # 使用唯一临时文件，避免多个会话同时保存时互相覆盖临时文件。
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    try:
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        # 目标文件可能正被扫描/索引或另一会话短暂占用，Windows 的 os.replace 会抛
+        # WinError 5，必须退避重试而不是直接失败。
+        for attempt, delay in enumerate((0.0, 0.05, 0.2, 0.5)):
+            if delay:
+                time.sleep(delay)
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if attempt == 3:
+                    raise
+    finally:
+        if temporary.exists():
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
 
 
 def _prefix_for_folder(folder_name: str) -> str:
@@ -65,8 +101,6 @@ def _record_template(date_name: str, folder_name: str) -> dict[str, object]:
         "folder_status": "active",
         "cleaning": {"status": "pending", "history": []},
         "affine": {"status": "pending", "version": None, "scale": None, "offset": None},
-        "compensation": {"value": 0.0, "history": []},
-        "audit": {"status": "pending", "history": []},
         "outputs": {"shift": None, "init": None, "profiles": {}, "csdata": None, "prefix_groups": []},
         "history": [{"operation": "lineage_initialized", "recorded_at": now}],
         "updated_at": now,
@@ -118,7 +152,7 @@ def initialize_folder_lineage(
             return
         for date_dir in sorted((item for item in base.iterdir() if item.is_dir() and item.name.isdigit()), key=lambda item: build_natural_key(item.name)):
             for folder_dir in sorted((item for item in date_dir.iterdir() if item.is_dir()), key=lambda item: build_natural_key(item.name)):
-                if folder_dir.name in SPECIAL_NAMES:
+                if folder_dir.name in SPECIAL_NAMES or folder_dir.name.startswith("."):
                     continue
                 files = sorted(
                     (item for item in folder_dir.rglob("*.arc_data") if item.is_file()),
@@ -210,6 +244,7 @@ def record_manual_move(
             "reason": reason,
             "recorded_at": now,
         }
+        record["init_pending"] = True
         record["folder_status"] = "folder_deleted" if reason in {"folder_remove", "date_remove", "prefix_folder_remove"} else "active"
         record.setdefault("cleaning", {}).setdefault("history", []).append(
             {"operation": reason, "path": relative, "recorded_at": now}
@@ -247,6 +282,7 @@ def record_folder_move(
             "reason": "folder_remove",
             "recorded_at": now,
         }
+        record["init_pending"] = True
         record["folder_status"] = "folder_deleted"
         record.setdefault("history", []).append({"operation": "folder_remove", "path": normalized, "recorded_at": now})
         record["updated_at"] = now
@@ -274,27 +310,8 @@ def record_restore(data_root: Path | str, relative_paths: list[str] | tuple[str,
             {"operation": "restore", "path": "/".join(parts[2:]), "recorded_at": now}
         )
         record.setdefault("history", []).append({"operation": "restore", "path": normalized, "recorded_at": now})
+        record["init_pending"] = True
         record["updated_at"] = now
-    payload["updated_at"] = now
-    save_folder_lineage(data_root, payload)
-    return payload
-
-
-def record_folder_compensation(data_root: Path | str, date_name: str, folder_name: str, value: float) -> dict[str, object]:
-    payload = load_folder_lineage(data_root)
-    record = _ensure_folder(payload, str(date_name), str(folder_name))
-    now = datetime.now(timezone.utc).isoformat()
-    compensation = record.setdefault("compensation", {"value": 0.0, "history": []})
-    if not isinstance(compensation, dict):
-        compensation = {"value": 0.0, "history": []}
-        record["compensation"] = compensation
-    previous = float(compensation.get("value", 0.0))
-    current = float(value)
-    if previous != current:
-        compensation.setdefault("history", []).append({"value": previous, "new_value": current, "recorded_at": now})
-        compensation["value"] = current
-        record.setdefault("history", []).append({"operation": "folder_compensation", "value": current, "recorded_at": now})
-    record["updated_at"] = now
     payload["updated_at"] = now
     save_folder_lineage(data_root, payload)
     return payload
@@ -314,6 +331,9 @@ def record_affine_approval(
         for key, record in folders.items():
             if not isinstance(record, dict) or not str(key).startswith(f"{date_name}/"):
                 continue
+            previous = record.get("affine", {})
+            if previous.get("scale") != float(scale) or previous.get("offset") != float(offset):
+                record["init_pending"] = True
             record["affine"] = {
                 "status": "approved",
                 "version": version,
@@ -326,38 +346,6 @@ def record_affine_approval(
     payload["updated_at"] = now
     save_folder_lineage(data_root, payload)
     return payload
-
-
-def record_audit_result(
-    data_root: Path | str,
-    date_name: str,
-    folder_name: str,
-    status: str,
-    reason: str | None = None,
-) -> dict[str, object]:
-    payload = initialize_folder_lineage(data_root)
-    record = _ensure_folder(payload, str(date_name), str(folder_name))
-    now = datetime.now(timezone.utc).isoformat()
-    audit = record.setdefault("audit", {})
-    previous_history = audit.get("history", []) if isinstance(audit, dict) else []
-    record["audit"] = {
-        "status": str(status),
-        "reason": reason,
-        "recorded_at": now,
-        "history": [*previous_history, {"status": status, "reason": reason, "recorded_at": now}],
-    }
-    record.setdefault("history", []).append({"operation": "audit", "status": status, "recorded_at": now})
-    record["updated_at"] = now
-    payload["updated_at"] = now
-    save_folder_lineage(data_root, payload)
-    return payload
-
-
-def folder_compensation(data_root: Path | str, date_name: str, folder_name: str) -> float:
-    payload = load_folder_lineage(data_root)
-    record = payload.get("folders", {}).get(f"{date_name}/{folder_name}", {})
-    compensation = record.get("compensation", {}) if isinstance(record, dict) else {}
-    return float(compensation.get("value", 0.0)) if isinstance(compensation, dict) else 0.0
 
 
 def record_output_path(
@@ -395,7 +383,7 @@ def record_output_path(
 def summarize_lineage(data_root: Path | str) -> dict[str, list[str]]:
     payload = initialize_folder_lineage(data_root)
     folders = payload.get("folders", {})
-    summary = {"cleaning_completed_dates": set(), "affine_completed_dates": set(), "audit_completed_dates": set(), "init_generated_dates": set()}
+    summary = {"cleaning_completed_dates": set(), "affine_completed_dates": set(), "init_generated_dates": set()}
     if not isinstance(folders, dict):
         return {key: [] for key in summary}
     by_date: dict[str, list[dict[str, object]]] = {}
@@ -407,8 +395,6 @@ def summarize_lineage(data_root: Path | str) -> dict[str, list[str]]:
             summary["cleaning_completed_dates"].add(date_name)
         if records and all(isinstance(record.get("affine"), dict) and (record.get("affine") or {}).get("status") == "approved" for record in records):
             summary["affine_completed_dates"].add(date_name)
-        if records and all(isinstance(record.get("audit"), dict) and (record.get("audit") or {}).get("status") == "applied" for record in records):
-            summary["audit_completed_dates"].add(date_name)
         if records and all(isinstance(record.get("outputs"), dict) and (record.get("outputs") or {}).get("init") for record in records):
             summary["init_generated_dates"].add(date_name)
     return {key: sorted(values, key=build_natural_key) for key, values in summary.items()}
@@ -425,7 +411,6 @@ def sync_pipeline_state_from_lineage(data_root: Path | str, state: object) -> ob
         if isinstance(record, dict):
             by_date.setdefault(str(record.get("date", "")), []).append(record)
     affine_dates: set[str] = set()
-    audit_dates: set[str] = set()
     init_dates: set[str] = set()
     cleaning_dates: set[str] = set()
     for date_name, records in by_date.items():
@@ -433,14 +418,8 @@ def sync_pipeline_state_from_lineage(data_root: Path | str, state: object) -> ob
             cleaning_dates.add(date_name)
         if records and all(isinstance(item.get("affine"), dict) and item["affine"].get("status") == "approved" for item in records):
             affine_dates.add(date_name)
-        audit_records = [
-            item for item in records
-            if item.get("folder_status") != "folder_deleted" and not is_test_source_folder(str(item.get("folder", "")))
-        ]
-        if audit_records and all(isinstance(item.get("audit"), dict) and item["audit"].get("status") == "applied" for item in audit_records):
-            audit_dates.add(date_name)
         output_records = [item for item in records if item.get("folder_status") != "folder_deleted"]
-        if output_records and all(
+        if output_records and not any(item.get("init_pending") for item in records) and all(
             isinstance(item.get("outputs"), dict)
             and ((item["outputs"].get("init") if not is_test_source_folder(str(item.get("folder", ""))) else item["outputs"].get("csdata")))
             for item in output_records
@@ -450,11 +429,23 @@ def sync_pipeline_state_from_lineage(data_root: Path | str, state: object) -> ob
         state.cleaning.completed_date_names = cleaning_dates
     if hasattr(state, "affine_completed_dates"):
         state.affine_completed_dates = affine_dates
-    if hasattr(state, "audit_completed_dates"):
-        state.audit_completed_dates = audit_dates
     if hasattr(state, "init_generated_dates"):
         state.init_generated_dates = init_dates
     return state
+
+
+def has_active_source_folders(data_root: Path | str, date_name: str) -> bool:
+    """判断日期下是否仍有普通源文件夹，排除小球和派生目录。"""
+    date_dir = Path(data_root).resolve() / str(date_name)
+    excluded = {"小球", "shift", "delete", "audit", "audit_runs", ".raman_pipeline"}
+    if not date_dir.is_dir():
+        return False
+    return any(
+        folder.is_dir()
+        and folder.name not in excluded
+        and any(folder.rglob("*.arc_data"))
+        for folder in date_dir.iterdir()
+    )
 
 
 def list_lineage_folders(
@@ -488,97 +479,45 @@ def remove_source_folder(
     *,
     shift_root: Path | str | None = None,
 ) -> dict[str, object]:
-    """从 cosmic 源头整夹删除，并按记录清理已知下游目录。"""
+    """只归档 cosmic 整夹及其已有单谱归档；失败时恢复文件与走向记录。"""
+    del shift_root  # 保留旧调用签名，派生数据由显式重建更新。
     root = Path(data_root).resolve()
-    parts = str(source_id).replace("\\", "/").split("/", 1)
+    parts = str(source_id).replace("\\\\", "/").split("/")
     if len(parts) != 2:
         raise ValueError("source_id 必须是 日期/文件夹")
     date_name, folder_name = parts
-    source_folder = root / date_name / folder_name
-    manual_folder = root / "delete" / "manual" / date_name / folder_name
-    folder_delete = root / FOLDER_DELETE_RELATIVE / date_name / folder_name
-    if folder_delete.exists() and not folder_delete.is_dir():
-        raise FileExistsError(f"整夹删除目标不是文件夹：{folder_delete}")
-    if not source_folder.is_dir() and not manual_folder.is_dir():
-        if folder_delete.is_dir():
-            files = sorted(
-                (item for item in folder_delete.rglob("*.arc_data") if item.is_file()),
-                key=lambda item: build_natural_key(item.relative_to(folder_delete).as_posix()),
-            )
-            relative_paths = [
-                f"{date_name}/{folder_name}/{item.relative_to(folder_delete).as_posix()}"
-                for item in files
-            ]
-            removed = remove_downstream_outputs(
-                root,
-                source_id,
-                shift_root=shift_root,
-                invalidate_date_enable=True,
-            )
-            return {"status": "already_ready", "source_id": source_id, "moved_paths": relative_paths, **removed}
-        raise FileNotFoundError(f"源文件夹不存在：{source_folder}")
-
-    manual_to_source_folder = False
-    manual_to_source_files: list[tuple[Path, Path]] = []
-    source_to_archive_folder = False
-    source_to_archive_files: list[tuple[Path, Path]] = []
-    all_relative_paths: list[str] = []
-    try:
-        if manual_folder.exists():
-            if not manual_folder.is_dir():
-                raise FileExistsError(f"人工删除目标不是文件夹：{manual_folder}")
-            source_folder.parent.mkdir(parents=True, exist_ok=True)
-            if source_folder.exists():
-                manual_to_source_files = _move_folder_contents(manual_folder, source_folder)
+    if len(date_name) != 8 or not date_name.isascii() or not date_name.isdigit() or not folder_name or folder_name in SPECIAL_NAMES or folder_name in {".", ".."}:
+        raise ValueError("source_id 必须是 日期/文件夹")
+    source = root / date_name / folder_name
+    manual = root / MANUAL_DELETE_RELATIVE / date_name / folder_name
+    archive = root / FOLDER_DELETE_RELATIVE / date_name / folder_name
+    if any(not path.resolve().is_relative_to(root) for path in (source, manual, archive)):
+        raise ValueError("归档路径超出 cosmic 目录")
+    if archive.exists() and not archive.is_dir():
+        raise FileExistsError(f"整夹归档目标不是文件夹：{archive}")
+    if not source.is_dir() and not manual.is_dir():
+        if not archive.is_dir():
+            raise FileNotFoundError(f"源文件夹不存在：{source}")
+        paths = [f"{date_name}/{folder_name}/{path.relative_to(archive).as_posix()}" for path in sorted(archive.rglob("*.arc_data"))]
+        return {"status": "already_ready", "source_id": source_id, "moved_paths": paths}
+    with preserve_paths([source, manual, archive, lineage_path(root)]):
+        if manual.exists():
+            if source.exists():
+                _move_folder_contents(manual, source)
             else:
-                shutil.move(str(manual_folder), str(source_folder))
-                manual_to_source_folder = True
-        if not source_folder.is_dir():
-            raise FileNotFoundError(f"源文件夹不存在：{source_folder}")
-        source_files = sorted(
-            (item for item in source_folder.rglob("*.arc_data") if item.is_file()),
-            key=lambda item: build_natural_key(item.relative_to(source_folder).as_posix()),
-        )
-        if not source_files:
-            raise ValueError(f"源文件夹没有光谱：{source_folder}")
-        all_relative_paths = [
-            f"{date_name}/{folder_name}/{item.relative_to(source_folder).as_posix()}"
-            for item in source_files
-        ]
-        folder_delete.parent.mkdir(parents=True, exist_ok=True)
-        if folder_delete.exists():
-            source_to_archive_files = _move_folder_contents(source_folder, folder_delete)
+                source.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(manual), str(source))
+        files = sorted(source.rglob("*.arc_data"), key=lambda path: build_natural_key(path.relative_to(source).as_posix()))
+        if not files:
+            raise ValueError(f"源文件夹没有光谱：{source}")
+        paths = [f"{date_name}/{folder_name}/{path.relative_to(source).as_posix()}" for path in files]
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        if archive.exists():
+            _move_folder_contents(source, archive)
         else:
-            shutil.move(str(source_folder), str(folder_delete))
-            source_to_archive_folder = True
-        record_folder_move(root, all_relative_paths)
-        removed = remove_downstream_outputs(
-            root,
-            source_id,
-            shift_root=shift_root,
-            invalidate_date_enable=True,
-        )
-        return {"status": "ready", "source_id": source_id, "moved_paths": all_relative_paths, **removed}
-    except Exception:
-        if source_to_archive_folder and folder_delete.exists() and not source_folder.exists():
-            source_folder.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(folder_delete), str(source_folder))
-        elif source_to_archive_files:
-            for source, target in reversed(source_to_archive_files):
-                if target.exists() and not source.exists():
-                    source.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(target), str(source))
-        if manual_to_source_folder and source_folder.exists() and not manual_folder.exists():
-            manual_folder.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(source_folder), str(manual_folder))
-        elif manual_to_source_files:
-            for source, target in reversed(manual_to_source_files):
-                if target.exists() and not source.exists():
-                    source.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(target), str(source))
-        if all_relative_paths:
-            record_restore(root, all_relative_paths)
-        raise
+            shutil.move(str(source), str(archive))
+        record_folder_move(root, paths)
+    return {"status": "ready", "source_id": source_id, "moved_paths": paths}
 
 
 def _move_folder_contents(source_folder: Path, target_folder: Path) -> list[tuple[Path, Path]]:
@@ -615,223 +554,20 @@ def _move_folder_contents(source_folder: Path, target_folder: Path) -> list[tupl
     return moved
 
 
-def _prepare_audit_cleanup(
-    shift_root: Path,
-    source_id: str,
-) -> list[tuple[Path, Path]]:
-    """暂存包含源文件夹的审核报告，删除该文件夹的报告记录。"""
-    audit_root = shift_root / "audit_runs"
-    if not audit_root.is_dir():
-        return []
-    backups: list[tuple[Path, Path]] = []
-    try:
-        for run_dir in sorted((item for item in audit_root.iterdir() if item.is_dir()), key=lambda item: build_natural_key(item.name)):
-            summary_path = run_dir / "summary.json"
-            if not summary_path.is_file():
-                continue
-            try:
-                report = json.loads(summary_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            folders = report.get("folders", [])
-            if not isinstance(folders, list):
-                continue
-            relevant = {
-                str(item).replace("\\", "/")
-                for item in folders
-                if str(item).replace("\\", "/") == source_id
-                or str(item).replace("\\", "/").startswith(f"{source_id}/")
-            }
-            if not relevant:
-                continue
-            backup = audit_root / f".{run_dir.name}.lineage_backup_{uuid4().hex}"
-            run_dir.replace(backup)
-            backups.append((run_dir, backup))
-            remaining = [item for item in folders if str(item).replace("\\", "/") not in relevant]
-            if not remaining:
-                continue
-            shutil.copytree(backup, run_dir)
-            report["folders"] = remaining
-            items = report.get("items", [])
-            if isinstance(items, list):
-                report["items"] = [
-                    item
-                    for item in items
-                    if not (
-                        isinstance(item, dict)
-                        and (
-                            str(item.get("relative_path", "")).replace("\\", "/") == source_id
-                            or str(item.get("relative_path", "")).replace("\\", "/").startswith(f"{source_id}/")
-                        )
-                    )
-                ]
-                report["item_count"] = len(report["items"])
-                report["candidate_count"] = sum(item.get("state") == "candidate" for item in report["items"] if isinstance(item, dict))
-            temporary = summary_path.with_name(f".{summary_path.name}.{uuid4().hex}.tmp")
-            temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            temporary.replace(summary_path)
-    except Exception:
-        for target, backup in reversed(backups):
-            if target.exists():
-                shutil.rmtree(target)
-            if backup.exists():
-                backup.replace(target)
-        raise
-    return backups
-
-
-def remove_downstream_outputs(
-    data_root: Path | str,
-    source_id: str,
-    *,
-    shift_root: Path | str | None = None,
-    invalidate_date_enable: bool = False,
-) -> dict[str, object]:
-    """按走向记录删除一个源文件夹的 shift、init、Profile 和 CSdata 目录。"""
-    root = Path(data_root).resolve()
-    payload = load_folder_lineage(root)
-    record = payload.get("folders", {}).get(str(source_id), {})
-    outputs = record.get("outputs", {}) if isinstance(record, dict) else {}
-    output_paths: list[Path] = []
-    if isinstance(outputs, dict):
-        for value in (outputs.get("shift"), outputs.get("init"), outputs.get("csdata")):
-            if value:
-                output_paths.append(Path(str(value)))
-        profiles = outputs.get("profiles", {})
-        if isinstance(profiles, dict):
-            output_paths.extend(Path(str(value)) for value in profiles.values() if value)
-    backups: list[tuple[Path, Path]] = []
-    audit_backups: list[tuple[Path, Path]] = []
-    if shift_root is not None:
-        parts = str(source_id).split("/", 1)
-        if len(parts) == 2:
-            shift_base = Path(shift_root).resolve()
-            if invalidate_date_enable:
-                output_paths.extend(
-                    path
-                    for path in (
-                        shift_base / parts[0],
-                        shift_base / "delete" / parts[0],
-                    )
-                    if path not in output_paths
-                )
-    try:
-        for path in output_paths:
-            if not path.exists():
-                continue
-            backup = path.with_name(f".{path.name}.lineage_backup_{uuid4().hex}")
-            path.replace(backup)
-            backups.append((path, backup))
-    except Exception:
-        for target, backup in reversed(backups):
-            if backup.exists() and not target.exists():
-                backup.replace(target)
-        raise
-    try:
-        if shift_root is not None:
-            audit_backups = _prepare_audit_cleanup(Path(shift_root).resolve(), str(source_id))
-        if isinstance(record, dict):
-            record["outputs"] = {"shift": None, "init": None, "profiles": {}, "csdata": None, "prefix_groups": []}
-            record["audit"] = {"status": "removed", "reason": "source_folder_removed", "history": []}
-            record["updated_at"] = datetime.now(timezone.utc).isoformat()
-        if invalidate_date_enable and len(str(source_id).split("/", 1)) == 2:
-            date_name = str(source_id).split("/", 1)[0]
-            folders = payload.get("folders", {})
-            if isinstance(folders, dict):
-                for item in folders.values():
-                    if not isinstance(item, dict) or str(item.get("date", "")) != date_name:
-                        continue
-                    item["affine"] = {"status": "pending", "version": None, "scale": None, "offset": None}
-                    item["audit"] = {"status": "pending", "history": []}
-                    item["updated_at"] = datetime.now(timezone.utc).isoformat()
-        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-        save_folder_lineage(root, payload)
-    except Exception:
-        for target, backup in reversed(audit_backups):
-            if target.exists():
-                shutil.rmtree(target)
-            if backup.exists():
-                backup.replace(target)
-        for target, backup in reversed(backups):
-            if backup.exists() and not target.exists():
-                backup.replace(target)
-        raise
-    for _, backup in backups:
-        if backup.is_dir():
-            shutil.rmtree(backup)
-        elif backup.exists():
-            backup.unlink()
-    for _, backup in audit_backups:
-        if backup.exists():
-            shutil.rmtree(backup)
-    return {"removed_outputs": [str(path) for path in output_paths]}
-
-
-def remove_downstream_files(
-    data_root: Path | str,
-    relative_paths: list[str] | tuple[str, ...] | set[str],
-    *,
-    shift_root: Path | str | None = None,
-) -> dict[str, object]:
-    """删除单谱在各下游目录中的对应文件，保留同文件夹其他光谱。"""
-    root = Path(data_root).resolve()
-    payload = load_folder_lineage(root)
-    removed: list[str] = []
-    backups: list[tuple[Path, Path]] = []
-    try:
-        for item in relative_paths:
-            normalized = str(item).replace("\\", "/")
-            parts = normalized.split("/")
-            if len(parts) < 3:
-                continue
-            record = payload.get("folders", {}).get("/".join(parts[:2]), {})
-            outputs = record.get("outputs", {}) if isinstance(record, dict) else {}
-            targets: list[Path] = []
-            if isinstance(outputs, dict):
-                for value in (outputs.get("init"), outputs.get("csdata")):
-                    if value:
-                        targets.append(Path(str(value)) / parts[-1])
-                profiles = outputs.get("profiles", {})
-                if isinstance(profiles, dict):
-                    targets.extend(Path(str(value)) / parts[-1] for value in profiles.values() if value)
-            if shift_root is not None:
-                shift_base = Path(shift_root).resolve()
-                targets.extend((shift_base / parts[0] / parts[1] / parts[-1], shift_base / "delete" / parts[0] / parts[1] / parts[-1]))
-            for target in targets:
-                if target.is_file():
-                    backup = target.with_name(f".{target.name}.lineage_backup_{uuid4().hex}")
-                    target.replace(backup)
-                    backups.append((target, backup))
-                    removed.append(str(target))
-        save_folder_lineage(root, payload)
-    except Exception:
-        for target, backup in reversed(backups):
-            if backup.exists() and not target.exists():
-                backup.replace(target)
-        raise
-    for _, backup in backups:
-        backup.unlink(missing_ok=True)
-    return {"removed_files": removed}
-
-
 __all__ = [
     "FOLDER_DELETE_RELATIVE",
     "LINEAGE_FILE_NAME",
-    "folder_compensation",
+    "has_active_source_folders",
     "initialize_folder_lineage",
     "lineage_path",
     "load_folder_lineage",
-    "record_folder_compensation",
     "record_affine_approval",
-    "record_audit_result",
     "record_manual_move",
     "record_folder_move",
     "record_restore",
     "record_output_path",
     "list_lineage_folders",
     "remove_source_folder",
-    "remove_downstream_outputs",
-    "remove_downstream_files",
     "save_folder_lineage",
     "summarize_lineage",
     "sync_pipeline_state_from_lineage",

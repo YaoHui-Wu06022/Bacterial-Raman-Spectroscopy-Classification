@@ -22,11 +22,6 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     affine.add_argument("--date", dest="date_names", action="append")
     affine.set_defaults(run_command=run_command)
 
-    audit = commands.add_parser("audit", help="审核并应用校正后文件夹异常谱")
-    audit.add_argument("--shift-root", default=str(PROJECT_ROOT / "dataset" / "shift_data"))
-    audit.add_argument("--date", dest="date_names", action="append")
-    audit.set_defaults(run_command=run_command)
-
     init = commands.add_parser("init", help="从 shift_data 生成全量 init")
     init.add_argument("--shift-root", default=str(PROJECT_ROOT / "dataset" / "shift_data"))
     init.add_argument("--init-root", default=str(PROJECT_ROOT / "dataset" / "init"))
@@ -48,16 +43,14 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     rebuild.add_argument("--date", dest="date_names", action="append", required=True)
     rebuild.set_defaults(run_command=run_command)
 
+    records = commands.add_parser("rebuild-records", help="按当前磁盘重建走向树与页面状态")
+    records.set_defaults(run_command=run_command)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Raman 前置数据流水线")
     configure_parser(parser)
     return parser
-
-
-def _pending_audit_dates(state) -> list[str]:
-    """返回默认 CLI 审核范围，排除已完成日期。"""
-    return sorted(state.affine_completed_dates - state.audit_completed_dates)
 
 
 def run_command(args: argparse.Namespace) -> int:
@@ -75,6 +68,7 @@ def run_command(args: argparse.Namespace) -> int:
         return 0
     if args.command == "affine":
         from ramanv2.pipeline.calibration import run_affine_calibration
+        from ramanv2.pipeline.invalidation import invalidate_downstream
 
         dates = args.date_names or sorted(state.cleaning.completed_date_names)
         reports = run_affine_calibration(args.source_root, dates, args.output_root)
@@ -83,18 +77,9 @@ def run_command(args: argparse.Namespace) -> int:
             if report.get("status") == "manual_approved":
                 state.affine_completed_dates.add(date_name)
                 if not report.get("skipped"):
-                    state.audit_completed_dates.discard(date_name)
+                    invalidate_downstream(state, [date_name])
             elif not report.get("skipped"):
                 state.affine_completed_dates.discard(date_name)
-        state.dataset_builds.pop("latest", None)
-        save_pipeline_state(state_path, state)
-        print(json.dumps(reports, ensure_ascii=False, indent=2))
-        return 0
-    if args.command == "audit":
-        from ramanv2.pipeline.audit import run_shift_folder_audit
-
-        dates = args.date_names or _pending_audit_dates(state)
-        reports = run_shift_folder_audit(args.shift_root, dates, state, state_path)
         state.dataset_builds.pop("latest", None)
         save_pipeline_state(state_path, state)
         print(json.dumps(reports, ensure_ascii=False, indent=2))
@@ -110,38 +95,47 @@ def run_command(args: argparse.Namespace) -> int:
             args.shift_root,
             args.init_root,
             catalog,
-            sorted(state.audit_completed_dates & state.affine_completed_dates),
+            sorted(state.affine_completed_dates),
             test_root=PROJECT_ROOT / "dataset" / "CSdata",
             selected_cs_folders=args.cs_folders,
         )
         state.dataset_builds["full_init"] = report
-        state.dataset_builds.pop("profiles", None)
-        state.dataset_builds.pop("prefix_plots", None)
         save_pipeline_state(state_path, state)
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     if args.command == "rebuild-shift":
-        from ramanv2.pipeline.calibration import rebuild_shift_dates
+        from ramanv2.pipeline.shift import rebuild_shift_data
+        from ramanv2.pipeline.invalidation import invalidate_downstream
 
-        reports = rebuild_shift_dates(
+        reports = rebuild_shift_data(
             PROJECT_ROOT / "dataset" / "cosmic_data",
             PROJECT_ROOT / "dataset" / "shift_data",
             args.date_names,
         )
         for report in reports:
             date_name = str(report["date"])
-            if report.get("status") == "manual_approved":
+            if report.get("status") == "rebuilt":
                 state.affine_completed_dates.add(date_name)
-            else:
-                state.affine_completed_dates.discard(date_name)
-            state.audit_completed_dates.discard(date_name)
-        state.dataset_builds.pop("full_init", None)
-        state.dataset_builds.pop("profiles", None)
-        state.dataset_builds.pop("prefix_plots", None)
+                invalidate_downstream(state, [date_name])
         report_path = pipeline_metadata_dir(PROJECT_ROOT) / "shift_rebuild_report.json"
         report_path.write_text(json.dumps(reports, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         save_pipeline_state(state_path, state)
         print(json.dumps(reports, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "rebuild-records":
+        from ramanv2.data.catalog import ensure_dataset_mapping
+        from ramanv2.pipeline.records import rebuild_pipeline_records
+
+        workbook = PROJECT_ROOT / "dataset" / "病原菌分类与规范简称.xlsx"
+        mapping_file = pipeline_metadata_dir(PROJECT_ROOT) / "profile_catalog.json"
+        catalog = ensure_dataset_mapping(workbook, mapping_file)
+        summary = rebuild_pipeline_records(
+            cosmic_root,
+            PROJECT_ROOT / "dataset" / "shift_data",
+            catalog,
+            state_path,
+        )
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
         return 0
     if args.command == "acquire":
         from ramanv2.data.builders.init import build_profile_dataset

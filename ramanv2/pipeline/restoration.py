@@ -1,25 +1,33 @@
-"""从人工清洗删除目录恢复普通光谱，并重新执行受影响文件夹的 audit。"""
+"""从人工清洗删除目录恢复普通光谱。
+
+恢复只作用于 ``cosmic_data`` 与清洗状态：源谱写回原位、受影响文件夹按需回到清洗队列。
+shift_data 与 init 都是可丢弃的派生数据，由各自的「重建」入口从 cosmic_data 整体生成，
+恢复流程不写 shift、不改仿射参数、不作废审核结论。
+"""
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ramanv2.audit.folder import run_folder_audit
-from ramanv2.common.arc_data import read_arc_data, write_arc_data
+from ramanv2.common.arc_data import read_arc_data
 from ramanv2.common.naming import (
     build_natural_key,
     is_test_source_folder,
     parse_folder_prefix,
     parse_test_folder_prefix,
 )
-from ramanv2.common.publishing import create_temporary_path, rename_directory
-from ramanv2.data.calibration.affine import load_calibration_report
+from ramanv2.data.calibration.affine import invalidate_calibration_report
 from ramanv2.data.catalog import DatasetMapping
-from ramanv2.pipeline.lineage import FOLDER_DELETE_RELATIVE, record_audit_result, record_restore
+from ramanv2.pipeline.invalidation import invalidate_downstream
+from ramanv2.pipeline.lineage import (
+    FOLDER_DELETE_RELATIVE,
+    record_restore,
+)
 from ramanv2.pipeline.state import load_pipeline_state, save_pipeline_state
 
 
@@ -27,6 +35,7 @@ MANUAL_DELETE_DIR = "delete/manual"
 FOLDER_DELETE_DIR = FOLDER_DELETE_RELATIVE.as_posix()
 RESTORE_LOG_NAME = "restore_log.jsonl"
 BEAD_DIR_NAME = "小球"
+ARC_DATA_SUFFIX = ".arc_data"
 
 
 @dataclass(frozen=True)
@@ -67,6 +76,43 @@ def _prefix_to_genus(mapping: DatasetMapping) -> dict[str, str]:
     }
 
 
+def _sub_directories(path: Path) -> list[os.DirEntry[str]]:
+    """列出目录的直接子目录。
+
+    用 ``os.scandir`` 而非 ``Path.iterdir`` + ``is_dir()``：Windows 上 ``DirEntry`` 的类型
+    来自目录枚举结果，不产生逐项 ``stat``，整树扫描比 ``pathlib`` 快约 8 倍。
+    """
+    with os.scandir(path) as iterator:
+        return [entry for entry in iterator if entry.is_dir()]
+
+
+def _arc_data_entries(path: Path) -> list[os.DirEntry[str]]:
+    """列出目录中直接的 ``.arc_data`` 文件。"""
+    with os.scandir(path) as iterator:
+        return [
+            entry
+            for entry in iterator
+            if entry.is_file() and entry.name.lower().endswith(ARC_DATA_SUFFIX)
+        ]
+
+
+def _count_arc_data(path: Path) -> int:
+    """递归统计目录下的 ``.arc_data`` 数量，等价 ``rglob("*.arc_data")`` + ``is_file``。"""
+    total = 0
+    pending = [path]
+    while pending:
+        try:
+            with os.scandir(pending.pop()) as iterator:
+                for entry in iterator:
+                    if entry.is_dir():
+                        pending.append(Path(entry.path))
+                    elif entry.is_file() and entry.name.lower().endswith(ARC_DATA_SUFFIX):
+                        total += 1
+        except OSError:
+            continue
+    return total
+
+
 def scan_deleted_spectra(
     data_root: Path | str,
     profile_catalog: DatasetMapping,
@@ -81,29 +127,33 @@ def scan_deleted_spectra(
         return []
     prefix_genus = _prefix_to_genus(profile_catalog)
     records: list[DeletedSpectrum] = []
-    for date_dir in sorted((item for item in manual_root.iterdir() if item.is_dir()), key=lambda item: build_natural_key(item.name)):
-        if date_name is not None and date_dir.name != str(date_name):
+    for date_entry in sorted(_sub_directories(manual_root), key=lambda entry: build_natural_key(entry.name)):
+        if date_name is not None and date_entry.name != str(date_name):
             continue
-        if not date_dir.name.isdigit():
+        if not date_entry.name.isdigit():
             continue
-        for folder_dir in sorted((item for item in date_dir.iterdir() if item.is_dir()), key=lambda item: build_natural_key(item.name)):
-            if folder_dir.name == BEAD_DIR_NAME and not include_bead:
+        for folder_entry in sorted(
+            _sub_directories(Path(date_entry.path)),
+            key=lambda entry: build_natural_key(entry.name),
+        ):
+            folder_name = folder_entry.name
+            if folder_name == BEAD_DIR_NAME and not include_bead:
                 continue
-            prefix = _prefix_for_folder(folder_dir.name)
+            prefix = _prefix_for_folder(folder_name)
             genus = prefix_genus.get(prefix, "")
-            if species_name is not None and species_name not in {genus, prefix, folder_dir.name}:
+            if species_name is not None and species_name not in {genus, prefix, folder_name}:
                 continue
             for source in sorted(
-                (item for item in folder_dir.iterdir() if item.is_file() and item.suffix.lower() == ".arc_data"),
-                key=lambda item: build_natural_key(item.name),
+                _arc_data_entries(Path(folder_entry.path)),
+                key=lambda entry: build_natural_key(entry.name),
             ):
-                relative = "/".join((date_dir.name, folder_dir.name, source.name))
+                relative = "/".join((date_entry.name, folder_name, source.name))
                 records.append(
                     DeletedSpectrum(
                         relative_path=relative,
                         source_relative_path=f"{MANUAL_DELETE_DIR}/{relative}",
-                        date_name=date_dir.name,
-                        folder_name=folder_dir.name,
+                        date_name=date_entry.name,
+                        folder_name=folder_name,
                         file_name=source.name,
                         genus=genus,
                         prefix=prefix,
@@ -118,68 +168,28 @@ def scan_deleted_folders(data_root: Path | str) -> list[DeletedFolder]:
     if not root.is_dir():
         return []
     records: list[DeletedFolder] = []
-    for date_dir in sorted(
-        (item for item in root.iterdir() if item.is_dir() and item.name.isdigit()),
-        key=lambda item: build_natural_key(item.name),
+    for date_entry in sorted(
+        (entry for entry in _sub_directories(root) if entry.name.isdigit()),
+        key=lambda entry: build_natural_key(entry.name),
     ):
-        for folder_dir in sorted(
-            (item for item in date_dir.iterdir() if item.is_dir()),
-            key=lambda item: build_natural_key(item.name),
+        for folder_entry in sorted(
+            _sub_directories(Path(date_entry.path)),
+            key=lambda entry: build_natural_key(entry.name),
         ):
-            file_count = sum(1 for item in folder_dir.rglob("*.arc_data") if item.is_file())
+            file_count = _count_arc_data(Path(folder_entry.path))
             if not file_count:
                 continue
-            relative = f"{date_dir.name}/{folder_dir.name}"
+            relative = f"{date_entry.name}/{folder_entry.name}"
             records.append(
                 DeletedFolder(
                     relative_path=relative,
                     source_relative_path=f"{FOLDER_DELETE_DIR}/{relative}",
-                    date_name=date_dir.name,
-                    folder_name=folder_dir.name,
+                    date_name=date_entry.name,
+                    folder_name=folder_entry.name,
                     file_count=file_count,
                 )
             )
     return records
-
-
-def _load_affine_parameters(shift_root: Path, date_name: str) -> tuple[dict[str, object], float, float]:
-    report = load_calibration_report(shift_root, date_name)
-    if report is None:
-        raise FileNotFoundError(f"日期没有仿射参数：{date_name}")
-    if report.get("status") != "manual_approved":
-        raise ValueError(f"日期尚未完成仿射校准：{date_name}")
-    scale = report.get("base_scale", report.get("scale"))
-    offset = report.get("base_offset", report.get("offset"))
-    if scale is None or offset is None:
-        raise ValueError(f"日期仿射参数不完整：{date_name}")
-    return report, float(scale), float(offset)
-
-
-def _resolve_init_target(init_root: Path, data_root: Path, record: DeletedSpectrum) -> Path:
-    """按已有 canonical 目录优先、删除和当前目录自然排序兜底解析目标。"""
-    genus_dir = init_root / record.genus
-    prefix_date = f"{record.prefix}{record.date_name}_"
-    existing = sorted(
-        (item for item in genus_dir.iterdir() if item.is_dir() and item.name.startswith(prefix_date)),
-        key=lambda item: build_natural_key(item.name),
-    ) if genus_dir.is_dir() else []
-    if len(existing) == 1:
-        return existing[0]
-    names: set[str] = set()
-    for parent in (data_root / record.date_name, data_root / MANUAL_DELETE_DIR / record.date_name):
-        if parent.is_dir():
-            names.update(
-                item.name
-                for item in parent.iterdir()
-                if item.is_dir() and item.name != BEAD_DIR_NAME and _prefix_for_folder(item.name) == record.prefix
-            )
-    ordered = sorted(names, key=build_natural_key)
-    if record.folder_name not in ordered:
-        raise ValueError(f"无法确定 init 来源文件夹：{record.relative_path}")
-    target = genus_dir / f"{record.prefix}{record.date_name}_{ordered.index(record.folder_name) + 1:02d}"
-    if existing and target not in existing:
-        raise ValueError(f"init 来源目录映射不唯一：{record.relative_path}")
-    return target
 
 
 def _append_log(path: Path, payload: dict[str, object]) -> None:
@@ -188,26 +198,27 @@ def _append_log(path: Path, payload: dict[str, object]) -> None:
         file.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def _audit_profile_id(mapping: DatasetMapping, genus: str) -> str:
-    for profile_name in ("GN", "GP", "FUNG"):
-        if genus in mapping.datasets.get(profile_name, ()):
-            return profile_name
-    return "MICRO"
-
-
-def _restore_directory_backup(target: Path, backup: Path | None) -> None:
-    if target.exists():
-        shutil.rmtree(target, ignore_errors=True)
-    if backup is not None and backup.exists():
-        rename_directory(backup, target)
+def _prune_empty_directories(directories: set[Path], root: Path) -> None:
+    """删除移动光谱后留下的空文件夹，保留根目录。"""
+    for parent in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+        while parent != root and root in parent.parents:
+            if not parent.is_dir() or any(parent.iterdir()):
+                break
+            parent.rmdir()
+            parent = parent.parent
 
 
 def _restore_bead_spectra(
     data_root: Path,
+    shift_root: Path,
     state_path: Path | str,
     records: list[DeletedSpectrum],
 ) -> dict[str, object]:
-    """恢复没有 affine 参数日期的小球谱，供后续仿射校准使用。"""
+    """恢复人工删除的小球谱，供后续仿射校准使用。
+
+    小球谱变化意味着日期级仿射参数必须重算，因此这里把 ``affine.json`` 置为 pending；
+    普通谱的恢复不做这一步。
+    """
     sources = {record.relative_path: data_root / MANUAL_DELETE_DIR / record.relative_path for record in records}
     targets = {record.relative_path: data_root / record.relative_path for record in records}
     created: list[Path] = []
@@ -233,13 +244,15 @@ def _restore_bead_spectra(
             state.cleaning.mark_reasons.pop(record.relative_path, None)
             state.cleaning.folder_catalog.setdefault(record.date_name, set()).add(BEAD_DIR_NAME)
             state.cleaning.completed_folder_keys.add(f"{record.date_name}/{BEAD_DIR_NAME}")
+        # 小球谱变化后旧仿射参数不再适用，日期回到待校准队列。
+        for date_name in dates:
+            invalidate_calibration_report(shift_root, date_name)
+            state.affine_completed_dates.discard(date_name)
         save_pipeline_state(state_path, state)
 
         for source in sources.values():
             source.unlink()
-        for parent in sorted({source.parent for source in sources.values()}, key=lambda item: len(item.parts), reverse=True):
-            if parent.is_dir() and not any(parent.iterdir()):
-                parent.rmdir()
+        _prune_empty_directories({source.parent for source in sources.values()}, data_root)
         _append_log(
             Path(state_path).resolve().parent / RESTORE_LOG_NAME,
             {
@@ -263,6 +276,10 @@ def _restore_bead_spectra(
             "restored_file_count": len(records),
             "dates": sorted(dates, key=build_natural_key),
             "paths": sorted(sources, key=build_natural_key),
+            "targets": sorted(
+                {f"{record.date_name}/{BEAD_DIR_NAME}" for record in records},
+                key=build_natural_key,
+            ),
         }
     except Exception:
         for target in created:
@@ -278,10 +295,14 @@ def restore_deleted_spectra(
     profile_catalog: DatasetMapping,
     selected_relative_paths: list[str] | tuple[str, ...] | set[str],
 ) -> dict[str, object]:
-    """从 cosmic 删除区恢复原始谱，重新生成受影响 shift 并更新下游数据。"""
+    """把 cosmic 删除区的普通谱移回原位。
+
+    只改 cosmic 与清洗状态：不写 shift、不改仿射参数、不触发审核，审核结论保持原样。
+    该文件夹的清洗完成状态保持不变；shift 由仿射校准页的重建入口从 cosmic 整体生成。
+    """
+    del init_root  # 恢复只作用于 cosmic_data；init 由数据集获取页按需重建。
     root = Path(data_root).resolve()
     shift_base = Path(shift_root).resolve()
-    init_base = Path(init_root).resolve()
     normalized = set()
     for item in selected_relative_paths:
         path = str(item).replace("\\", "/")
@@ -303,64 +324,26 @@ def restore_deleted_spectra(
     if bead_records:
         if len(bead_records) != len(chosen):
             raise ValueError("小球光谱不能与普通采集光谱混合恢复")
-        return _restore_bead_spectra(root, state_path, chosen)
-    affected_folders = sorted(
-        {(record.date_name, record.folder_name) for record in chosen},
-        key=lambda item: build_natural_key(f"{item[0]}/{item[1]}"),
-    )
+        return _restore_bead_spectra(root, shift_base, state_path, chosen)
+    affected_dates = {record.date_name for record in chosen}
 
-    date_parameters: dict[str, tuple[dict[str, object], float, float]] = {}
     source_raw: dict[str, Path] = {}
     raw_targets: dict[str, Path] = {}
-    shift_targets: dict[str, Path] = {}
-    init_targets: dict[str, Path] = {}
     for record in chosen:
         if not record.genus or prefix_genus.get(record.prefix) != record.genus:
             raise ValueError(f"删除文件夹前缀未映射：{record.folder_name}")
         raw_source = root / MANUAL_DELETE_DIR / record.relative_path
         raw_target = root / record.relative_path
-        shift_target = shift_base / record.date_name / record.folder_name / record.file_name
         if not raw_source.is_file():
             raise FileNotFoundError(f"人工删除光谱不存在：{raw_source}")
         if raw_target.exists():
             raise FileExistsError(f"原始目标已存在：{raw_target}")
-        if shift_target.exists():
-            raise FileExistsError(f"shift 目标已存在：{shift_target}")
-        if record.date_name not in date_parameters:
-            date_parameters[record.date_name] = _load_affine_parameters(shift_base, record.date_name)
-        init_target = _resolve_init_target(init_base, root, record)
-        if (init_target / record.file_name).exists():
-            raise FileExistsError(f"init 目标已存在：{init_target / record.file_name}")
         source_raw[record.relative_path] = raw_source
         raw_targets[record.relative_path] = raw_target
-        shift_targets[record.relative_path] = shift_target
-        init_targets[record.relative_path] = init_target
 
-    shift_backups: dict[Path, Path | None] = {}
-    init_backups: dict[Path, Path | None] = {}
     created_raw: list[Path] = []
-    created_shift: list[Path] = []
-    published_init: list[Path] = []
-    temporary_init: list[Path] = []
-    audit_reports: list[dict[str, object]] = []
-    audit_started_dates: set[str] = set()
     try:
-        for folder in {target.parent for target in shift_targets.values()}:
-            backup = create_temporary_path(folder)
-            if folder.exists():
-                shutil.copytree(folder, backup)
-                shift_backups[folder] = backup
-            else:
-                shift_backups[folder] = None
-        for folder in set(init_targets.values()):
-            backup = create_temporary_path(folder)
-            if folder.exists():
-                shutil.copytree(folder, backup)
-                init_backups[folder] = backup
-            else:
-                init_backups[folder] = None
-
-        # 只从 cosmic_data/delete/manual 恢复原始谱，重新按日期级 affine 生成 shift。
+        # 只从 cosmic_data/delete/manual 把原始谱移回原位，不派生任何 shift 输出。
         for record in chosen:
             raw_x, raw_y = read_arc_data(source_raw[record.relative_path])
             if not raw_x.size or raw_x.size != raw_y.size:
@@ -368,63 +351,17 @@ def restore_deleted_spectra(
             raw_targets[record.relative_path].parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_raw[record.relative_path], raw_targets[record.relative_path])
             created_raw.append(raw_targets[record.relative_path])
-            shift_targets[record.relative_path].parent.mkdir(parents=True, exist_ok=True)
-            _, scale, offset = date_parameters[record.date_name]
-            corrected = scale * raw_x + offset
-            write_arc_data(shift_targets[record.relative_path], corrected, raw_y)
-            created_shift.append(shift_targets[record.relative_path])
 
-        # 只重新审核受影响的普通文件夹；小球目录在扫描阶段已排除。
-        for date_name, folder_name in affected_folders:
-            record = next(item for item in chosen if item.date_name == date_name and item.folder_name == folder_name)
-            audit_started_dates.add(date_name)
-            report = dict(
-                run_folder_audit(
-                    shift_base,
-                    date_name=date_name,
-                    folder_name=folder_name,
-                    profile_id=_audit_profile_id(profile_catalog, record.genus),
-                )
-            )
-            audit_reports.append(report)
-            record_audit_result(
-                root,
-                date_name,
-                folder_name,
-                "applied" if report.get("status") == "applied" else str(report.get("status", "failed")),
-                None if report.get("status") == "applied" else str(report.get("error", "audit_failed")),
-            )
-            if report.get("status") != "applied":
-                raise RuntimeError(f"文件夹 audit 未通过：{date_name}/{folder_name}")
-
-        # audit 后的 shift 文件夹整体替换到 init，确保被 audit 再次移除的候选不会进入 init。
-        for init_folder in set(init_targets.values()):
-            record = next(item for item in chosen if init_targets[item.relative_path] == init_folder)
-            shift_folder = shift_base / record.date_name / record.folder_name
-            temporary = create_temporary_path(init_folder)
-            temporary.mkdir(parents=True, exist_ok=False)
-            temporary_init.append(temporary)
-            if shift_folder.is_dir():
-                for source in sorted(shift_folder.iterdir(), key=lambda item: build_natural_key(item.name)):
-                    if source.is_file() and source.suffix.lower() == ".arc_data":
-                        target = temporary / source.name
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(source, target)
-            temporary.parent.mkdir(parents=True, exist_ok=True)
-            if init_folder.exists():
-                shutil.rmtree(init_folder)
-            rename_directory(temporary, init_folder)
-            published_init.append(init_folder)
+        record_restore(root, selected)
 
         state = load_pipeline_state(state_path)
-        affected_dates = {record.date_name for record in chosen}
         for record in chosen:
             state.cleaning.committed_paths.discard(record.relative_path)
             state.cleaning.marked_paths.discard(record.relative_path)
             state.cleaning.mark_reasons.pop(record.relative_path, None)
             state.cleaning.folder_catalog.setdefault(record.date_name, set()).add(record.folder_name)
-            state.cleaning.completed_folder_keys.add(f"{record.date_name}/{record.folder_name}")
-        state.dataset_builds.pop("profiles", None)
+        # 恢复不回退清洗进度、不作废审核结论：只标记 init 待重建。
+        invalidate_downstream(state, affected_dates)
         full_report = state.dataset_builds.get("full_init")
         if isinstance(full_report, dict):
             updated_full = dict(full_report)
@@ -432,7 +369,6 @@ def restore_deleted_spectra(
                 "file_count": len(chosen),
                 "dates": sorted(affected_dates, key=build_natural_key),
                 "paths": selected,
-                "audit_reports": audit_reports,
                 "recorded_at": datetime.now(timezone.utc).isoformat(),
             }
             state.dataset_builds["full_init"] = updated_full
@@ -440,28 +376,17 @@ def restore_deleted_spectra(
 
         for path in source_raw.values():
             path.unlink()
-        for parent in sorted(
-            {path.parent for path in source_raw.values()},
-            key=lambda item: len(item.parts),
-            reverse=True,
-        ):
-            if parent.is_dir() and not any(parent.iterdir()):
-                parent.rmdir()
-
-        record_restore(root, selected)
+        _prune_empty_directories({path.parent for path in source_raw.values()}, root)
 
         _append_log(
             Path(state_path).resolve().parent / RESTORE_LOG_NAME,
             {
                 "operation": "restore",
                 "recorded_at": datetime.now(timezone.utc).isoformat(),
-                "audit_reports": audit_reports,
                 "items": [
                     {
                         "source_manual": str(source_raw[item.relative_path]),
                         "cosmic": str(raw_targets[item.relative_path]),
-                        "shift": str(shift_targets[item.relative_path]),
-                        "init": str(init_targets[item.relative_path] / item.file_name),
                         "date": item.date_name,
                         "genus": item.genus,
                         "prefix": item.prefix,
@@ -476,29 +401,15 @@ def restore_deleted_spectra(
             "restored_file_count": len(chosen),
             "dates": sorted(affected_dates, key=build_natural_key),
             "paths": selected,
-            "init_targets": sorted({str(path) for path in init_targets.values()}),
-            "audit_reports": audit_reports,
+            "targets": sorted(
+                {f"{record.date_name}/{record.folder_name}" for record in chosen},
+                key=build_natural_key,
+            ),
         }
     except Exception:
-        for path in created_raw + created_shift:
+        for path in created_raw:
             path.unlink(missing_ok=True)
-        for path in temporary_init:
-            shutil.rmtree(path, ignore_errors=True)
-        for folder, backup in shift_backups.items():
-            _restore_directory_backup(folder, backup)
-        for folder in published_init:
-            _restore_directory_backup(folder, init_backups.get(folder))
-        if audit_started_dates:
-            state = load_pipeline_state(state_path)
-            state.audit_completed_dates.difference_update(audit_started_dates)
-            save_pipeline_state(state_path, state)
-            for date_name, folder_name in affected_folders:
-                record_audit_result(root, date_name, folder_name, "pending", "restore_rollback")
         raise
-    finally:
-        for backup in (*shift_backups.values(), *init_backups.values()):
-            if backup is not None:
-                shutil.rmtree(backup, ignore_errors=True)
 
 
 def restore_deleted_folder(
@@ -509,8 +420,12 @@ def restore_deleted_folder(
     profile_catalog: DatasetMapping,
     source_id: str,
 ) -> dict[str, object]:
-    """将整夹删除归档整体移回 cosmic_data，不自动重建下游产物。"""
-    del shift_root, init_root, profile_catalog
+    """把整夹删除归档整体移回 cosmic_data，并让该文件夹重新进入清洗队列。
+
+    只改 cosmic 与清洗状态：不写 shift、不作废审核结论。shift 由仿射校准页的重建入口
+    按已确认参数生成（重建时才作废该日期审核结论），init 由数据集获取页重建。
+    """
+    del init_root, profile_catalog  # 整夹恢复不写 shift、不写 init。
     root = Path(data_root).resolve()
     parts = str(source_id).replace("\\", "/").split("/", 1)
     if len(parts) != 2:
@@ -537,11 +452,10 @@ def restore_deleted_folder(
     try:
         record_restore(root, relative_paths)
         state = load_pipeline_state(state_path)
-        state.affine_completed_dates.discard(date_name)
-        state.audit_completed_dates.discard(date_name)
-        state.dataset_builds.pop("latest", None)
-        state.dataset_builds.pop("profiles", None)
-        state.dataset_builds.pop("prefix_plots", None)
+        state.cleaning.folder_catalog.setdefault(date_name, set()).add(folder_name)
+        # 整夹恢复后文件夹内容已变，必须重新清洗确认；审核结论保持原样（审核只做一次）。
+        state.cleaning.completed_folder_keys.discard(f"{date_name}/{folder_name}")
+        invalidate_downstream(state, [date_name])
         save_pipeline_state(state_path, state)
     except Exception:
         if target.exists() and not archive.exists():
@@ -552,7 +466,9 @@ def restore_deleted_folder(
         "status": "folder_restored",
         "source_id": source_id,
         "restored_file_count": len(files),
+        "dates": [date_name],
         "paths": relative_paths,
+        "targets": [f"{date_name}/{folder_name}"],
     }
 
 

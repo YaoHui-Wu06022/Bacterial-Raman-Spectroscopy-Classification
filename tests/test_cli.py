@@ -8,7 +8,7 @@ from ramanv2.cli.main import build_parser
 
 def test_root_cli_registers_migrated_commands() -> None:
     parser = build_parser()
-    pipeline_args = parser.parse_args(["pipeline", "audit", "--date", "20240101"])
+    pipeline_args = parser.parse_args(["pipeline", "rebuild-shift", "--date", "20240101"])
     data_args = parser.parse_args(["data", "build", "train", "--profile", "GN"])
     train_args = parser.parse_args(["train", "--profile", "GN", "--level", "level_1"])
     infer_args = parser.parse_args(
@@ -28,7 +28,7 @@ def test_root_cli_registers_migrated_commands() -> None:
     zip_args = parser.parse_args(["zip"])
 
     assert pipeline_args.domain == "pipeline"
-    assert pipeline_args.command == "audit"
+    assert pipeline_args.command == "rebuild-shift"
     assert callable(pipeline_args.run_command)
     assert data_args.domain == "data"
     assert data_args.command == "build"
@@ -46,6 +46,8 @@ def test_root_cli_registers_migrated_commands() -> None:
     assert callable(evaluation_args.run_command)
     assert zip_args.domain == "zip"
     assert callable(zip_args.run_command)
+    with pytest.raises(SystemExit):
+        parser.parse_args(["pipeline", "audit", "--date", "20240101"])
     with pytest.raises(SystemExit):
         parser.parse_args(["stanford", "transfer"])
 

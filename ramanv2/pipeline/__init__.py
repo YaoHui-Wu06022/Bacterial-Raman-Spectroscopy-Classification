@@ -14,7 +14,6 @@ __all__ = [
     "load_pipeline_state",
     "save_pipeline_state",
     "run_affine_calibration",
-    "run_shift_folder_audit",
     "DeletedSpectrum",
     "DeletedFolder",
     "scan_deleted_folders",
@@ -24,6 +23,10 @@ __all__ = [
     "initialize_folder_lineage",
     "load_folder_lineage",
     "save_folder_lineage",
+    "invalidate_downstream",
+    "rebuild_shift_data",
+    "load_date_affine_parameters",
+    "rebuild_pipeline_records",
 ]
 
 
@@ -32,10 +35,6 @@ def __getattr__(name: str):
         from ramanv2.pipeline.calibration import run_affine_calibration
 
         return run_affine_calibration
-    if name == "run_shift_folder_audit":
-        from ramanv2.pipeline.audit import run_shift_folder_audit
-
-        return run_shift_folder_audit
     if name in {"initialize_folder_lineage", "load_folder_lineage", "save_folder_lineage"}:
         from ramanv2.pipeline.lineage import initialize_folder_lineage, load_folder_lineage, save_folder_lineage
         return {
@@ -60,4 +59,19 @@ def __getattr__(name: str):
             "restore_deleted_spectra": restore_deleted_spectra,
             "restore_deleted_folder": restore_deleted_folder,
         }[name]
+    if name == "invalidate_downstream":
+        from ramanv2.pipeline.invalidation import invalidate_downstream
+
+        return invalidate_downstream
+    if name in {"rebuild_shift_data", "load_date_affine_parameters"}:
+        from ramanv2.pipeline.shift import load_date_affine_parameters, rebuild_shift_data
+
+        return {
+            "rebuild_shift_data": rebuild_shift_data,
+            "load_date_affine_parameters": load_date_affine_parameters,
+        }[name]
+    if name == "rebuild_pipeline_records":
+        from ramanv2.pipeline.records import rebuild_pipeline_records
+
+        return rebuild_pipeline_records
     raise AttributeError(name)

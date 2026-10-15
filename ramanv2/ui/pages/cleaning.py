@@ -18,6 +18,7 @@ from ramanv2.common.plotting import configure_matplotlib_fonts
 from ramanv2.data.catalog import ensure_dataset_mapping
 from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.pipeline.cleaning import (
+    SPECIAL_FOLDER_NAMES,
     ReviewFolder,
     SpectrumItem,
     commit_date_items,
@@ -35,6 +36,7 @@ from ramanv2.pipeline.cleaning import (
     unmark_paths,
 )
 from ramanv2.pipeline.restoration import (
+    DeletedFolder,
     DeletedSpectrum,
     restore_deleted_folder,
     restore_deleted_spectra,
@@ -42,6 +44,7 @@ from ramanv2.pipeline.restoration import (
     scan_deleted_spectra,
 )
 from ramanv2.pipeline.state import PipelineState
+from ramanv2.pipeline.lineage import list_lineage_folders
 from ramanv2.ui.components.spectrum_grid import render_spectrum_grid
 from ramanv2.ui.cache import cached_directory_names
 from ramanv2.ui.page_context import PageContext
@@ -61,19 +64,27 @@ DATE_CACHE_KEY = "cleaning_current_date_cache"
 DATE_CACHE_NAME_KEY = "cleaning_current_date_name"
 
 
-@st.cache_data(show_spinner=False)
-def _cached_deleted_records(
-    data_root: str,
-    workbook_path: str,
-    mapping_path: str,
-    mapping_modified_ns: int,
-    version: int,
-    include_bead: bool,
-) -> tuple[DeletedSpectrum, ...]:
-    """缓存删除恢复清单，写入或重新扫描后由版本号失效。"""
-    del mapping_modified_ns, version
+def _deleted_records(
+    data_root: Path | str,
+    workbook_path: Path | str,
+    mapping_path: Path | str,
+    include_bead: bool = False,
+) -> list[DeletedSpectrum]:
+    """扫描人工删除区，**不缓存**。
+
+    清单曾用 ``@st.cache_data`` 缓存、键里放会话内版本号，但 ``st.cache_data`` 是跨会话
+    共享的：新会话（刷新页面、新标签页）版本号重置为 0，会复用旧会话留下的清单，对已被
+    移走的文件调用绘图从而报 ``WinError 2``。改用目录指纹做键同样不可靠——Windows 上目录
+    mtime 的更新存在非确定性延迟（同一条测试重复运行会时对时错）。``os.scandir`` 重写后
+    整树扫描约 65ms，直接每次扫描，换取「列表永远与磁盘一致」。
+    """
     mapping = ensure_dataset_mapping(workbook_path, mapping_path)
-    return tuple(scan_deleted_spectra(Path(data_root), mapping, include_bead=include_bead))
+    return scan_deleted_spectra(Path(data_root), mapping, include_bead=include_bead)
+
+
+def _deleted_folders(data_root: Path | str) -> list[DeletedFolder]:
+    """扫描整夹删除区，同样不缓存（理由见 ``_deleted_records``）。"""
+    return scan_deleted_folders(Path(data_root))
 
 
 @st.cache_data(show_spinner=False)
@@ -160,6 +171,17 @@ def _build_cards(root: Path, items: list[SpectrumItem]) -> list[dict[str, object
     return cards
 
 
+def _is_review_date_available(root: Path, date_name: str) -> bool:
+    """判断日期目录是否含至少一个可审核文件夹；空目录不进入审核队列。"""
+    date_dir = root / date_name
+    if not date_dir.is_dir():
+        return False
+    return any(
+        path.is_dir() and path.name not in SPECIAL_FOLDER_NAMES
+        for path in date_dir.iterdir()
+    )
+
+
 def _next_pending_date(dates: list[str], state: PipelineState) -> str | None:
     return next((date_name for date_name in dates if date_name not in state.cleaning.completed_date_names), None)
 
@@ -220,21 +242,21 @@ def _restore_card_data(root: Path, record: DeletedSpectrum) -> dict[str, object]
     return card
 
 
+def _render_flash() -> None:
+    """显示上一次按钮操作的结果，避免 rerun 吞掉提示。"""
+    message = st.session_state.pop("cleaning_flash", None)
+    if message:
+        st.success(message)
+
+
 def _render_restore_section(context: PageContext) -> None:
     """显示人工删除普通光谱恢复入口；小球目录不进入该流程。"""
     with st.expander("删除数据恢复", expanded=False):
         try:
-            mapping_modified_ns = (
-                context.dataset_mapping_file.stat().st_mtime_ns
-                if context.dataset_mapping_file.is_file()
-                else 0
-            )
-            records = _cached_deleted_records(
-                str(context.data_root.resolve()),
-                str(context.classification_workbook.resolve()),
-                str(context.dataset_mapping_file.resolve()),
-                mapping_modified_ns,
-                ui_cache_version("cleaning"),
+            records = _deleted_records(
+                context.data_root,
+                context.classification_workbook,
+                context.dataset_mapping_file,
                 True,
             )
         except (OSError, ValueError, RuntimeError) as error:
@@ -243,14 +265,18 @@ def _render_restore_section(context: PageContext) -> None:
         if not records:
             st.info("人工删除目录中没有可恢复的普通光谱。")
             return
+        # 只对涉及的小球日期各读取一次校准报告，避免逐条重复读同一日期。
+        bead_dates = {item.date_name for item in records if item.folder_name == "小球"}
+        approved_bead_dates = {
+            date_name
+            for date_name in bead_dates
+            if (load_calibration_report(context.shift_root, date_name) or {}).get("status")
+            == "manual_approved"
+        }
         records = tuple(
             item
             for item in records
-            if item.folder_name != "小球"
-            or (
-                (load_calibration_report(context.shift_root, item.date_name) or {}).get("status")
-                != "manual_approved"
-            )
+            if item.folder_name != "小球" or item.date_name not in approved_bead_dates
         )
         if not records:
             st.info("当前人工删除目录中没有可恢复的光谱。")
@@ -335,10 +361,9 @@ def _render_restore_section(context: PageContext) -> None:
             width="stretch",
         ):
             try:
-                with st.status("正在恢复光谱并重新执行文件夹 audit…", expanded=True) as restore_status:
-                    st.write("正在恢复原始光谱并生成 shift_data。")
-                    st.write("正在把旧 audit 删除谱合并回当前文件夹。")
-                    st.write("正在执行新的文件夹 audit，并同步 init。")
+                with st.status("正在恢复光谱…", expanded=True) as restore_status:
+                    st.write("正在把人工删除的原始谱移回 cosmic_data。")
+                    st.write("正在作废受影响日期的 init 记录（shift 由重建入口生成）。")
                     result = restore_deleted_spectra(
                         context.data_root,
                         context.shift_root,
@@ -358,26 +383,70 @@ def _render_restore_section(context: PageContext) -> None:
                 _clear_date_cache()
                 invalidate_ui_cache("cleaning")
                 invalidate_ui_cache("dataset")
+                invalidate_ui_cache("affine")
                 if result.get("status") == "bead_restored":
-                    st.success(f"已恢复 {result['restored_file_count']} 条小球光谱，请到仿射校准页重新分析对应日期。")
+                    st.session_state["cleaning_flash"] = (
+                        f"已恢复 {result['restored_file_count']} 条小球光谱；"
+                        "小球谱已变，日期级仿射参数需到「仿射校准」页重新分析。"
+                    )
                 else:
-                    st.success(f"已恢复 {result['restored_file_count']} 条光谱，并完成受影响文件夹 audit 和 init 同步。")
+                    st.session_state["cleaning_flash"] = (
+                        f"已恢复 {result['restored_file_count']} 条光谱；只改 cosmic_data，"
+                        "shift 和 init 由重建入口更新。"
+                        "shift 请在「仿射校准」页重建，init 由「数据集获取」页重建。"
+                    )
                 st.rerun()
             except (OSError, ValueError, RuntimeError) as error:
                 st.error(f"恢复失败：{error}")
 
 
+def _render_folder_removal_section(context: PageContext, state: PipelineState) -> None:
+    """选择任意活动源文件夹，整夹归档并标记 init 待重建。"""
+    with st.expander("文件夹移除", expanded=False):
+        st.caption("整夹移入 cosmic_data/delete/folder_delete；shift、init 和 Profile 等你显式重建。")
+        source_ids = [str(item["source_id"]) for item in list_lineage_folders(context.data_root)]
+        if not source_ids:
+            st.info("当前没有可移除的文件夹。")
+            return
+        source_id = st.selectbox("选择要移除的文件夹", source_ids, key="cleaning_remove_source_folder")
+        if not st.button("整夹删除", key="cleaning_remove_folder_confirm", width="stretch"):
+            return
+        try:
+            date_name, folder_name = source_id.split("/", 1)
+            commit_folder_items(
+                context.data_root,
+                state,
+                context.state_file,
+                ReviewFolder(source_id, date_name, folder_name, ()),
+            )
+            _clear_date_cache()
+            invalidate_ui_cache("cleaning")
+            invalidate_ui_cache("dataset")
+            st.session_state.pop("cleaning_remove_source_folder", None)
+            st.session_state["cleaning_flash"] = f"已整夹删除 {source_id}，init 待重建。"
+            st.rerun()
+        except (OSError, ValueError, RuntimeError) as error:
+            st.error(f"整夹删除失败：{error}")
+
+
 def _render_folder_restore_section(context: PageContext) -> None:
     """显示整夹删除恢复入口；只移动 folder_delete 中的完整目录。"""
     with st.expander("整夹删除恢复", expanded=False):
-        folders = scan_deleted_folders(context.data_root)
+        try:
+            folders = _deleted_folders(context.data_root)
+        except (OSError, ValueError, RuntimeError) as error:
+            st.error(f"整夹删除扫描失败：{error}")
+            return
         if not folders:
             st.info("整夹删除目录中没有可恢复的文件夹。")
             return
         labels = [f"{item.date_name} / {item.folder_name}（{item.file_count} 条）" for item in folders]
         selected_label = st.selectbox("选择整夹", labels, key="folder_restore_source")
         selected = folders[labels.index(selected_label)]
-        st.caption("整夹恢复只移回 cosmic_data，不自动重建仿射、audit 或 init。")
+        st.caption(
+            "整夹恢复只把归档移回 cosmic_data，并让该文件夹回到待清洗队列；"
+            "不写 shift。shift 到「仿射校准」页重建，init 由「数据集获取」页重建。"
+        )
         if not st.button("恢复整夹到 cosmic_data", key="folder_restore_confirm", width="stretch"):
             return
         try:
@@ -394,9 +463,14 @@ def _render_folder_restore_section(context: PageContext) -> None:
             _clear_date_cache()
             invalidate_ui_cache("cleaning")
             invalidate_ui_cache("dataset")
+            invalidate_ui_cache("affine")
             invalidate_ui_cache("training")
             invalidate_ui_cache("inference")
-            st.success(f"已恢复整夹 {selected.relative_path}，请重新执行仿射和后续数据流程。")
+            st.session_state["cleaning_flash"] = (
+                f"已恢复整夹 {selected.relative_path}（{result['restored_file_count']} 条），"
+                "该文件夹已回到待清洗队列，只改 cosmic_data；"
+                "shift 请在「仿射校准」页重建（重建会作废该日期审核结论）。"
+            )
             st.rerun()
         except (OSError, ValueError, RuntimeError) as error:
             st.error(f"整夹恢复失败：{error}")
@@ -413,6 +487,8 @@ def render_cleaning_page(context: PageContext) -> None:
     except FileNotFoundError as error:
         st.error(str(error))
         return
+    # 空日期目录（无任何普通子文件夹）不产生审核项，剔除后可避免 _next_pending_date 反复选中同一日期。
+    dates = [name for name in dates if _is_review_date_available(context.data_root, name)]
 
     st.sidebar.text(f"数据目录：{context.data_root}")
     st.sidebar.text(f"状态文件：{context.state_file}")
@@ -422,8 +498,9 @@ def render_cleaning_page(context: PageContext) -> None:
         st.rerun()
     if not dates:
         st.warning("dataset/cosmic_data 下没有找到日期目录。")
-        _render_restore_section(context)
         _render_folder_restore_section(context)
+        _render_folder_removal_section(context, state)
+        _render_restore_section(context)
         return
 
     pending_dates = [date_name for date_name in dates if date_name not in state.cleaning.completed_date_names]
@@ -436,10 +513,12 @@ def render_cleaning_page(context: PageContext) -> None:
             _save(context, state)
 
     st.title("数据清洗")
+    _render_flash()
     if current_date is None:
         st.success("区间内所有文件夹已审核")
-        _render_restore_section(context)
         _render_folder_restore_section(context)
+        _render_folder_removal_section(context, state)
+        _render_restore_section(context)
         return
 
     try:
@@ -474,7 +553,9 @@ def render_cleaning_page(context: PageContext) -> None:
     date_total = len(catalog)
     date_done = sum(key in state.cleaning.completed_folder_keys for key in catalog)
 
-    st.caption(f"当前日期 {current_date} · 当前文件夹 {current_folder.folder_name} · 点击光谱卡片切换移除状态")
+    st.caption(
+        f"当前日期 {current_date} · 当前文件夹 {current_folder.folder_name} · 点击光谱卡片切换移除状态"
+    )
     metrics = st.columns(5)
     metrics[0].metric("当前日期", current_date)
     metrics[1].metric("当前文件夹", current_folder.folder_name)
@@ -488,12 +569,37 @@ def render_cleaning_page(context: PageContext) -> None:
             state.cleaning.folder_page_indices[current_folder.key] = page_index - 1
             _save(context, state)
             st.rerun()
-        if row[1].button("下一页", width="stretch"):
-            if page_index < page_count - 1:
-                state.cleaning.folder_page_indices[current_folder.key] = page_index + 1
-                _save(context, state)
+        if row[1].button("下一页", disabled=page_index >= page_count - 1, width="stretch"):
+            state.cleaning.folder_page_indices[current_folder.key] = page_index + 1
+            _save(context, state)
+            st.rerun()
+        row = st.columns(2)
+        if row[0].button(
+            "移除选中光谱",
+            disabled=not current_pending,
+            help="只移除已标记的光谱，继续审核本文件夹",
+            width="stretch",
+        ):
+            try:
+                result = commit_paths(context.data_root, state, context.state_file, current_pending)
+            except RuntimeError as error:
+                st.error(f"移除失败：{error}")
             else:
-                _commit_current_folder(context, state, dates, catalog, current_folder)
+                if result.missing_paths:
+                    st.warning(f"有 {len(result.missing_paths)} 条文件不存在，未移除。")
+                else:
+                    st.session_state["cleaning_flash"] = f"已移除 {len(result.moved_paths)} 条光谱。"
+                _clear_date_cache()
+                invalidate_ui_cache("cleaning")
+                _save(context, state)
+                st.rerun()
+        if row[1].button(
+            "完成当前夹",
+            disabled=bool(current_pending),
+            help="标记本文件夹已审核并进入下一个文件夹",
+            width="stretch",
+        ):
+            _commit_current_folder(context, state, dates, catalog, current_folder)
             st.rerun()
         row = st.columns(2)
         if row[0].button("文件夹移除", width="stretch"):
@@ -523,9 +629,8 @@ def render_cleaning_page(context: PageContext) -> None:
             if result.missing_paths:
                 st.warning(f"有 {len(result.missing_paths)} 条文件不存在。")
             discard_removed_date(state.cleaning, current_date)
-            # 整日期移除后，旧的校正、audit 和 init 结果不再满足流水线门禁。
+            # 整日期移除后，旧的校正和 init 结果不再满足流水线门禁。
             state.affine_completed_dates.discard(current_date)
-            state.audit_completed_dates.discard(current_date)
             state.dataset_builds.pop("latest", None)
             state.cleaning.current_date_name = _next_pending_date(dates, state)
             state.cleaning.current_folder_key = None
@@ -558,8 +663,9 @@ def render_cleaning_page(context: PageContext) -> None:
                 _save(context, state)
                 st.rerun()
 
-    _render_restore_section(context)
     _render_folder_restore_section(context)
+    _render_folder_removal_section(context, state)
+    _render_restore_section(context)
 
 
 __all__ = ["render_cleaning_page"]

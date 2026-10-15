@@ -8,10 +8,10 @@ from dataclasses import dataclass
 class DataBuildConfig:
     """描述常规数据集从 init 到 train/test 的固定清洗参数。"""
 
-    baseline_method: str = "airPLS"
-    baseline_lam: float = 1e5
+    baseline_method: str = "arPLS"
+    baseline_lam: float = 3e4
     baseline_asls_p: float = 0.01
-    baseline_max_iter: int = 15
+    baseline_max_iter: int = 100
     baseline_fit_min: float = 400.0
     baseline_fit_max: float = 2000.0
     cosmic_ray_profile_ids: tuple[str, ...] = ("original",)

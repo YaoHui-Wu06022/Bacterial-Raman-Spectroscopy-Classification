@@ -10,17 +10,18 @@ from ramanv2.data.builders.init import (
     build_full_init,
     build_init_datasets,
     build_profile_dataset,
-    update_compensated_init,
 )
-from ramanv2.data.calibration.affine import apply_folder_affine_compensation, load_calibration_report
+from ramanv2.data.plots.prefix import build_prefix_plots
+from ramanv2.pipeline.calibration import run_folder_offset
 from ramanv2.data.catalog import DatasetMapping, ensure_dataset_mapping
-from ramanv2.common.naming import build_natural_key, is_test_source_folder, parse_folder_prefix, parse_test_folder_prefix
-from ramanv2.data.plots.prefix import build_prefix_plots_for_groups
+from ramanv2.common.naming import build_natural_key, is_test_source_folder, parse_test_folder_prefix
 from ramanv2.data.profiles import PIPELINE_PROFILE_IDS, get_dataset_dir, get_profile
 from ramanv2.pipeline.cleaning import reconcile_cleaning_records
-from ramanv2.pipeline.lineage import initialize_folder_lineage, list_lineage_folders, remove_source_folder
+from ramanv2.pipeline.lineage import (
+    initialize_folder_lineage,
+)
 from ramanv2.ui.page_context import PageContext
-from ramanv2.ui.cache import cached_approved_affine_dates, cached_dataset_summary
+from ramanv2.ui.cache import cached_dataset_summary
 from ramanv2.ui.state import (
     invalidate_ui_cache,
     load_page_state as _load_state,
@@ -46,47 +47,6 @@ def _render_count_metrics(summary: dict[str, int | bool]) -> None:
     metrics[0].metric("属数量", f"{summary['genus_count']} 个")
     metrics[1].metric("来源文件夹", f"{summary['folder_count']} 个")
     metrics[2].metric("光谱数量", f"{summary['file_count']} 条")
-
-
-def _render_source_folder_removal(
-    context: PageContext,
-    state,
-    source_records: list[dict[str, object]],
-    key: str,
-    label: str,
-) -> None:
-    """显示源头整夹删除入口；删除从 cosmic_data 开始并同步清理下游。"""
-    if not source_records:
-        st.info("当前没有可移除的源头文件夹。")
-        return
-    source_ids = [str(item.get("source_id")) for item in source_records if item.get("source_id")]
-    if not source_ids:
-        st.info("当前没有可移除的源头文件夹。")
-        return
-    source_id = st.selectbox(label, source_ids, key=f"{key}_source_folder")
-    if not st.button("从 cosmic 源头整夹删除", key=f"{key}_remove_source_folder", width="stretch"):
-        return
-    try:
-        result = remove_source_folder(
-            context.data_root,
-            source_id,
-            shift_root=context.shift_root,
-        )
-        date_name = source_id.split("/", 1)[0]
-        state.affine_completed_dates.discard(date_name)
-        state.audit_completed_dates.discard(date_name)
-        state.dataset_builds.pop("profiles", None)
-        state.dataset_builds.pop("prefix_plots", None)
-        invalidate_ui_cache("cleaning")
-        invalidate_ui_cache("dataset")
-        invalidate_ui_cache("training")
-        invalidate_ui_cache("inference")
-        _save_state(context, state)
-        st.session_state.pop(f"{key}_source_folder", None)
-        st.success(f"已从源头删除 {source_id}，并清理对应下游产物。")
-        st.rerun()
-    except (OSError, ValueError, RuntimeError) as error:
-        st.error(f"源头整夹删除失败：{error}")
 
 
 def _render_prefix_plot_section(
@@ -136,132 +96,45 @@ def _render_prefix_plot_section(
         selected = figure_root / genus_name / f"{prefix_name}.png"
         if selected.is_file():
             st.image(str(selected), caption=f"{genus_name} / {prefix_name}", width="stretch")
-        source_records = list_lineage_folders(context.data_root, genus_name, prefix_name)
-        _render_source_folder_removal(context, state, source_records, key, "选择源头文件夹")
 
 
 def _render_affine_compensation(context: PageContext, state, catalog: DatasetMapping) -> None:
-    """按文件夹输入补偿值，并从原始光谱重新发布校正日期。"""
-    approved_dates = list(
-        cached_approved_affine_dates(
-            str(context.shift_root.resolve()),
-            str(context.data_root.resolve()),
-            ui_cache_version("dataset"),
-        )
-    )
-    st.subheader("仿射校正补偿")
-    if not approved_dates:
-        st.info("当前没有可以补充仿射校正的日期。")
-        return
-    date_name = st.selectbox("选择日期", approved_dates, key="affine_compensation_date")
-    report = load_calibration_report(context.shift_root, date_name) or {}
-    source_date = context.data_root / date_name
-    excluded = {"小球", "shift", "delete", "audit_runs", ".raman_pipeline"}
+    """输入只表示本次 cosmic 原轴增量，提交成功或切换文件夹后归零。"""
+    st.subheader("补充频移")
+    if st.session_state.pop("folder_offset_reset", False):
+        st.session_state["folder_offset_delta"] = 0.0
+    message = st.session_state.pop("folder_offset_message", None)
+    if message:
+        st.success(message)
+    dates = state.affine_completed_dates
     folders = [
-        path
-        for path in sorted(source_date.iterdir(), key=lambda item: build_natural_key(item.name))
-        if path.is_dir() and path.name not in excluded and any(path.rglob("*.arc_data"))
+        f"{date}/{folder.name}"
+        for date in sorted(dates)
+        for folder in sorted((context.data_root / date).glob("*"), key=lambda item: build_natural_key(item.name))
+        if folder.is_dir() and folder.name not in {"小球", "shift", "delete", "audit", "audit_runs", ".raman_pipeline"} and any(folder.rglob("*.arc_data"))
     ]
-    if not folders:
-        st.warning("该日期没有可补偿的普通采集文件夹。")
+    if not folders or not context.init_root.is_dir():
+        st.info("请先完成仿射校正并生成全量 init。")
         return
-    previous = report.get("folder_compensations", {})
-    folder_names = [folder.name for folder in folders]
-    selected_folder = st.selectbox(
-        "选择补偿文件夹",
-        folder_names,
-        key=f"affine_compensation_folder_{date_name}",
-    )
-    value = st.number_input(
-        f"{selected_folder} 补偿（cm⁻¹）",
-        value=float(previous.get(selected_folder, 0.0)),
-        step=0.1,
-        format="%.1f",
-        key=f"affine_compensation_{date_name}_{selected_folder}",
-    )
-    offsets = {selected_folder: float(value)}
-    if st.button("应用文件夹补偿", key="apply_affine_compensation", width="stretch"):
+    selected = st.selectbox("选择文件夹", folders, key="folder_offset_source")
+    if st.session_state.get("folder_offset_previous_source") != selected:
+        st.session_state["folder_offset_delta"] = 0.0
+        st.session_state["folder_offset_previous_source"] = selected
+    delta = st.number_input("本次频移量（cm⁻¹）", step=0.1, format="%.1f", key="folder_offset_delta")
+    if st.button("应用本次频移并同步数据", key="apply_affine_compensation", width="stretch"):
         try:
-            result = apply_folder_affine_compensation(
-                context.data_root,
-                context.shift_root,
-                date_name,
-                offsets,
-            )
-            if not result.get("changed_folders"):
-                st.info(f"{date_name}/{selected_folder} 的补偿值没有变化，未更新 init。")
+            result = run_folder_offset(context.data_root, context.shift_root, context.init_root, catalog, state, context.state_file, selected, float(delta), context.init_root.parent / "fig_init")
+            if not result["changed_folders"]:
+                st.info("本次频移量为 0，未改动光谱。")
                 return
-
-            if context.init_root.is_dir():
-                profile_roots = {
-                    profile_id: get_dataset_dir(
-                        get_profile(profile_id),
-                        context.init_root.parent.parent,
-                    ) / "init"
-                    for profile_id in PIPELINE_PROFILE_IDS
-                }
-                init_update = update_compensated_init(
-                    context.shift_root,
-                    date_name,
-                    offsets,
-                    context.init_root,
-                    profile_roots,
-                    catalog,
-                    test_root=context.init_root.parent / "CSdata",
-                )
-                plot_roots = {"init": context.init_root, **profile_roots}
-                prefix_updates: dict[str, int] = {}
-                updated_roots = {
-                    str(item.get("root"))
-                    for item in init_update.get("updated_targets", [])
-                    if isinstance(item, dict) and item.get("root")
-                }
-                for root_name in sorted(updated_roots):
-                    init_root = plot_roots.get(root_name)
-                    if init_root is None or not init_root.is_dir():
-                        continue
-                    group_keys = {
-                        (
-                            Path(str(item.get("path"))).parts[0],
-                            parse_folder_prefix(Path(str(item.get("path"))).parts[1]),
-                        )
-                        for item in init_update.get("updated_targets", [])
-                        if item.get("root") == root_name
-                        and len(Path(str(item.get("path"))).parts) >= 2
-                    }
-                    outputs = build_prefix_plots_for_groups(
-                        init_root,
-                        init_root.parent / "fig_init",
-                        group_keys,
-                    )
-                    prefix_updates[root_name] = len(outputs)
-            else:
-                init_update = {
-                    "status": "skipped",
-                    "reason": "init_missing",
-                    "updated_targets": [],
-                }
-                prefix_updates = {}
-            result["init_update"] = init_update
-            result["prefix_updates"] = prefix_updates
-            invalidate_ui_cache("dataset")
-            invalidate_ui_cache("training")
-            invalidate_ui_cache("inference")
-            invalidate_ui_cache("analysis")
-            compensation_reports = state.dataset_builds.get("affine_compensations", {})
-            if not isinstance(compensation_reports, dict):
-                compensation_reports = {}
-            compensation_reports[date_name] = result
-            state.dataset_builds["affine_compensations"] = compensation_reports
-            _save_state(context, state)
-            prefix_plot_count = sum(prefix_updates.values())
-            if init_update["status"] == "ready":
-                message = f"{date_name}/{selected_folder} 已记录补偿参数，并同步更新已有 init 和 {prefix_plot_count} 张 prefix-plot；shift_data 未改写。"
-            else:
-                message = f"{date_name}/{selected_folder} 已记录补偿参数；当前没有 init，后续生成数据集时会自动应用。"
-            st.success(message)
+            for name in ("cleaning", "affine", "dataset"):
+                invalidate_ui_cache(name)
+            st.session_state["folder_offset_reset"] = True
+            destination = "对应 CSdata 文件夹" if result.get("csdata_updated") else "init 及审核图"
+            st.session_state["folder_offset_message"] = f"{selected} 已同步平移活动谱及归档谱，并更新{destination}。"
+            st.rerun()
         except (OSError, ValueError, RuntimeError, TypeError) as error:
-            st.error(f"仿射补偿失败：{error}")
+            st.error(f"频移补偿失败：{error}")
 
 
 @st.cache_data(show_spinner=False)
@@ -379,7 +252,6 @@ def _merge_incremental_init_report(
 
 def render_dataset_acquisition_page(context: PageContext) -> None:
     state = _load_state(context)
-    initialize_folder_lineage(context.data_root)
     if reconcile_cleaning_records(context.data_root, state.cleaning):
         _save_state(context, state)
 
@@ -391,8 +263,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     except (OSError, ValueError, RuntimeError) as error:
         catalog = None
         st.error(f"Profile 配置加载失败：{error}")
-    if catalog is not None:
-        initialize_folder_lineage(context.data_root, catalog)
+    initialize_folder_lineage(context.data_root, catalog)
 
     st.subheader("全量 init")
     full_summary = cached_dataset_summary(
@@ -404,9 +275,9 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         and isinstance(full_report, dict)
         and full_report.get("status") == "ready"
     )
-    st.metric("状态", "已生成" if full_summary["exists"] else "未生成")
+    st.metric("状态", "待重建" if full_summary["exists"] and not full_init_ready else ("已生成" if full_summary["exists"] else "未生成"))
     _render_count_metrics(full_summary)
-    eligible_dates = sorted(state.audit_completed_dates & state.affine_completed_dates, key=build_natural_key)
+    eligible_dates = sorted(state.affine_completed_dates, key=build_natural_key)
     cs_candidates = _list_cs_sources(context, eligible_dates)
     cs_selection_key = "full_init_cs_selection"
     initialized_key = "full_init_cs_selection_initialized"
@@ -432,14 +303,12 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                 )
                 status.update(label="全量 init 重建完成", state="complete", expanded=False)
             state.dataset_builds["full_init"] = report
-            state.dataset_builds.pop("profiles", None)
-            state.dataset_builds.pop("prefix_plots", None)
             invalidate_ui_cache("dataset")
             invalidate_ui_cache("training")
             invalidate_ui_cache("inference")
             invalidate_ui_cache("analysis")
             _save_state(context, state)
-            st.success("全量 init 生成完成，旧 Profile 构建记录已清除。")
+            st.success("全量 init 生成完成，已有 Profile 保留，可按需重新生成。")
             st.rerun()
         except (OSError, ValueError, RuntimeError) as error:
             st.error(f"全量 init 生成失败：{error}")
@@ -492,8 +361,6 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                         update,
                         context.init_root,
                     )
-                    state.dataset_builds.pop("profiles", None)
-                    state.dataset_builds.pop("prefix_plots", None)
                     invalidate_ui_cache("dataset")
                     invalidate_ui_cache("training")
                     invalidate_ui_cache("inference")
@@ -510,17 +377,8 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         st.info("请先修复本地病原菌分类 Excel 文件。")
         return
 
+    _render_prefix_plot_section(context, context.init_root, context.init_root.parent / "fig_init", "full_init", state)
     _render_affine_compensation(context, state, catalog)
-
-    with st.expander("源头文件夹移除", expanded=False):
-        st.caption("整夹移除从 cosmic_data 开始，并同步清理 shift、审核、init、Profile 和 prefix 产物。")
-        _render_source_folder_removal(
-            context,
-            state,
-            list_lineage_folders(context.data_root),
-            "all_source_folders",
-            "选择要移除的源头文件夹",
-        )
 
     st.subheader("Profile 数据集")
     profile_name = st.selectbox("选择 Profile", PIPELINE_PROFILE_IDS, key="dataset_profile_name")
@@ -557,13 +415,6 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         except (OSError, ValueError, RuntimeError) as error:
             st.error(f"{profile_name} 数据集生成失败：{error}")
 
-    _render_prefix_plot_section(
-        context,
-        profile_root,
-        profile_root.parent / "fig_init",
-        f"profile_{profile_name}",
-        state,
-    )
 
 
 __all__ = ["render_dataset_acquisition_page"]
