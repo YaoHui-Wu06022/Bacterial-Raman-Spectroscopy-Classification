@@ -79,7 +79,7 @@ class TrainingConfig:
     train_split: float = 0.8
     epochs: int = 80
     patience: int = 50
-    batch_size: int = 48
+    batch_size: int = 64
     train_loader_num_workers: int = 2
     val_loader_num_workers: int = 2
     loader_pin_memory: bool = True
@@ -100,8 +100,8 @@ class TrainingConfig:
     supcon_loss_weight: float = 0.01
     supcon_tau: float = 0.12
     supcon_start: int = 25
-    supcon_end: int = 50
-    decay_start_ratio: float = 0.7
+    supcon_end: int = 45
+    decay_start_ratio: float = 0.6
     # Focal 损失、类别难度 EMA 与早停评分。
     gamma: float = 1.2
     use_ema: bool = True

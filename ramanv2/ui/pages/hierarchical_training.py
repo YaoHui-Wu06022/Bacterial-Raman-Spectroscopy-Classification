@@ -225,7 +225,7 @@ def _render_colab_export(profiles) -> None:
     )
     output_dir = PROJECT_ROOT / "output" / "colab" / profile_id
     st.caption(f"输出目录：{output_dir}")
-    if st.button("生成 data.zip 和 ramanv2.zip", width="stretch"):
+    if st.button("生成 data.tar.xz 和 ramanv2.zip", width="stretch"):
         try:
             with st.spinner("正在生成 Colab 压缩包…"):
                 report = build_colab_bundle(profile_id, output_dir)
@@ -245,7 +245,7 @@ def _render_download_buttons(report: dict[str, object]) -> None:
     data_report = report.get("data_archive", {})
     package_report = report.get("package_archive", {})
     for label, item, key in (
-        ("下载 data.zip", data_report, "download_data_zip"),
+        ("下载 data.tar.xz", data_report, "download_data_tar_xz"),
         ("下载 ramanv2.zip", package_report, "download_ramanv2_zip"),
     ):
         if not isinstance(item, dict):

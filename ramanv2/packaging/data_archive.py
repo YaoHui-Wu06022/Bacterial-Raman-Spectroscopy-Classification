@@ -1,10 +1,10 @@
-"""为 Colab 导出 profile 数据 ZIP 和 ramanv2 源码 ZIP。"""
+"""为 Colab 导出 profile 数据 TAR.XZ 和 ramanv2 源码 ZIP。"""
 
 from __future__ import annotations
 
 import shutil
+import tarfile
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
 
 from ramanv2.common.arc_data import read_arc_data
 from ramanv2.common.publishing import create_temporary_path, publish_file, publish_files
@@ -18,7 +18,7 @@ def build_profile_data_archive(
     output_path: Path | str,
     project_root: Path | str = PROJECT_ROOT,
 ) -> dict[str, object]:
-    """将 profile 的 init 目录原样打包为 data.zip。"""
+    """将 profile 的 init 目录原样打包为 data.tar.xz。"""
     profile = get_profile(profile_id)
     source_init = get_dataset_dir(profile, project_root) / profile.root_init
     if not source_init.is_dir():
@@ -47,7 +47,7 @@ def build_colab_bundle(
     output_dir: Path | str,
     project_root: Path | str = PROJECT_ROOT,
 ) -> dict[str, object]:
-    """原子生成只含目录数据的 data.zip 和源码 ramanv2.zip。"""
+    """原子生成只含目录数据的 data.tar.xz 和源码 ramanv2.zip。"""
     profile = get_profile(profile_id)
     source_init = get_dataset_dir(profile, project_root) / profile.root_init
     if not source_init.is_dir():
@@ -58,11 +58,11 @@ def build_colab_bundle(
     temporary_dir = create_temporary_path(target_dir)
     temporary_dir.mkdir(parents=True, exist_ok=False)
     try:
-        _, sample_count = _build_data_archive(profile, source_init, temporary_dir / "data.zip")
+        _, sample_count = _build_data_archive(profile, source_init, temporary_dir / "data.tar.xz")
         package_path = temporary_dir / "ramanv2.zip"
         build_package_archive(Path(project_root).resolve() / "ramanv2", package_path)
         final_paths = {
-            target_dir / "data.zip": temporary_dir / "data.zip",
+            target_dir / "data.tar.xz": temporary_dir / "data.tar.xz",
             target_dir / "ramanv2.zip": package_path,
         }
         publish_files(final_paths)
@@ -70,7 +70,7 @@ def build_colab_bundle(
         shutil.rmtree(temporary_dir, ignore_errors=True)
         raise
     shutil.rmtree(temporary_dir, ignore_errors=True)
-    data_path = target_dir / "data.zip"
+    data_path = target_dir / "data.tar.xz"
     package_path = target_dir / "ramanv2.zip"
     return {
         "profile_id": profile.profile_id,
@@ -93,14 +93,15 @@ def _build_data_archive(profile, source_init: Path, output_path: Path) -> tuple[
     files = sorted(path for path in source_init.rglob("*.arc_data") if path.is_file())
     if not files:
         raise RuntimeError(f"init 目录中没有 .arc_data 光谱：{source_init}")
-    with ZipFile(output_path, "w", compression=ZIP_DEFLATED) as archive:
+    # 整包压缩可利用光谱间重复的波数轴，保留原始文件字节与目录。
+    with tarfile.open(output_path, "w:xz", preset=6, dereference=True) as archive:
         for source_path in files:
             wavenumbers, intensities = read_arc_data(source_path)
             if wavenumbers.size < 2 or intensities.size != wavenumbers.size:
                 raise ValueError(f"无效光谱文件：{source_path}")
             relative = source_path.relative_to(source_init)
             archive_name = (Path("dataset") / profile.dataset_name / "init" / relative).as_posix()
-            archive.write(source_path, archive_name)
+            archive.add(source_path, arcname=archive_name, recursive=False)
     return output_path, len(files)
 
 
