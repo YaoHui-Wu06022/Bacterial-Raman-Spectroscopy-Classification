@@ -55,7 +55,7 @@ def test_training_summary_counts_species_instead_of_source_folders(tmp_path):
     script = f'''
 from pathlib import Path
 from ramanv2.data.runtime.index import DatasetIndex
-from ramanv2.ui.pages.hierarchical_training import _render_dataset_summary
+from ramanv2.ui.page_views.hierarchical_training import _render_dataset_summary
 root = Path({str(tmp_path)!r})
 _render_dataset_summary(DatasetIndex(root, load_intensity_enable=False), root)
 '''

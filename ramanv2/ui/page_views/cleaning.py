@@ -250,35 +250,38 @@ def _render_flash() -> None:
 
 def _render_restore_section(context: PageContext) -> None:
     """显示人工删除普通光谱恢复入口；小球目录不进入该流程。"""
-    with st.expander("删除数据恢复", expanded=False):
-        try:
-            records = _deleted_records(
-                context.data_root,
-                context.classification_workbook,
-                context.dataset_mapping_file,
-                True,
-            )
-        except (OSError, ValueError, RuntimeError) as error:
-            st.error(f"删除数据扫描失败：{error}")
-            return
+    try:
+        records = _deleted_records(
+            context.data_root,
+            context.classification_workbook,
+            context.dataset_mapping_file,
+            True,
+        )
+    except (OSError, ValueError, RuntimeError) as error:
+        st.error(f"删除数据扫描失败：{error}")
+        return
+    
+    # 过滤小球已批准日期的记录
+    bead_dates = {item.date_name for item in records if item.folder_name == "小球"}
+    approved_bead_dates = {
+        date_name
+        for date_name in bead_dates
+        if (load_calibration_report(context.shift_root, date_name) or {}).get("status")
+        == "manual_approved"
+    }
+    records = tuple(
+        item
+        for item in records
+        if item.folder_name != "小球" or item.date_name not in approved_bead_dates
+    )
+    
+    # 有可恢复记录时保持展开，无记录时折叠
+    has_records = len(records) > 0
+    expand_restore = st.session_state.get("restore_expand", False) or has_records
+    
+    with st.expander("删除数据恢复", expanded=expand_restore):
         if not records:
             st.info("人工删除目录中没有可恢复的普通光谱。")
-            return
-        # 只对涉及的小球日期各读取一次校准报告，避免逐条重复读同一日期。
-        bead_dates = {item.date_name for item in records if item.folder_name == "小球"}
-        approved_bead_dates = {
-            date_name
-            for date_name in bead_dates
-            if (load_calibration_report(context.shift_root, date_name) or {}).get("status")
-            == "manual_approved"
-        }
-        records = tuple(
-            item
-            for item in records
-            if item.folder_name != "小球" or item.date_name not in approved_bead_dates
-        )
-        if not records:
-            st.info("当前人工删除目录中没有可恢复的光谱。")
             return
         try:
             mapping = ensure_dataset_mapping(context.classification_workbook, context.dataset_mapping_file)
@@ -295,6 +298,25 @@ def _render_restore_section(context: PageContext) -> None:
             for item in records
         }
         species_options = sorted(species_map, key=build_natural_key)
+        
+        # 如果当前选择的物种不在列表中，自动顺延到下一个可用的物种
+        current_species = st.session_state.get("restore_species_label")
+        if current_species and current_species not in species_options and species_options:
+            # 找到当前物种应该插入的位置，然后选择该位置之后的第一个物种
+            # 手动比较 key 来找到位置
+            current_key = build_natural_key(current_species)
+            insert_pos = 0
+            for i, species in enumerate(species_options):
+                if build_natural_key(species) >= current_key:
+                    insert_pos = i
+                    break
+            else:
+                insert_pos = len(species_options)
+            # 如果位置在末尾，循环到第一个；否则选择下一个
+            next_species = species_options[0] if insert_pos >= len(species_options) else species_options[insert_pos]
+            st.session_state["restore_species_label"] = next_species
+            st.info(f"物种「{current_species}」的所有光谱已恢复，已自动切换到「{next_species}」。")
+        
         species_label = st.selectbox("选择物种", species_options, key="restore_species_label")
         _, selected_prefix, selected_folder = species_map[species_label]
         date_options = sorted(
@@ -379,6 +401,7 @@ def _render_restore_section(context: PageContext) -> None:
                 st.session_state.pop("pipeline_state", None)
                 st.session_state["pipeline_state"] = _load_state(context)
                 st.session_state.pop("restore_selected_paths", None)
+                st.session_state["restore_expand"] = True
                 _clear_date_cache()
                 invalidate_ui_cache("cleaning")
                 invalidate_ui_cache("dataset")
@@ -401,17 +424,20 @@ def _render_restore_section(context: PageContext) -> None:
 
 def _render_folder_removal_section(context: PageContext, state: PipelineState) -> None:
     """选择任意活动源文件夹，整夹归档并标记 init 待重建。"""
-    with st.expander("文件夹移除", expanded=False):
-        st.caption("整夹移入 cosmic_data/delete/folder_delete；shift、init 和 Profile 等你显式重建。")
-        # 下拉框只需要目录名，不能为每次选谱扫描全库并重写走向记录。
-        dates = cached_directory_names(str(context.data_root.resolve()), ui_cache_version("cleaning"))
-        source_ids = [
-            f"{date_name}/{folder.name}"
-            for date_name in dates
-            for folder in sorted((context.data_root / date_name).glob("*"), key=lambda path: build_natural_key(path.name))
-            if folder.is_dir() and folder.name not in SPECIAL_FOLDER_NAMES | {"小球", "audit"}
-            and not folder.name.startswith(".")
-        ]
+    st.caption("整夹移入 cosmic_data/delete/folder_delete；shift、init 和 Profile 等你显式重建。")
+    # 下拉框只需要目录名，不能为每次选谱扫描全库并重写走向记录。
+    dates = cached_directory_names(str(context.data_root.resolve()), ui_cache_version("cleaning"))
+    source_ids = [
+        f"{date_name}/{folder.name}"
+        for date_name in dates
+        for folder in sorted((context.data_root / date_name).glob("*"), key=lambda path: build_natural_key(path.name))
+        if folder.is_dir() and folder.name not in SPECIAL_FOLDER_NAMES | {"小球", "audit"}
+        and not folder.name.startswith(".")
+    ]
+    # 有可移除文件夹时保持展开
+    has_folders = len(source_ids) > 0
+    expand_folder_remove = st.session_state.get("folder_remove_expand", False) or has_folders
+    with st.expander("文件夹移除", expanded=expand_folder_remove):
         if not source_ids:
             st.info("当前没有可移除的文件夹。")
             return
@@ -430,6 +456,7 @@ def _render_folder_removal_section(context: PageContext, state: PipelineState) -
             invalidate_ui_cache("cleaning")
             invalidate_ui_cache("dataset")
             st.session_state.pop("cleaning_remove_source_folder", None)
+            st.session_state["folder_remove_expand"] = True
             st.session_state["cleaning_flash"] = f"已整夹删除 {source_id}，init 待重建。"
             st.rerun()
         except (OSError, ValueError, RuntimeError) as error:
@@ -438,12 +465,15 @@ def _render_folder_removal_section(context: PageContext, state: PipelineState) -
 
 def _render_folder_restore_section(context: PageContext) -> None:
     """显示整夹删除恢复入口；只移动 folder_delete 中的完整目录。"""
-    with st.expander("整夹删除恢复", expanded=False):
-        try:
-            folders = _deleted_folders(context.data_root)
-        except (OSError, ValueError, RuntimeError) as error:
-            st.error(f"整夹删除扫描失败：{error}")
-            return
+    try:
+        folders = _deleted_folders(context.data_root)
+    except (OSError, ValueError, RuntimeError) as error:
+        st.error(f"整夹删除扫描失败：{error}")
+        return
+    # 有可恢复文件夹时保持展开
+    has_folders = len(folders) > 0
+    expand_folder_restore = st.session_state.get("folder_restore_expand", False) or has_folders
+    with st.expander("整夹删除恢复", expanded=expand_folder_restore):
         if not folders:
             st.info("整夹删除目录中没有可恢复的文件夹。")
             return
@@ -467,6 +497,7 @@ def _render_folder_restore_section(context: PageContext) -> None:
             )
             st.session_state.pop("folder_restore_source", None)
             st.session_state.pop("pipeline_state", None)
+            st.session_state["folder_restore_expand"] = True
             _clear_date_cache()
             invalidate_ui_cache("cleaning")
             invalidate_ui_cache("dataset")

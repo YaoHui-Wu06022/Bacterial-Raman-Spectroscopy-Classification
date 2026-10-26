@@ -481,6 +481,7 @@ def _collect_source_groups(
 ) -> list[_SourceGroup]:
     by_prefix: dict[str, list[tuple[Path, tuple[Path, ...]]]] = {}
     groups: list[_SourceGroup] = []
+    cs_prefix_counts: dict[str, int] = {}
     for source_dir in sorted(date_dir.iterdir(), key=lambda path: build_natural_key(path.name)):
         if not source_dir.is_dir() or source_dir.name in SPECIAL_NAMES or source_dir.name.startswith("."):
             continue
@@ -504,8 +505,12 @@ def _collect_source_groups(
         if is_selected_test:
             for source_path in files:
                 _validate_spectrum(source_path)
-            # 普通 init 也可显式分流；后续重建沿用快速迁移时保存的目录名。
-            default_name = source_dir.name if is_cs_source else f"{prefix}{date_dir.name}_{source_dir.name}"
+            # CSdata 命名沿用 init 模式：{prefix}{date}_{number}，按前缀在日期内递增。
+            if is_cs_source:
+                cs_prefix_counts[prefix] = cs_prefix_counts.get(prefix, 0) + 1
+                default_name = f"{prefix}{date_dir.name}_{cs_prefix_counts[prefix]:02d}"
+            else:
+                default_name = f"{prefix}{date_dir.name}_{source_dir.name}"
             target_name = (test_target_names or {}).get(source_key, default_name)
             if Path(target_name).name != target_name or target_name in {".", ".."}:
                 raise ValueError("无效的 CSdata 输出文件夹")

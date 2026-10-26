@@ -184,7 +184,7 @@ def test_folder_update_failure_restores_output_plot_and_state(layout, monkeypatc
 @pytest.mark.parametrize("is_deleted", [False, True])
 def test_dataset_page_can_update_selected_folder_while_pending(layout, monkeypatch, folder, is_deleted):
     from streamlit.testing.v1 import AppTest
-    from ramanv2.ui.pages import dataset_acquisition
+    from ramanv2.ui.page_views import dataset_acquisition
 
     cosmic, shift, init, state, state_file = layout
     if is_deleted:
@@ -199,7 +199,7 @@ def test_dataset_page_can_update_selected_folder_while_pending(layout, monkeypat
     script = f'''
 from pathlib import Path
 from types import SimpleNamespace
-from ramanv2.ui.pages.dataset_acquisition import render_dataset_acquisition_page
+from ramanv2.ui.page_views.dataset_acquisition import render_dataset_acquisition_page
 root = Path({str(cosmic.parent)!r})
 context = SimpleNamespace(data_root=root / "cosmic_data", shift_root=root / "shift_data", init_root=root / "init", state_file=root / ".raman_pipeline/state.json", classification_workbook=root / "mapping.xlsx", dataset_mapping_file=root / "mapping.json")
 render_dataset_acquisition_page(context)

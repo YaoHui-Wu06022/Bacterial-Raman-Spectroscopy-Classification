@@ -164,7 +164,7 @@ def test_date_rebuild_ui_updates_shift_without_loading_classification(layout):
     script = f'''
 from pathlib import Path
 from types import SimpleNamespace
-from ramanv2.ui.pages.affine_calibration import render_affine_calibration_page
+from ramanv2.ui.page_views.affine_calibration import render_affine_calibration_page
 root = Path({str(cosmic.parent)!r})
 context = SimpleNamespace(data_root=root / "cosmic_data", shift_root=root / "shift_data", init_root=root / "init", state_file=root / ".raman_pipeline/state.json")
 render_affine_calibration_page(context)
@@ -183,7 +183,7 @@ render_affine_calibration_page(context)
 
 def test_date_change_hints_distinguish_deletion_restore_and_shift_update(layout):
     from ramanv2.pipeline.lineage import record_manual_move
-    from ramanv2.ui.pages.affine_calibration import _collect_folder_changes
+    from ramanv2.ui.page_views.affine_calibration import _collect_folder_changes
 
     cosmic, shift, state, state_file = layout
     record_manual_move(cosmic, [f"{DATE}/EC01/a.arc_data"], "manual_selection")
@@ -210,7 +210,7 @@ def test_date_change_hints_distinguish_deletion_restore_and_shift_update(layout)
 
 def test_single_folder_shift_update_does_not_clear_sibling_hint(layout):
     from ramanv2.pipeline.shift import rebuild_shift_folder
-    from ramanv2.ui.pages.affine_calibration import _collect_folder_changes
+    from ramanv2.ui.page_views.affine_calibration import _collect_folder_changes
 
     cosmic, shift, state, state_file = layout
     record_restore(cosmic, [f"{DATE}/EC01/a.arc_data", f"{DATE}/EC02/a.arc_data"])
@@ -224,7 +224,7 @@ def test_single_folder_shift_update_does_not_clear_sibling_hint(layout):
 
 def test_date_rebuild_clears_deleted_folder_shift_hint(layout):
     from ramanv2.pipeline.lineage import record_folder_move
-    from ramanv2.ui.pages.affine_calibration import _collect_folder_changes
+    from ramanv2.ui.page_views.affine_calibration import _collect_folder_changes
 
     cosmic, shift, state, state_file = layout
     record_folder_move(cosmic, [f"{DATE}/EC02/a.arc_data"])
@@ -244,7 +244,7 @@ def test_date_change_hints_render_read_only_and_refresh_after_update(layout):
 from pathlib import Path
 from types import SimpleNamespace
 from ramanv2.pipeline.state import load_pipeline_state
-from ramanv2.ui.pages.affine_calibration import _render_date_rebuild_section
+from ramanv2.ui.page_views.affine_calibration import _render_date_rebuild_section
 root = Path({str(cosmic.parent)!r})
 context = SimpleNamespace(data_root=root / "cosmic_data", shift_root=root / "shift_data", state_file=root / ".raman_pipeline/state.json")
 _render_date_rebuild_section(context, load_pipeline_state(context.state_file))
@@ -267,7 +267,7 @@ _render_date_rebuild_section(context, load_pipeline_state(context.state_file))
 
 def test_folder_change_hints_keep_delete_and_restore_batches(layout):
     from ramanv2.pipeline.lineage import record_manual_move
-    from ramanv2.ui.pages.affine_calibration import _collect_folder_changes
+    from ramanv2.ui.page_views.affine_calibration import _collect_folder_changes
 
     cosmic, shift, state, state_file = layout
     assert _collect_folder_changes(cosmic) == []

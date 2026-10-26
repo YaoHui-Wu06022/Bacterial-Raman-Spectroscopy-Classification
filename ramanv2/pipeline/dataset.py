@@ -168,7 +168,15 @@ def _run_dataset_transfer(
     if to_csdata_enable:
         if source.parent != genus_dir:
             raise ValueError("init 的属目录与种前缀映射不一致")
-        target = cs_root / (folder_name if is_test_source_folder(folder_name) else source.name)
+        # CSdata 命名沿用 init 模式：{prefix}{date}_{number}，扁平结构。
+        existing_numbers = [
+            int(match.group(3))
+            for path in cs_root.glob("*")
+            if path.is_dir() and (match := CANONICAL_FOLDER_PATTERN.fullmatch(path.name))
+            and match.group(1).upper() == prefix and match.group(2) == date_name
+        ]
+        new_folder_name = f"{prefix}{date_name}_{max(existing_numbers, default=0) + 1:02d}"
+        target = cs_root / new_folder_name
         if any(other["target"] == target.name for other in exports) or any(
             key != source_id and value.get("outputs", {}).get("csdata") == str(target)
             for key, value in records.items()

@@ -134,7 +134,7 @@ def cached_result_experiment_dirs(output_root: str, version: int) -> tuple[str, 
 
 @st.cache_data(show_spinner=False)
 def cached_cs_folder_names(root_dir: str, version: int) -> tuple[str, ...]:
-    """缓存 CSdata 的直接文件夹扫描。"""
+    """缓存 CSdata 的文件夹扫描。"""
     del version
     root = Path(root_dir)
     if not root.is_dir():

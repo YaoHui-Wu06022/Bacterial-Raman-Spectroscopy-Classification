@@ -8,12 +8,12 @@ from pathlib import Path
 
 def test_ui_pages_are_independent_importable_modules() -> None:
     from ramanv2.ui.app import PAGE_NAMES, main
-    from ramanv2.ui.pages.affine_calibration import render_affine_calibration_page
-    from ramanv2.ui.pages.cleaning import render_cleaning_page
-    from ramanv2.ui.pages.dataset_acquisition import render_dataset_acquisition_page
-    from ramanv2.ui.pages.hierarchical_training import render_hierarchical_training_page
-    from ramanv2.ui.pages.result_analysis import render_result_analysis_page
-    from ramanv2.ui.pages.sample_inference import render_sample_inference_page
+    from ramanv2.ui.page_views.affine_calibration import render_affine_calibration_page
+    from ramanv2.ui.page_views.cleaning import render_cleaning_page
+    from ramanv2.ui.page_views.dataset_acquisition import render_dataset_acquisition_page
+    from ramanv2.ui.page_views.hierarchical_training import render_hierarchical_training_page
+    from ramanv2.ui.page_views.result_analysis import render_result_analysis_page
+    from ramanv2.ui.page_views.sample_inference import render_sample_inference_page
 
     assert PAGE_NAMES == ("数据清洗", "仿射校准", "数据集获取", "层级训练", "结果分析", "样本推理")
     assert all(
@@ -34,7 +34,7 @@ def test_pipeline_modules_keep_data_flow_separation() -> None:
     """恢复只改 cosmic、审核只做一次、shift 只由整夹重建生成。"""
     cleaning = Path("ramanv2/pipeline/cleaning.py").read_text(encoding="utf-8")
     restoration = Path("ramanv2/pipeline/restoration.py").read_text(encoding="utf-8")
-    affine_page = Path("ramanv2/ui/pages/affine_calibration.py").read_text(encoding="utf-8")
+    affine_page = Path("ramanv2/ui/page_views/affine_calibration.py").read_text(encoding="utf-8")
 
     # 清洗不再拒绝已校准日期的源谱改动（否则整夹恢复后无法重新清洗）。
     assert "清洗页不能继续修改源谱" not in cleaning
@@ -55,7 +55,7 @@ def test_one_click_calibrates_missing_and_reuses_existing(tmp_path, monkeypatch)
     """一键流程：缺参数的日期走分析，已有参数的日期复用参数重建 shift。"""
     from types import SimpleNamespace
 
-    from ramanv2.ui.pages import affine_calibration as page
+    from ramanv2.ui.page_views import affine_calibration as page
 
     calls: dict[str, list[str]] = {}
 
@@ -82,7 +82,7 @@ def test_one_click_skips_empty_groups(tmp_path, monkeypatch) -> None:
     """没有待校准日期时不重复分析小球；没有已校准日期时不重建。"""
     from types import SimpleNamespace
 
-    from ramanv2.ui.pages import affine_calibration as page
+    from ramanv2.ui.page_views import affine_calibration as page
 
     calls: list[str] = []
 
@@ -109,21 +109,20 @@ def test_one_click_skips_empty_groups(tmp_path, monkeypatch) -> None:
     assert calls == ["calibration"]
 
 
-def test_dataset_page_only_defaults_unmapped_cs_folders() -> None:
-    from ramanv2.data.catalog import DatasetMapping
-    from ramanv2.ui.pages.dataset_acquisition import _default_unmapped_cs_sources
+def test_dataset_page_defaults_second_source_only_for_species_with_four_folders() -> None:
+    from ramanv2.ui.page_views.dataset_acquisition import _default_cs_sources
 
-    mapping = DatasetMapping.from_payload(
-        {"genera": {"Klebsiella": ["KP"]}, "datasets": {"GN": ["Klebsiella"]}}
-    )
-    assert _default_unmapped_cs_sources(
-        ["20240101/CS01KP", "20240101/CS02AA", "20240101/CS03"],
-        mapping,
-    ) == ["20240101/CS02AA", "20240101/CS03"]
+    assert _default_cs_sources(
+        ["20240101/CS10EC", "20240101/CS02EC", "20240101/CS01EC", "20240101/CS11EC",
+         "20240101/CS01KP", "20240101/CS02KP", "20240101/CS03KP"]
+    ) == ["20240101/CS02EC"]
+    assert _default_cs_sources(
+        ["20240101/CS01EC", "20240101/CS02EC", "20240101/CS03EC"]
+    ) == []
 
 
 def test_training_page_builds_existing_train_request() -> None:
-    from ramanv2.ui.pages.hierarchical_training import _build_train_request
+    from ramanv2.ui.page_views.hierarchical_training import _build_train_request
 
     request = _build_train_request(
         {"profile_id": "GN", "epochs": 2, "batch_size": 4},
@@ -149,11 +148,11 @@ def test_one_click_call_site_matches_signature() -> None:
     import ast
     import inspect
 
-    from ramanv2.ui.pages import affine_calibration as page
+    from ramanv2.ui.page_views import affine_calibration as page
 
     target = page._run_analyze_and_rebuild
     expected = len(inspect.signature(target).parameters)
-    tree = ast.parse(Path("ramanv2/ui/pages/affine_calibration.py").read_text(encoding="utf-8"))
+    tree = ast.parse(Path("ramanv2/ui/page_views/affine_calibration.py").read_text(encoding="utf-8"))
     call_sites = [
         node
         for node in ast.walk(tree)
@@ -170,7 +169,7 @@ def test_one_click_call_site_matches_signature() -> None:
 
 
 def test_affine_page_only_returns_incremental_dates() -> None:
-    from ramanv2.ui.pages.affine_calibration import _pending_date_names
+    from ramanv2.ui.page_views.affine_calibration import _pending_date_names
 
     assert _pending_date_names(
         ["20240101", "20240102", "20240103"],

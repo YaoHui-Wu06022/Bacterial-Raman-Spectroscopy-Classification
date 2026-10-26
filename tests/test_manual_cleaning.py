@@ -301,7 +301,7 @@ def test_save_state_retries_transient_windows_replace_lock(tmp_path: Path, monke
 
 def test_cleaning_page_selects_and_archives_folder_between_restore_sections(tmp_path, monkeypatch):
     from streamlit.testing.v1 import AppTest
-    from ramanv2.ui.pages import cleaning
+    from ramanv2.ui.page_views import cleaning
 
     root = tmp_path / "cosmic_data"
     for name in ("EC01", "EC02"):
@@ -322,7 +322,7 @@ def test_cleaning_page_selects_and_archives_folder_between_restore_sections(tmp_
     script = f'''
 from pathlib import Path
 from types import SimpleNamespace
-from ramanv2.ui.pages.cleaning import render_cleaning_page
+from ramanv2.ui.page_views.cleaning import render_cleaning_page
 root = Path({str(tmp_path)!r})
 context = SimpleNamespace(data_root=root / "cosmic_data", state_file=root / ".raman_pipeline/state.json", shift_root=root / "shift_data", init_root=root / "init", classification_workbook=root / "mapping.xlsx", dataset_mapping_file=root / "mapping.json")
 render_cleaning_page(context)

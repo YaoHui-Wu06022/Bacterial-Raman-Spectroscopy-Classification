@@ -14,7 +14,7 @@ from ramanv2.data.builders.init import (
 from ramanv2.data.plots.prefix import build_prefix_plots
 from ramanv2.pipeline.calibration import run_folder_offset
 from ramanv2.data.catalog import DatasetMapping, ensure_dataset_mapping
-from ramanv2.common.naming import build_natural_key, is_test_source_folder, parse_test_folder_prefix
+from ramanv2.common.naming import build_natural_key, parse_test_folder_prefix
 from ramanv2.data.profiles import PIPELINE_PROFILE_IDS, get_dataset_dir, get_profile
 from ramanv2.pipeline.dataset import collect_cs_return_sources, collect_dataset_source_folders, collect_init_export_sources, run_cs_to_init, run_folder_dataset_update, run_init_to_cs
 from ramanv2.ui.page_context import PageContext
@@ -243,7 +243,7 @@ def _render_affine_compensation(context: PageContext, state, catalog: DatasetMap
 
 @st.cache_data(show_spinner=False)
 def _cached_cs_sources(shift_root: str, date_names: tuple[str, ...], version: int) -> tuple[str, ...]:
-    """缓存日期下的 CS 候选目录扫描。"""
+    """缓存日期下的候选目录扫描。"""
     del version
     root = Path(shift_root)
     candidates: list[str] = []
@@ -252,7 +252,7 @@ def _cached_cs_sources(shift_root: str, date_names: tuple[str, ...], version: in
         if not date_dir.is_dir():
             continue
         for folder in sorted(date_dir.iterdir(), key=lambda item: build_natural_key(item.name)):
-            if folder.is_dir() and is_test_source_folder(folder.name) and any(folder.glob("*.arc_data")):
+            if folder.is_dir() and folder.name not in {"小球", "shift", "delete", "audit", "audit_runs", ".raman_pipeline"} and any(folder.glob("*.arc_data")):
                 candidates.append(f"{date_name}/{folder.name}")
     return tuple(candidates)
 
@@ -268,21 +268,24 @@ def _list_cs_sources(context: PageContext, date_names: list[str]) -> list[str]:
     )
 
 
-def _default_unmapped_cs_sources(candidates: list[str], catalog: DatasetMapping | None) -> list[str]:
-    """默认选择没有规范前缀映射的 CS 目录。"""
-    mapped_prefixes = {
-        prefix
-        for prefixes in (catalog.genera.values() if catalog is not None else ())
-        for prefix in prefixes
-    }
-    return sorted(
-        [
-            candidate
-            for candidate in candidates
-            if parse_test_folder_prefix(candidate.rsplit("/", 1)[-1]) not in mapped_prefixes
-        ],
-        key=build_natural_key,
-    )
+# 默认选择逻辑版本号，修改逻辑时递增以强制重新初始化
+_CS_SELECTION_LOGIC_VERSION = 2
+
+
+def _default_cs_sources(candidates: list[str]) -> list[str]:
+    """默认选择每个种的第二个文件夹；种总数少于 4 个则不选择。"""
+    from collections import defaultdict
+    species_folders: dict[str, list[str]] = defaultdict(list)
+    for candidate in candidates:
+        folder_name = candidate.rsplit("/", 1)[-1]
+        prefix = parse_test_folder_prefix(folder_name)
+        species_folders[prefix].append(candidate)
+    selected: list[str] = []
+    for prefix, folders in species_folders.items():
+        if len(folders) >= 4:
+            sorted_folders = sorted(folders, key=build_natural_key)
+            selected.append(sorted_folders[1])
+    return sorted(selected, key=build_natural_key)
 
 
 def _sync_cs_selection(
@@ -291,11 +294,16 @@ def _sync_cs_selection(
     selection_key: str,
     initialized_key: str,
 ) -> None:
-    """保留用户选择，并只为新出现的未映射 CS 目录添加默认选择。"""
+    """保留用户选择，并只为新出现的候选目录添加默认选择。"""
+    version_key = f"{selection_key}_version"
     previous_candidates_key = f"{selection_key}_candidates"
     previous_candidates = set(st.session_state.get(previous_candidates_key, []))
-    if not st.session_state.get(initialized_key, False):
-        selected = _default_unmapped_cs_sources(candidates, catalog)
+    # 逻辑版本变化或首次初始化时重新计算默认选择
+    if st.session_state.get(version_key) != _CS_SELECTION_LOGIC_VERSION:
+        selected = _default_cs_sources(candidates)
+        st.session_state[version_key] = _CS_SELECTION_LOGIC_VERSION
+    elif not st.session_state.get(initialized_key, False):
+        selected = _default_cs_sources(candidates)
     else:
         selected = [
             value
@@ -305,7 +313,7 @@ def _sync_cs_selection(
         new_candidates = sorted(set(candidates) - previous_candidates, key=build_natural_key)
         selected.extend(
             value
-            for value in _default_unmapped_cs_sources(new_candidates, catalog)
+            for value in _default_cs_sources(new_candidates)
             if value not in selected
         )
     st.session_state[selection_key] = selected
@@ -390,6 +398,8 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     if not st.session_state.get(initialized_key, False) and isinstance(full_report, dict):
         st.session_state[cs_selection_key] = list(full_report.get("selected_cs_folders", []))
         st.session_state[initialized_key] = True
+        st.session_state[f"{cs_selection_key}_version"] = _CS_SELECTION_LOGIC_VERSION
+        st.session_state[f"{cs_selection_key}_candidates"] = list(cs_candidates)
     returned_source = st.session_state.pop("cs_return_removed_source", None)
     if returned_source is not None:
         st.session_state[cs_selection_key] = [value for value in st.session_state.get(cs_selection_key, []) if value != returned_source]

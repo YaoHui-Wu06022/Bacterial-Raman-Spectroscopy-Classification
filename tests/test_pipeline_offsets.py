@@ -199,7 +199,7 @@ def test_offset_preserves_same_date_sibling_files_and_shift_report(tmp_path, mon
 
 
 def test_offset_ui_resets_to_zero_and_calls_pipeline(tmp_path, monkeypatch):
-    from ramanv2.ui.pages import dataset_acquisition
+    from ramanv2.ui.page_views import dataset_acquisition
 
     cosmic, shift, init, mapping, state, state_file, figures = _layout(tmp_path)
     session = {"folder_offset_reset": True, "folder_offset_delta": 9.0}
@@ -230,7 +230,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from ramanv2.data.catalog import DatasetMapping
 from ramanv2.pipeline.state import load_pipeline_state
-from ramanv2.ui.pages.dataset_acquisition import _render_affine_compensation
+from ramanv2.ui.page_views.dataset_acquisition import _render_affine_compensation
 context = SimpleNamespace(data_root=Path({str(cosmic)!r}), shift_root=Path({str(shift)!r}), init_root=Path({str(init)!r}), state_file=Path({str(state_file)!r}))
 mapping = DatasetMapping(genera={{"Escherichia": ("EC",)}}, datasets={{"GN": ("Escherichia",)}})
 _render_affine_compensation(context, load_pipeline_state(context.state_file), mapping)
@@ -250,7 +250,9 @@ _render_affine_compensation(context, load_pipeline_state(context.state_file), ma
     else:
         assert len(list(figures.rglob("*.png"))) == 1
         source_axis = read_arc_data(cosmic / DATE / selected_folder / "test.arc_data")[0]
-        target_axis = read_arc_data(tmp_path / "CSdata" / selected_folder / "test.arc_data")[0]
+        entry = next(item for item in state.dataset_builds["full_init"]["cs_exports"]
+                     if item["source"] == f"{DATE}/{selected_folder}")
+        target_axis = read_arc_data(tmp_path / "CSdata" / entry["target"] / "test.arc_data")[0]
         np.testing.assert_array_equal(target_axis, source_axis * 2 + 10)
     assert _snapshot(tmp_path / "GN") == gn_before
 
@@ -258,7 +260,9 @@ _render_affine_compensation(context, load_pipeline_state(context.state_file), ma
 @pytest.mark.parametrize("cs_folder,export_cs", [("CS01EC", True), ("CS02ZZ", False)])
 def test_exported_cs_offset_updates_only_its_csdata_group(tmp_path, monkeypatch, cs_folder, export_cs):
     cosmic, shift, init, mapping, state, state_file, figures = _layout(tmp_path, cs_folder, export_cs)
-    target = tmp_path / "CSdata" / cs_folder
+    entry = next(item for item in state.dataset_builds["full_init"]["cs_exports"]
+                 if item["source"] == f"{DATE}/{cs_folder}")
+    target = tmp_path / "CSdata" / entry["target"]
     source = cosmic / DATE / cs_folder / "test.arc_data"
     axis, intensity = read_arc_data(source)
     for archive in ("manual", "folder_delete"):
@@ -333,7 +337,7 @@ def test_affine_ui_has_no_audit_step_and_can_rebuild_directly(tmp_path):
     script = f'''
 from pathlib import Path
 from types import SimpleNamespace
-from ramanv2.ui.pages.affine_calibration import render_affine_calibration_page
+from ramanv2.ui.page_views.affine_calibration import render_affine_calibration_page
 context = SimpleNamespace(data_root=Path({str(cosmic)!r}), shift_root=Path({str(shift)!r}), init_root=Path({str(init)!r}), state_file=Path({str(state_file)!r}))
 render_affine_calibration_page(context)
 '''

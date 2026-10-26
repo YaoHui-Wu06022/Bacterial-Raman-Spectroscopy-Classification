@@ -11,7 +11,7 @@ from ramanv2.pipeline.state import PipelineState, save_pipeline_state
 def test_dataset_controls_do_not_scan_or_write_lineage_and_datasets(tmp_path, monkeypatch):
     from ramanv2.data.catalog import DatasetMapping
     from ramanv2.pipeline import lineage
-    from ramanv2.ui.pages import dataset_acquisition
+    from ramanv2.ui.page_views import dataset_acquisition
 
     dataset = tmp_path / "dataset"
     cosmic, shift, init = (dataset / name for name in ("cosmic_data", "shift_data", "init"))
@@ -53,7 +53,7 @@ def test_dataset_controls_do_not_scan_or_write_lineage_and_datasets(tmp_path, mo
     script = f'''
 from pathlib import Path
 from types import SimpleNamespace
-from ramanv2.ui.pages.dataset_acquisition import render_dataset_acquisition_page
+from ramanv2.ui.page_views.dataset_acquisition import render_dataset_acquisition_page
 root = Path({str(dataset)!r})
 context = SimpleNamespace(data_root=root / "cosmic_data", shift_root=root / "shift_data", init_root=root / "init", state_file=root / ".raman_pipeline/state.json", classification_workbook=root / "mapping.xlsx", dataset_mapping_file=root / "mapping.json")
 render_dataset_acquisition_page(context)

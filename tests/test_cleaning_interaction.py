@@ -9,7 +9,7 @@ from ramanv2.pipeline.state import PipelineState, load_pipeline_state, save_pipe
 
 def test_spectrum_selection_is_saved_with_one_rerun_and_no_lineage_scan(tmp_path, monkeypatch):
     from ramanv2.pipeline import lineage
-    from ramanv2.ui.pages import cleaning
+    from ramanv2.ui.page_views import cleaning
 
     root = tmp_path / "cosmic_data"
     relative = "20240101/EC01/cell3.arc_data"
@@ -34,7 +34,7 @@ def test_spectrum_selection_is_saved_with_one_rerun_and_no_lineage_scan(tmp_path
 from pathlib import Path
 from types import SimpleNamespace
 import streamlit as st
-from ramanv2.ui.pages.cleaning import render_cleaning_page
+from ramanv2.ui.page_views.cleaning import render_cleaning_page
 root = Path({str(tmp_path)!r})
 context = SimpleNamespace(data_root=root / "cosmic_data", state_file=root / ".raman_pipeline/state.json", shift_root=root / "shift_data", init_root=root / "init", classification_workbook=root / "mapping.xlsx", dataset_mapping_file=root / "mapping.json")
 st.session_state["page_runs"] = st.session_state.get("page_runs", 0) + 1

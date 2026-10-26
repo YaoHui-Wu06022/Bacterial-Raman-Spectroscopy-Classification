@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from ramanv2.ui.cache import cached_directory_names
-from ramanv2.ui.pages.cleaning import _deleted_folders, _deleted_records
+from ramanv2.ui.page_views.cleaning import _deleted_folders, _deleted_records
 from ramanv2.ui.state import invalidate_ui_cache, ui_cache_version
 
 

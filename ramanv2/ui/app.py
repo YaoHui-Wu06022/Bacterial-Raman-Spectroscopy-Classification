@@ -6,12 +6,12 @@ import streamlit as st
 
 from ramanv2.pipeline.state import load_pipeline_state, save_pipeline_state
 from ramanv2.ui.page_context import build_page_context
-from ramanv2.ui.pages.affine_calibration import render_affine_calibration_page
-from ramanv2.ui.pages.cleaning import render_cleaning_page
-from ramanv2.ui.pages.dataset_acquisition import render_dataset_acquisition_page
-from ramanv2.ui.pages.hierarchical_training import render_hierarchical_training_page
-from ramanv2.ui.pages.result_analysis import render_result_analysis_page
-from ramanv2.ui.pages.sample_inference import render_sample_inference_page
+from ramanv2.ui.page_views.affine_calibration import render_affine_calibration_page
+from ramanv2.ui.page_views.cleaning import render_cleaning_page
+from ramanv2.ui.page_views.dataset_acquisition import render_dataset_acquisition_page
+from ramanv2.ui.page_views.hierarchical_training import render_hierarchical_training_page
+from ramanv2.ui.page_views.result_analysis import render_result_analysis_page
+from ramanv2.ui.page_views.sample_inference import render_sample_inference_page
 
 
 PAGE_NAMES = ("数据清洗", "仿射校准", "数据集获取", "层级训练", "结果分析", "样本推理")
@@ -54,3 +54,6 @@ def main() -> None:
 
 
 __all__ = ["PAGE_NAMES", "main"]
+
+
+main()

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from ramanv2.common.arc_data import write_arc_data
 from ramanv2.data.calibration import affine
@@ -16,6 +17,30 @@ from ramanv2.data.calibration.affine import (
 
 TRUE_SCALE = 1.002
 TRUE_OFFSET = -3.5
+
+
+@pytest.mark.parametrize(
+    ("is_overlap", "snr", "expected_status"),
+    [(True, 6.9, "ok"), (True, 6.4, "low_snr"), (False, 6.9, "low_snr"), (False, 8.1, "ok")],
+)
+def test_relaxed_snr_only_applies_to_overlapping_auxiliary_peak(monkeypatch, is_overlap, snr, expected_status):
+    """弱重叠辅助峰可通过；更低信噪比及低信噪比主峰仍被拦截。"""
+    axis = np.linspace(1566.1, 1619.3, 81)
+    parameters = [100.0, 0.0, snr * 10.0, 1583.1, 6.0, 0.5]
+    if is_overlap:
+        parameters.extend([500.0, 1602.3, 6.0, 0.5])
+        values = affine.evaluate_double_pseudo_voigt(axis, *parameters)
+    else:
+        values = affine.evaluate_pseudo_voigt(axis, *parameters)
+    noise = np.random.default_rng(42).normal(size=axis.size)
+    values += (noise - noise.mean()) / noise.std(ddof=1) * 10.0
+    monkeypatch.setattr(affine, "curve_fit", lambda *args, **kwargs: (np.array(parameters), None))
+    if is_overlap:
+        result = affine._fit_overlapping_auxiliary_peak(axis, values, 1583.1, 1602.3)
+    else:
+        result = affine._fit_pseudo_voigt_peak(axis, values, 1602.3, 1592.7, 27.0)
+    assert result.snr == pytest.approx(snr)
+    assert result.status == expected_status
 
 
 def _write_bead(

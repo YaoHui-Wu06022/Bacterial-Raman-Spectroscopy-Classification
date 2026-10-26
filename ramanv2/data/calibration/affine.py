@@ -32,6 +32,8 @@ AUXILIARY_PEAKS = (1031.8, 1583.1)
 PRIMARY_STD = (0.69, 0.54, 0.73)
 RESIDUAL_LIMIT_CM = 2.0
 MIN_SNR = 8.0
+# 1583.1 与相邻主峰重叠，单独放宽该辅助峰的信噪比门槛。
+OVERLAP_MIN_SNR = 6.5
 INITIAL_RADIUS = 45.0
 REFINED_RADIUS = 18.0
 ISOLATED_PRIMARY_RADIUS = 12.0
@@ -267,7 +269,7 @@ def _fit_overlapping_auxiliary_peak(
     fit_residual = y - evaluate_double_pseudo_voigt(x, *parameters)
     noise = float(np.std(fit_residual, ddof=1)) if fit_residual.size > 1 else 0.0
     snr = float(parameters[2] / max(noise, np.finfo(float).eps))
-    status = "ok" if snr >= MIN_SNR else "low_snr"
+    status = "ok" if snr >= OVERLAP_MIN_SNR else "low_snr"
     return PeakFit(
         target,
         float(parameters[3]),

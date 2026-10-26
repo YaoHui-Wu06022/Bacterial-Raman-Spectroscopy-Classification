@@ -59,7 +59,7 @@ def _fake_plot(init, output, groups):
 def test_cs_return_moves_only_selected_group_and_updates_future_route(layout, monkeypatch):
     cosmic, init, mapping, state, state_file = layout
     root = cosmic.parent
-    source = root / "CSdata/CS01EC"
+    source = root / "CSdata" / f"EC{DATE}_01"
     original = (source / "a.arc_data").read_bytes()
     before = _snapshot(root)
     monkeypatch.setattr(dataset, "build_prefix_plots_for_groups", _fake_plot)
@@ -85,7 +85,7 @@ def test_cs_return_moves_only_selected_group_and_updates_future_route(layout, mo
     assert DATE in state.init_generated_dates
     assert dataset.collect_cs_return_sources(init, state) == [f"{DATE}/CS02EC"]
     allowed = {".raman_pipeline/state.json", ".raman_pipeline/folder_lineage.json",
-               "fig_init/Escherichia/EC.png", "CSdata/CS01EC/a.arc_data",
+               "fig_init/Escherichia/EC.png", f"CSdata/EC{DATE}_01/a.arc_data",
                f"init/Escherichia/EC{DATE}_02/a.arc_data"}
     after = _snapshot(root)
     assert {k: v for k, v in before.items() if k not in allowed} == {
@@ -116,7 +116,7 @@ def test_cs_return_failure_restores_folders_state_and_plot(layout, monkeypatch, 
 
 def test_cs_return_page_uses_direct_transfer_without_rebuilding(layout, monkeypatch):
     from streamlit.testing.v1 import AppTest
-    from ramanv2.ui.pages import dataset_acquisition
+    from ramanv2.ui.page_views import dataset_acquisition
 
     cosmic, init, mapping, state, state_file = layout
     monkeypatch.setattr(dataset, "build_prefix_plots_for_groups", _fake_plot)
@@ -131,7 +131,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from ramanv2.data.catalog import DatasetMapping
 from ramanv2.pipeline.state import load_pipeline_state
-from ramanv2.ui.pages.dataset_acquisition import _render_cs_return
+from ramanv2.ui.page_views.dataset_acquisition import _render_cs_return
 root = Path({str(cosmic.parent)!r})
 context = SimpleNamespace(data_root=root / "cosmic_data", init_root=root / "init", state_file=root / ".raman_pipeline/state.json")
 mapping = DatasetMapping(genera={{"Escherichia": ("EC",)}}, datasets={{"GN": ("Escherichia",)}})
@@ -144,7 +144,7 @@ _render_cs_return(context, load_pipeline_state(context.state_file), mapping)
     assert not app.exception
     assert not app.error
     assert any("移回 init" in message.value for message in app.success)
-    assert not (cosmic.parent / "CSdata/CS01EC").exists()
+    assert not (cosmic.parent / "CSdata" / f"EC{DATE}_01").exists()
 
 
 @pytest.mark.parametrize("invalid", ["pending", "missing_active", "unknown_species", "duplicate_export", "outside_root", "existing_init"])
@@ -182,7 +182,7 @@ def test_returned_group_keeps_init_route_during_folder_update(layout, monkeypatc
     result = dataset.run_folder_dataset_update(cosmic, cosmic.parent / "shift_data", init, state, state_file, SOURCE)
     assert not result["csdata_updated"]
     assert result["target_dir"] == moved["target_dir"]
-    assert not (cosmic.parent / "CSdata/CS01EC").exists()
+    assert not (cosmic.parent / "CSdata" / f"EC{DATE}_01").exists()
 
 
 def test_cs_return_does_not_reuse_reserved_deleted_folder_number(layout, monkeypatch):
@@ -203,7 +203,7 @@ def test_cs_return_does_not_reuse_reserved_deleted_folder_number(layout, monkeyp
 @pytest.mark.parametrize("to_csdata_enable", [False, True])
 def test_full_page_synchronizes_cs_selection_after_transfer(layout, monkeypatch, to_csdata_enable):
     from streamlit.testing.v1 import AppTest
-    from ramanv2.ui.pages import dataset_acquisition
+    from ramanv2.ui.page_views import dataset_acquisition
 
     cosmic, init, mapping, state, state_file = layout
     monkeypatch.setattr(dataset_acquisition, "_load_catalog", lambda *args: mapping)
@@ -211,7 +211,7 @@ def test_full_page_synchronizes_cs_selection_after_transfer(layout, monkeypatch,
     script = f'''
 from pathlib import Path
 from types import SimpleNamespace
-from ramanv2.ui.pages.dataset_acquisition import render_dataset_acquisition_page
+from ramanv2.ui.page_views.dataset_acquisition import render_dataset_acquisition_page
 root = Path({str(cosmic.parent)!r})
 context = SimpleNamespace(data_root=root / "cosmic_data", shift_root=root / "shift_data", init_root=root / "init", state_file=root / ".raman_pipeline/state.json", classification_workbook=root / "mapping.xlsx", dataset_mapping_file=root / "mapping.json")
 render_dataset_acquisition_page(context)
@@ -228,10 +228,9 @@ render_dataset_acquisition_page(context)
     assert not app.error
     expected = {SOURCE, f"{DATE}/CS02EC", f"{DATE}/EC01"} if to_csdata_enable else {f"{DATE}/CS02EC"}
     assert set(app.multiselect(key="full_init_cs_selection").value) == expected
-    if to_csdata_enable:
-        reopened = AppTest.from_string(script).run(timeout=30)
-        assert not reopened.exception
-        assert set(reopened.multiselect(key="full_init_cs_selection").value) == expected
+    reopened = AppTest.from_string(script).run(timeout=30)
+    assert not reopened.exception
+    assert set(reopened.multiselect(key="full_init_cs_selection").value) == expected
 
 
 def test_cs_return_can_build_real_affected_plot(layout):
@@ -242,7 +241,7 @@ def test_cs_return_can_build_real_affected_plot(layout):
 
 def test_cs_return_counts_existing_exports_and_keeps_missing_route_for_restore(layout, monkeypatch):
     cosmic, init, mapping, state, state_file = layout
-    missing = cosmic.parent / "CSdata/CS02EC"
+    missing = cosmic.parent / "CSdata" / f"EC{DATE}_02"
     (missing / "a.arc_data").unlink()
     missing.rmdir()
     monkeypatch.setattr(dataset, "build_prefix_plots_for_groups", _fake_plot)
@@ -270,7 +269,7 @@ def test_init_export_preserves_spectra_and_future_cs_route(layout, monkeypatch, 
     result = dataset.run_init_to_cs(*layout, source_id)
     target = Path(result["target_dir"])
     assert target.parent == cosmic.parent / "CSdata"
-    assert target.name == ("CS01EC" if source_id == SOURCE else f"EC{DATE}_01")
+    assert target.name == f"EC{DATE}_03"
     assert not source.exists()
     assert (target / "a.arc_data").read_bytes() == original
     record = load_folder_lineage(cosmic)["folders"][source_id]
@@ -330,15 +329,18 @@ def test_init_export_state_failure_restores_original_folder_and_plot(layout, mon
     assert json.dumps(state.to_payload(), sort_keys=True) == memory_before
 
 
-def test_init_export_refuses_existing_csdata_target(layout):
+def test_init_export_appends_number_without_overwriting_existing_csdata(layout, monkeypatch):
     cosmic, init, mapping, state, state_file = layout
-    target = cosmic.parent / "CSdata" / f"EC{DATE}_01"
+    target = cosmic.parent / "CSdata" / f"EC{DATE}_09"
     target.mkdir()
     (target / "other.arc_data").write_text("600 1\n1000 2\n", encoding="utf-8")
-    before = _snapshot(cosmic.parent)
-    with pytest.raises(FileExistsError):
-        dataset.run_init_to_cs(*layout, f"{DATE}/EC01")
-    assert _snapshot(cosmic.parent) == before
+    before = _snapshot(cosmic.parent / "CSdata")
+    monkeypatch.setattr(dataset, "build_prefix_plots_for_groups", _fake_plot)
+    result = dataset.run_init_to_cs(*layout, f"{DATE}/EC01")
+    assert Path(result["target_dir"]).name == f"EC{DATE}_10"
+    after = _snapshot(cosmic.parent / "CSdata")
+    assert {key: after[key] for key in before} == before
+    assert (Path(result["target_dir"]) / "a.arc_data").is_file()
 
 
 def test_ordinary_source_can_move_both_directions_without_recalculation(layout, monkeypatch):
