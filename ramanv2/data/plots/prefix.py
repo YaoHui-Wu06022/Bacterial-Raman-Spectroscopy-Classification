@@ -14,12 +14,16 @@ import numpy as np
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
-from ramanv2.common.naming import build_natural_key, parse_folder_prefix
+from ramanv2.common.naming import (
+    NON_TRAINING_FOLDER_NAMES,
+    PIPELINE_RESERVED_FOLDER_NAMES,
+    build_natural_key,
+    parse_folder_prefix,
+)
 from ramanv2.common.arc_data import read_raw_arc_data
 from ramanv2.common.plotting import add_bad_band_spans, configure_matplotlib_fonts
 from ramanv2.core.config import InputConfig
 from ramanv2.data.config import DEFAULT_BUILD_CONFIG, DataBuildConfig
-from ramanv2.data.profiles import get_dataset_dir, get_profile
 from ramanv2.spectra.bands import build_valid_mask
 from ramanv2.spectra.normalize import normalize_spectrum
 from ramanv2.spectra.preprocess import estimate_baseline
@@ -62,7 +66,7 @@ PREFIX_PLOT_COLORS = (
     "#5e7b87",
 )
 PLOT_STATE_FIELDS = ("genus", "folder", "prefix", "file_count", "file_signature")
-PLOT_EXCLUDED_NAMES = {"小球", "shift", "delete", ".raman_pipeline"}
+PLOT_EXCLUDED_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
 
 
 @dataclass(frozen=True)
@@ -79,21 +83,6 @@ DEFAULT_PREFIX_PLOT_CONFIG = PrefixPlotConfig()
 def resolve_plot_config(config: PrefixPlotConfig | None = None) -> PrefixPlotConfig:
     """返回调用方配置，缺失时使用数据模块默认值。"""
     return DEFAULT_PREFIX_PLOT_CONFIG if config is None else config
-
-
-@dataclass(frozen=True)
-class PlotPaths:
-    """描述审核总览图的输入与输出位置。"""
-
-    init_dir: Path
-    output_dir: Path
-
-
-def resolve_plot_paths(dataset_key: str) -> PlotPaths:
-    """按 profile 解析审核总览图的固定路径。"""
-    profile = get_profile(dataset_key)
-    dataset_dir = get_dataset_dir(profile)
-    return PlotPaths(dataset_dir / profile.root_init, dataset_dir / "fig_init")
 
 
 def build_plot_axis(config: PrefixPlotConfig) -> np.ndarray:
@@ -372,16 +361,6 @@ def plot_prefix_init(
     return outputs
 
 
-def plot_prefix_dataset(
-    dataset_key: str = "GN",
-    force_enable: bool = False,
-    config: PrefixPlotConfig | None = None,
-) -> list[Path]:
-    """按 profile 生成 prefix-plot，保留 data CLI 的既有入口。"""
-    paths = resolve_plot_paths(dataset_key)
-    return plot_prefix_init(paths.init_dir, paths.output_dir, force_enable, config)
-
-
 def build_prefix_plots(
     init_root: Path | str,
     output_root: Path | str,
@@ -441,7 +420,6 @@ __all__ = [
     "build_prefix_plots",
     "build_prefix_plots_for_groups",
     "build_plot_state",
-    "plot_prefix_dataset",
     "plot_prefix_init",
     "resolve_plot_config",
 ]

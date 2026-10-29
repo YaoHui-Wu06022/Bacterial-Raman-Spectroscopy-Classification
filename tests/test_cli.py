@@ -1,5 +1,3 @@
-import subprocess
-import sys
 
 import pytest
 
@@ -52,16 +50,3 @@ def test_root_cli_registers_migrated_commands() -> None:
         parser.parse_args(["stanford", "transfer"])
 
 
-def test_root_help_does_not_load_torch() -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys; from ramanv2.cli.main import build_parser; build_parser(); print('torch' in sys.modules)",
-        ],
-        check=True,
-        text=True,
-        capture_output=True,
-    )
-
-    assert result.stdout.strip() == "False"

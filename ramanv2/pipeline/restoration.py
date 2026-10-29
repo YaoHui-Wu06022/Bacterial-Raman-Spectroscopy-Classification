@@ -15,12 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ramanv2.common.arc_data import read_arc_data
-from ramanv2.common.naming import (
-    build_natural_key,
-    is_test_source_folder,
-    parse_folder_prefix,
-    parse_test_folder_prefix,
-)
+from ramanv2.common.naming import build_natural_key, parse_folder_prefix
 from ramanv2.data.calibration.affine import invalidate_calibration_report
 from ramanv2.data.catalog import DatasetMapping
 from ramanv2.pipeline.invalidation import invalidate_downstream
@@ -60,12 +55,6 @@ class DeletedFolder:
     date_name: str
     folder_name: str
     file_count: int
-
-
-def _prefix_for_folder(folder_name: str) -> str:
-    if is_test_source_folder(folder_name):
-        return parse_test_folder_prefix(folder_name).upper()
-    return parse_folder_prefix(folder_name, uppercase_enable=True)
 
 
 def _prefix_to_genus(mapping: DatasetMapping) -> dict[str, str]:
@@ -139,7 +128,7 @@ def scan_deleted_spectra(
             folder_name = folder_entry.name
             if folder_name == BEAD_DIR_NAME and not include_bead:
                 continue
-            prefix = _prefix_for_folder(folder_name)
+            prefix = parse_folder_prefix(folder_name, uppercase_enable=True)
             genus = prefix_genus.get(prefix, "")
             if species_name is not None and species_name not in {genus, prefix, folder_name}:
                 continue

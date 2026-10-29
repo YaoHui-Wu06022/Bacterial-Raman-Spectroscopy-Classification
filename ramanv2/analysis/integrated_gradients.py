@@ -91,31 +91,6 @@ def select_balanced_task_sample_indices(
     return np.asarray(source_indices[selected_positions], dtype=np.int64)
 
 
-def select_balanced_class_inputs(
-    inputs: torch.Tensor,
-    labels: torch.Tensor,
-    total_limit: int,
-    max_per_class: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """在归因预算内按类别稳定抽取输入，避免索引排序造成类别缺失。"""
-    if inputs.size(0) != labels.size(0):
-        raise ValueError("归因输入和标签数量不一致")
-    if total_limit < 1:
-        raise ValueError("归因样本总数上限必须至少为 1")
-    if max_per_class < 1:
-        raise ValueError("每类归因样本上限必须至少为 1")
-    class_ids = torch.unique(labels, sorted=True)
-    if len(class_ids) > total_limit:
-        raise ValueError("归因样本总数上限小于实际类别数")
-    quota = min(max_per_class, total_limit // len(class_ids))
-    selected = []
-    for class_id in class_ids:
-        class_indices = torch.nonzero(labels == class_id, as_tuple=False).flatten()
-        selected.append(class_indices[:quota])
-    selected_indices = torch.cat(selected).sort().values
-    return inputs.index_select(0, selected_indices), labels.index_select(0, selected_indices)
-
-
 def compute_integrated_gradients(
     model: torch.nn.Module,
     inputs: torch.Tensor,

@@ -29,7 +29,7 @@ from ramanv2.training.losses import (
 )
 from ramanv2.training.optimizer import build_optimizer, build_scheduler
 from ramanv2.training.split import TrainTask
-from ramanv2.training.validation import evaluate_validation_loader
+from ramanv2.training.validation import evaluate_validation_loader, map_local_targets
 
 
 @dataclass(frozen=True)
@@ -460,7 +460,7 @@ def _compute_batch_losses(
 ) -> dict[str, torch.Tensor]:
     """计算主分类损失及启用时参与的 Align、SupCon 损失。"""
     level_targets = _select_training_labels(labels, train_task)
-    local_targets = _map_local_targets(level_targets, label_map_tensor)
+    local_targets = map_local_targets(level_targets, label_map_tensor)
     valid_mask = local_targets >= 0
     if valid_mask.any():
         valid_logits = logits[valid_mask]
@@ -502,19 +502,6 @@ def _select_training_labels(
     if labels.ndim != 2:
         return labels
     return labels[:, train_task.level_index]
-
-
-def _map_local_targets(
-    targets: torch.Tensor,
-    label_map_tensor: torch.Tensor | None,
-) -> torch.Tensor:
-    """将全局类别索引映射为父类子模型使用的局部标签索引。"""
-    if label_map_tensor is None:
-        return targets
-    invalid_mask = targets < 0
-    local_targets = label_map_tensor[targets.clamp_min(0)]
-    local_targets[invalid_mask] = -1
-    return local_targets
 
 
 def _apply_gradient_step(

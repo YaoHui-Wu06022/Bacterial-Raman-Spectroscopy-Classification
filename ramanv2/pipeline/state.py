@@ -6,12 +6,11 @@
 from __future__ import annotations
 
 import json
-import os
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
+
+from ramanv2.common.publishing import write_text_atomic
 
 
 PIPELINE_STATE_VERSION = 1
@@ -164,43 +163,11 @@ def load_pipeline_state(path: Path | str) -> PipelineState:
 
 
 def save_pipeline_state(path: Path | str, state: PipelineState) -> None:
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
     state.updated_at = datetime.now(timezone.utc).isoformat()
-    # 采集目录在 Windows 上可能继承只读属性，先确保状态目录和旧状态文件可写。
-    try:
-        target.parent.chmod(0o700)
-    except OSError:
-        pass
-    if target.exists():
-        try:
-            target.chmod(0o600)
-        except OSError:
-            pass
-
-    # 使用唯一临时文件，避免多个浏览器会话同时保存时互相覆盖临时文件。
-    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
-    try:
-        temporary.write_text(
-            json.dumps(state.to_payload(), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        for attempt, delay in enumerate((0.0, 0.05, 0.2, 0.5)):
-            if delay:
-                time.sleep(delay)
-            try:
-                os.replace(temporary, target)
-                break
-            except PermissionError:
-                if attempt == 3:
-                    raise
-                # 状态文件可能正被另一个页面刷新短暂占用，下一次循环重试。
-    finally:
-        if temporary.exists():
-            try:
-                temporary.unlink()
-            except OSError:
-                pass
+    write_text_atomic(
+        path,
+        json.dumps(state.to_payload(), ensure_ascii=False, indent=2) + "\n",
+    )
 
 
 def _optional_string(value: object) -> str | None:

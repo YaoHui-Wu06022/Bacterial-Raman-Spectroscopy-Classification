@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from ramanv2.core.config import ExecutionConfig, TrainingConfig
+
+
+# 自动解析加载进程数时的上限，避免在超大核数机器上占满全部 CPU。
+MAX_LOADER_WORKERS = 8
 
 
 @dataclass(frozen=True)
@@ -140,9 +145,17 @@ def _build_loader_spec(training_config: TrainingConfig, shuffle_enable: bool) ->
     )
     return LoaderSpec(
         batch_size=int(training_config.batch_size),
-        num_workers=int(workers),
+        num_workers=resolve_loader_worker_count(workers),
         shuffle_enable=shuffle_enable,
         pin_memory_enable=bool(training_config.loader_pin_memory),
         persistent_workers_enable=bool(training_config.loader_persistent_workers),
         prefetch_factor=int(training_config.loader_prefetch_factor),
     )
+
+
+def resolve_loader_worker_count(configured: int) -> int:
+    """把配置的加载进程数解析为实际值；-1 表示按 CPU 核数自动取。"""
+    value = int(configured)
+    if value >= 0:
+        return value
+    return min(MAX_LOADER_WORKERS, max(1, os.cpu_count() or 1))

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +20,7 @@ from ramanv2.analysis.layer_attribution import (
 from ramanv2.analysis.report import save_task_reports, write_aggregate_reports
 from ramanv2.analysis.se_summary import write_se_summary
 from ramanv2.analysis.task import build_parent_tasks, build_run_task
+from ramanv2.common.run_manifest import write_run_manifest
 from ramanv2.evaluation.context import load_evaluation_context, resolve_level_name
 from ramanv2.inference.predictor import load_predictor
 from ramanv2.spectra.axis import expected_wavenumbers
@@ -145,7 +145,13 @@ def _run_tasks(
         context.config.analysis.separate_class_plots_use,
     )
     if mode == "parent-routed":
-        _write_used_runs(tasks, output_dir.parent / "used_runs.json", tasks[0].level_name)
+        runs = {str(task.parent_id): task.entry.get("run_dir") for task in tasks}
+        write_run_manifest(
+            output_dir.parent / "used_runs.json",
+            "parent-routed",
+            tasks[0].level_name,
+            runs,
+        )
     return output_dir
 
 
@@ -314,15 +320,6 @@ def _inherit_single_child_summaries(
             }
         )
     return inherited
-
-
-def _write_used_runs(tasks, output_path: Path, level_name: str) -> None:
-    """记录 parent-routed 分析实际使用的模型 run。"""
-    runs = {str(task.parent_id): task.entry.get("run_dir") for task in tasks}
-    output_path.write_text(
-        json.dumps({"mode": "parent-routed", "target_level": level_name, "runs": runs}, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
 
 
 def _write_analysis_log(

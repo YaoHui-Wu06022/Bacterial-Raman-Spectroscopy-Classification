@@ -1,15 +1,15 @@
-"""在 PyCharm 或 Colab 中直接运行的独立测试集推理入口。"""
+"""在任意 Jupyter / Python 环境中直接运行的独立测试集推理入口。"""
 
 from ramanv2.inference.runner import run_independent_inference
 
 
-# 本次独立推理任务范围；输入目录固定使用 CSdata。
+# 本次独立推理任务范围；输入目录固定使用 init_test。
 SOURCE_DIR = "output/ramanv2/GP/20260809_103407"
 # 填写实验目录内的历史 run 时，推理仅加载该 run，不改写 hierarchy_meta.json。
 MODEL_RUN_DIR = None
 LEVEL_NAME = "level_2"
 PROFILE_ID = "GN"
-TEST_DIR = "dataset/CSdata"
+TEST_DIR = "dataset/init_test"
 ONE_DIR = None
 TOP_K = 3
 CPU_ENABLE = False
@@ -18,7 +18,7 @@ PLOT_TRAIN_MEAN_ENABLE = False
 
 
 def main():
-    """按顶部任务范围直接使用 CSdata 执行独立推理。"""
+    """按顶部任务范围直接使用 init_test 执行独立推理。"""
     if not SOURCE_DIR:
         raise ValueError("请先在 infer.py 里填写 SOURCE_DIR")
 

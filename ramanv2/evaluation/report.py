@@ -31,6 +31,7 @@ def write_model_report(
     paths: Sequence[str],
     labels: Sequence[int],
     predictions: Sequence[int],
+    sample_name: str = "val_eval_results.csv",
 ) -> Path:
     """写入模型评估的逐样本结果、指标报告和混淆矩阵。"""
     target_dir = Path(result_dir)
@@ -43,7 +44,7 @@ def write_model_report(
         predictions,
         report_name="classification_report.txt",
         matrix_name="confusion_matrix_raw.csv",
-        sample_name="val_eval_results.csv",
+        sample_name=sample_name,
     )
     return target_dir
 

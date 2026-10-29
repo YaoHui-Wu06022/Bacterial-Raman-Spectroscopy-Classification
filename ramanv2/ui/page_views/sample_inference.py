@@ -1,4 +1,4 @@
-"""样本推理、CS 文件夹筛选和测试输入缓存页面。"""
+"""样本推理、测试文件夹筛选和测试输入缓存页面。"""
 
 from __future__ import annotations
 
@@ -8,23 +8,23 @@ from typing import Any
 
 import streamlit as st
 
-from ramanv2.common.naming import build_natural_key, parse_test_folder_prefix
-from ramanv2.core.paths import DATASET_ROOT, PROJECT_ROOT
+from ramanv2.common.naming import build_natural_key, parse_folder_prefix
+from ramanv2.core.paths import PROJECT_ROOT
 from ramanv2.core.runtime import resolve_device
-from ramanv2.data.profiles import get_dataset_dir, list_profiles
+from ramanv2.data.profiles import get_dataset_dir, list_profiles, resolve_test_root
 from ramanv2.inference.cache import build_test_cache
 from ramanv2.inference.labels import build_expected_label_lookup
 from ramanv2.inference.predictor import load_predictor
 from ramanv2.inference.runner import run_independent_inference
 from ramanv2.ui.cache import (
-    cached_cs_folder_names,
+    cached_test_folder_names,
     cached_experiment_dirs,
     cached_json_file,
 )
 from ramanv2.ui.state import invalidate_ui_cache, ui_cache_version
 
 
-CS_ROOT = DATASET_ROOT / "CSdata"
+TEST_ROOT = resolve_test_root(PROJECT_ROOT)
 
 
 def render_sample_inference_page() -> None:
@@ -54,10 +54,7 @@ def render_sample_inference_page() -> None:
     if not isinstance(meta, dict):
         st.error("实验目录缺少有效的 hierarchy_meta.json。")
         return
-    level_names = [
-        str(name)
-        for name in (meta.get("head_names") or meta.get("level_names") or [])
-    ]
+    level_names = _predict_level_names(meta)
     if not level_names:
         st.error("实验元数据中没有可用预测层级。")
         return
@@ -69,9 +66,9 @@ def render_sample_inference_page() -> None:
     metrics[1].metric("预测层级", level_name)
     metrics[2].metric("模型类别数", len(target_labels))
 
-    folders = _list_cs_folders()
+    folders = _list_test_folders()
     if not folders:
-        st.info("dataset/CSdata 下没有可推理的 CS 文件夹。")
+        st.info("dataset/init_test 下没有可推理的测试文件夹。")
         _render_existing_result(experiment_dir, level_name)
         return
     expected_lookup = build_expected_label_lookup(meta, level_name)
@@ -85,7 +82,7 @@ def render_sample_inference_page() -> None:
         key=build_natural_key,
     )
     selected_categories = st.multiselect(
-        "按 CS 类别筛选",
+        "按测试类别筛选",
         category_options,
         default=default_categories,
         key="inference_categories",
@@ -103,7 +100,7 @@ def render_sample_inference_page() -> None:
         key="inference_folders",
     )
     if not selected_folders:
-        st.warning("请至少选择一个 CS 文件夹。")
+        st.warning("请至少选择一个测试文件夹。")
         _render_existing_result(experiment_dir, level_name)
         return
 
@@ -127,8 +124,8 @@ def _list_experiment_dirs(profile_id: str) -> list[Path]:
     ]
 
 
-def _list_cs_folders() -> list[str]:
-    return list(cached_cs_folder_names(str(CS_ROOT.resolve()), ui_cache_version("inference")))
+def _list_test_folders() -> list[str]:
+    return list(cached_test_folder_names(str(TEST_ROOT.resolve()), ui_cache_version("inference")))
 
 
 @st.cache_resource(show_spinner=False)
@@ -143,6 +140,12 @@ def _get_cached_predictor(experiment_dir: Path, level_name: str):
     return _load_cached_predictor(str(experiment_dir.resolve()), level_name, meta_path.stat().st_mtime_ns)
 
 
+def _predict_level_names(meta: dict[str, Any]) -> list[str]:
+    """head_names 末位是 leaf 汇总头，预测层级只保留可训练层级。"""
+    names = meta.get("head_names") or meta.get("level_names") or []
+    return [str(name) for name in names if str(name) != "leaf"]
+
+
 def _target_class_names(meta: dict[str, Any], level_name: str) -> list[str]:
     names = (meta.get("class_names_by_level") or {}).get(level_name, [])
     return [str(name) for name in names]
@@ -155,7 +158,7 @@ def _build_folder_info(
 ) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     for folder in folders:
-        expected = expected_lookup.get(parse_test_folder_prefix(folder))
+        expected = expected_lookup.get(parse_folder_prefix(folder, uppercase_enable=True))
         known = expected is not None and expected in target_labels
         result.append(
             {
@@ -178,8 +181,8 @@ def _build_cache(
         with st.status("正在更新测试缓存…", expanded=True) as status:
             status.write("正在复用或加载实验模型。")
             predictor = _get_cached_predictor(experiment_dir, level_name)
-            status.write("正在检查新增和已修改的 CS 光谱。")
-            report = build_test_cache(CS_ROOT, cache_root, folder_names, predictor)
+            status.write("正在检查新增和已修改的测试光谱。")
+            report = build_test_cache(TEST_ROOT, cache_root, folder_names, predictor)
             status.update(label="测试缓存更新完成", state="complete", expanded=False)
         invalidate_ui_cache("inference")
         st.success(
@@ -203,7 +206,7 @@ def _run_inference(
             status.write("正在加载或复用实验模型。")
             predictor = _get_cached_predictor(experiment_dir, level_name)
             status.write("正在检查测试数据缓存。")
-            build_report = build_test_cache(CS_ROOT, cache_root, folder_names, predictor)
+            build_report = build_test_cache(TEST_ROOT, cache_root, folder_names, predictor)
             status.write("正在执行预测并生成结果报告。")
             result_dir = run_independent_inference(
                 experiment_dir,

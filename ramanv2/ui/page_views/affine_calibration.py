@@ -16,8 +16,8 @@ from ramanv2.pipeline.shift import rebuild_shift_data
 from ramanv2.ui.page_context import PageContext
 from ramanv2.ui.state import (
     invalidate_ui_cache,
-    load_page_state as _load_state,
-    save_page_state as _save,
+    load_page_state,
+    save_page_state,
 )
 
 
@@ -176,7 +176,7 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
         if not dates:
             st.info("当前没有可复用仿射参数的日期。")
             return
-        st.caption("复用已有仿射参数，从 cosmic_data 更新所选日期的 shift_data。init/CSdata 请到「数据集获取」页按文件夹更新。")
+        st.caption("复用已有仿射参数，从 cosmic_data 更新所选日期的 shift_data。init/init_test 请到「数据集获取」页按文件夹更新。")
         selected = st.selectbox("选择更新日期", dates, key="affine_rebuild_date")
         if not st.button("更新所选日期", key="affine_rebuild_date_confirm", width="stretch"):
             return
@@ -185,16 +185,16 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
                 result = run_date_rebuild(context.data_root, context.shift_root, state, context.state_file, selected)
             for name in ("cleaning", "affine", "dataset"):
                 invalidate_ui_cache(name)
-            st.session_state["affine_date_rebuild_message"] = f"{selected} 的 shift_data 已更新（{result['spectrum_count']} 条光谱）。init/CSdata 可到「数据集获取」页按文件夹更新。"
+            st.session_state["affine_date_rebuild_message"] = f"{selected} 的 shift_data 已更新（{result['spectrum_count']} 条光谱）。init/init_test 可到「数据集获取」页按文件夹更新。"
             st.rerun()
         except (OSError, ValueError, RuntimeError, TypeError) as error:
             st.error(f"日期更新失败：{error}")
 
 
 def render_affine_calibration_page(context: PageContext) -> None:
-    state = _load_state(context)
+    state = load_page_state(context)
     if reconcile_cleaning_records(context.data_root, state.cleaning):
-        _save(context, state)
+        save_page_state(context, state)
     cleaned_dates = sorted(state.cleaning.completed_date_names)
     eligible_dates = [
         date_name for date_name in cleaned_dates
@@ -213,7 +213,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
     affine_dates = sorted(report_affine_dates)
     if state.affine_completed_dates != report_affine_dates:
         state.affine_completed_dates = set(report_affine_dates)
-        _save(context, state)
+        save_page_state(context, state)
     failed_dates = [
         date_name
         for date_name, report in reports.items()
@@ -273,7 +273,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
         invalidate_ui_cache("dataset")
         invalidate_ui_cache("cleaning")
         invalidate_ui_cache("affine")
-        _save(context, state)
+        save_page_state(context, state)
         st.session_state["affine_analyze_reports"] = reports
         st.rerun()
     _render_analyze_reports(st.session_state.pop("affine_analyze_reports", None))
@@ -324,7 +324,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
                     state.dataset_builds.pop("latest", None)
                     invalidate_ui_cache("cleaning")
                     invalidate_ui_cache("dataset")
-                    _save(context, state)
+                    save_page_state(context, state)
                     if result.missing_paths:
                         st.warning(f"有 {len(result.missing_paths)} 条光谱已经不存在，其余数据已移除。")
                     else:

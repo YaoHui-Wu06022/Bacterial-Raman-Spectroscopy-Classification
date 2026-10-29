@@ -98,13 +98,10 @@ def cached_run_dirs(level_dir: str, version: int) -> tuple[str, ...]:
 def cached_experiment_dirs(project_root: str, profile_id: str, version: int) -> tuple[str, ...]:
     """缓存样本推理和结果分析共用的实验目录扫描。"""
     del version
-    root = Path(project_root)
-    roots = (root / "output" / profile_id, root / "output" / "raman" / profile_id)
+    root = Path(project_root) / "output" / profile_id
     result: set[Path] = set()
-    for profile_root in roots:
-        if not profile_root.is_dir():
-            continue
-        for path in profile_root.iterdir():
+    if root.is_dir():
+        for path in root.iterdir():
             if path.is_dir() and (path / "hierarchy_meta.json").is_file():
                 result.add(path.resolve())
     return tuple(str(path) for path in sorted(result, key=lambda path: build_natural_key(path.name), reverse=True))
@@ -115,15 +112,10 @@ def cached_result_experiment_dirs(output_root: str, version: int) -> tuple[str, 
     """缓存结果分析页的完整实验目录扫描。"""
     del version
     root = Path(output_root)
-    roots = [root]
-    if (root / "raman").is_dir():
-        roots.append(root / "raman")
     result: set[Path] = set()
     markers = ("shared_config.yaml", "hierarchy_meta.json", "train_split.json", "val_split.json")
-    for profile_root in roots:
-        if not profile_root.is_dir():
-            continue
-        for profile_dir in profile_root.iterdir():
+    if root.is_dir():
+        for profile_dir in root.iterdir():
             if not profile_dir.is_dir():
                 continue
             for path in profile_dir.iterdir():
@@ -133,8 +125,8 @@ def cached_result_experiment_dirs(output_root: str, version: int) -> tuple[str, 
 
 
 @st.cache_data(show_spinner=False)
-def cached_cs_folder_names(root_dir: str, version: int) -> tuple[str, ...]:
-    """缓存 CSdata 的文件夹扫描。"""
+def cached_test_folder_names(root_dir: str, version: int) -> tuple[str, ...]:
+    """缓存 init_test 的文件夹扫描。"""
     del version
     root = Path(root_dir)
     if not root.is_dir():
@@ -146,33 +138,12 @@ def cached_cs_folder_names(root_dir: str, version: int) -> tuple[str, ...]:
     )
 
 
-@st.cache_data(show_spinner=False)
-def cached_approved_affine_dates(shift_root: str, data_root: str, version: int) -> tuple[str, ...]:
-    """缓存可进行文件夹补偿的日期列表。"""
-    del version
-    shift_path = Path(shift_root)
-    data_path = Path(data_root)
-    result: list[str] = []
-    for date_dir in sorted(shift_path.iterdir(), key=lambda item: build_natural_key(item.name)) if shift_path.is_dir() else ():
-        if not date_dir.is_dir() or not date_dir.name.isdigit() or not (data_path / date_dir.name).is_dir():
-            continue
-        report_path = date_dir / "shift" / "affine.json"
-        try:
-            payload = json.loads(report_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
-            continue
-        if isinstance(payload, dict) and payload.get("status") == "manual_approved":
-            result.append(date_dir.name)
-    return tuple(result)
-
-
 __all__ = [
     "cached_dataset_index",
     "cached_dataset_summary",
     "cached_dataset_taxon_counts",
     "cached_directory_names",
-    "cached_cs_folder_names",
-    "cached_approved_affine_dates",
+    "cached_test_folder_names",
     "cached_experiment_dirs",
     "cached_file_bytes",
     "cached_json_file",

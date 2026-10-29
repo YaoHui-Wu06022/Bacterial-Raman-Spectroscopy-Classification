@@ -13,28 +13,23 @@ from uuid import uuid4
 import numpy as np
 
 from ramanv2.common.arc_data import read_arc_data
-from ramanv2.common.naming import build_natural_key, is_test_source_folder, parse_test_folder_prefix
+from ramanv2.common.naming import (
+    NON_TRAINING_FOLDER_NAMES,
+    PIPELINE_RESERVED_FOLDER_NAMES,
+    build_natural_key,
+    parse_folder_prefix,
+)
 from ramanv2.common.publishing import create_temporary_path, publish_directory, rename_directory, preserve_paths, _remove_path
 from ramanv2.data.count import summarize_dataset
+from ramanv2.data.profiles import TEST_ROOT_NAME
 from ramanv2.data.catalog import DatasetMapping
 from ramanv2.pipeline.lineage import initialize_folder_lineage, load_folder_lineage, record_output_path, save_folder_lineage, lineage_path
 
 
-SPECIAL_NAMES = {"小球", "shift", "delete", "audit_runs", ".raman_pipeline"}
+SPECIAL_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
 CANONICAL_FOLDER_PATTERN = re.compile(r"^([A-Za-z]+)(\d{8})_(\d+)$")
 DATE_PATTERN = re.compile(r"^\d{8}$")
 BuildMode = Literal["full", "incremental", "replace_dates"]
-
-
-@dataclass(frozen=True)
-class InitBuildReport:
-    """保留给调用方的构建报告类型。"""
-
-    source_dates: tuple[str, ...]
-    skipped_dates: tuple[str, ...]
-    source_files: int
-    output_files: int
-    generated_profiles: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -62,11 +57,11 @@ def build_full_init(
     mapping: DatasetMapping,
     completed_dates: list[str] | set[str] | tuple[str, ...],
     test_root: Path | str | None = None,
-    selected_cs_folders: list[str] | set[str] | tuple[str, ...] | None = None,
+    selected_test_folders: list[str] | set[str] | tuple[str, ...] | None = None,
     *,
-    rebuild_csdata_enable: bool = True,
+    rebuild_test_enable: bool = True,
 ) -> dict[str, object]:
-    """从通过门禁的 shift 日期构建普通 init 与选定的独立 CSdata。"""
+    """从通过门禁的 shift 日期构建普通 init 与选定的独立 init_test。"""
     cosmic_root = Path(shift_root).resolve().parent / "cosmic_data"
     if cosmic_root.is_dir():
         initialize_folder_lineage(cosmic_root, mapping)
@@ -86,7 +81,7 @@ def build_full_init(
     resolved_test_root = (
         Path(test_root).resolve()
         if test_root is not None
-        else Path(init_root).resolve().parent / "CSdata"
+        else Path(init_root).resolve().parent / TEST_ROOT_NAME
     )
     report = build_init_datasets(
         shift_root,
@@ -95,8 +90,8 @@ def build_full_init(
         mapping,
         completed_dates,
         test_root=resolved_test_root,
-        selected_test_folders=selected_cs_folders,
-        publish_test_enable=rebuild_csdata_enable,
+        selected_test_folders=selected_test_folders,
+        publish_test_enable=rebuild_test_enable,
     )
     report["generated_profiles"] = []
     report["profile_stats"] = {}
@@ -104,8 +99,8 @@ def build_full_init(
     return report
 
 
-def build_cs_folder(source_folder: Path, target_folder: Path) -> int:
-    """原样发布一组已校正的 CS 谱；先完整复制校验，失败保留旧组。"""
+def build_test_folder(source_folder: Path, target_folder: Path) -> int:
+    """原样发布一组已校正的测试谱；先完整复制校验，失败保留旧组。"""
     return build_spectrum_folder(source_folder, target_folder)
 
 
@@ -114,7 +109,7 @@ def build_spectrum_folder(source_folder: Path, target_folder: Path, filenames: s
     source = source_folder.resolve()
     target = target_folder.resolve()
     if target == source or source in target.parents or target in source.parents:
-        raise ValueError("CS 来源与输出目录不能互相包含")
+        raise ValueError("测试来源与输出目录不能互相包含")
     files = sorted((path for path in source.iterdir() if path.is_file() and path.suffix.lower() == ".arc_data"), key=lambda path: build_natural_key(path.name))
     if filenames is not None:
         if filenames - {path.name for path in files}:
@@ -140,7 +135,7 @@ def build_profile_dataset(
     profile_name: str,
     catalog: DatasetMapping,
 ) -> dict[str, object]:
-    """从全量 init 原子构建一个固定 Profile，并返回 count 统计。"""
+    """从全量 init 原子构建一个固定 Profile，并从全局 init_test 派生其测试集。"""
     if profile_name not in catalog.datasets:
         raise ValueError(f"未知 Profile：{profile_name}")
     mapping = catalog.subset(profile_name)
@@ -159,7 +154,7 @@ def build_profile_datasets(
     profile_roots: dict[str, Path | str],
     mapping: DatasetMapping,
 ) -> dict[str, object]:
-    """从全量 init 按属名单原样构建各 profile init 目录。"""
+    """从全量 init 构建各 profile init，并从全局 init_test 派生 profile 测试集。"""
     source_root = Path(init_root).resolve()
     roots = {name: Path(path).resolve() for name, path in profile_roots.items()}
     if not source_root.is_dir():
@@ -174,8 +169,18 @@ def build_profile_datasets(
         if root.exists() and not root.is_dir():
             raise NotADirectoryError(f"profile 输出目录不是目录：{root}")
 
+    master_test_root = source_root.parent / TEST_ROOT_NAME
+    test_targets: dict[str, Path] = {}
+    if master_test_root.is_dir():
+        test_targets = {
+            name: roots[name].parent / TEST_ROOT_NAME
+            for name in mapping.datasets
+        }
+        _validate_profile_test_targets(source_root, roots, test_targets)
+
     source_genera = {path.name: path for path in source_root.iterdir() if path.is_dir()}
     temporary_roots: dict[str, Path] = {}
+    temporary_test_roots: dict[str, Path] = {}
     profiles: dict[str, dict[str, object]] = {}
     try:
         for profile_name, genera in mapping.datasets.items():
@@ -212,9 +217,26 @@ def build_profile_datasets(
                 "output_files": source_files,
                 "output_root": str(roots[profile_name]),
             }
-        _publish_all(temporary_roots, roots)
+            if profile_name in test_targets:
+                test_folder_count, test_files = _stage_profile_test_set(
+                    master_test_root,
+                    temporary_test_roots,
+                    test_targets[profile_name],
+                    profile_name,
+                    mapping,
+                )
+                profiles[profile_name]["test_folder_count"] = test_folder_count
+                profiles[profile_name]["test_files"] = test_files
+                profiles[profile_name]["test_output_root"] = str(test_targets[profile_name])
+        publish_roots = dict(temporary_roots)
+        publish_targets = dict(roots)
+        for profile_name, temporary in temporary_test_roots.items():
+            key = f"{profile_name}__{TEST_ROOT_NAME}"
+            publish_roots[key] = temporary
+            publish_targets[key] = test_targets[profile_name]
+        _publish_all(publish_roots, publish_targets)
     except Exception:
-        for temporary in temporary_roots.values():
+        for temporary in (*temporary_roots.values(), *temporary_test_roots.values()):
             shutil.rmtree(temporary, ignore_errors=True)
         raise
     return {
@@ -224,6 +246,70 @@ def build_profile_datasets(
         "profile_count": len(profiles),
         "source_files": sum(int(item["source_files"]) for item in profiles.values()),
     }
+
+
+def _validate_profile_test_targets(
+    source_root: Path,
+    roots: dict[str, Path],
+    test_targets: dict[str, Path],
+) -> None:
+    """校验 profile init 与派生测试集目录不重复、不互相嵌套。"""
+    targets = [*roots.values(), *test_targets.values()]
+    if len(set(targets)) != len(targets):
+        raise ValueError("profile init 与 init_test 输出目录不能重复")
+    for target in test_targets.values():
+        if target.exists() and not target.is_dir():
+            raise NotADirectoryError(f"profile 测试集输出不是目录：{target}")
+        if target == source_root or source_root in target.parents or target in source_root.parents:
+            raise ValueError("profile 测试集输出目录不能与全量 init 互相嵌套")
+    for init_path in roots.values():
+        for test_path in test_targets.values():
+            if init_path == test_path or init_path in test_path.parents or test_path in init_path.parents:
+                raise ValueError("profile init 与 init_test 输出目录不能互相嵌套")
+
+
+def _stage_profile_test_set(
+    master_test_root: Path,
+    temporary_test_roots: dict[str, Path],
+    target_root: Path,
+    profile_name: str,
+    mapping: DatasetMapping,
+) -> tuple[int, int]:
+    """把全局 init_test 中属于该 profile 的文件夹复制到临时测试集目录。"""
+    genera = set(mapping.datasets[profile_name])
+    prefix_to_genus = {
+        prefix: genus
+        for genus, prefixes in mapping.genera.items()
+        for prefix in prefixes
+    }
+    temporary = create_temporary_path(target_root)
+    temporary.mkdir(parents=True, exist_ok=False)
+    temporary_test_roots[profile_name] = temporary
+    folder_count = 0
+    file_count = 0
+    for folder in sorted(
+        (path for path in master_test_root.iterdir() if path.is_dir()),
+        key=lambda path: build_natural_key(path.name),
+    ):
+        prefix = parse_folder_prefix(folder.name, uppercase_enable=True)
+        if prefix_to_genus.get(prefix) not in genera:
+            continue
+        files = sorted(folder.rglob("*.arc_data"), key=lambda path: build_natural_key(path.as_posix()))
+        if not files:
+            continue
+        for source_file in files:
+            _validate_spectrum(source_file)
+            relative = source_file.relative_to(folder)
+            target = temporary / folder.name / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, target)
+            source_axis, source_intensity = read_arc_data(source_file)
+            target_axis, target_intensity = read_arc_data(target)
+            if not np.array_equal(source_axis, target_axis) or not np.array_equal(source_intensity, target_intensity):
+                raise ValueError(f"复制后光谱校验失败：{source_file}")
+            file_count += 1
+        folder_count += 1
+    return folder_count, file_count
 
 
 def build_init_datasets(
@@ -239,7 +325,7 @@ def build_init_datasets(
     *,
     publish_test_enable: bool = True,
 ) -> dict[str, object]:
-    """按批准日期构建 init；replace_dates 仅替换已生成日期及已导出的 CS 组。"""
+    """按批准日期构建 init；replace_dates 仅替换已生成日期及已导出的测试组。"""
     if mode not in {"full", "incremental", "replace_dates"}:
         raise ValueError("mode 必须是 full、incremental 或 replace_dates")
     if mode == "replace_dates" and (date_names is None or profile_roots):
@@ -288,9 +374,9 @@ def build_init_datasets(
     }
     cosmic_root = source_root.parent / "cosmic_data"
     test_target_names = {
-        source_id: Path(record["outputs"]["csdata"]).name
+        source_id: Path(record["outputs"]["test"]).name
         for source_id, record in load_folder_lineage(cosmic_root)["folders"].items()
-        if record.get("outputs", {}).get("csdata")
+        if record.get("outputs", {}).get("test")
     }
     for date_name in eligible_dates:
         groups.extend(
@@ -298,7 +384,6 @@ def build_init_datasets(
                 source_root / date_name,
                 prefix_to_genus,
                 selected_keys,
-                include_unknown_tests=resolved_test_root is not None or not publish_test_enable,
                 test_target_names=test_target_names,
             )
         )
@@ -316,7 +401,7 @@ def build_init_datasets(
     if resolved_test_root is not None:
         destination_roots["__test__"] = resolved_test_root
     replaced_init_dirs: list[Path] = []
-    replaced_cs_names: set[str] = set()
+    replaced_test_names: set[str] = set()
     if mode == "replace_dates":
         replaced_init_dirs = [
             path.relative_to(full_root)
@@ -327,19 +412,19 @@ def build_init_datasets(
         if not replaced_init_dirs:
             destination_roots.pop("__all__", None)
         if resolved_test_root is not None:
-            replaced_cs_names = {
+            replaced_test_names = {
                 name for key in selected_keys
                 if "/" in key and key.split("/", 1)[0] in eligible_dates
                 for name in [test_target_names.get(key, key.split("/", 1)[1])]
                 if (resolved_test_root / name).is_dir()
             }
-            if any(Path(name).name != name or name in {".", ".."} for name in replaced_cs_names):
-                raise ValueError("无效的 CSdata 输出文件夹")
-            if not replaced_cs_names:
+            if any(Path(name).name != name or name in {".", ".."} for name in replaced_test_names):
+                raise ValueError("无效的 init_test 输出文件夹")
+            if not replaced_test_names:
                 destination_roots.pop("__test__", None)
         groups = [
             group for group in groups
-            if (group.is_test and group.target_name in replaced_cs_names)
+            if (group.is_test and group.target_name in replaced_test_names)
             or (not group.is_test and replaced_init_dirs)
         ]
     _validate_test_group_targets(groups)
@@ -358,12 +443,12 @@ def build_init_datasets(
     profile_stats = {name: 0 for name in roots}
     test_files = 0
     test_folders: set[str] = set()
-    cs_exports: list[dict[str, object]] = []
+    test_exports: list[dict[str, object]] = []
     try:
         if mode == "replace_dates":
             for relative in replaced_init_dirs:
                 _remove_path(temporary_roots["__all__"] / relative)
-            for name in replaced_cs_names:
+            for name in replaced_test_names:
                 _remove_path(temporary_roots["__test__"] / name)
         for group in groups:
             date_stats[group.date_name]["folder_count"] += 1
@@ -384,7 +469,7 @@ def build_init_datasets(
                         else:
                             profile_stats[profile_name] += 1
             if group.is_test:
-                cs_exports.append(
+                test_exports.append(
                     {
                         "source": f"{group.date_name}/{group.source_name or group.source_dir.name}",
                         "source_name": group.source_name or group.source_dir.name,
@@ -413,12 +498,11 @@ def build_init_datasets(
             "test_root": str(resolved_test_root) if resolved_test_root is not None else None,
             "test_files": test_files,
             "test_folders": sorted(test_folders, key=build_natural_key),
-            "cs_folder_count": len(test_folders),
+            "test_folder_count": len(test_folders),
+            "test_source_files": test_files,
             "test_output_files": test_files,
-            "cs_source_files": test_files,
-            "cs_output_files": test_files,
-            "cs_exports": cs_exports,
-            "selected_cs_folders": sorted(selected_keys or set(), key=build_natural_key),
+            "test_exports": test_exports,
+            "selected_test_folders": sorted(selected_keys or set(), key=build_natural_key),
         }
         with preserve_paths([*destination_roots.values(), lineage_path(cosmic_root)]):
             if mode == "replace_dates":
@@ -434,7 +518,7 @@ def build_init_datasets(
                             cosmic_root,
                             group.date_name,
                             group.source_name or group.source_dir.name,
-                            csdata_path=str(resolved_test_root / relative) if resolved_test_root is not None else None,
+                            test_path=str(resolved_test_root / relative) if resolved_test_root is not None else None,
                         )
                         continue
                     profile_paths = {
@@ -475,13 +559,12 @@ def _collect_source_groups(
     prefix_to_genus: dict[str, str],
     selected_test_folders: set[str],
     *,
-    include_unknown_tests: bool = False,
     source_folder_names: set[str] | None = None,
     test_target_names: dict[str, str] | None = None,
 ) -> list[_SourceGroup]:
     by_prefix: dict[str, list[tuple[Path, tuple[Path, ...]]]] = {}
+    test_prefix_counts: dict[str, int] = {}
     groups: list[_SourceGroup] = []
-    cs_prefix_counts: dict[str, int] = {}
     for source_dir in sorted(date_dir.iterdir(), key=lambda path: build_natural_key(path.name)):
         if not source_dir.is_dir() or source_dir.name in SPECIAL_NAMES or source_dir.name.startswith("."):
             continue
@@ -498,28 +581,22 @@ def _collect_source_groups(
         source_key = f"{date_dir.name}/{source_dir.name}"
         prefix = _source_prefix(source_dir.name)
         genus = prefix_to_genus.get(prefix)
-        is_cs_source = is_test_source_folder(source_dir.name)
-        if not is_cs_source and genus is None:
+        if genus is None:
             raise ValueError(f"名单未映射来源前缀：{date_dir.name}/{source_dir.name} ({prefix})")
-        is_selected_test = source_key in selected_test_folders or (include_unknown_tests and is_cs_source and genus is None)
-        if is_selected_test:
+        if source_key in selected_test_folders:
             for source_path in files:
                 _validate_spectrum(source_path)
-            # CSdata 命名沿用 init 模式：{prefix}{date}_{number}，按前缀在日期内递增。
-            if is_cs_source:
-                cs_prefix_counts[prefix] = cs_prefix_counts.get(prefix, 0) + 1
-                default_name = f"{prefix}{date_dir.name}_{cs_prefix_counts[prefix]:02d}"
-            else:
-                default_name = f"{prefix}{date_dir.name}_{source_dir.name}"
+            # 测试组与普通组共用 {prefix}{date}_{序号} 命名，按前缀在日期内递增；
+            # 早期用 {prefix}{date}_{来源目录名} 会产出 EC20231207_EC04 这类异形名。
+            test_prefix_counts[prefix] = test_prefix_counts.get(prefix, 0) + 1
+            default_name = f"{prefix}{date_dir.name}_{test_prefix_counts[prefix]:02d}"
             target_name = (test_target_names or {}).get(source_key, default_name)
             if Path(target_name).name != target_name or target_name in {".", ".."}:
-                raise ValueError("无效的 CSdata 输出文件夹")
+                raise ValueError("无效的 init_test 输出文件夹")
             groups.append(_SourceGroup(
-                date_name=date_dir.name, source_dir=source_dir, genus=genus or "",
+                date_name=date_dir.name, source_dir=source_dir, genus=genus,
                 target_name=target_name, files=files, is_test=True, source_name=source_dir.name,
             ))
-            continue
-        if is_cs_source and genus is None:
             continue
         for source_path in files:
             _validate_spectrum(source_path)
@@ -548,7 +625,7 @@ def _resolve_destinations(
 ) -> list[tuple[str, Path]]:
     if group.is_test:
         if "__test__" not in temporary_roots:
-            raise ValueError("CS 测试目录需要配置 test_root")
+            raise ValueError("测试目录需要配置 test_root")
         return [("__test__", temporary_roots["__test__"] / group.target_name)]
     target_relative = Path(group.genus) / group.target_name
     destinations = [("__all__", temporary_roots["__all__"] / target_relative)]
@@ -567,7 +644,7 @@ def _validate_output_roots(
     if test_root is not None:
         roots.append(test_root)
     if len(set(roots)) != len(roots):
-        raise ValueError("init、profile 和 CSdata 输出目录不能重复")
+        raise ValueError("init、profile 和 init_test 输出目录不能重复")
     for index, root in enumerate(roots):
         for other in roots[index + 1 :]:
             if root in other.parents or other in root.parents:
@@ -616,7 +693,7 @@ def _target_relative(group: _SourceGroup) -> Path:
 
 
 def _validate_test_group_targets(groups: list[_SourceGroup]) -> None:
-    """防止不同日期的同名 CS 目录在一次全量发布中互相覆盖。"""
+    """防止不同日期的同名测试目录在一次全量发布中互相覆盖。"""
     targets: dict[Path, _SourceGroup] = {}
     for group in groups:
         if not group.is_test:
@@ -703,8 +780,6 @@ def _publish_all(
 
 
 def _source_prefix(name: str) -> str:
-    if is_test_source_folder(name):
-        return parse_test_folder_prefix(name)
     match = CANONICAL_FOLDER_PATTERN.fullmatch(name)
     if match is not None:
         return match.group(1).upper()
@@ -718,9 +793,8 @@ def _source_prefix(name: str) -> str:
 
 __all__ = [
     "InitBuildConflictError",
-    "InitBuildReport",
     "build_full_init",
-    "build_cs_folder",
+    "build_test_folder",
     "build_spectrum_folder",
     "build_profile_dataset",
     "build_init_datasets",

@@ -134,11 +134,6 @@ def _target_group_name(relative_dir: Path, leaf_name: str) -> Path:
     return relative_dir.parent / target if relative_dir != Path(".") else Path(target)
 
 
-def resolve_train_group_name(relative_dir: Path, leaf_name: str) -> Path:
-    """返回 init 来源目录经前缀合并后的 train 相对类别路径。"""
-    return _target_group_name(relative_dir, leaf_name)
-
-
 def _ensure_name_prefix(prefix: str, filename: str) -> str:
     """为合并来源补齐目录名前缀，避免同名光谱覆盖。"""
     marker = f"{prefix}_"
@@ -171,13 +166,10 @@ def build_train(
     if not input_path.is_dir():
         raise FileNotFoundError(f"Missing init folder: {input_path}")
     output_path = resolve_path(profile.root_train_clean, base_dir)
-    figure_path = resolve_path(profile.root_train_fig, base_dir)
     temp_output = create_temporary_path(output_path)
-    temp_figure = create_temporary_path(figure_path)
-    if temp_output.exists() or temp_figure.exists():
+    if temp_output.exists():
         raise FileExistsError("随机生成的临时构建路径已存在，请重试")
     temp_output.mkdir(parents=True)
-    temp_figure.mkdir(parents=True)
     merged = {}
     skipped_sources = 0
     try:
@@ -204,18 +196,14 @@ def build_train(
         for relative_text, samples in sorted(merged.items()):
             if len(samples) < config.min_samples_per_class:
                 continue
-            if len(samples) < config.min_samples_per_class:
-                continue
             _write_group(temp_output, Path(relative_text), samples)
             built_groups += 1
 
         if built_groups == 0:
             raise RuntimeError("训练集构建未生成任何类别，拒绝发布空产物")
         publish_directory(temp_output, output_path)
-        publish_directory(temp_figure, figure_path)
     except Exception:
         shutil.rmtree(temp_output, ignore_errors=True)
-        shutil.rmtree(temp_figure, ignore_errors=True)
         raise
 
     print("\nTraining dataset preprocessing finished:")
@@ -230,11 +218,20 @@ def build_test(
     config: DataBuildConfig | None = None,
     input_config: InputConfig = InputConfig(),
     reference_wavenumbers: np.ndarray | None = None,
+    test_root: Path | str | None = None,
 ):
-    """从 init_test 构建独立 test。"""
+    """从 profile 专属的 ``<base_dir>/init_test`` 构建独立 test。
+
+    profile 测试集由全局 ``dataset/init_test`` 按前缀筛选后生成；需要改用其他
+    来源时才传 ``test_root``。输出写入 ``<base_dir>/<profile.root_test>``。
+    """
     config = resolve_build_config(config)
     base_dir = Path(base_dir)
-    input_path = resolve_path(profile.root_init_test, base_dir)
+    input_path = (
+        Path(test_root).resolve()
+        if test_root is not None
+        else (base_dir / profile.root_init_test).resolve()
+    )
     output_path = resolve_path(profile.root_test, base_dir)
     if not input_path.is_dir():
         raise FileNotFoundError(f"Missing init_test folder: {input_path}")

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from ramanv2.common.naming import build_natural_key
+from ramanv2.common.naming import PIPELINE_RESERVED_FOLDER_NAMES, build_natural_key
 from ramanv2.common.publishing import move_files, preserve_paths
 from ramanv2.pipeline.invalidation import invalidate_downstream
 from ramanv2.pipeline.lineage import (
@@ -22,7 +22,7 @@ from ramanv2.pipeline.state import COMMIT_LOG_NAME, CleaningState, PipelineState
 
 DATE_PATTERN = re.compile(r"^\d{8}$")
 DEFAULT_CELL_PATTERN = re.compile(r"^cell[12](?:_|$)", re.IGNORECASE)
-SPECIAL_FOLDER_NAMES = {"delete", "shift", "audit_runs", ".raman_pipeline"}
+SPECIAL_FOLDER_NAMES = PIPELINE_RESERVED_FOLDER_NAMES
 
 
 @dataclass(frozen=True)
@@ -152,6 +152,41 @@ def discard_removed_folder(state: CleaningState, folder: ReviewFolder) -> None:
         for path, reasons in state.mark_reasons.items()
         if not path.startswith(prefix)
     }
+    refresh_completed_dates(state)
+
+
+def reopen_date_review(
+    state: CleaningState,
+    date_name: str,
+    folders: list[ReviewFolder],
+) -> None:
+    """撤销整日审核完成状态，让新增文件夹和光谱重新进入审核队列。"""
+    prefix = f"{date_name}/"
+    folder_names = {folder.folder_name for folder in folders}
+    if folder_names:
+        state.folder_catalog[date_name] = folder_names
+    else:
+        state.folder_catalog.pop(date_name, None)
+    state.completed_folder_keys = {
+        key for key in state.completed_folder_keys if not key.startswith(prefix)
+    }
+    state.seeded_folder_keys = {
+        key for key in state.seeded_folder_keys if not key.startswith(prefix)
+    }
+    state.folder_page_indices = {
+        key: value
+        for key, value in state.folder_page_indices.items()
+        if not key.startswith(prefix)
+    }
+    state.marked_paths = {path for path in state.marked_paths if not path.startswith(prefix)}
+    state.mark_reasons = {
+        path: reasons
+        for path, reasons in state.mark_reasons.items()
+        if not path.startswith(prefix)
+    }
+    state.completed_date_names.discard(date_name)
+    state.current_date_name = date_name if folder_names else None
+    state.current_folder_key = None
     refresh_completed_dates(state)
 
 
@@ -417,6 +452,7 @@ __all__ = [
     "mark_paths",
     "refresh_completed_dates",
     "reconcile_cleaning_records",
+    "reopen_date_review",
     "scan_date_names",
     "scan_review_folders",
     "seed_default_marks",

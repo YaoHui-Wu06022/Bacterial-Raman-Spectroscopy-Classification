@@ -63,6 +63,41 @@ def publish_file(temp_path: Path | str, target_path: Path | str) -> Path:
     return target
 
 
+def write_text_atomic(target_path: Path | str, text: str) -> Path:
+    """以同级临时文件原子替换文本；目标被其他会话短暂占用时退避重试。"""
+    target = Path(target_path).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # 采集目录在 Windows 上可能继承只读属性，先确保目录与旧文件可写。
+    try:
+        target.parent.chmod(0o700)
+    except OSError:
+        pass
+    if target.exists():
+        try:
+            target.chmod(0o600)
+        except OSError:
+            pass
+    temporary = create_temporary_path(target)
+    try:
+        temporary.write_text(text, encoding="utf-8")
+        for attempt, delay in enumerate((0.0, 0.05, 0.2, 0.5)):
+            if delay:
+                time.sleep(delay)
+            try:
+                os.replace(temporary, target)
+                return target
+            except PermissionError:
+                if attempt == 3:
+                    raise
+    finally:
+        if temporary.exists():
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+    return target
+
+
 def publish_directory(temp_path: Path | str, target_path: Path | str) -> Path:
     """用临时目录替换目标目录，失败时保留旧目录。"""
     temporary = Path(temp_path).resolve()
@@ -196,4 +231,5 @@ __all__ = [
     "publish_files",
     "preserve_paths",
     "move_files",
+    "write_text_atomic",
 ]

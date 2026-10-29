@@ -46,9 +46,9 @@ def build_test_cache(
     cache = Path(cache_root).resolve()
     selected = sorted({str(name) for name in folder_names}, key=build_natural_key)
     if not selected:
-        raise ValueError("至少选择一个 CS 文件夹")
+        raise ValueError("至少选择一个测试文件夹")
     if not source.is_dir():
-        raise FileNotFoundError(f"CSdata 不存在：{source}")
+        raise FileNotFoundError(f"init_test 不存在：{source}")
 
     old_manifest = _read_manifest(cache / MANIFEST_NAME)
     input_signature = _input_signature(predictor)
@@ -67,10 +67,10 @@ def build_test_cache(
         for folder_name in selected:
             source_folder = source / folder_name
             if not source_folder.is_dir():
-                raise FileNotFoundError(f"CS 文件夹不存在：{source_folder}")
+                raise FileNotFoundError(f"测试文件夹不存在：{source_folder}")
             spectrum_paths = list_spectrum_paths(source_folder)
             if not spectrum_paths:
-                raise ValueError(f"CS 文件夹没有 .arc_data：{source_folder}")
+                raise ValueError(f"测试文件夹没有 .arc_data：{source_folder}")
             old_files = entries.get(folder_name, {}).get("files", {})
             if not isinstance(old_files, dict):
                 old_files = {}

@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
 import torch
 
 from ramanv2.common.metrics import compute_classification_metrics
-from ramanv2.core.hierarchy import mask_logits_by_parent, select_level_targets
+from ramanv2.core.hierarchy import select_level_targets
 from ramanv2.training.se_stats import (
     accumulate_se_stats,
     build_se_stats_accumulator,
@@ -24,11 +23,9 @@ def evaluate_validation_loader(
     device: torch.device,
     level_index: int,
     label_map_tensor: torch.Tensor | None = None,
-    parent_level_index: int | None = None,
-    parent_to_children: Mapping[int | str, Sequence[int]] | None = None,
     amp_enable: bool = False,
 ) -> tuple[float, float, dict[str, float], dict[str, dict[str, int | torch.Tensor]]]:
-    """验证单层模型，统一处理局部标签、父类约束、指标与 SE 统计。"""
+    """验证单层模型，统一处理局部标签、指标与 SE 统计。"""
     model.eval()
     criterion = torch.nn.CrossEntropyLoss()
     total_loss = 0.0
@@ -49,14 +46,8 @@ def evaluate_validation_loader(
                 with torch.autocast(device_type=device.type, enabled=amp_enable):
                     logits = model(inputs)
                 level_targets = select_level_targets(labels, level_index)
-                level_targets = _map_local_targets(level_targets, label_map_tensor)
-                logits, valid_parent_mask = _apply_parent_mask(
-                    logits,
-                    labels,
-                    parent_level_index,
-                    parent_to_children,
-                )
-                valid_mask = (level_targets >= 0) & valid_parent_mask
+                level_targets = map_local_targets(level_targets, label_map_tensor)
+                valid_mask = level_targets >= 0
                 accumulate_se_stats(se_accumulators, batch_scales, valid_mask)
                 if not valid_mask.any():
                     continue
@@ -87,7 +78,7 @@ def evaluate_validation_loader(
     return total_loss / max(total_samples, 1), metrics["accuracy"], metrics, se_stats
 
 
-def _map_local_targets(
+def map_local_targets(
     targets: torch.Tensor,
     label_map_tensor: torch.Tensor | None,
 ) -> torch.Tensor:
@@ -98,18 +89,3 @@ def _map_local_targets(
     local_targets = label_map_tensor[targets.clamp_min(0)]
     local_targets[invalid_mask] = -1
     return local_targets
-
-
-def _apply_parent_mask(
-    logits: torch.Tensor,
-    labels: torch.Tensor,
-    parent_level_index: int | None,
-    parent_to_children: Mapping[int | str, Sequence[int]] | None,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """父类约束启用时按完整多层标签遮罩子类 logits。"""
-    if parent_level_index is None or parent_to_children is None:
-        valid_mask = torch.ones(logits.size(0), dtype=torch.bool, device=logits.device)
-        return logits, valid_mask
-    if labels.ndim != 2:
-        raise ValueError("parent_level_index 需要完整的多层标签输入")
-    return mask_logits_by_parent(logits, labels[:, parent_level_index], parent_to_children)

@@ -9,9 +9,10 @@ from pathlib import Path
 from ramanv2.common.publishing import preserve_paths
 from ramanv2.data.calibration.affine import analyze_date, approve_and_apply_date, apply_folder_affine_compensation, load_calibration_report
 from ramanv2.pipeline.lineage import lineage_path, load_folder_lineage, save_folder_lineage, record_affine_approval, record_output_path
-from ramanv2.data.builders.init import CANONICAL_FOLDER_PATTERN, build_cs_folder, build_spectrum_folder
+from ramanv2.data.builders.init import CANONICAL_FOLDER_PATTERN, build_test_folder, build_spectrum_folder
 from ramanv2.data.catalog import DatasetMapping
 from ramanv2.data.plots.prefix import build_prefix_plots_for_groups
+from ramanv2.data.profiles import TEST_ROOT_NAME
 from ramanv2.pipeline.invalidation import invalidate_downstream
 from ramanv2.pipeline.state import PipelineState, save_pipeline_state
 from ramanv2.pipeline.shift import load_date_affine_parameters, rebuild_shift_data, rebuild_shift_folder
@@ -57,15 +58,6 @@ def run_affine_calibration(
     return reports
 
 
-def rebuild_shift_dates(
-    source_root: Path | str,
-    output_root: Path | str,
-    date_names: list[str] | tuple[str, ...] | set[str],
-) -> list[dict[str, object]]:
-    """兼容原 CLI 调用顺序，复用参数重建，绝不重新拟合小球。"""
-    return rebuild_shift_data(source_root, output_root, date_names)
-
-
 def run_date_rebuild(
     data_root: Path,
     shift_root: Path,
@@ -103,7 +95,7 @@ def run_folder_offset(
     delta: float,
     figure_root: Path,
 ) -> dict[str, object]:
-    """平移源谱及归档，按原分流同步 init 或对应 CSdata 组；失败整体回滚。"""
+    """平移源谱及归档，按原分流同步 init 或对应 init_test 组；失败整体回滚。"""
     if not math.isfinite(delta):
         raise ValueError("频移量必须是有限数值")
     if delta == 0:
@@ -128,19 +120,19 @@ def run_folder_offset(
     previous = working.dataset_builds.get("full_init")
     if not isinstance(previous, dict):
         raise ValueError("缺少 init 来源清单，请先重建全量 init")
-    cs_export = next((entry for entry in previous.get("cs_exports", []) if entry.get("source") == source_id), None)
-    cs_target = None
-    if cs_export is not None:
-        cs_root = Path(previous.get("test_root") or init_root.parent / "CSdata").resolve()
-        target_name = str(cs_export["target"])
-        cs_target = (cs_root / target_name).resolve()
-        if not target_name or target_name in {".", ".."} or "/" in target_name or "\\" in target_name or cs_target.parent != cs_root:
-            raise ValueError("无效的 CSdata 输出文件夹")
-        if cs_target.is_relative_to(init_root.resolve()) or init_root.resolve().is_relative_to(cs_target):
-            raise ValueError("CSdata 输出不能覆盖 init")
+    test_export = next((entry for entry in previous.get("test_exports", []) if entry.get("source") == source_id), None)
+    test_target = None
+    if test_export is not None:
+        test_root = Path(previous.get("test_root") or init_root.parent / TEST_ROOT_NAME).resolve()
+        target_name = str(test_export["target"])
+        test_target = (test_root / target_name).resolve()
+        if not target_name or target_name in {".", ".."} or "/" in target_name or "\\" in target_name or test_target.parent != test_root:
+            raise ValueError("无效的 init_test 输出文件夹")
+        if test_target.is_relative_to(init_root.resolve()) or init_root.resolve().is_relative_to(test_target):
+            raise ValueError("init_test 输出不能覆盖 init")
     init_target = None
     plot_groups = set()
-    if cs_target is None:
+    if test_target is None:
         record = load_folder_lineage(root).get("folders", {}).get(source_id, {})
         output = record.get("outputs", {}).get("init")
         if not output:
@@ -154,24 +146,24 @@ def run_folder_offset(
         plot_groups = {(init_target.parent.name, match.group(1).upper())}
     old_count = len(list(init_target.glob("*.arc_data"))) if init_target is not None else 0
     snapshots = [*folders, shift_root / date_name / folder_name, lineage_path(root), state_file]
-    snapshots.append(cs_target if cs_target is not None else init_target)
+    snapshots.append(test_target if test_target is not None else init_target)
     snapshots.extend(figure_root / genus / f"{prefix}.png" for genus, prefix in plot_groups)
     with preserve_paths(snapshots):
         result = apply_folder_affine_compensation(root, shift_root, date_name, {folder_name: delta})
         rebuild_shift_folder(root, shift_root, date_name, folder_name)
-        if cs_target is not None:
-            count = build_cs_folder(shift_root / date_name / folder_name, cs_target)
-            change = count - int(cs_export["file_count"])
-            cs_export["file_count"] = count
-            for key in ("source_files", "output_files", "test_files", "test_output_files", "cs_source_files", "cs_output_files"):
+        if test_target is not None:
+            count = build_test_folder(shift_root / date_name / folder_name, test_target)
+            change = count - int(test_export["file_count"])
+            test_export["file_count"] = count
+            for key in ("source_files", "output_files", "test_files", "test_output_files", "test_source_files", "test_output_files"):
                 if key in previous:
                     previous[key] += change
             for key in ("source_files", "output_files", "test_files"):
                 stats = previous.get("date_stats", {}).get(date_name, {})
                 if key in stats:
                     stats[key] += change
-            record_output_path(root, date_name, folder_name, csdata_path=str(cs_target))
-            result["csdata_updated"] = True
+            record_output_path(root, date_name, folder_name, test_path=str(test_target))
+            result["test_updated"] = True
         else:
             count = build_spectrum_folder(shift_root / date_name / folder_name, init_target)
             change = count - old_count
@@ -200,4 +192,4 @@ def run_folder_offset(
     return result
 
 
-__all__ = ["rebuild_shift_dates", "run_affine_calibration", "run_date_rebuild", "run_folder_offset"]
+__all__ = ["run_affine_calibration", "run_date_rebuild", "run_folder_offset"]

@@ -24,15 +24,6 @@ class TrainingState:
     checkpoint_path: Path | None = None
 
 
-def build_checkpoint_path(model_path: Path | str) -> Path:
-    """为模型权重路径生成同目录的续训 checkpoint 路径。"""
-    target_path = Path(model_path)
-    suffix = "_model.pt"
-    if target_path.name.endswith(suffix):
-        return target_path.with_name(target_path.name[: -len(suffix)] + "_checkpoint.pt")
-    return target_path.with_name(target_path.name + ".checkpoint.pt")
-
-
 def save_training_checkpoint(
     checkpoint_path: Path | str,
     epoch: int,

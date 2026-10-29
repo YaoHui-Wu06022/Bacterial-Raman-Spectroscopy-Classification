@@ -3,6 +3,7 @@
 __all__ = [
     "Prediction",
     "Predictor",
+    "evaluate_test_set",
     "load_predictor",
     "run_independent_inference",
 ]
@@ -14,8 +15,8 @@ def __getattr__(name: str):
         from . import predictor
 
         return getattr(predictor, name)
-    if name == "run_independent_inference":
-        from .runner import run_independent_inference
+    if name in {"evaluate_test_set", "run_independent_inference"}:
+        from . import runner
 
-        return run_independent_inference
+        return getattr(runner, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

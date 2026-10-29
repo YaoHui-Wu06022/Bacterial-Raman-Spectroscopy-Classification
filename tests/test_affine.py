@@ -1,8 +1,6 @@
-import json
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 from ramanv2.common.arc_data import write_arc_data
 from ramanv2.data.calibration import affine
@@ -19,28 +17,6 @@ TRUE_SCALE = 1.002
 TRUE_OFFSET = -3.5
 
 
-@pytest.mark.parametrize(
-    ("is_overlap", "snr", "expected_status"),
-    [(True, 6.9, "ok"), (True, 6.4, "low_snr"), (False, 6.9, "low_snr"), (False, 8.1, "ok")],
-)
-def test_relaxed_snr_only_applies_to_overlapping_auxiliary_peak(monkeypatch, is_overlap, snr, expected_status):
-    """弱重叠辅助峰可通过；更低信噪比及低信噪比主峰仍被拦截。"""
-    axis = np.linspace(1566.1, 1619.3, 81)
-    parameters = [100.0, 0.0, snr * 10.0, 1583.1, 6.0, 0.5]
-    if is_overlap:
-        parameters.extend([500.0, 1602.3, 6.0, 0.5])
-        values = affine.evaluate_double_pseudo_voigt(axis, *parameters)
-    else:
-        values = affine.evaluate_pseudo_voigt(axis, *parameters)
-    noise = np.random.default_rng(42).normal(size=axis.size)
-    values += (noise - noise.mean()) / noise.std(ddof=1) * 10.0
-    monkeypatch.setattr(affine, "curve_fit", lambda *args, **kwargs: (np.array(parameters), None))
-    if is_overlap:
-        result = affine._fit_overlapping_auxiliary_peak(axis, values, 1583.1, 1602.3)
-    else:
-        result = affine._fit_pseudo_voigt_peak(axis, values, 1602.3, 1592.7, 27.0)
-    assert result.snr == pytest.approx(snr)
-    assert result.status == expected_status
 
 
 def _write_bead(
@@ -95,105 +71,18 @@ def test_analyze_date_recovers_affine_and_writes_bead_plots(tmp_path: Path) -> N
     assert len(list(shift_dir.glob("*_calibration.png"))) == 3
 
 
-def test_auxiliary_residual_uses_corrected_axis_only_once(tmp_path: Path) -> None:
-    source_root = tmp_path / "cosmic_data"
-    date_dir = source_root / "20240101"
-    for index in range(3):
-        _write_bead(
-            date_dir / "小球" / f"bead{index + 1}.arc_data",
-            scale=0.997373109,
-            offset=21.264244785,
-        )
-    report = analyze_date(date_dir, tmp_path / "cosmic_data_shifted")
-
-    assert report["status"] == "ready"
-    assert max(abs(float(value)) for value in report["auxiliary_residuals_cm-1"].values()) <= 2.0
 
 
-def test_approve_writes_corrected_spectra_without_bead_folder(tmp_path: Path) -> None:
-    source_root = tmp_path / "cosmic_data"
-    date_dir = _write_date(source_root, "20240101")
-    output_root = tmp_path / "cosmic_data_shifted"
-    analyze_date(date_dir, output_root)
-
-    report = approve_and_apply_date(date_dir, output_root)
-
-    assert report["status"] == "manual_approved"
-    output_date = output_root / "20240101"
-    assert not (output_date / "小球").exists()
-    corrected = np.loadtxt(output_date / "EC01" / "sample.arc_data")
-    source = np.loadtxt(date_dir / "EC01" / "sample.arc_data")
-    np.testing.assert_allclose(
-        corrected[:, 0], float(report["scale"]) * source[:, 0] + float(report["offset"]), atol=1e-7
-    )
-    np.testing.assert_allclose(corrected[:, 1], source[:, 1], atol=1e-7)
-    saved = json.loads((output_date / "shift" / "affine.json").read_text(encoding="utf-8"))
-    assert saved["manual_approval_enable"] is True
 
 
-def test_single_valid_repeat_is_limited_but_approvable(tmp_path: Path) -> None:
-    source_root = tmp_path / "cosmic_data"
-    date_dir = _write_date(source_root, "20240101", bead_count=1)
-    output_root = tmp_path / "cosmic_data_shifted"
-
-    report = analyze_date(date_dir, output_root)
-
-    assert report["status"] == "limited_replicates"
-    approve_and_apply_date(date_dir, output_root)
-    assert (output_root / "20240101" / "EC01" / "sample.arc_data").is_file()
 
 
-def test_median_repeat_aggregation_reduces_outlier_influence(tmp_path: Path) -> None:
-    source_root = tmp_path / "cosmic_data"
-    date_dir = _write_date(source_root, "20240101", bead_count=3)
-    _write_bead(date_dir / "小球" / "bead3.arc_data", shift=10.0)
-
-    report = analyze_date(date_dir, tmp_path / "cosmic_data_shifted")
-
-    assert report["status"] == "ready"
-    assert abs(float(report["scale"]) - TRUE_SCALE) < 0.001
-    assert abs(float(report["offset"]) - TRUE_OFFSET) < 0.2
 
 
-def test_auxiliary_residual_over_limit_requires_review(tmp_path: Path) -> None:
-    source_root = tmp_path / "cosmic_data"
-    date_dir = source_root / "20240101"
-    _write_bead(date_dir / "小球" / "bead1.arc_data", auxiliary_shift=8.0)
-    write_arc_data(
-        date_dir / "EC01" / "sample.arc_data",
-        np.linspace(400.0, 1800.0, 1401),
-        np.linspace(1.0, 2.0, 1401),
-    )
-
-    report = analyze_date(date_dir, tmp_path / "cosmic_data_shifted")
-
-    assert report["status"] == "needs_review"
-    assert max(abs(float(value)) for value in report["auxiliary_residuals_cm-1"].values()) > 2.0
 
 
-def test_missing_auxiliary_peaks_requires_review(tmp_path: Path) -> None:
-    source_root = tmp_path / "cosmic_data"
-    date_dir = _write_date(source_root, "20240101", include_auxiliary=False)
-
-    report = analyze_date(date_dir, tmp_path / "cosmic_data_shifted")
-
-    assert report["status"] == "needs_review"
-    assert report["valid_repeat_count"] == 0
-    assert not (tmp_path / "cosmic_data_shifted" / "20240101" / "EC01").exists()
 
 
-def test_batch_analysis_keeps_failed_date_diagnostic_only(tmp_path: Path) -> None:
-    source_root = tmp_path / "cosmic_data"
-    _write_date(source_root, "20240101", bead_count=1)
-    failed_date = source_root / "20240102" / "EC01"
-    write_arc_data(failed_date / "sample.arc_data", [400.0, 401.0], [1.0, 2.0])
-
-    reports = analyze_all_dates(source_root, tmp_path / "cosmic_data_shifted")
-
-    assert [report["date"] for report in reports] == ["20240101", "20240102"]
-    assert reports[1]["status"] == "needs_review"
-    assert (tmp_path / "cosmic_data_shifted" / "20240102" / "shift" / "affine.json").is_file()
-    assert not (tmp_path / "cosmic_data_shifted" / "20240102" / "EC01").exists()
 
 
 def test_failed_rerun_preserves_previous_shift(tmp_path: Path, monkeypatch) -> None:

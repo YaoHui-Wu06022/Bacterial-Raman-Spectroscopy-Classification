@@ -54,6 +54,3 @@ def main() -> None:
 
 
 __all__ = ["PAGE_NAMES", "main"]
-
-
-main()

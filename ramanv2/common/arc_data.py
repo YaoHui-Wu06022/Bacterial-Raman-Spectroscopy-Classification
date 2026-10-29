@@ -9,18 +9,8 @@ import numpy as np
 
 def read_arc_data(path: Path | str) -> tuple[np.ndarray, np.ndarray]:
     """读取两列文本光谱，忽略格式错误的行。"""
-    wavenumbers, intensities = [], []
-    with Path(path).open("r", encoding="utf-8", errors="ignore") as file:
-        for line in file:
-            fields = line.strip().split()
-            if len(fields) != 2:
-                continue
-            try:
-                wavenumbers.append(float(fields[0]))
-                intensities.append(float(fields[1]))
-            except ValueError:
-                continue
-    return np.asarray(wavenumbers), np.asarray(intensities)
+    wavenumbers, intensities, _ = read_raw_arc_data(path)
+    return wavenumbers, intensities
 
 
 def read_raw_arc_data(path: Path | str) -> tuple[np.ndarray, np.ndarray, int]:

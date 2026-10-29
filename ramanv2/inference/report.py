@@ -8,7 +8,6 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from ramanv2.spectra.bands import build_valid_mask
 
 
 def write_file_report(
@@ -134,24 +133,6 @@ def write_summary_json(output_path: Path | str, summary: Mapping[str, Any]) -> N
     )
 
 
-def write_used_runs(
-    output_path: Path | str,
-    predictor_mode: str,
-    target_level: str,
-    runs: Mapping[str, Any],
-) -> None:
-    """写入本次推理可使用的模型 run 清单。"""
-    payload = {
-        "mode": predictor_mode,
-        "target_level": target_level,
-        "runs": runs,
-    }
-    Path(output_path).write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-
 def plot_folder_spectra(
     output_path: Path | str,
     folder_name: str,
@@ -189,18 +170,6 @@ def plot_folder_spectra(
     figure.tight_layout()
     figure.savefig(output_path, dpi=300)
     plt.close(figure)
-
-
-def build_plot_axis(
-    cut_min: float,
-    cut_max: float,
-    point_count: int,
-    bad_bands: tuple[tuple[float, float], ...],
-) -> np.ndarray:
-    """构建与模型输入强度长度匹配的绘图波数轴。"""
-    full_axis = np.linspace(cut_min, cut_max, point_count, dtype=np.float32)
-    valid_mask = build_valid_mask(full_axis, bad_bands)
-    return full_axis if valid_mask is None else full_axis[valid_mask]
 
 
 def _plot_train_mean(

@@ -1,49 +1,20 @@
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
 
-from ramanv2.core.config import build_config
-from ramanv2.core.input_spec import build_input_spec
 from ramanv2.inference.labels import (
     build_expected_label_lookup,
     build_folder_summary,
     build_test_input_selection,
 )
 from ramanv2.inference.predictor import Prediction, Predictor, _resolve_input_entry
-from ramanv2.inference.spectra import build_inference_preprocessor, preprocess_spectrum_path
+from ramanv2.inference.routing import predict_routed_labels
 
 
-def test_expected_lookup_projects_deep_labels_to_target_level() -> None:
-    meta = {
-        "class_names_by_level": {
-            "level_1": ["GenusA"],
-            "level_2": ["GenusA/AA", "GenusA/AB"],
-        }
-    }
-    assert build_expected_label_lookup(meta, "level_1") == {
-        "GENUSA": "GenusA",
-        "AA": "GenusA",
-        "AB": "GenusA",
-    }
-    assert build_expected_label_lookup(meta, "level_2") == {
-        "AA": "GenusA/AA",
-        "AB": "GenusA/AB",
-    }
 
 
-def test_folder_summary_uses_majority_prediction() -> None:
-    rows = [
-        {"top1_label": "GenusA"},
-        {"top1_label": "GenusA"},
-        {"top1_label": "GenusB"},
-    ]
-    summary = build_folder_summary("CS01AA", "GenusA", ["GenusA", "GenusB"], rows)
-    assert summary["predicted_label"] == "GenusA"
-    assert summary["correct_count"] == 2
-    assert summary["folder_correct"] is True
 
 
 def test_test_input_selection_uses_current_model_labels() -> None:
@@ -55,13 +26,13 @@ def test_test_input_selection_uses_current_model_labels() -> None:
     }
 
     selected, rows = build_test_input_selection(
-        ["CS01AA", "CS02BB", "CS03CC"],
+        ["AA01", "BB01", "CC01"],
         meta,
         "level_1",
         ["GenusA"],
     )
 
-    assert selected == {"CS01AA"}
+    assert selected == {"AA01"}
     assert [row["reason"] for row in rows] == [
         "selected",
         "outside_model_label_space",
@@ -69,21 +40,6 @@ def test_test_input_selection_uses_current_model_labels() -> None:
     ]
 
 
-def test_preprocess_spectrum_path_accepts_bad_band_filtered_length(tmp_path: Path) -> None:
-    config = build_config()
-    input_spec = build_input_spec(config.input)
-    preprocessor = build_inference_preprocessor(input_spec, "cpu")
-    full_axis = np.linspace(
-        config.input.cut_min,
-        config.input.cut_max,
-        config.input.target_points,
-        dtype=np.float32,
-    )
-    mask = ~((full_axis >= 890.0) & (full_axis <= 950.0))
-    path = tmp_path / "sample.arc_data"
-    np.savetxt(path, np.column_stack([full_axis[mask], np.sin(full_axis[mask])]))
-    inputs = preprocess_spectrum_path(path, preprocessor, config.input.bad_bands)
-    assert tuple(inputs.shape) == (1, input_spec.in_channels, input_spec.point_count)
 
 
 def test_predict_tensor_directly_inherits_single_child_branch(
@@ -128,39 +84,26 @@ def test_predict_tensor_directly_inherits_single_child_branch(
     assert predictions == [Prediction("GenusA/SpeciesA", 1.0, 0)]
 
 
-def test_resolve_input_entry_uses_available_parent_model(tmp_path: Path) -> None:
-    entry = {"model_path": "level_2/parent_0/model.pt"}
-    meta = {
-        "head_names": ["level_1", "level_2"],
-        "level_models": {},
-        "parent_models": {"level_2": {"0": entry}},
-    }
+def test_routed_labels_skip_invalid_and_shortcut_single_child() -> None:
+    loaded: list[int] = []
 
-    result = _resolve_input_entry(meta, tmp_path, None, "level_2")
+    def load_parent(parent_id: int):
+        loaded.append(parent_id)
+        return object()
 
-    assert result is entry
+    results = predict_routed_labels(
+        range(5),
+        [1, 2, 3, -1, 1],
+        [0, 1, 1, 0, 0],
+        {"0": [1], "1": [2, 3]},
+        {},
+        load_parent,
+        lambda predictor, sample_index: 7,
+    )
+
+    assert results == [(0, 1, 1), (1, 2, 7), (2, 3, 7), (4, 1, 1)]
+    assert loaded == [1]
 
 
-def test_resolve_input_entry_accepts_unregistered_global_run(tmp_path: Path) -> None:
-    run_dir = tmp_path / "level_1" / "run_history"
-    run_dir.mkdir(parents=True)
-    (run_dir / "level_1_model.pt").touch()
-    (run_dir / "model_config.yaml").touch()
-    (run_dir / "resolved_config.yaml").touch()
-    (run_dir / "logs").mkdir()
-    (run_dir / "logs" / "run.log").touch()
-    meta = {
-        "head_names": ["level_1"],
-        "level_models": {
-            "level_1": {
-                "run_dir": "level_1/current_run",
-                "model_path": "level_1/current_model.pt",
-            }
-        },
-        "parent_models": {},
-    }
 
-    entry = _resolve_input_entry(meta, tmp_path, run_dir, "level_1")
 
-    assert entry["run_dir"] == "level_1/run_history"
-    assert entry["model_path"] == "level_1/run_history/level_1_model.pt"

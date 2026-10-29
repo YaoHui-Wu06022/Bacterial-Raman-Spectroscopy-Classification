@@ -6,22 +6,24 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
-import time
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
 
-from ramanv2.common.publishing import preserve_paths
-from ramanv2.common.naming import build_natural_key, is_test_source_folder, parse_folder_prefix, parse_test_folder_prefix
+from ramanv2.common.publishing import preserve_paths, write_text_atomic
+from ramanv2.common.naming import (
+    NON_TRAINING_FOLDER_NAMES,
+    PIPELINE_RESERVED_FOLDER_NAMES,
+    build_natural_key,
+    parse_folder_prefix,
+)
 
 
 LINEAGE_FILE_NAME = "folder_lineage.json"
 LINEAGE_VERSION = 1
 MANUAL_DELETE_RELATIVE = Path("delete") / "manual"
 FOLDER_DELETE_RELATIVE = Path("delete") / "folder_delete"
-SPECIAL_NAMES = {"delete", "shift", "audit", "audit_runs", ".raman_pipeline", "小球"}
+SPECIAL_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
 
 
 def lineage_path(data_root: Path | str) -> Path:
@@ -43,50 +45,10 @@ def load_folder_lineage(data_root: Path | str) -> dict[str, object]:
 
 
 def save_folder_lineage(data_root: Path | str, payload: dict[str, object]) -> None:
-    for record in payload.get("folders", {}).values():
-        if isinstance(record, dict):
-            record.pop("compensation", None)
-            record.pop("audit", None)
-            record["history"] = [item for item in record.get("history", []) if item.get("operation") != "folder_compensation"]
-    path = lineage_path(data_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # 采集目录在 Windows 上可能继承只读属性，先确保目录与旧记录文件可写。
-    try:
-        path.parent.chmod(0o700)
-    except OSError:
-        pass
-    if path.exists():
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
-    # 使用唯一临时文件，避免多个会话同时保存时互相覆盖临时文件。
-    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    try:
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        # 目标文件可能正被扫描/索引或另一会话短暂占用，Windows 的 os.replace 会抛
-        # WinError 5，必须退避重试而不是直接失败。
-        for attempt, delay in enumerate((0.0, 0.05, 0.2, 0.5)):
-            if delay:
-                time.sleep(delay)
-            try:
-                os.replace(temporary, path)
-                break
-            except PermissionError:
-                if attempt == 3:
-                    raise
-    finally:
-        if temporary.exists():
-            try:
-                temporary.unlink()
-            except OSError:
-                pass
-
-
-def _prefix_for_folder(folder_name: str) -> str:
-    if is_test_source_folder(folder_name):
-        return parse_test_folder_prefix(folder_name).upper()
-    return parse_folder_prefix(folder_name, uppercase_enable=True)
+    write_text_atomic(
+        lineage_path(data_root),
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+    )
 
 
 def _record_template(date_name: str, folder_name: str) -> dict[str, object]:
@@ -95,13 +57,13 @@ def _record_template(date_name: str, folder_name: str) -> dict[str, object]:
         "source_id": f"{date_name}/{folder_name}",
         "date": date_name,
         "folder": folder_name,
-        "prefix": _prefix_for_folder(folder_name),
+        "prefix": parse_folder_prefix(folder_name, uppercase_enable=True),
         "genus": "",
         "files": {},
         "folder_status": "active",
         "cleaning": {"status": "pending", "history": []},
         "affine": {"status": "pending", "version": None, "scale": None, "offset": None},
-        "outputs": {"shift": None, "init": None, "profiles": {}, "csdata": None, "prefix_groups": []},
+        "outputs": {"shift": None, "init": None, "profiles": {}, "test": None, "prefix_groups": []},
         "history": [{"operation": "lineage_initialized", "recorded_at": now}],
         "updated_at": now,
     }
@@ -213,7 +175,9 @@ def initialize_folder_lineage(
             record["active_file_count"] = active_count
             record["deleted_file_count"] = deleted_count
         if key not in discovered:
-            if record.get("folder_status") == "active":
+            # 小球与派生目录本就不参与扫描，不能被"未发现即整夹删除"误判。
+            # 小球与派生目录本就不参与扫描，不能被"未发现即整夹删除"误判。
+            if record.get("folder_status") == "active" and str(record.get("folder", "")) not in SPECIAL_NAMES:
                 record["folder_status"] = "folder_deleted"
         record["updated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -368,7 +332,7 @@ def record_output_path(
     *,
     init_path: str | None = None,
     profile_paths: dict[str, str] | None = None,
-    csdata_path: str | None = None,
+    test_path: str | None = None,
     shift_path: str | None = None,
 ) -> dict[str, object]:
     payload = load_folder_lineage(data_root)
@@ -383,8 +347,8 @@ def record_output_path(
         current = outputs.setdefault("profiles", {})
         if isinstance(current, dict):
             current.update({str(key): str(value) for key, value in profile_paths.items()})
-    if csdata_path is not None:
-        outputs["csdata"] = str(csdata_path)
+    if test_path is not None:
+        outputs["test"] = str(test_path)
     if shift_path is not None:
         outputs["shift"] = str(shift_path)
     record["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -393,26 +357,6 @@ def record_output_path(
     payload["updated_at"] = record["updated_at"]
     save_folder_lineage(data_root, payload)
     return payload
-
-
-def summarize_lineage(data_root: Path | str) -> dict[str, list[str]]:
-    payload = initialize_folder_lineage(data_root)
-    folders = payload.get("folders", {})
-    summary = {"cleaning_completed_dates": set(), "affine_completed_dates": set(), "init_generated_dates": set()}
-    if not isinstance(folders, dict):
-        return {key: [] for key in summary}
-    by_date: dict[str, list[dict[str, object]]] = {}
-    for record in folders.values():
-        if isinstance(record, dict):
-            by_date.setdefault(str(record.get("date", "")), []).append(record)
-    for date_name, records in by_date.items():
-        if records and all(record.get("folder_status") in {"active", "manual_deleted", "folder_deleted"} for record in records):
-            summary["cleaning_completed_dates"].add(date_name)
-        if records and all(isinstance(record.get("affine"), dict) and (record.get("affine") or {}).get("status") == "approved" for record in records):
-            summary["affine_completed_dates"].add(date_name)
-        if records and all(isinstance(record.get("outputs"), dict) and (record.get("outputs") or {}).get("init") for record in records):
-            summary["init_generated_dates"].add(date_name)
-    return {key: sorted(values, key=build_natural_key) for key, values in summary.items()}
 
 
 def sync_pipeline_state_from_lineage(data_root: Path | str, state: object) -> object:
@@ -436,7 +380,7 @@ def sync_pipeline_state_from_lineage(data_root: Path | str, state: object) -> ob
         output_records = [item for item in records if item.get("folder_status") != "folder_deleted"]
         if output_records and not any(item.get("init_pending") for item in records) and all(
             isinstance(item.get("outputs"), dict)
-            and (item["outputs"].get("init") or item["outputs"].get("csdata"))
+            and (item["outputs"].get("init") or item["outputs"].get("test"))
             for item in output_records
         ):
             init_dates.add(date_name)
@@ -452,7 +396,7 @@ def sync_pipeline_state_from_lineage(data_root: Path | str, state: object) -> ob
 def has_active_source_folders(data_root: Path | str, date_name: str) -> bool:
     """判断日期下是否仍有普通源文件夹，排除小球和派生目录。"""
     date_dir = Path(data_root).resolve() / str(date_name)
-    excluded = {"小球", "shift", "delete", "audit", "audit_runs", ".raman_pipeline"}
+    excluded = SPECIAL_NAMES
     if not date_dir.is_dir():
         return False
     return any(
@@ -584,6 +528,5 @@ __all__ = [
     "list_lineage_folders",
     "remove_source_folder",
     "save_folder_lineage",
-    "summarize_lineage",
     "sync_pipeline_state_from_lineage",
 ]

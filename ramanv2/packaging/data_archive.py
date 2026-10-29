@@ -1,4 +1,4 @@
-"""为 Colab 导出 profile 数据 TAR.XZ 和 ramanv2 源码 ZIP。"""
+"""为远程训练平台导出 init/init_test 数据 TAR.XZ 和 ramanv2 源码 ZIP。"""
 
 from __future__ import annotations
 
@@ -13,25 +13,26 @@ from ramanv2.data.profiles import get_dataset_dir, get_profile
 from ramanv2.packaging.source_archive import build_package_archive
 
 
+STAGE_INIT = "init"
+STAGE_INIT_TEST = "init_test"
+
+
 def build_profile_data_archive(
     profile_id: str,
     output_path: Path | str,
     project_root: Path | str = PROJECT_ROOT,
 ) -> dict[str, object]:
-    """将 profile 的 init 目录原样打包为 data.tar.xz。"""
+    """将 profile 的 init 与已存在的 profile 测试集打包为 data.tar.xz。"""
     profile = get_profile(profile_id)
-    source_init = get_dataset_dir(profile, project_root) / profile.root_init
-    if not source_init.is_dir():
-        raise FileNotFoundError(f"缺少 profile init 目录：{source_init}")
+    stage_dirs = _resolve_stage_dirs(profile, project_root)
 
     target = Path(output_path).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = create_temporary_path(target)
     try:
         temporary.mkdir(parents=True, exist_ok=False)
-        archive_path, sample_count = _build_data_archive(
-            profile,
-            source_init,
+        archive_path, sample_counts = _build_data_archive(
+            stage_dirs,
             temporary / target.name,
         )
         publish_file(archive_path, target)
@@ -39,26 +40,24 @@ def build_profile_data_archive(
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
-    return _data_report(profile, source_init, target, sample_count)
+    return _data_report(profile, stage_dirs, target, sample_counts)
 
 
-def build_colab_bundle(
+def build_platform_bundle(
     profile_id: str,
     output_dir: Path | str,
     project_root: Path | str = PROJECT_ROOT,
 ) -> dict[str, object]:
     """原子生成只含目录数据的 data.tar.xz 和源码 ramanv2.zip。"""
     profile = get_profile(profile_id)
-    source_init = get_dataset_dir(profile, project_root) / profile.root_init
-    if not source_init.is_dir():
-        raise FileNotFoundError(f"缺少 profile init 目录：{source_init}")
+    stage_dirs = _resolve_stage_dirs(profile, project_root)
 
     target_dir = Path(output_dir).resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
     temporary_dir = create_temporary_path(target_dir)
     temporary_dir.mkdir(parents=True, exist_ok=False)
     try:
-        _, sample_count = _build_data_archive(profile, source_init, temporary_dir / "data.tar.xz")
+        _, sample_counts = _build_data_archive(stage_dirs, temporary_dir / "data.tar.xz")
         package_path = temporary_dir / "ramanv2.zip"
         build_package_archive(Path(project_root).resolve() / "ramanv2", package_path)
         final_paths = {
@@ -75,8 +74,13 @@ def build_colab_bundle(
     return {
         "profile_id": profile.profile_id,
         "dataset_name": profile.dataset_name,
-        "source_init": str(source_init.resolve()),
-        "sample_count": sample_count,
+        "source_init": str(stage_dirs[STAGE_INIT][1].resolve()),
+        "source_dirs": {
+            name: str(source_dir.resolve())
+            for name, (_archive_root, source_dir) in stage_dirs.items()
+        },
+        "sample_count": sum(sample_counts.values()),
+        "sample_counts": sample_counts,
         "data_archive": {
             "output_path": str(data_path),
             "file_size": data_path.stat().st_size,
@@ -88,32 +92,78 @@ def build_colab_bundle(
     }
 
 
-def _build_data_archive(profile, source_init: Path, output_path: Path) -> tuple[Path, int]:
-    """校验并压缩 init 下的原始 arc_data 文件。"""
-    files = sorted(path for path in source_init.rglob("*.arc_data") if path.is_file())
-    if not files:
-        raise RuntimeError(f"init 目录中没有 .arc_data 光谱：{source_init}")
-    # 整包压缩可利用光谱间重复的波数轴，保留原始文件字节与目录。
+def _resolve_stage_dirs(
+    profile,
+    project_root: Path | str,
+) -> dict[str, tuple[Path, Path]]:
+    """返回打包阶段及其 (归档根, 源目录)。
+
+    ``init`` 必需；profile 测试集存在时一并打包，缺失时跳过。两者都只在
+    ``dataset/<profile>/`` 下取，全局测试母本 ``dataset/init_test`` 不进入数据包。
+    """
+    dataset_dir = get_dataset_dir(profile, project_root)
+    profile_root = Path("dataset") / profile.dataset_name
+    init_dir = dataset_dir / profile.root_init
+    if not init_dir.is_dir():
+        raise FileNotFoundError(f"缺少 profile init 目录：{init_dir}")
+    stages: dict[str, tuple[Path, Path]] = {
+        STAGE_INIT: (profile_root / profile.root_init, init_dir),
+    }
+    profile_test_dir = dataset_dir / profile.root_init_test
+    if profile_test_dir.is_dir():
+        stages[STAGE_INIT_TEST] = (
+            profile_root / profile.root_init_test,
+            profile_test_dir,
+        )
+    return stages
+
+
+def _build_data_archive(
+    stage_dirs: dict[str, tuple[Path, Path]],
+    output_path: Path,
+) -> tuple[Path, dict[str, int]]:
+    """校验并压缩各阶段原始 arc_data 文件，返回每个阶段的样本数。"""
+    sample_counts: dict[str, int] = {}
     with tarfile.open(output_path, "w:xz", preset=6, dereference=True) as archive:
-        for source_path in files:
-            wavenumbers, intensities = read_arc_data(source_path)
-            if wavenumbers.size < 2 or intensities.size != wavenumbers.size:
-                raise ValueError(f"无效光谱文件：{source_path}")
-            relative = source_path.relative_to(source_init)
-            archive_name = (Path("dataset") / profile.dataset_name / "init" / relative).as_posix()
-            archive.add(source_path, arcname=archive_name, recursive=False)
-    return output_path, len(files)
+        for stage_name, (archive_root, source_dir) in stage_dirs.items():
+            files = sorted(path for path in source_dir.rglob("*.arc_data") if path.is_file())
+            if not files:
+                if stage_name == STAGE_INIT:
+                    raise RuntimeError(f"init 目录中没有 .arc_data 光谱：{source_dir}")
+                continue
+            for source_path in files:
+                wavenumbers, intensities = read_arc_data(source_path)
+                if wavenumbers.size < 2 or intensities.size != wavenumbers.size:
+                    raise ValueError(f"无效光谱文件：{source_path}")
+                relative = source_path.relative_to(source_dir)
+                archive.add(
+                    source_path,
+                    arcname=(archive_root / relative).as_posix(),
+                    recursive=False,
+                )
+            sample_counts[stage_name] = len(files)
+    return output_path, sample_counts
 
 
-def _data_report(profile, source_init: Path, output_path: Path, sample_count: int) -> dict[str, object]:
+def _data_report(
+    profile,
+    stage_dirs: dict[str, tuple[Path, Path]],
+    output_path: Path,
+    sample_counts: dict[str, int],
+) -> dict[str, object]:
     return {
         "profile_id": profile.profile_id,
         "dataset_name": profile.dataset_name,
-        "source_init": str(source_init.resolve()),
+        "source_init": str(stage_dirs[STAGE_INIT][1].resolve()),
+        "source_dirs": {
+            name: str(source_dir.resolve())
+            for name, (_archive_root, source_dir) in stage_dirs.items()
+        },
         "output_path": str(output_path),
-        "sample_count": sample_count,
+        "sample_count": sum(sample_counts.values()),
+        "sample_counts": sample_counts,
         "file_size": output_path.stat().st_size,
     }
 
 
-__all__ = ["build_colab_bundle", "build_profile_data_archive"]
+__all__ = ["build_platform_bundle", "build_profile_data_archive"]

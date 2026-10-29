@@ -1,4 +1,4 @@
-"""层级训练与 Colab 数据包导出页面。"""
+"""层级训练与远程平台数据包导出页面。"""
 
 from __future__ import annotations
 
@@ -9,21 +9,21 @@ import streamlit as st
 
 from ramanv2.core.config import build_config
 from ramanv2.core.paths import PROJECT_ROOT
-from ramanv2.packaging.data_archive import build_colab_bundle
+from ramanv2.packaging.data_archive import build_platform_bundle
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.data.profiles import get_profile, list_profiles, resolve_training_dir
 from ramanv2.training.workflow import TrainRequest, run_training
-from ramanv2.ui.cache import cached_dataset_index, cached_file_bytes, cached_run_dirs
+from ramanv2.ui.cache import cached_dataset_index, cached_file_bytes
 from ramanv2.ui.state import invalidate_ui_cache, ui_cache_version
 
 
 BATCH_SIZES = (8, 16, 32, 48, 64, 96, 128)
-WORKER_COUNTS = (0, 1, 2, 4, 8)
+WORKER_COUNTS = (-1, 0, 1, 2, 4, 8, 16)
 TARGET_POINTS = (256, 512, 896, 1024, 2048)
 
 
 def render_hierarchical_training_page() -> None:
-    """渲染本地训练与 Colab 导出两个相互独立的操作区。"""
+    """渲染本地训练与数据包导出两个相互独立的操作区。"""
     st.title("层级训练")
     profiles = list_profiles()
     if not profiles:
@@ -48,25 +48,24 @@ def render_hierarchical_training_page() -> None:
     st.subheader("训练范围")
     scope = _render_training_scope(index)
     values = _render_config_controls(profile_id)
-    run_options = _render_run_options(profile_id)
 
     if st.button("开始本地训练", type="primary", disabled=index is None, width="stretch"):
         try:
-            request = _build_train_request(values, scope, run_options)
+            request = _build_train_request(values, scope)
             with st.status("正在准备训练…", expanded=True) as status:
                 status.write("正在加载数据索引和训练配置。")
                 status.write("训练任务运行中，请等待当前训练任务完成。")
-                result = run_training(request)
+                run_training(request)
                 status.update(label="训练完成", state="complete", expanded=False)
-            st.session_state["last_training_result"] = result
             invalidate_ui_cache("training")
             invalidate_ui_cache("analysis")
+            invalidate_ui_cache("inference")
             st.success("本地训练完成。")
             st.caption("训练结果和层级元数据已保存到自动生成的实验目录。")
         except (OSError, RuntimeError, ValueError, TypeError, KeyError) as error:
             st.error(f"本地训练失败：{error}")
 
-    _render_colab_export(profiles)
+    _render_platform_export(profiles)
 
 
 def _load_dataset_index(train_dir: Path) -> DatasetIndex | None:
@@ -131,12 +130,11 @@ def _render_config_controls(profile_id: str) -> dict[str, Any]:
         "batch_size": st.selectbox("批大小", BATCH_SIZES, index=BATCH_SIZES.index(batch_default), key="training_batch"),
         "learning_rate": st.selectbox("学习率", (1e-5, 5e-5, 1e-4, 2e-4, 4e-4, 1e-3), index=4, key="training_lr"),
         "weight_decay": st.selectbox("权重衰减", (0.0, 1e-5, 1e-4, 1e-3), index=2, key="training_decay"),
-        "train_loader_num_workers": st.selectbox("数据加载进程数", WORKER_COUNTS, index=WORKER_COUNTS.index(worker_default), key="training_workers"),
-        "val_loader_num_workers": st.selectbox("验证加载进程数", WORKER_COUNTS, index=WORKER_COUNTS.index(worker_default), key="validation_workers"),
+        "train_loader_num_workers": st.selectbox("数据加载进程数（-1=按 CPU 自动）", WORKER_COUNTS, index=WORKER_COUNTS.index(worker_default), key="training_workers"),
+        "val_loader_num_workers": st.selectbox("验证加载进程数（-1=按 CPU 自动）", WORKER_COUNTS, index=WORKER_COUNTS.index(worker_default), key="validation_workers"),
         "use_gpu": st.checkbox("使用显卡", value=execution.use_gpu, key="training_gpu"),
         "use_amp": st.checkbox("使用混合精度", value=amp_default, key="training_amp"),
         "deterministic": st.checkbox("启用确定性训练", value=execution.deterministic, key="training_deterministic"),
-        "resume_training": st.checkbox("允许断点恢复", value=execution.resume_training, key="training_resume"),
         "norm_method": st.radio("输入归一化", ("SNV 标准化", "不归一化"), index=0 if input_config.norm_method == "snv" else 1, key="training_norm"),
         "smooth_use": st.checkbox("加入平滑谱", value=input_config.smooth_use, key="training_smooth"),
         "d1_use": st.checkbox("加入一阶导谱", value=input_config.d1_use, key="training_d1"),
@@ -180,65 +178,43 @@ def _render_config_controls(profile_id: str) -> dict[str, Any]:
     return values
 
 
-def _render_run_options(profile_id: str) -> dict[str, Path | str | None]:
-    """扫描已有运行目录，以选择方式提供断点恢复。"""
-    root = PROJECT_ROOT / "output" / profile_id
-    choices = [
-        Path(path)
-        for path in reversed(cached_run_dirs(str(root.resolve()), ui_cache_version("training")))
-    ] if root.is_dir() else []
-    labels = ["不恢复"] + [str(path.relative_to(PROJECT_ROOT)) for path in choices]
-    selected = st.selectbox("恢复已有训练", labels, key="training_resume_run")
-    return {
-        "experiment_dir": None,
-        "run_name": None,
-        "resume_run_dir": None if selected == "不恢复" else choices[labels.index(selected) - 1],
-    }
-
-
-def _build_train_request(
-    values: dict[str, Any],
-    scope: dict[str, object],
-    run_options: dict[str, Path | str | None],
-) -> TrainRequest:
+def _build_train_request(values: dict[str, Any], scope: dict[str, object]) -> TrainRequest:
     config = build_config(values)
     return TrainRequest(
         config=config,
         level_name=str(scope["level_name"]),
         only_parent_name=scope.get("only_parent_name"),
         train_per_parent_enable=bool(scope.get("train_per_parent_enable", False)),
-        experiment_dir=run_options.get("experiment_dir"),
-        run_name=run_options.get("run_name"),
-        resume_run_dir=run_options.get("resume_run_dir"),
     )
 
 
-def _render_colab_export(profiles) -> None:
+def _render_platform_export(profiles) -> None:
     st.divider()
-    st.subheader("Colab 数据包")
+    st.subheader("远程平台数据包")
     profile_ids = [profile.profile_id for profile in profiles]
     profile_id = st.selectbox(
         "导出数据集",
         profile_ids,
         index=profile_ids.index("GN") if "GN" in profile_ids else 0,
-        key="colab_export_profile",
+        key="bundle_export_profile",
     )
-    output_dir = PROJECT_ROOT / "output" / "colab" / profile_id
+    output_dir = PROJECT_ROOT / "output" / "bundle" / profile_id
     st.caption(f"输出目录：{output_dir}")
     if st.button("生成 data.tar.xz 和 ramanv2.zip", width="stretch"):
         try:
-            with st.spinner("正在生成 Colab 压缩包…"):
-                report = build_colab_bundle(profile_id, output_dir)
-            st.success("Colab 压缩包生成完成。")
+            with st.spinner("正在生成数据包…"):
+                report = build_platform_bundle(profile_id, output_dir)
+            st.success("数据包生成完成。")
             data_report = report.get("data_archive", {})
             package_report = report.get("package_archive", {})
             if isinstance(data_report, dict) and isinstance(package_report, dict):
                 st.write(f"样本数量：{report.get('sample_count', 0)}")
+                st.write(f"分阶段样本数：{report.get('sample_counts', {})}")
                 st.write(f"数据包路径：{data_report.get('output_path', '')}")
                 st.write(f"源码包路径：{package_report.get('output_path', '')}")
             _render_download_buttons(report)
         except (OSError, RuntimeError, ValueError, KeyError) as error:
-            st.error(f"Colab 压缩包生成失败：{error}")
+            st.error(f"数据包生成失败：{error}")
 
 
 def _render_download_buttons(report: dict[str, object]) -> None:

@@ -80,8 +80,9 @@ class TrainingConfig:
     epochs: int = 80
     patience: int = 50
     batch_size: int = 64
-    train_loader_num_workers: int = 2
-    val_loader_num_workers: int = 2
+    # -1 表示按 CPU 核数自动解析（上限见 training.spec.MAX_LOADER_WORKERS），0 表示不用额外进程。
+    train_loader_num_workers: int = -1
+    val_loader_num_workers: int = -1
     loader_pin_memory: bool = True
     loader_persistent_workers: bool = True
     loader_prefetch_factor: int = 2

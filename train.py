@@ -1,4 +1,4 @@
-"""在 PyCharm 或 Colab 中直接运行的层级训练入口。"""
+"""在任意 Jupyter / Python 环境中直接运行的层级训练入口。"""
 
 from ramanv2.core.config import build_config
 from ramanv2.training.workflow import TrainRequest, run_training

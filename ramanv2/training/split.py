@@ -421,31 +421,3 @@ def build_label_map_np(
     return mapping
 
 
-def log_split_summary(
-    dataset: Any,
-    train_indices: np.ndarray,
-    val_indices: np.ndarray,
-    stats_level: str,
-    head_name_to_index: dict[str, int],
-) -> None:
-    """输出指定层级在 train/val 中的样本数量摘要。"""
-    level_index = head_name_to_index[stats_level]
-    labels = dataset.level_labels[:, level_index]
-    print(
-        f"[Sample-level Split] Train samples: {len(train_indices)}, "
-        f"Val samples: {len(val_indices)}"
-    )
-    print(
-        f"Train {stats_level} counts:",
-        np.bincount(
-            labels[train_indices][labels[train_indices] >= 0],
-            minlength=dataset.num_classes_by_level[stats_level],
-        ),
-    )
-    print(
-        f"Val   {stats_level} counts:",
-        np.bincount(
-            labels[val_indices][labels[val_indices] >= 0],
-            minlength=dataset.num_classes_by_level[stats_level],
-        ),
-    )

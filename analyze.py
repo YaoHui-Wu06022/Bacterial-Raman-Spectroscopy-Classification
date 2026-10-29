@@ -1,4 +1,4 @@
-"""在 PyCharm 或 Colab 中直接运行的模型解释入口。"""
+"""在任意 Jupyter / Python 环境中直接运行的模型解释入口。"""
 
 from ramanv2.analysis.runner import run_interpret_parent_routed, run_interpret_run
 

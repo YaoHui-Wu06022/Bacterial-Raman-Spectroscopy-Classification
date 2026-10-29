@@ -66,22 +66,6 @@ def render_result_analysis_page() -> None:
     _render_umap_section(run_dir, level_name)
 
 
-def find_experiment_dirs(output_root: Path | str) -> list[Path]:
-    """发现包含页面所需四个实验级快照的实验目录。"""
-    root = Path(output_root)
-    if not root.is_dir():
-        return []
-    markers = ("shared_config.yaml", "hierarchy_meta.json", "train_split.json", "val_split.json")
-    return sorted(
-        (
-            path
-            for profile_dir in root.iterdir() if profile_dir.is_dir()
-            for path in profile_dir.iterdir()
-            if path.is_dir() and all((path / marker).is_file() for marker in markers)
-        ), key=lambda path: str(path).lower(), reverse=True,
-    )
-
-
 def find_level_dirs(experiment_dir: Path | str) -> list[Path]:
     """列出实验根下的业务层级目录。"""
     root = Path(experiment_dir)
@@ -212,4 +196,4 @@ def _format_metric(value: object) -> str:
         return "—"
 
 
-__all__ = ["find_experiment_dirs", "find_level_dirs", "find_run_dirs", "render_result_analysis_page"]
+__all__ = ["find_level_dirs", "find_run_dirs", "render_result_analysis_page"]

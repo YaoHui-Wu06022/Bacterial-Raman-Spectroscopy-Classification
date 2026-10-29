@@ -6,7 +6,7 @@ import argparse
 import json
 
 from ramanv2.core.paths import PROJECT_ROOT
-from ramanv2.data.profiles import PIPELINE_PROFILE_IDS
+from ramanv2.data.profiles import PIPELINE_PROFILE_IDS, resolve_test_root
 from ramanv2.pipeline.state import pipeline_metadata_dir, pipeline_state_path
 
 
@@ -25,7 +25,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     init = commands.add_parser("init", help="从 shift_data 生成全量 init")
     init.add_argument("--shift-root", default=str(PROJECT_ROOT / "dataset" / "shift_data"))
     init.add_argument("--init-root", default=str(PROJECT_ROOT / "dataset" / "init"))
-    init.add_argument("--cs-folder", dest="cs_folders", action="append", default=[])
+    init.add_argument("--test-folder", dest="test_folders", action="append", default=[])
     init.set_defaults(run_command=run_command)
 
     acquire = commands.add_parser("acquire", help="从全量 init 生成 profile 子集")
@@ -96,8 +96,8 @@ def run_command(args: argparse.Namespace) -> int:
             args.init_root,
             catalog,
             sorted(state.affine_completed_dates),
-            test_root=PROJECT_ROOT / "dataset" / "CSdata",
-            selected_cs_folders=args.cs_folders,
+            test_root=resolve_test_root(PROJECT_ROOT),
+            selected_test_folders=args.test_folders,
         )
         state.dataset_builds["full_init"] = report
         save_pipeline_state(state_path, state)

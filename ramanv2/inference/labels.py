@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Mapping
 
-from ramanv2.common.naming import parse_test_folder_prefix
+from ramanv2.common.naming import parse_folder_prefix
 from ramanv2.core.hierarchy import normalize_level_name
 
 
@@ -23,7 +23,7 @@ def build_expected_label_lookup(
             parts = [part for part in str(source_label).split("/") if part]
             if len(parts) < target_depth:
                 continue
-            prefix = parse_test_folder_prefix(parts[-1])
+            prefix = parse_folder_prefix(parts[-1], uppercase_enable=True)
             target_label = "/".join(parts[:target_depth])
             prefixes.setdefault(prefix, set()).add(target_label)
     return {
@@ -39,13 +39,13 @@ def build_test_input_selection(
     level_name: str,
     class_names: list[str],
 ) -> tuple[set[str], list[dict[str, str | bool]]]:
-    """按目标层标签空间筛选可推理的 CS 文件夹。"""
+    """按目标层标签空间筛选可推理的测试文件夹。"""
     expected_lookup = build_expected_label_lookup(meta, level_name)
     model_labels = set(class_names)
     selected_names = set()
     rows = []
     for folder_name in folder_names:
-        species_prefix = parse_test_folder_prefix(folder_name)
+        species_prefix = parse_folder_prefix(folder_name, uppercase_enable=True)
         expected_label = expected_lookup.get(species_prefix)
         expected_in_model = expected_label in model_labels
         if expected_label is None:
@@ -67,6 +67,26 @@ def build_test_input_selection(
             }
         )
     return selected_names, rows
+
+
+def build_test_folder_labels(
+    folder_names: list[str],
+    meta: Mapping[str, Any],
+    level_name: str,
+    class_names: list[str],
+) -> tuple[dict[str, int], list[dict[str, str | bool]]]:
+    """把扁平测试文件夹名映射到目标层全局类别索引，无法归属时记为 ``-1``。
+
+    独立测试集目录不带属名层，标签只能从文件夹前缀反查。返回的索引与
+    ``class_names`` 的位置一一对应，可直接作为评估真值。
+    """
+    position = {str(name): index for index, name in enumerate(class_names)}
+    _, rows = build_test_input_selection(folder_names, meta, level_name, class_names)
+    labels = {
+        str(row["folder"]): position.get(str(row["expected_label"]), -1)
+        for row in rows
+    }
+    return labels, rows
 
 
 def build_folder_summary(

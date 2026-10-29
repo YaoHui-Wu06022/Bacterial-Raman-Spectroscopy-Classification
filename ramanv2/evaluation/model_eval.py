@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import torch
 
+from ramanv2.common.run_manifest import write_run_manifest
 from ramanv2.core.runtime import resolve_device
 from ramanv2.data.runtime.input import InputPreprocessor
 from ramanv2.evaluation.context import (
@@ -23,6 +23,7 @@ from ramanv2.evaluation.context import (
 from ramanv2.evaluation.report import write_model_report
 from ramanv2.evaluation.scope import resolve_run_class_ids
 from ramanv2.inference.predictor import Predictor, load_predictor
+from ramanv2.inference.routing import predict_routed_labels
 
 
 def evaluate_model_run(
@@ -69,7 +70,7 @@ def evaluate_model_parent_routed(
             target_device,
         )
     output_dir = write_model_report(result_dir, class_names, paths, labels, predictions)
-    _write_used_runs(output_dir.parent, "parent-routed", level_name, used_runs)
+    write_run_manifest(output_dir.parent / "used_runs.json", "parent-routed", level_name, used_runs)
     return output_dir
 
 
@@ -102,7 +103,12 @@ def evaluate_model_cascade(
         predictions.append(prediction.class_id)
     result_dir = resolve_result_dir(context, level_name, "model", "cascade")
     output_dir = write_model_report(result_dir, class_names, paths, labels, predictions)
-    _write_used_runs(output_dir.parent, "cascade", level_name, predictor.build_used_runs())
+    write_run_manifest(
+        output_dir.parent / "used_runs.json",
+        "cascade",
+        level_name,
+        predictor.build_used_runs(),
+    )
     return output_dir
 
 
@@ -151,55 +157,39 @@ def _predict_parent_routed(
     mapping = (context.meta.get("parent_to_children") or {}).get(level_name) or {}
     predictors: dict[int, Predictor] = {}
     used_runs: dict[str, Any] = {}
-    paths: list[str] = []
-    labels: list[int] = []
-    predictions: list[int] = []
     preprocessor = InputPreprocessor(context.input_spec, device)
-    for sample_index in context.validation_indices:
-        true_label = int(dataset_index.level_labels[sample_index, level_index])
-        parent_id = int(dataset_index.level_labels[sample_index, parent_index])
-        if true_label < 0 or parent_id < 0:
-            continue
-        child_ids = [int(item) for item in mapping.get(str(parent_id), [])]
-        if true_label not in child_ids:
-            continue
+
+    def load_parent_predictor(parent_id: int) -> Predictor:
         entry = entries.get(str(parent_id))
-        if len(child_ids) == 1:
-            predicted_label = child_ids[0]
-        else:
-            if not isinstance(entry, dict) or not entry.get("model_path"):
-                raise FileNotFoundError(
-                    f"{level_name} 缺少 parent={parent_id} 的子模型"
-                )
-            predictor = predictors.get(parent_id)
-            if predictor is None:
-                run_dir = resolve_entry_path(context.experiment_dir, entry, "run_dir")
-                predictor = load_predictor(run_dir, device, level_name)
-                predictors[parent_id] = predictor
-                used_runs[str(parent_id)] = build_used_runs(entry)
-            inputs = preprocessor.preprocess_intensity(
-                dataset_index.get_raw_intensity(int(sample_index))
-            )
-            predicted_label = predictor.predict_tensor(inputs, top_k=1)[0].class_id
-        paths.append(str(dataset_index.samples[sample_index]))
-        labels.append(true_label)
-        predictions.append(predicted_label)
+        if not isinstance(entry, dict) or not entry.get("model_path"):
+            raise FileNotFoundError(f"{level_name} 缺少 parent={parent_id} 的子模型")
+        predictor = load_predictor(
+            resolve_entry_path(context.experiment_dir, entry, "run_dir"),
+            device,
+            level_name,
+        )
+        used_runs[str(parent_id)] = build_used_runs(entry)
+        return predictor
+
+    def predict_for_parent(predictor: Predictor, sample_index: int) -> int:
+        inputs = preprocessor.preprocess_intensity(
+            dataset_index.get_raw_intensity(int(sample_index))
+        )
+        return predictor.predict_tensor(inputs, top_k=1)[0].class_id
+
+    validation_indices = context.validation_indices
+    results = predict_routed_labels(
+        validation_indices,
+        dataset_index.level_labels[validation_indices, level_index],
+        dataset_index.level_labels[validation_indices, parent_index],
+        mapping,
+        predictors,
+        load_parent_predictor,
+        predict_for_parent,
+    )
+    paths = [str(dataset_index.samples[index]) for index, _, _ in results]
+    labels = [label for _, label, _ in results]
+    predictions = [prediction for _, _, prediction in results]
     return dataset_index.get_class_names(level_name), paths, labels, predictions, {level_name: used_runs}
 
 
-def _write_used_runs(
-    result_root: Path,
-    mode: str,
-    level_name: str,
-    used_runs: Mapping[str, Any],
-) -> None:
-    """写入实验级模型评估使用的模型 run 清单。"""
-    result_root.mkdir(parents=True, exist_ok=True)
-    (result_root / "used_runs.json").write_text(
-        json.dumps(
-            {"mode": mode, "target_level": level_name, "runs": used_runs},
-            ensure_ascii=False,
-            indent=2,
-        ) + "\n",
-        encoding="utf-8",
-    )

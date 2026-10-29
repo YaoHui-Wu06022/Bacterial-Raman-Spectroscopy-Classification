@@ -13,7 +13,7 @@ from matplotlib import pyplot as plt
 import streamlit as st
 
 from ramanv2.common.arc_data import read_arc_data
-from ramanv2.common.naming import build_natural_key
+from ramanv2.common.naming import NON_TRAINING_FOLDER_NAMES, build_natural_key
 from ramanv2.common.plotting import configure_matplotlib_fonts
 from ramanv2.data.catalog import ensure_dataset_mapping
 from ramanv2.data.calibration.affine import load_calibration_report
@@ -29,6 +29,7 @@ from ramanv2.pipeline.cleaning import (
     discard_removed_folder,
     refresh_completed_dates,
     reconcile_cleaning_records,
+    reopen_date_review,
     scan_review_folders,
     seed_default_marks,
     sync_folder_catalog,
@@ -49,8 +50,8 @@ from ramanv2.ui.cache import cached_directory_names
 from ramanv2.ui.page_context import PageContext
 from ramanv2.ui.state import (
     invalidate_ui_cache,
-    load_page_state as _load_state,
-    save_page_state as _save,
+    load_page_state,
+    save_page_state,
     ui_cache_version,
 )
 
@@ -132,7 +133,7 @@ def _load_current_date(
     sync_folder_catalog(state.cleaning, folders)
     refresh_completed_dates(state.cleaning)
     if state.cleaning.folder_catalog != before:
-        _save(context, state)
+        save_page_state(context, state)
     catalog = {folder.key: folder for folder in folders}
     st.session_state[DATE_CACHE_KEY] = catalog
     st.session_state[DATE_CACHE_NAME_KEY] = date_name
@@ -221,7 +222,7 @@ def _commit_current_folder(
     else:
         catalog[folder.key] = ReviewFolder(folder.key, folder.date_name, folder.folder_name, ())
     _set_next_folder_or_date(state, dates, catalog)
-    _save(context, state)
+    save_page_state(context, state)
     invalidate_ui_cache("cleaning")
     return True
 
@@ -246,6 +247,31 @@ def _render_flash() -> None:
     message = st.session_state.pop("cleaning_flash", None)
     if message:
         st.success(message)
+
+
+def _render_reopen_section(
+    context: PageContext,
+    state: PipelineState,
+    dates: list[str],
+) -> None:
+    """让已完成日期重新进入审核队列，便于补入新文件夹后复审。"""
+    completed = [name for name in dates if name in state.cleaning.completed_date_names]
+    if not completed:
+        return
+    with st.expander("重新审核已完成日期", expanded=False):
+        st.caption(
+            "将清空所选日期的审核完成状态和当前标记；该日期下的文件夹会重新进入待审核队列，"
+            "新文件夹默认标记 cell1/cell2。"
+        )
+        selected = st.selectbox("选择日期", completed, key="cleaning_reopen_date")
+        if st.button("重新审核该日期", key="cleaning_reopen_confirm", width="stretch"):
+            folders = scan_review_folders(context.data_root, [selected], None, set())
+            reopen_date_review(state.cleaning, selected, folders)
+            _clear_date_cache()
+            invalidate_ui_cache("cleaning")
+            save_page_state(context, state)
+            st.session_state["cleaning_flash"] = f"{selected} 已重新进入审核队列。"
+            st.rerun()
 
 
 def _render_restore_section(context: PageContext) -> None:
@@ -399,7 +425,7 @@ def _render_restore_section(context: PageContext) -> None:
                         expanded=False,
                     )
                 st.session_state.pop("pipeline_state", None)
-                st.session_state["pipeline_state"] = _load_state(context)
+                st.session_state["pipeline_state"] = load_page_state(context)
                 st.session_state.pop("restore_selected_paths", None)
                 st.session_state["restore_expand"] = True
                 _clear_date_cache()
@@ -431,7 +457,7 @@ def _render_folder_removal_section(context: PageContext, state: PipelineState) -
         f"{date_name}/{folder.name}"
         for date_name in dates
         for folder in sorted((context.data_root / date_name).glob("*"), key=lambda path: build_natural_key(path.name))
-        if folder.is_dir() and folder.name not in SPECIAL_FOLDER_NAMES | {"小球", "audit"}
+        if folder.is_dir() and folder.name not in SPECIAL_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
         and not folder.name.startswith(".")
     ]
     # 有可移除文件夹时保持展开
@@ -519,7 +545,7 @@ def _save_grid_selection(context: PageContext, grid_key: str, page_paths: set[st
     event = st.session_state.get(grid_key)
     if not isinstance(event, dict) or event.get("event") != "selection":
         return
-    state = _load_state(context)
+    state = load_page_state(context)
     marked = state.cleaning.marked_paths.intersection(page_paths)
     chosen = {str(path).replace("\\", "/") for path in event.get("selected_paths", [])}.intersection(page_paths)
     if chosen == marked:
@@ -527,13 +553,13 @@ def _save_grid_selection(context: PageContext, grid_key: str, page_paths: set[st
     unmark_paths(state.cleaning, marked - chosen)
     for path in chosen - marked:
         toggle_mark_path(state.cleaning, path)
-    _save(context, state)
+    save_page_state(context, state)
 
 
 def render_cleaning_page(context: PageContext) -> None:
-    state = _load_state(context)
+    state = load_page_state(context)
     if reconcile_cleaning_records(context.data_root, state.cleaning):
-        _save(context, state)
+        save_page_state(context, state)
     try:
         if not context.data_root.is_dir():
             raise FileNotFoundError(f"光谱根目录不存在：{context.data_root}")
@@ -564,10 +590,11 @@ def render_cleaning_page(context: PageContext) -> None:
         state.cleaning.current_date_name = current_date
         state.cleaning.current_folder_key = None
         if current_date is not None:
-            _save(context, state)
+            save_page_state(context, state)
 
     st.title("数据清洗")
     _render_flash()
+    _render_reopen_section(context, state, dates)
     if current_date is None:
         st.success("区间内所有文件夹已审核")
         _render_folder_restore_section(context)
@@ -586,19 +613,19 @@ def render_cleaning_page(context: PageContext) -> None:
         state.cleaning.current_date_name = _next_pending_date(dates, state)
         state.cleaning.current_folder_key = None
         _clear_date_cache()
-        _save(context, state)
+        save_page_state(context, state)
         st.rerun()
 
     folder_keys = {folder.key for folder in folders}
     if state.cleaning.current_folder_key not in folder_keys:
         state.cleaning.current_folder_key = folders[0].key
-        _save(context, state)
+        save_page_state(context, state)
     current_index = next(index for index, folder in enumerate(folders) if folder.key == state.cleaning.current_folder_key)
     current_folder = folders[current_index]
 
     if current_folder.key not in state.cleaning.seeded_folder_keys:
         seed_default_marks([current_folder], state.cleaning)
-        _save(context, state)
+        save_page_state(context, state)
 
     page_count = max((len(current_folder.relative_paths) + PAGE_SIZE - 1) // PAGE_SIZE, 1)
     page_index = min(state.cleaning.folder_page_indices.get(current_folder.key, 0), page_count - 1)
@@ -621,11 +648,11 @@ def render_cleaning_page(context: PageContext) -> None:
         row = st.columns(2)
         if row[0].button("上一页", disabled=page_index == 0, width="stretch"):
             state.cleaning.folder_page_indices[current_folder.key] = page_index - 1
-            _save(context, state)
+            save_page_state(context, state)
             st.rerun()
         if row[1].button("下一页", disabled=page_index >= page_count - 1, width="stretch"):
             state.cleaning.folder_page_indices[current_folder.key] = page_index + 1
-            _save(context, state)
+            save_page_state(context, state)
             st.rerun()
         row = st.columns(2)
         if row[0].button(
@@ -645,7 +672,7 @@ def render_cleaning_page(context: PageContext) -> None:
                     st.session_state["cleaning_flash"] = f"已移除 {len(result.moved_paths)} 条光谱。"
                 _clear_date_cache()
                 invalidate_ui_cache("cleaning")
-                _save(context, state)
+                save_page_state(context, state)
                 st.rerun()
         if row[1].button(
             "完成当前夹",
@@ -664,7 +691,7 @@ def render_cleaning_page(context: PageContext) -> None:
                 catalog.pop(current_folder.key, None)
                 discard_removed_folder(state.cleaning, current_folder)
                 _set_next_folder_or_date(state, dates, catalog)
-                _save(context, state)
+                save_page_state(context, state)
                 st.rerun()
         if row[1].button("日期移除", width="stretch"):
             # 日期移除必须重新读取磁盘，不能使用审核过程中已把完成文件夹路径清空的页面缓存。
@@ -691,7 +718,7 @@ def render_cleaning_page(context: PageContext) -> None:
             _clear_date_cache()
             invalidate_ui_cache("cleaning")
             invalidate_ui_cache("dataset")
-            _save(context, state)
+            save_page_state(context, state)
             st.rerun()
         st.metric("当前页", f"{page_index + 1} / {page_count}")
 

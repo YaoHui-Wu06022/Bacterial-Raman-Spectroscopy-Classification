@@ -18,7 +18,11 @@ matplotlib.use("Agg", force=True)
 from matplotlib import pyplot as plt
 
 from ramanv2.common.arc_data import read_arc_data, write_arc_data
-from ramanv2.common.naming import build_natural_key
+from ramanv2.common.naming import (
+    NON_TRAINING_FOLDER_NAMES,
+    PIPELINE_RESERVED_FOLDER_NAMES,
+    build_natural_key,
+)
 from ramanv2.common.plotting import configure_matplotlib_fonts
 from ramanv2.common.publishing import create_temporary_path, publish_file, publish_files, rename_directory
 from ramanv2.core.paths import PROJECT_ROOT
@@ -43,6 +47,7 @@ DISPLAY_MIN = 400.0
 DISPLAY_MAX = 1800.0
 BEAD_DIR_NAME = "小球"
 SHIFT_DIR_NAME = "shift"
+EXCLUDED_FOLDER_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
 OUTPUT_ROOT = PROJECT_ROOT / "dataset" / "shift_data"
 
 
@@ -670,7 +675,7 @@ def build_corrected_folder(
 ) -> int:
     """将指定来源目录应用日期仿射，写入临时目录；日期与单夹重建共用此内核。"""
     count = 0
-    excluded = {BEAD_DIR_NAME, SHIFT_DIR_NAME, "delete", "audit", "audit_runs", ".raman_pipeline"}
+    excluded = EXCLUDED_FOLDER_NAMES
     for source in sorted(source_folder.rglob("*"), key=lambda path: build_natural_key(str(path.relative_to(source_folder)))):
         relative = source.relative_to(source_folder)
         if any(part in excluded or part.startswith(".") for part in relative.parts):
@@ -725,7 +730,7 @@ def apply_folder_affine_compensation(
             delta = float(requested)
             if not math.isfinite(delta):
                 raise ValueError("频移量必须是有限数值")
-            if not name or name in {"小球", "shift", "delete", "audit", "audit_runs", ".raman_pipeline"} or Path(name).name != name or "/" in name or "\\" in name or name in {".", ".."}:
+            if not name or name in EXCLUDED_FOLDER_NAMES or Path(name).name != name or "/" in name or "\\" in name or name in {".", ".."}:
                 raise ValueError("无效的补偿文件夹")
             if delta == 0:
                 continue

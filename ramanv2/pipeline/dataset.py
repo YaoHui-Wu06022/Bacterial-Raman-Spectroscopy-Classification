@@ -1,4 +1,4 @@
-"""沿用源文件夹走向，从 shift 最小更新对应的 init 或 CSdata 组。"""
+"""沿用源文件夹走向，从 shift 最小更新对应的 init 或 init_test 组。"""
 
 from __future__ import annotations
 
@@ -7,12 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ramanv2.common.naming import build_natural_key, is_test_source_folder, parse_folder_prefix, parse_test_folder_prefix
+from ramanv2.common.naming import build_natural_key, parse_folder_prefix
 from ramanv2.common.publishing import preserve_paths, publish_file, rename_directory, _remove_path
 from ramanv2.data.builders.init import CANONICAL_FOLDER_PATTERN, build_spectrum_folder
 from ramanv2.data.catalog import DatasetMapping
 from ramanv2.data.count import summarize_dataset
 from ramanv2.data.plots.prefix import build_prefix_plots_for_groups
+from ramanv2.data.profiles import TEST_ROOT_NAME
 from ramanv2.pipeline.lineage import lineage_path, load_folder_lineage, save_folder_lineage
 from ramanv2.pipeline.shift import load_date_affine_parameters
 from ramanv2.pipeline.state import PipelineState, save_pipeline_state
@@ -23,7 +24,7 @@ def collect_dataset_source_folders(data_root: Path, shift_root: Path, state: Pip
     previous = state.dataset_builds.get("full_init")
     if not isinstance(previous, dict):
         return []
-    exports = {entry["source"] for entry in previous.get("cs_exports", [])}
+    exports = {entry["source"] for entry in previous.get("test_exports", [])}
     folders = load_folder_lineage(data_root)["folders"]
     return sorted(
         (
@@ -40,20 +41,20 @@ def collect_dataset_source_folders(data_root: Path, shift_root: Path, state: Pip
     )
 
 
-def collect_cs_return_sources(init_root: Path, state: PipelineState) -> list[str]:
-    """只列出仍有实际 CSdata 光谱且有来源记录的目录，不扫描全量 init。"""
+def collect_test_return_sources(init_root: Path, state: PipelineState) -> list[str]:
+    """只列出仍有实际 init_test 光谱且有来源记录的目录，不扫描全量 init。"""
     report = state.dataset_builds.get("full_init")
     if not isinstance(report, dict):
         return []
-    root = Path(report.get("test_root") or init_root.parent / "CSdata").resolve()
+    root = Path(report.get("test_root") or init_root.parent / TEST_ROOT_NAME).resolve()
     return sorted({
-        entry["source"] for entry in report.get("cs_exports", [])
+        entry["source"] for entry in report.get("test_exports", [])
         if (root / str(entry["target"])).resolve().parent == root
         and any((root / str(entry["target"])).glob("*.arc_data"))
     }, key=build_natural_key)
 
 
-def run_cs_to_init(
+def run_test_to_init(
     data_root: Path,
     init_root: Path,
     mapping: DatasetMapping,
@@ -61,7 +62,7 @@ def run_cs_to_init(
     state_file: Path,
     source_id: str,
 ) -> dict[str, object]:
-    """直接迁移已有 CSdata 单组到 init，复用双向迁移事务。"""
+    """直接迁移已有 init_test 单组到 init，复用双向迁移事务。"""
     return _run_dataset_transfer(data_root, init_root, mapping, state, state_file, source_id, False)
 
 
@@ -70,7 +71,7 @@ def collect_init_export_sources(data_root: Path, init_root: Path, state: Pipelin
     report = state.dataset_builds.get("full_init")
     if not isinstance(report, dict):
         return {}
-    exports = {entry["source"] for entry in report.get("cs_exports", [])}
+    exports = {entry["source"] for entry in report.get("test_exports", [])}
     records = load_folder_lineage(data_root)["folders"]
     sources = {}
     for source_id, record in records.items():
@@ -83,7 +84,7 @@ def collect_init_export_sources(data_root: Path, init_root: Path, state: Pipelin
     return dict(sorted(sources.items(), key=lambda item: build_natural_key(item[1])))
 
 
-def run_init_to_cs(
+def run_init_to_test(
     data_root: Path,
     init_root: Path,
     mapping: DatasetMapping,
@@ -91,7 +92,7 @@ def run_init_to_cs(
     state_file: Path,
     source_id: str,
 ) -> dict[str, object]:
-    """将所选 init 整夹移入 CSdata，不重建其余数据。"""
+    """将所选 init 整夹移入 init_test，不重建其余数据。"""
     return _run_dataset_transfer(data_root, init_root, mapping, state, state_file, source_id, True)
 
 
@@ -102,7 +103,7 @@ def _run_dataset_transfer(
     state: PipelineState,
     state_file: Path,
     source_id: str,
-    to_csdata_enable: bool,
+    to_test_enable: bool,
 ) -> dict[str, object]:
     """双向共用预检查、迁移、绘图及状态发布；任一失败恢复原文件和路由。"""
     parts = source_id.split("/")
@@ -113,21 +114,21 @@ def _run_dataset_transfer(
     report = working.dataset_builds.get("full_init")
     if not isinstance(report, dict) or not init_root.is_dir():
         raise ValueError("请先生成 init，缺少来源分流记录")
-    exports = report.get("cs_exports", [])
+    exports = report.get("test_exports", [])
     selected = [entry for entry in exports if entry["source"] == source_id]
-    cs_root = Path(report.get("test_root") or init_root.parent / "CSdata").resolve()
-    if any(cs_root.is_relative_to(root.resolve()) or root.resolve().is_relative_to(cs_root)
+    test_root = Path(report.get("test_root") or init_root.parent / TEST_ROOT_NAME).resolve()
+    if any(test_root.is_relative_to(root.resolve()) or root.resolve().is_relative_to(test_root)
            for root in (init_root, data_root, init_root.parent / "shift_data")):
-        raise ValueError("CSdata 路径不能覆盖 init 或源数据")
+        raise ValueError("init_test 路径不能覆盖 init 或源数据")
     payload = load_folder_lineage(data_root)
     records = payload["folders"]
     record = records.get(source_id)
     if record is None:
         raise ValueError("缺少源文件夹走向记录")
     outputs = record.setdefault("outputs", {})
-    if to_csdata_enable:
+    if to_test_enable:
         if selected:
-            raise ValueError("该来源已经进入 CSdata，不能重复移入")
+            raise ValueError("该来源已经进入 init_test，不能重复移入")
         value = outputs.get("init")
         if not value:
             raise ValueError("缺少 init 输出路径")
@@ -140,20 +141,20 @@ def _run_dataset_transfer(
         prefix = match.group(1).upper()
     else:
         if len(selected) != 1:
-            raise ValueError("缺少唯一的 CSdata 来源记录，不能重复移回")
+            raise ValueError("缺少唯一的 init_test 来源记录，不能重复移回")
         entry = selected[0]
         if entry.get("date") != date_name:
-            raise ValueError("CSdata 日期与来源记录不一致")
-        source = (cs_root / str(entry["target"])).resolve()
-        if source.parent != cs_root:
-            raise ValueError("CSdata 来源路径无效")
+            raise ValueError("init_test 日期与来源记录不一致")
+        source = (test_root / str(entry["target"])).resolve()
+        if source.parent != test_root:
+            raise ValueError("init_test 来源路径无效")
         if any(other is not entry and other["target"] == entry["target"] for other in exports):
-            raise ValueError("CSdata 文件夹被多个来源共用")
-        if outputs.get("csdata") and Path(outputs["csdata"]).resolve() != source:
-            raise ValueError("CSdata 路径与来源走向不一致")
+            raise ValueError("init_test 文件夹被多个来源共用")
+        if outputs.get("test") and Path(outputs["test"]).resolve() != source:
+            raise ValueError("init_test 路径与来源走向不一致")
         if outputs.get("init") and Path(outputs["init"]).exists():
             raise ValueError("该来源已有 init 输出，不能重复移回")
-        prefix = parse_test_folder_prefix(folder_name)
+        prefix = parse_folder_prefix(folder_name, uppercase_enable=True)
     filenames = {path.name for path in source.glob("*.arc_data") if path.is_file()}
     if not filenames:
         raise ValueError("所选文件夹没有光谱")
@@ -165,23 +166,23 @@ def _run_dataset_transfer(
     genus_dir = (init_root / genus).resolve()
     if genus_dir.parent != init_root.resolve():
         raise ValueError("属目录超出 init")
-    if to_csdata_enable:
+    if to_test_enable:
         if source.parent != genus_dir:
             raise ValueError("init 的属目录与种前缀映射不一致")
-        # CSdata 命名沿用 init 模式：{prefix}{date}_{number}，扁平结构。
+        # init_test 命名沿用 init 模式：{prefix}{date}_{number}，扁平结构。
         existing_numbers = [
             int(match.group(3))
-            for path in cs_root.glob("*")
+            for path in test_root.glob("*")
             if path.is_dir() and (match := CANONICAL_FOLDER_PATTERN.fullmatch(path.name))
             and match.group(1).upper() == prefix and match.group(2) == date_name
         ]
         new_folder_name = f"{prefix}{date_name}_{max(existing_numbers, default=0) + 1:02d}"
-        target = cs_root / new_folder_name
+        target = test_root / new_folder_name
         if any(other["target"] == target.name for other in exports) or any(
-            key != source_id and value.get("outputs", {}).get("csdata") == str(target)
+            key != source_id and value.get("outputs", {}).get("test") == str(target)
             for key, value in records.items()
         ):
-            raise ValueError("CSdata 目标名称已被其他来源保留")
+            raise ValueError("init_test 目标名称已被其他来源保留")
     else:
         # 跳过仍被其他来源（含删除归档）保留的编号，不改动现有组号。
         reserved = [*genus_dir.glob("*"), *(Path(value["outputs"]["init"]) for value in records.values() if value.get("outputs", {}).get("init"))]
@@ -192,7 +193,7 @@ def _run_dataset_transfer(
     if target.exists():
         raise FileExistsError(f"目标文件夹已存在：{target}")
     summary = summarize_dataset(init_root)
-    if to_csdata_enable:
+    if to_test_enable:
         summary["file_count"] -= len(filenames)
         summary["folder_count"] -= 1
         summary["genus_count"] -= int(not any(not path.is_relative_to(source) for path in genus_dir.rglob("*.arc_data")))
@@ -206,29 +207,29 @@ def _run_dataset_transfer(
     with preserve_paths(snapshots):
         target.parent.mkdir(parents=True, exist_ok=True)
         rename_directory(source, target)
-        with TemporaryDirectory(prefix=".cs_return_plot_", dir=figure_root.parent) as temporary:
+        with TemporaryDirectory(prefix=".test_return_plot_", dir=figure_root.parent) as temporary:
             plots = build_prefix_plots_for_groups(init_root, Path(temporary), {(genus, prefix)})
             if plots:
                 publish_file(plots[0], plot_path)
-            elif to_csdata_enable:
+            elif to_test_enable:
                 _remove_path(plot_path)
             else:
                 raise RuntimeError("对应前缀图未生成")
-        outputs["init"] = None if to_csdata_enable else str(target)
-        outputs["csdata"] = str(target) if to_csdata_enable else None
+        outputs["init"] = None if to_test_enable else str(target)
+        outputs["test"] = str(target) if to_test_enable else None
         record["genus"] = genus
         record["prefix"] = prefix
         record["updated_at"] = datetime.now(timezone.utc).isoformat()
         payload["updated_at"] = record["updated_at"]
-        if to_csdata_enable:
-            report["cs_exports"] = [*exports, {
+        if to_test_enable:
+            report["test_exports"] = [*exports, {
                 "source": source_id, "source_name": folder_name, "target": target.name,
                 "genus": genus, "date": date_name, "file_count": len(filenames),
             }]
-            report["selected_cs_folders"] = sorted(set(report.get("selected_cs_folders", [])) | {source_id}, key=build_natural_key)
+            report["selected_test_folders"] = sorted(set(report.get("selected_test_folders", [])) | {source_id}, key=build_natural_key)
         else:
-            report["cs_exports"] = [other for other in exports if other is not entry]
-            report["selected_cs_folders"] = [value for value in report.get("selected_cs_folders", []) if value != source_id]
+            report["test_exports"] = [other for other in exports if other is not entry]
+            report["selected_test_folders"] = [value for value in report.get("selected_test_folders", []) if value != source_id]
         _update_dataset_counts(report, init_root, date_name, summary)
         save_folder_lineage(data_root, payload)
         working.dataset_builds.pop("latest", None)
@@ -239,34 +240,34 @@ def _run_dataset_transfer(
 
 def _update_dataset_counts(report: dict, init_root: Path, date_name: str, summary: dict) -> None:
     """供单组更新和分流迁移共用，不扫描或重建其他谱的数值。"""
-    exports = report.get("cs_exports", [])
-    cs_root = Path(report.get("test_root") or init_root.parent / "CSdata").resolve()
+    exports = report.get("test_exports", [])
+    test_root = Path(report.get("test_root") or init_root.parent / TEST_ROOT_NAME).resolve()
     for entry in exports:
-        target = (cs_root / str(entry["target"])).resolve()
-        if target.parent != cs_root:
-            raise ValueError("无效的 CSdata 输出文件夹")
+        target = (test_root / str(entry["target"])).resolve()
+        if target.parent != test_root:
+            raise ValueError("无效的 init_test 输出文件夹")
         entry["file_count"] = sum(path.is_file() for path in target.glob("*.arc_data"))
     report["count"] = summary
     init_count = summary["file_count"]
-    cs_count = sum(int(entry["file_count"]) for entry in exports)
+    test_count = sum(int(entry["file_count"]) for entry in exports)
     for key in ("source_files", "output_files"):
-        report[key] = init_count + cs_count
+        report[key] = init_count + test_count
     for key in ("init_source_files", "init_output_files"):
         report[key] = init_count
-    for key in ("test_files", "test_output_files", "cs_source_files", "cs_output_files"):
-        report[key] = cs_count
+    for key in ("test_files", "test_output_files", "test_source_files"):
+        report[key] = test_count
     report["test_folders"] = sorted({entry["target"] for entry in exports if int(entry["file_count"]) > 0}, key=build_natural_key)
-    report["cs_folder_count"] = len(report["test_folders"])
+    report["test_folder_count"] = len(report["test_folders"])
     date_dirs = [path for path in init_root.glob("*/*")
                  if path.is_dir() and (match := CANONICAL_FOLDER_PATTERN.fullmatch(path.name)) and match.group(2) == date_name]
     date_exports = [entry for entry in exports if entry["date"] == date_name and int(entry["file_count"]) > 0]
     date_init_count = sum(len(list(path.glob("*.arc_data"))) for path in date_dirs)
-    date_cs_count = sum(int(entry["file_count"]) for entry in date_exports)
+    date_test_count = sum(int(entry["file_count"]) for entry in date_exports)
     report.setdefault("date_stats", {})[date_name] = {
-        "source_files": date_init_count + date_cs_count,
-        "output_files": date_init_count + date_cs_count,
+        "source_files": date_init_count + date_test_count,
+        "output_files": date_init_count + date_test_count,
         "folder_count": len(date_dirs) + len(date_exports),
-        "test_files": date_cs_count,
+        "test_files": date_test_count,
     }
 
 
@@ -302,16 +303,16 @@ def run_folder_dataset_update(
         raise ValueError("缺少文件夹输出走向，请先生成全量 init")
     # 只有已记录的整夹删除才同步移除旧产物；普通缺谱或路径缺失仍报错。
     is_deleted = record.get("folder_status") == "folder_deleted" and not active.exists()
-    exports = report.get("cs_exports", [])
-    cs_export = next((entry for entry in exports if entry["source"] == source_id), None)
-    is_cs = cs_export is not None
-    if is_cs:
-        output_root = Path(report.get("test_root") or init_root.parent / "CSdata").resolve()
-        target = (output_root / str(cs_export["target"])).resolve()
+    exports = report.get("test_exports", [])
+    test_export = next((entry for entry in exports if entry["source"] == source_id), None)
+    is_test = test_export is not None
+    if is_test:
+        output_root = Path(report.get("test_root") or init_root.parent / TEST_ROOT_NAME).resolve()
+        target = (output_root / str(test_export["target"])).resolve()
         if target.parent != output_root:
-            raise ValueError("无效的 CSdata 输出文件夹")
-        if any(entry["source"] != source_id and entry["target"] == cs_export["target"] for entry in exports):
-            raise ValueError("CSdata 目标被其他来源占用")
+            raise ValueError("无效的 init_test 输出文件夹")
+        if any(entry["source"] != source_id and entry["target"] == test_export["target"] for entry in exports):
+            raise ValueError("init_test 目标被其他来源占用")
     else:
         output_root = init_root.resolve()
         target_value = record.get("outputs", {}).get("init")
@@ -325,8 +326,8 @@ def run_folder_dataset_update(
             raise ValueError("init 目标被其他来源占用，请先按日期更新")
     if target.is_relative_to(shift_root.resolve()) or target.is_relative_to(data_root.resolve()):
         raise ValueError("输出目录不能覆盖源数据")
-    if is_cs and (target.is_relative_to(init_root.resolve()) or init_root.resolve().is_relative_to(target)):
-        raise ValueError("CSdata 输出不能覆盖 init")
+    if is_test and (target.is_relative_to(init_root.resolve()) or init_root.resolve().is_relative_to(target)):
+        raise ValueError("init_test 输出不能覆盖 init")
     filenames = {path.name for path in active.glob("*.arc_data") if path.is_file()}
     if not filenames and not is_deleted:
         raise ValueError("所选文件夹没有活动光谱")
@@ -336,7 +337,7 @@ def run_folder_dataset_update(
     # 在快照创建前统计，避免把同级临时备份误计入 init 数量。
     summary = summarize_dataset(init_root)
     old_count = len(list(target.glob("*.arc_data")))
-    if not is_cs:
+    if not is_test:
         summary["exists"] = True
         if is_deleted:
             summary["folder_count"] -= int(old_count > 0)
@@ -352,7 +353,7 @@ def run_folder_dataset_update(
     prefix = parse_folder_prefix(target.name, uppercase_enable=True)
     plot_path = figure_root / target.parent.name / f"{prefix}.png"
     snapshots = [target, lineage_path(data_root), state_file]
-    if not is_cs:
+    if not is_test:
         snapshots.append(plot_path)
     with preserve_paths(snapshots):
         if is_deleted:
@@ -360,8 +361,8 @@ def run_folder_dataset_update(
             count = 0
         else:
             count = build_spectrum_folder(source, target, filenames)
-        if is_cs:
-            cs_export["file_count"] = count
+        if is_test:
+            test_export["file_count"] = count
         else:
             # 只计算这一属/前缀的图；临时图生成成功后再发布，保留其他图片。
             with TemporaryDirectory(prefix=".folder_plot_", dir=figure_root.parent) as temporary:
@@ -390,7 +391,7 @@ def run_folder_dataset_update(
         working.dataset_builds.pop("latest", None)
         save_pipeline_state(state_file, working)
     state.__dict__.update(working.__dict__)
-    result = {"source_id": source_id, "target_dir": str(target), "spectrum_count": count, "csdata_updated": is_cs}
+    result = {"source_id": source_id, "target_dir": str(target), "spectrum_count": count, "test_updated": is_test}
     if is_deleted:
         result.update(deleted=True, removed_file_count=old_count)
     return result
