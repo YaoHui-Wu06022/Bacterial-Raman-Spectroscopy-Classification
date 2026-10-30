@@ -57,7 +57,7 @@ def _load_catalog(context: PageContext) -> DatasetMapping:
 def _render_count_metrics(summary: dict[str, int | bool]) -> None:
     metrics = st.columns(3)
     metrics[0].metric("属数量", f"{summary['genus_count']} 个")
-    metrics[1].metric("来源文件夹", f"{summary['folder_count']} 个")
+    metrics[1].metric("种数量", f"{summary['species_count']} 个")
     metrics[2].metric("光谱数量", f"{summary['file_count']} 条")
 
 
@@ -314,11 +314,11 @@ def _list_test_sources(context: PageContext, date_names: list[str]) -> list[str]
 
 
 # 默认选择逻辑版本号，修改逻辑时递增以强制重新初始化
-_TEST_SELECTION_LOGIC_VERSION = 2
+_TEST_SELECTION_LOGIC_VERSION = 5
 
 
 def _default_test_sources(candidates: list[str]) -> list[str]:
-    """默认选择每个种的第二个文件夹；种总数少于 4 个则不选择。"""
+    """默认选择每个种的倒数第二个文件夹（恰好 4 个）或倒数第三个（>= 5 个）；少于 4 个则不选择。"""
     from collections import defaultdict
     species_folders: dict[str, list[str]] = defaultdict(list)
     for candidate in candidates:
@@ -327,9 +327,26 @@ def _default_test_sources(candidates: list[str]) -> list[str]:
         species_folders[prefix].append(candidate)
     selected: list[str] = []
     for prefix, folders in species_folders.items():
+        if len(folders) < 4:
+            continue
+        sorted_folders = sorted(folders, key=build_natural_key)
+        selected.append(sorted_folders[-3] if len(folders) >= 5 else sorted_folders[-2])
+    return sorted(selected, key=build_natural_key)
+
+
+def _legacy_default_test_sources(candidates: list[str]) -> list[str]:
+    """返回旧版“第二个文件夹”规则，用于迁移已有会话选择。"""
+    from collections import defaultdict
+
+    species_folders: dict[str, list[str]] = defaultdict(list)
+    for candidate in candidates:
+        folder_name = candidate.rsplit("/", 1)[-1]
+        prefix = parse_folder_prefix(folder_name, uppercase_enable=True)
+        species_folders[prefix].append(candidate)
+    selected = []
+    for folders in species_folders.values():
         if len(folders) >= 4:
-            sorted_folders = sorted(folders, key=build_natural_key)
-            selected.append(sorted_folders[1])
+            selected.append(sorted(folders, key=build_natural_key)[1])
     return sorted(selected, key=build_natural_key)
 
 
@@ -338,31 +355,64 @@ def _sync_test_selection(
     selection_key: str,
     initialized_key: str,
 ) -> None:
-    """保留用户选择，并只为新出现的候选目录添加默认选择。"""
+    """按当前候选集补齐默认选择，同时保留用户显式移除的默认项。"""
     version_key = f"{selection_key}_version"
     previous_candidates_key = f"{selection_key}_candidates"
-    previous_candidates = set(st.session_state.get(previous_candidates_key, []))
-    # 逻辑版本变化或首次初始化时重新计算默认选择
-    if st.session_state.get(version_key) != _TEST_SELECTION_LOGIC_VERSION:
+    defaults_key = f"{selection_key}_defaults"
+    suppressed_key = f"{selection_key}_suppressed_defaults"
+    version_changed = st.session_state.get(version_key) != _TEST_SELECTION_LOGIC_VERSION
+    initialized = st.session_state.get(initialized_key, False)
+    previous_defaults = set(st.session_state.get(defaults_key, []))
+    current_candidates = set(candidates)
+
+    # 首次初始化时直接采用当前候选集的默认值；逻辑版本升级时保留已有选择，
+    # 再按当前候选集补齐默认值，避免旧版本状态阻断新规则。
+    if not initialized:
         selected = _default_test_sources(candidates)
-        st.session_state[version_key] = _TEST_SELECTION_LOGIC_VERSION
-    elif not st.session_state.get(initialized_key, False):
-        selected = _default_test_sources(candidates)
+        suppressed_defaults: set[str] = set()
     else:
         selected = [
             value
             for value in st.session_state.get(selection_key, [])
             if value in candidates
         ]
-        new_candidates = sorted(set(candidates) - previous_candidates, key=build_natural_key)
-        selected.extend(
-            value
-            for value in _default_test_sources(new_candidates)
-            if value not in selected
-        )
-    st.session_state[selection_key] = selected
+        suppressed_defaults = set(st.session_state.get(suppressed_key, []))
+        if version_changed:
+            selected = [value for value in selected if value not in previous_defaults]
+        if not version_changed:
+            # 只记录仍然存在但被用户从选择中移除的旧默认项；候选已消失时，
+            # 允许排序变化后由新的第二个文件夹接替它。
+            suppressed_defaults.update(
+                value
+                for value in previous_defaults & current_candidates
+                if value not in selected
+            )
+        suppressed_defaults.difference_update(selected)
+
+    defaults = set(_default_test_sources(candidates))
+    selected_set = set(selected)
+    selected_set.update(defaults - suppressed_defaults)
+    st.session_state[selection_key] = sorted(selected_set, key=build_natural_key)
+    st.session_state[defaults_key] = sorted(defaults, key=build_natural_key)
+    st.session_state[suppressed_key] = sorted(suppressed_defaults, key=build_natural_key)
+    st.session_state[version_key] = _TEST_SELECTION_LOGIC_VERSION
     st.session_state[previous_candidates_key] = list(candidates)
     st.session_state[initialized_key] = True
+
+
+def _render_default_test_selection_button(candidates: list[str], selection_key: str) -> None:
+    """提供显式的默认选择恢复入口，避免误用多选框的全选操作。"""
+    if not st.button(
+        "恢复默认选择",
+        key=f"{selection_key}_reset_defaults",
+        help="按当前候选文件夹重新应用默认规则：每个前缀 4 个选倒数第二个，>= 5 个选倒数第三个。",
+    ):
+        return
+    defaults = _default_test_sources(candidates)
+    st.session_state[selection_key] = defaults
+    st.session_state[f"{selection_key}_defaults"] = defaults
+    st.session_state[f"{selection_key}_suppressed_defaults"] = []
+    st.rerun()
 
 
 def _merge_incremental_init_report(
@@ -436,16 +486,13 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     _render_taxon_counts(context.init_root)
     eligible_dates = sorted(state.affine_completed_dates, key=build_natural_key)
     test_candidates = _list_test_sources(context, eligible_dates)
-    if isinstance(full_report, dict):
-        test_candidates = sorted(set(test_candidates) | {
-            entry["source"] for entry in full_report.get("test_exports", []) if entry["date"] in eligible_dates
-        }, key=build_natural_key)
     test_selection_key = "full_init_test_selection"
     initialized_key = "full_init_test_selection_initialized"
     if not st.session_state.get(initialized_key, False) and isinstance(full_report, dict):
         st.session_state[test_selection_key] = list(full_report.get("selected_test_folders", []))
         st.session_state[initialized_key] = True
-        st.session_state[f"{test_selection_key}_version"] = _TEST_SELECTION_LOGIC_VERSION
+        st.session_state[f"{test_selection_key}_version"] = _TEST_SELECTION_LOGIC_VERSION - 1
+        st.session_state[f"{test_selection_key}_defaults"] = _legacy_default_test_sources(test_candidates)
         st.session_state[f"{test_selection_key}_candidates"] = list(test_candidates)
     returned_source = st.session_state.pop("test_return_removed_source", None)
     if returned_source is not None:
@@ -454,6 +501,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     if exported_source is not None:
         st.session_state[test_selection_key] = sorted(set(st.session_state.get(test_selection_key, [])) | {exported_source}, key=build_natural_key)
     _sync_test_selection(test_candidates, test_selection_key, initialized_key)
+    _render_default_test_selection_button(test_candidates, test_selection_key)
     selected_test = st.multiselect(
         "选择进入 init_test 的来源文件夹",
         test_candidates,
@@ -539,6 +587,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                 test_selection_key,
                 "incremental_init_test_selection_initialized",
             )
+            _render_default_test_selection_button(test_candidates, test_selection_key)
             selected_test = st.multiselect(
                 "新增来源中选择进入 init_test 的文件夹",
                 test_candidates,

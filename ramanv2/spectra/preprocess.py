@@ -209,8 +209,20 @@ def preprocess_single_spectrum(
     cosmic_ray_max_iter: int = 2,
 ):
     """完成单谱尖峰修复、基线校正、裁剪、坏段删除和插值。"""
+    wavenumbers = np.asarray(wavenumbers, dtype=np.float64)
+    spectrum = np.asarray(spectrum, dtype=np.float32)
+    if wavenumbers.ndim != 1 or spectrum.ndim != 1:
+        raise ValueError(
+            f"光谱输入必须是一维数组：wavenumbers.ndim={wavenumbers.ndim}, "
+            f"spectrum.ndim={spectrum.ndim}"
+        )
+    if wavenumbers.size != spectrum.size:
+        raise ValueError(
+            f"波数与强度长度不一致：wavenumbers={wavenumbers.size}, "
+            f"spectrum={spectrum.size}"
+        )
     normalized_bands = normalize_bad_bands(bad_bands)
-    cleaned = np.asarray(spectrum, dtype=np.float32)
+    cleaned = spectrum
     cosmic_stats = CosmicRayStats()
     if cosmic_ray_enable:
         cleaned, cosmic_stats = remove_cosmic_rays(

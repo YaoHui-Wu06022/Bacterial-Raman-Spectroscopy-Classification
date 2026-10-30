@@ -42,5 +42,22 @@ def test_interpolation_uses_own_segment_endpoint_at_bad_band_edges():
     np.testing.assert_array_equal(actual[2:], result[2:])
 
 
+def test_preprocess_rejects_mismatched_axis_and_intensity_lengths():
+    axis = np.linspace(600.0, 1800.0, 8)
+    values = np.ones(7)
+    with np.testing.assert_raises_regex(ValueError, "wavenumbers=8, spectrum=7"):
+        preprocess.preprocess_single_spectrum(
+            axis,
+            values,
+            cut_min=600.0,
+            cut_max=1800.0,
+            reference_wavenumbers=np.linspace(600.0, 1800.0, 8),
+            bad_bands=(),
+            baseline_lam=1e5,
+            baseline_asls_p=0.01,
+            baseline_max_iter=1,
+        )
+
+
 
 

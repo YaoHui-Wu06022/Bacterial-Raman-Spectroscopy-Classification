@@ -49,21 +49,24 @@ def _physical_clean_group(
     for filename, wavenumbers, intensities in samples:
         if not wavenumbers.size or not intensities.size:
             continue
-        output_axis, output_spectrum, _ = preprocess_single_spectrum(
-            wavenumbers,
-            intensities,
-            cut_min=input_config.cut_min,
-            cut_max=input_config.cut_max,
-            reference_wavenumbers=reference_axis,
-            bad_bands=input_config.bad_bands,
-            baseline_lam=build_config.baseline_lam,
-            baseline_asls_p=build_config.baseline_asls_p,
-            baseline_max_iter=build_config.baseline_max_iter,
-            baseline_fit_min=build_config.baseline_fit_min,
-            baseline_fit_max=build_config.baseline_fit_max,
-            baseline_method=build_config.baseline_method,
-            **options,
-        )
+        try:
+            output_axis, output_spectrum, _ = preprocess_single_spectrum(
+                wavenumbers,
+                intensities,
+                cut_min=input_config.cut_min,
+                cut_max=input_config.cut_max,
+                reference_wavenumbers=reference_axis,
+                bad_bands=input_config.bad_bands,
+                baseline_lam=build_config.baseline_lam,
+                baseline_asls_p=build_config.baseline_asls_p,
+                baseline_max_iter=build_config.baseline_max_iter,
+                baseline_fit_min=build_config.baseline_fit_min,
+                baseline_fit_max=build_config.baseline_fit_max,
+                baseline_method=build_config.baseline_method,
+                **options,
+            )
+        except ValueError as error:
+            raise ValueError(f"预处理文件失败：{filename}：{error}") from error
         if output_axis is not None:
             cleaned.append((filename, output_axis, output_spectrum))
     return cleaned

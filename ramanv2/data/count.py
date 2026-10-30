@@ -45,7 +45,7 @@ def summarize_dataset(root_dir: Path | str) -> dict[str, int | bool]:
     """返回页面和构建报告共用的数据集统计摘要。"""
     root_path = Path(root_dir)
     if not root_path.is_dir():
-        return {"exists": False, "genus_count": 0, "folder_count": 0, "file_count": 0}
+        return {"exists": False, "genus_count": 0, "species_count": 0, "folder_count": 0, "file_count": 0}
 
     tree, total_files = count_dataset(root_path)
 
@@ -57,9 +57,17 @@ def summarize_dataset(root_dir: Path | str) -> dict[str, int | bool]:
             if not name.startswith("__")
         )
 
+    species_keys = {
+        (genus, parse_folder_prefix(folder, uppercase_enable=True))
+        for genus, genus_tree in tree.items()
+        if not genus.startswith("__")
+        for folder, group in genus_tree.items()
+        if not folder.startswith("__") and group.get("__total__", 0)
+    }
     return {
         "exists": True,
         "genus_count": sum(1 for name in tree if not name.startswith("__")),
+        "species_count": len(species_keys),
         "folder_count": folder_count(tree),
         "file_count": total_files,
     }
