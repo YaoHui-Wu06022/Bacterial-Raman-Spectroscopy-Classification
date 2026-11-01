@@ -15,6 +15,9 @@ from ramanv2.packaging.source_archive import build_package_archive
 
 STAGE_INIT = "init"
 STAGE_INIT_TEST = "init_test"
+# xz preset 1（快速模式）相对默认 6 约快 9 倍，体积约增 1.5 倍；
+# 对纯文本 arc_data 数据，压缩率差异小，主要收益是本地生成耗时。
+XZ_PRESET = 1
 
 
 def build_profile_data_archive(
@@ -124,7 +127,7 @@ def _build_data_archive(
 ) -> tuple[Path, dict[str, int]]:
     """校验并压缩各阶段原始 arc_data 文件，返回每个阶段的样本数。"""
     sample_counts: dict[str, int] = {}
-    with tarfile.open(output_path, "w:xz", preset=6, dereference=True) as archive:
+    with tarfile.open(output_path, "w:xz", preset=XZ_PRESET, dereference=True) as archive:
         for stage_name, (archive_root, source_dir) in stage_dirs.items():
             files = sorted(path for path in source_dir.rglob("*.arc_data") if path.is_file())
             if not files:

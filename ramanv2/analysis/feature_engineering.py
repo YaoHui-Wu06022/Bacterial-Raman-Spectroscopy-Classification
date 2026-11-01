@@ -242,11 +242,14 @@ def _build_model(name: str):
 
         return make_pipeline(StandardScaler(), NearestCentroid())
     if name == "linear_svm":
-        return make_pipeline(StandardScaler(), LinearSVC(C=1.0, dual=False, max_iter=2000, random_state=42))
+        return make_pipeline(
+            StandardScaler(),
+            LinearSVC(C=1.0, dual=False, tol=1e-3, max_iter=500, random_state=42),
+        )
     if name == "rbf_svm":
         return make_pipeline(
             StandardScaler(),
-            PCA(n_components=20, whiten=True, random_state=42),
+            PCA(n_components=10, whiten=True, random_state=42),
             SVC(C=3.0, gamma="scale"),
         )
     raise ValueError(f"未知模型：{name}")
@@ -343,7 +346,10 @@ def _domain_auc(features: np.ndarray, domains: np.ndarray, groups: np.ndarray) -
     splitter = GroupKFold(n_splits=min(5, np.unique(groups).size))
     probabilities = np.zeros(domains.size, dtype=np.float64)
     for train_index, test_index in splitter.split(features, domains, groups):
-        model = make_pipeline(StandardScaler(), LinearSVC(C=1.0, dual=False, max_iter=2000, random_state=42))
+        model = make_pipeline(
+            StandardScaler(),
+            LinearSVC(C=1.0, dual=False, tol=1e-3, max_iter=500, random_state=42),
+        )
         model.fit(features[train_index], domains[train_index])
         probabilities[test_index] = model.decision_function(features[test_index])
     return float(roc_auc_score(domains, probabilities))
@@ -421,6 +427,7 @@ def run_feature_engineering_analysis(
     test_mask = domains == "init_test"
     feature_names = ["snv_full", "derivative", "peak", "interval", "combined"]
     model_names = ["nearest_centroid", "linear_svm", "rbf_svm"]
+    linear_feature_names = {"snv_full", "derivative", "combined"}
     metrics_rows: list[dict[str, object]] = []
     best_external: dict[str, tuple[float, str, str, np.ndarray, np.ndarray]] = {}
     for level_name, labels_array in (("level_1", level_1), ("level_2", level_2)):
@@ -429,6 +436,8 @@ def run_feature_engineering_analysis(
             features = feature_table[feature_name]
             domain_auc = _domain_auc(features, domains.astype(str) == "init_test", domain_groups)
             for model_name in model_names:
+                if model_name == "linear_svm" and feature_name not in linear_feature_names:
+                    continue
                 if model_name == "rbf_svm" and feature_name not in {"peak", "interval", "combined"}:
                     continue
                 internal_protocol = "lofo" if model_name == "nearest_centroid" else "group5"
