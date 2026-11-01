@@ -32,6 +32,26 @@ def _build_sg_kernel(
     return torch.tensor(coefficients, dtype=torch.float32, device=device).view(1, 1, -1)
 
 
+def _segment_conv1d(
+    signal: torch.Tensor,
+    kernel: torch.Tensor,
+    segment_bounds: tuple[tuple[int, int], ...],
+    padding: int,
+) -> torch.Tensor:
+    """按有效段分别卷积；段内用边缘复制补齐，避免跨过被剔除的坏段混点。"""
+    if len(segment_bounds) <= 1:
+        return torch.nn.functional.conv1d(signal, kernel, padding=padding)
+    outputs = []
+    for start, stop in segment_bounds:
+        segment = signal[..., start:stop]
+        if padding:
+            segment = torch.nn.functional.pad(
+                segment, (padding, padding), mode="replicate"
+            )
+        outputs.append(torch.nn.functional.conv1d(segment, kernel))
+    return torch.cat(outputs, dim=-1)
+
+
 def build_model_input(
     raw_intensity: np.ndarray,
     input_spec: InputSpec,
@@ -48,6 +68,7 @@ def build_model_input(
             raise ValueError("启用增强时必须提供 AugmentationSpec")
         values = augment_raw_spectrum(values, augmentation_spec)
     values = values.copy()
+    segment_bounds = input_spec.segment_bounds or ((0, values.size),)
 
     source = torch.as_tensor(values, dtype=torch.float32, device=device).view(1, 1, -1)
     normalized = normalize_spectrum(values, input_spec.norm_method)
@@ -55,25 +76,28 @@ def build_model_input(
 
     smooth_signal = None
     if input_spec.smooth_enable:
-        smooth_values = torch.nn.functional.conv1d(
+        smooth_values = _segment_conv1d(
             source,
             smooth_kernel,
-            padding=input_spec.smooth_window // 2,
+            segment_bounds,
+            input_spec.smooth_window // 2,
         )[0, 0]
         smooth_values = normalize_spectrum(smooth_values, input_spec.norm_method)
         smooth_signal = smooth_values.view(1, 1, -1)
 
     d1_signal = None
     if input_spec.d1_enable:
-        d1_values = torch.nn.functional.conv1d(
+        d1_values = _segment_conv1d(
             source,
             smooth_kernel,
-            padding=input_spec.smooth_window // 2,
+            segment_bounds,
+            input_spec.smooth_window // 2,
         )
-        d1_values = torch.nn.functional.conv1d(
+        d1_values = _segment_conv1d(
             d1_values,
             d1_kernel,
-            padding=input_spec.d1_window // 2,
+            segment_bounds,
+            input_spec.d1_window // 2,
         )[0, 0]
         d1_values = d1_values / input_spec.step_cm
         d1_values = normalize_spectrum(d1_values, input_spec.norm_method)
