@@ -4,10 +4,9 @@ from pathlib import Path
 import pytest
 
 from ramanv2.data.builders.init import (
-    InitBuildConflictError,
     build_full_init,
-    build_profile_datasets,
     build_init_datasets,
+    build_profile_datasets,
 )
 from ramanv2.data.catalog import DatasetMapping
 from ramanv2.pipeline.lineage import load_folder_lineage, save_folder_lineage
@@ -64,20 +63,6 @@ def test_build_init_copies_only_approved_dates_and_profiles(tmp_path: Path) -> N
     assert progress_calls == [("20240101", 1, 1)]
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_rebuild_ignores_stale_test_names_and_keeps_unified_numbers(tmp_path: Path) -> None:
     """历史测试组名不得覆盖统一编号：重建后同一前缀同日期的编号必须唯一。"""
     cosmic = tmp_path / "cosmic_data"
@@ -105,6 +90,21 @@ def test_rebuild_ignores_stale_test_names_and_keeps_unified_numbers(tmp_path: Pa
     assert (init / "Enterobacter" / f"EC{date}_01").is_dir()
     assert (tmp_path / "init_test" / f"EC{date}_02").is_dir()
     assert not (tmp_path / "init_test" / f"EC{date}_01").exists()
+
+
+def test_build_init_rejects_invalid_spectrum(tmp_path: Path) -> None:
+    """坏谱在复制阶段即被拒绝，不留下半成品 init。"""
+    shift = tmp_path / "shift_data"
+    approved = approve_date(shift, "20240101")
+    write_spectrum(approved / "ECL01" / "ok.arc_data", 1)
+    (approved / "ECL01" / "broken.arc_data").write_text("broken", encoding="utf-8")
+    mapping = DatasetMapping.from_payload(
+        {"genera": {"Enterobacter": ["ECL"]}, "datasets": {"GN": ["Enterobacter"]}}
+    )
+
+    with pytest.raises(ValueError, match="无效光谱"):
+        build_init_datasets(shift, tmp_path / "init", {}, mapping, ["20240101"])
+    assert not (tmp_path / "init").exists()
 
 
 def test_profile_build_failure_keeps_previous_output(tmp_path: Path) -> None:

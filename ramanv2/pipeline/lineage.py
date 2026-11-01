@@ -325,8 +325,8 @@ def record_affine_approval(
     return payload
 
 
-def record_output_path(
-    data_root: Path | str,
+def apply_output_path(
+    payload: dict[str, object],
     date_name: str,
     folder_name: str,
     *,
@@ -335,7 +335,7 @@ def record_output_path(
     test_path: str | None = None,
     shift_path: str | None = None,
 ) -> dict[str, object]:
-    payload = load_folder_lineage(data_root)
+    """在已加载的走向记录中写入输出路径，由调用方统一保存，避免逐组读写大文件。"""
     record = _ensure_folder(payload, str(date_name), str(folder_name))
     outputs = record.setdefault("outputs", {})
     if not isinstance(outputs, dict):
@@ -355,6 +355,29 @@ def record_output_path(
     if shift_path is not None:
         outputs["shift_updated_at"] = record["updated_at"]
     payload["updated_at"] = record["updated_at"]
+    return payload
+
+
+def record_output_path(
+    data_root: Path | str,
+    date_name: str,
+    folder_name: str,
+    *,
+    init_path: str | None = None,
+    profile_paths: dict[str, str] | None = None,
+    test_path: str | None = None,
+    shift_path: str | None = None,
+) -> dict[str, object]:
+    payload = load_folder_lineage(data_root)
+    apply_output_path(
+        payload,
+        date_name,
+        folder_name,
+        init_path=init_path,
+        profile_paths=profile_paths,
+        test_path=test_path,
+        shift_path=shift_path,
+    )
     save_folder_lineage(data_root, payload)
     return payload
 
@@ -516,6 +539,7 @@ def _move_folder_contents(source_folder: Path, target_folder: Path) -> list[tupl
 __all__ = [
     "FOLDER_DELETE_RELATIVE",
     "LINEAGE_FILE_NAME",
+    "apply_output_path",
     "has_active_source_folders",
     "initialize_folder_lineage",
     "lineage_path",

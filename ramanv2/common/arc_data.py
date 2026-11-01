@@ -15,21 +15,25 @@ def read_arc_data(path: Path | str) -> tuple[np.ndarray, np.ndarray]:
 
 def read_raw_arc_data(path: Path | str) -> tuple[np.ndarray, np.ndarray, int]:
     """读取原始两列谱并统计无法解析的非空行。"""
+    return parse_raw_arc_data(Path(path).read_text(encoding="utf-8", errors="ignore"))
+
+
+def parse_raw_arc_data(text: str) -> tuple[np.ndarray, np.ndarray, int]:
+    """解析两列文本光谱内容并统计无法解析的非空行。"""
     wavenumbers, intensities = [], []
     malformed_lines = 0
-    with Path(path).open("r", encoding="utf-8", errors="ignore") as file:
-        for line in file:
-            fields = line.strip().split()
-            if not fields:
-                continue
-            if len(fields) != 2:
-                malformed_lines += 1
-                continue
-            try:
-                wavenumbers.append(float(fields[0]))
-                intensities.append(float(fields[1]))
-            except ValueError:
-                malformed_lines += 1
+    for line in text.splitlines():
+        fields = line.strip().split()
+        if not fields:
+            continue
+        if len(fields) != 2:
+            malformed_lines += 1
+            continue
+        try:
+            wavenumbers.append(float(fields[0]))
+            intensities.append(float(fields[1]))
+        except ValueError:
+            malformed_lines += 1
     return (
         np.asarray(wavenumbers, dtype=np.float64),
         np.asarray(intensities, dtype=np.float64),
@@ -44,4 +48,4 @@ def write_arc_data(path: Path | str, wavenumbers, intensities, fmt: str = "%.8f"
     np.savetxt(target, np.column_stack([wavenumbers, intensities]), fmt=[fmt, fmt])
 
 
-__all__ = ["read_arc_data", "read_raw_arc_data", "write_arc_data"]
+__all__ = ["read_arc_data", "read_raw_arc_data", "parse_raw_arc_data", "write_arc_data"]

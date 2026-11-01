@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import re
 import json
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Literal
@@ -12,18 +14,18 @@ from uuid import uuid4
 
 import numpy as np
 
-from ramanv2.common.arc_data import read_arc_data
+from ramanv2.common.arc_data import parse_raw_arc_data, read_arc_data
 from ramanv2.common.naming import (
     NON_TRAINING_FOLDER_NAMES,
     PIPELINE_RESERVED_FOLDER_NAMES,
     build_natural_key,
     parse_folder_prefix,
 )
-from ramanv2.common.publishing import create_temporary_path, publish_directory, rename_directory, preserve_paths, _remove_path
+from ramanv2.common.publishing import create_temporary_path, publish_directory, rename_directory, _remove_path
 from ramanv2.data.count import summarize_dataset
 from ramanv2.data.profiles import TEST_ROOT_NAME
 from ramanv2.data.catalog import DatasetMapping
-from ramanv2.pipeline.lineage import initialize_folder_lineage, load_folder_lineage, record_output_path, save_folder_lineage, lineage_path
+from ramanv2.pipeline.lineage import apply_output_path, initialize_folder_lineage, load_folder_lineage, save_folder_lineage
 
 
 SPECIAL_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
@@ -127,7 +129,7 @@ def build_spectrum_folder(source_folder: Path, target_folder: Path, filenames: s
     temporary.mkdir()
     try:
         for path in files:
-            _copy_source_file(path, temporary / path.name)
+            _copy_source_file(path, [temporary / path.name])
         publish_directory(temporary, target)
     finally:
         if temporary.exists():
@@ -450,7 +452,6 @@ def build_init_datasets(
     profile_stats = {name: 0 for name in roots}
     test_files = 0
     test_folders: set[str] = set()
-    test_exports: list[dict[str, object]] = []
     total_source_files = sum(len(group.files) for group in groups)
     processed_source_files = 0
     try:
@@ -459,38 +460,44 @@ def build_init_datasets(
                 _remove_path(temporary_roots["__all__"] / relative)
             for name in replaced_test_names:
                 _remove_path(temporary_roots["__test__"] / name)
-        for group in groups:
-            date_stats[group.date_name]["folder_count"] += 1
-            destinations = _resolve_destinations(group, mapping, temporary_roots)
-            for source_path in group.files:
-                source_files += 1
-                date_stats[group.date_name]["source_files"] += 1
-                for profile_name, destination in destinations:
-                    target = destination / source_path.name
-                    _copy_source_file(source_path, target)
-                    output_files += 1
-                    date_stats[group.date_name]["output_files"] += 1
-                    if profile_name != "__all__":
-                        if profile_name == "__test__":
-                            test_files += 1
-                            test_folders.add(group.target_name)
-                            date_stats[group.date_name]["test_files"] += 1
-                        else:
-                            profile_stats[profile_name] += 1
-            if group.is_test:
-                test_exports.append(
-                    {
-                        "source": f"{group.date_name}/{group.source_name or group.source_dir.name}",
-                        "source_name": group.source_name or group.source_dir.name,
-                        "target": group.target_name,
-                        "genus": group.genus,
-                        "date": group.date_name,
-                        "file_count": len(group.files),
-                    }
-                )
-            processed_source_files += len(group.files)
-            if progress_callback is not None:
-                progress_callback(group.date_name, processed_source_files, total_source_files)
+        plans = [(group, _resolve_destinations(group, mapping, temporary_roots)) for group in groups]
+        with ThreadPoolExecutor(max_workers=_copy_worker_count()) as executor:
+            futures = {
+                executor.submit(_copy_group_files, group, destinations): group
+                for group, destinations in plans
+            }
+            for future in as_completed(futures):
+                group = futures[future]
+                counts = future.result()
+                date_stats[group.date_name]["folder_count"] += 1
+                date_stats[group.date_name]["source_files"] += len(group.files)
+                source_files += len(group.files)
+                for profile_name, count in counts.items():
+                    output_files += count
+                    date_stats[group.date_name]["output_files"] += count
+                    if profile_name == "__all__":
+                        continue
+                    if profile_name == "__test__":
+                        test_files += count
+                        test_folders.add(group.target_name)
+                        date_stats[group.date_name]["test_files"] += count
+                    else:
+                        profile_stats[profile_name] += count
+                processed_source_files += len(group.files)
+                if progress_callback is not None:
+                    progress_callback(group.date_name, processed_source_files, total_source_files)
+        test_exports = [
+            {
+                "source": f"{group.date_name}/{group.source_name or group.source_dir.name}",
+                "source_name": group.source_name or group.source_dir.name,
+                "target": group.target_name,
+                "genus": group.genus,
+                "date": group.date_name,
+                "file_count": len(group.files),
+            }
+            for group in groups
+            if group.is_test
+        ]
         report = {
             "status": "ready",
             "mode": mode,
@@ -516,41 +523,39 @@ def build_init_datasets(
             "test_exports": test_exports,
             "selected_test_folders": sorted(selected_keys or set(), key=build_natural_key),
         }
-        with preserve_paths([*destination_roots.values(), lineage_path(cosmic_root)]):
-            if mode == "replace_dates":
-                for name, target in destination_roots.items():
-                    publish_directory(temporary_roots[name], target)
-            else:
-                _publish_all(temporary_roots, destination_roots)
-            if cosmic_root.is_dir():
-                for group in groups:
-                    relative = _target_relative(group)
-                    if group.is_test:
-                        record_output_path(
-                            cosmic_root,
-                            group.date_name,
-                            group.source_name or group.source_dir.name,
-                            test_path=str(resolved_test_root / relative) if resolved_test_root is not None else None,
-                        )
-                        continue
-                    profile_paths = {
-                        name: str(root / relative)
-                        for name, root in roots.items()
-                        if group.genus in mapping.datasets.get(name, ())
-                    }
-                    record_output_path(
-                        cosmic_root,
+        if mode == "replace_dates":
+            for name, target in destination_roots.items():
+                publish_directory(temporary_roots[name], target)
+        else:
+            _publish_all(temporary_roots, destination_roots)
+        if cosmic_root.is_dir():
+            payload = load_folder_lineage(cosmic_root)
+            for group in groups:
+                relative = _target_relative(group)
+                if group.is_test:
+                    apply_output_path(
+                        payload,
                         group.date_name,
                         group.source_name or group.source_dir.name,
-                        init_path=str(full_root / relative),
-                        profile_paths=profile_paths,
+                        test_path=str(resolved_test_root / relative) if resolved_test_root is not None else None,
                     )
-            if cosmic_root.is_dir():
-                payload = load_folder_lineage(cosmic_root)
-                for record in payload.get("folders", {}).values():
-                    if record.get("date") in eligible_dates and (mode != "replace_dates" or replaced_init_dirs):
-                        record["init_pending"] = False
-                save_folder_lineage(cosmic_root, payload)
+                    continue
+                profile_paths = {
+                    name: str(root / relative)
+                    for name, root in roots.items()
+                    if group.genus in mapping.datasets.get(name, ())
+                }
+                apply_output_path(
+                    payload,
+                    group.date_name,
+                    group.source_name or group.source_dir.name,
+                    init_path=str(full_root / relative),
+                    profile_paths=profile_paths,
+                )
+            for record in payload.get("folders", {}).values():
+                if record.get("date") in eligible_dates and (mode != "replace_dates" or replaced_init_dirs):
+                    record["init_pending"] = False
+            save_folder_lineage(cosmic_root, payload)
         return report
     except Exception:
         for temporary in temporary_roots.values():
@@ -595,8 +600,6 @@ def _collect_source_groups(
         genus = prefix_to_genus.get(prefix)
         if genus is None:
             raise ValueError(f"名单未映射来源前缀：{date_dir.name}/{source_dir.name} ({prefix})")
-        for source_path in files:
-            _validate_spectrum(source_path)
         prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
         target_name = f"{prefix}{date_dir.name}_{prefix_counts[prefix]:02d}"
         groups.append(_SourceGroup(
@@ -708,7 +711,7 @@ def _create_temporary_roots(destination_roots: dict[str, Path], mode: BuildMode)
             if mode in {"incremental", "replace_dates"} and root.exists():
                 if not root.is_dir():
                     raise NotADirectoryError(f"输出目录不是目录：{root}")
-                shutil.copytree(root, temporary, dirs_exist_ok=True)
+                shutil.copytree(root, temporary, dirs_exist_ok=True, copy_function=_link_or_copy_file)
     except Exception:
         for temporary in temporary_roots.values():
             shutil.rmtree(temporary, ignore_errors=True)
@@ -716,13 +719,43 @@ def _create_temporary_roots(destination_roots: dict[str, Path], mode: BuildMode)
     return temporary_roots
 
 
-def _copy_source_file(source: Path, target: Path) -> None:
-    """验证源谱后原样复制；文件夹补偿已在 cosmic 源谱阶段写入，这里不再叠加。"""
-    wavenumbers, intensities = read_arc_data(source)
+def _link_or_copy_file(source: str, target: str) -> str:
+    """同卷优先硬链接克隆已有产物，跨卷或文件系统不支持时回退为完整复制。"""
+    try:
+        os.link(source, target)
+    except OSError:
+        return shutil.copy2(source, target)
+    return target
+
+
+def _copy_source_file(source: Path, targets: list[Path]) -> None:
+    """读取一次源谱并校验，再写入全部目标；文件夹补偿已在 cosmic 源谱阶段写入，这里不再叠加。"""
+    data = source.read_bytes()
+    wavenumbers, intensities, _ = parse_raw_arc_data(data.decode("utf-8", errors="ignore"))
     if not wavenumbers.size or wavenumbers.size != intensities.size:
         raise ValueError(f"无效光谱：{source}")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
+    for target in targets:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        shutil.copystat(source, target)
+
+
+def _copy_group_files(group: _SourceGroup, destinations: list[tuple[str, Path]]) -> dict[str, int]:
+    """把一个来源组写入各目标目录，返回每个目标新增的光谱数。"""
+    counts = {name: 0 for name, _ in destinations}
+    for source_path in group.files:
+        _copy_source_file(
+            source_path,
+            [destination / source_path.name for _, destination in destinations],
+        )
+        for name, _ in destinations:
+            counts[name] += 1
+    return counts
+
+
+def _copy_worker_count() -> int:
+    """按 CPU 数决定并发复制线程数；源谱随机读延迟高，适度并发收益明显。"""
+    return max(4, min(16, os.cpu_count() or 4))
 
 
 def _validate_spectrum(path: Path) -> None:
