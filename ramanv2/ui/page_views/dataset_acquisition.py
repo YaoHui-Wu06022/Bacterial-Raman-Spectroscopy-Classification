@@ -304,32 +304,30 @@ def _render_affine_compensation(context: PageContext, state, catalog: DatasetMap
 
 
 @st.cache_data(show_spinner=False)
-def _cached_test_sources(shift_root: str, date_names: tuple[str, ...], version: int) -> tuple[tuple[str, int], ...]:
-    """缓存日期下的候选目录扫描，并统计每个文件夹的可用光谱数供旧规则迁移使用。"""
+def _cached_test_sources(shift_root: str, date_names: tuple[str, ...], version: int) -> tuple[str, ...]:
+    """缓存日期下的候选目录扫描。"""
     del version
     root = Path(shift_root)
-    candidates: list[tuple[str, int]] = []
+    candidates: list[str] = []
     for date_name in date_names:
         date_dir = root / date_name
         if not date_dir.is_dir():
             continue
         for folder in sorted(date_dir.iterdir(), key=lambda item: build_natural_key(item.name)):
-            if not folder.is_dir() or folder.name in SOURCE_RESERVED_NAMES:
-                continue
-            sample_count = sum(1 for path in folder.glob("*.arc_data") if path.is_file())
-            if sample_count:
-                candidates.append((f"{date_name}/{folder.name}", sample_count))
+            if folder.is_dir() and folder.name not in SOURCE_RESERVED_NAMES and any(folder.glob("*.arc_data")):
+                candidates.append(f"{date_name}/{folder.name}")
     return tuple(candidates)
 
 
-def _list_test_sources(context: PageContext, date_names: list[str]) -> tuple[list[str], dict[str, int]]:
-    """列出指定日期中可放入 init_test 的测试文件夹，并返回其样本数。"""
-    scanned = _cached_test_sources(
-        str(context.shift_root.resolve()),
-        tuple(sorted(date_names, key=build_natural_key)),
-        ui_cache_version("dataset"),
+def _list_test_sources(context: PageContext, date_names: list[str]) -> list[str]:
+    """列出指定日期中可放入 init_test 的测试文件夹。"""
+    return list(
+        _cached_test_sources(
+            str(context.shift_root.resolve()),
+            tuple(sorted(date_names, key=build_natural_key)),
+            ui_cache_version("dataset"),
+        )
     )
-    return [candidate for candidate, _ in scanned], dict(scanned)
 
 
 # 默认选择逻辑版本号，修改逻辑时递增以强制重新初始化
@@ -353,35 +351,6 @@ def _default_test_sources(candidates: list[str]) -> list[str]:
     return sorted(selected, key=build_natural_key)
 
 
-def _legacy_default_test_sources(candidates: list[str], sample_counts: dict[str, int]) -> list[str]:
-    """返回历史默认规则可能自动选中的文件夹，用于迁移已有会话选择。"""
-    from collections import defaultdict
-
-    species_folders: dict[str, list[str]] = defaultdict(list)
-    for candidate in candidates:
-        folder_name = candidate.rsplit("/", 1)[-1]
-        prefix = parse_folder_prefix(folder_name, uppercase_enable=True)
-        species_folders[prefix].append(candidate)
-    selected: set[str] = set()
-    for folders in species_folders.values():
-        if len(folders) < 4:
-            continue
-        sorted_folders = sorted(folders, key=build_natural_key)
-        # 旧版“第二个文件夹”、倒数第二个/倒数第三个规则，以及按样本数最少选择的规则，均视为旧默认项。
-        selected.add(sorted_folders[1])
-        selected.add(sorted_folders[-3] if len(sorted_folders) >= 5 else sorted_folders[-2])
-        selected.add(
-            min(
-                folders,
-                key=lambda candidate: (
-                    sample_counts.get(candidate, 0),
-                    -int(candidate.split("/", 1)[0]),
-                ),
-            )
-        )
-    return sorted(selected, key=build_natural_key)
-
-
 def _sync_test_selection(
     candidates: list[str],
     selection_key: str,
@@ -397,9 +366,8 @@ def _sync_test_selection(
     previous_defaults = set(st.session_state.get(defaults_key, []))
     current_candidates = set(candidates)
 
-    # 首次初始化时直接采用当前候选集的默认值；逻辑版本升级时保留已有选择，
-    # 再按当前候选集补齐默认值，避免旧版本状态阻断新规则。
-    if not initialized:
+    # 首次初始化或默认规则升级时直接采用当前规则的默认选择。
+    if not initialized or version_changed:
         selected = _default_test_sources(candidates)
         suppressed_defaults: set[str] = set()
     else:
@@ -409,16 +377,13 @@ def _sync_test_selection(
             if value in candidates
         ]
         suppressed_defaults = set(st.session_state.get(suppressed_key, []))
-        if version_changed:
-            selected = [value for value in selected if value not in previous_defaults]
-        if not version_changed:
-            # 只记录仍然存在但被用户从选择中移除的旧默认项；候选已消失时，
-            # 允许候选变化后由新的默认文件夹接替它。
-            suppressed_defaults.update(
-                value
-                for value in previous_defaults & current_candidates
-                if value not in selected
-            )
+        # 只记录仍然存在但被用户从选择中移除的旧默认项；候选已消失时，
+        # 允许候选变化后由新的默认文件夹接替它。
+        suppressed_defaults.update(
+            value
+            for value in previous_defaults & current_candidates
+            if value not in selected
+        )
         suppressed_defaults.difference_update(selected)
 
     defaults = set(_default_test_sources(candidates))
@@ -517,15 +482,9 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     _render_count_metrics(full_summary)
     _render_taxon_counts(context.init_root)
     eligible_dates = sorted(state.affine_completed_dates, key=build_natural_key)
-    test_candidates, test_sample_counts = _list_test_sources(context, eligible_dates)
+    test_candidates = _list_test_sources(context, eligible_dates)
     test_selection_key = "full_init_test_selection"
     initialized_key = "full_init_test_selection_initialized"
-    if not st.session_state.get(initialized_key, False) and isinstance(full_report, dict):
-        st.session_state[test_selection_key] = list(full_report.get("selected_test_folders", []))
-        st.session_state[initialized_key] = True
-        st.session_state[f"{test_selection_key}_version"] = _TEST_SELECTION_LOGIC_VERSION - 1
-        st.session_state[f"{test_selection_key}_defaults"] = _legacy_default_test_sources(test_candidates, test_sample_counts)
-        st.session_state[f"{test_selection_key}_candidates"] = list(test_candidates)
     returned_source = st.session_state.pop("test_return_removed_source", None)
     if returned_source is not None:
         st.session_state[test_selection_key] = [value for value in st.session_state.get(test_selection_key, []) if value != returned_source]
@@ -620,7 +579,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                 key="incremental_init_dates",
             )
             incremental_dates = st.session_state.get("incremental_init_dates", pending_dates)
-            test_candidates, _ = _list_test_sources(context, incremental_dates)
+            test_candidates = _list_test_sources(context, incremental_dates)
             test_selection_key = "incremental_init_test_selection"
             _sync_test_selection(
                 test_candidates,
