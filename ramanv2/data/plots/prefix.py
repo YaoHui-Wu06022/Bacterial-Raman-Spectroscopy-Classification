@@ -7,6 +7,7 @@ import hashlib
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import matplotlib
 import numpy as np
@@ -325,8 +326,14 @@ def plot_prefix_init(
     output_dir: Path | str,
     force_enable: bool = False,
     config: PrefixPlotConfig | None = None,
+    *,
+    progress_callback: Callable[[str, str, int, int], None] | None = None,
 ) -> list[Path]:
-    """从任意属/种两层 init 目录生成 prefix-plot。"""
+    """从任意属/种两层 init 目录生成 prefix-plot。
+
+    ``progress_callback(属, 前缀, 已处理分组数, 待处理分组数)`` 在每组绘制后调用，
+    供界面显示进度。
+    """
     configure_matplotlib_fonts()
     plot_config = resolve_plot_config(config)
     input_dir = Path(init_dir).resolve()
@@ -344,11 +351,16 @@ def plot_prefix_init(
         stale_output = figure_dir / genus / f"{prefix}.png"
         if stale_output.is_file():
             stale_output.unlink()
+    targets = [
+        key
+        for key in sorted(grouped)
+        if force_enable or key in changed or not (figure_dir / key[0] / f"{key[1]}.png").is_file()
+    ]
+    total = len(targets)
     outputs = []
-    for (genus, prefix), group in sorted(grouped.items()):
+    for index, (genus, prefix) in enumerate(targets, start=1):
+        group = grouped[(genus, prefix)]
         output_path = figure_dir / genus / f"{prefix}.png"
-        if not force_enable and output_path.is_file() and (genus, prefix) not in changed:
-            continue
         curves = {}
         for folder in group:
             median_curves = build_folder_median_curves(folder, axis, plot_config)
@@ -357,6 +369,8 @@ def plot_prefix_init(
         if curves:
             plot_prefix_group(curves, axis, output_path, f"{genus} {prefix} median spectra", plot_config.input.bad_bands)
             outputs.append(output_path)
+        if progress_callback is not None:
+            progress_callback(genus, prefix, index, total)
     write_plot_state(figure_dir / "prefix_plot_state.csv", state)
     return outputs
 
@@ -366,9 +380,11 @@ def build_prefix_plots(
     output_root: Path | str,
     force_enable: bool = False,
     config: PrefixPlotConfig | None = None,
+    *,
+    progress_callback: Callable[[str, str, int, int], None] | None = None,
 ) -> list[Path]:
     """为指定 init 目录生成同前缀总览图。"""
-    return plot_prefix_init(init_root, output_root, force_enable, config)
+    return plot_prefix_init(init_root, output_root, force_enable, config, progress_callback=progress_callback)
 
 
 def build_prefix_plots_for_groups(

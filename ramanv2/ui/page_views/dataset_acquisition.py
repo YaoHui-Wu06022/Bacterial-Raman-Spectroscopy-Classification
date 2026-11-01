@@ -100,7 +100,24 @@ def _render_prefix_plot_section(
             st.session_state[f"{key}_show"] = True
         if update_clicked:
             try:
-                outputs = build_prefix_plots(init_root, figure_root, force_enable=False)
+                with st.status("正在更新 prefix-plot…", expanded=True) as status:
+                    progress = st.progress(0.0, text="正在扫描 init 文件夹…")
+
+                    def report_plot_progress(genus: str, prefix: str, done: int, total: int) -> None:
+                        """按已处理的分组数刷新绘图进度。"""
+                        progress.progress(
+                            done / total,
+                            text=f"[{done}/{total}] 已绘制 {genus} / {prefix}",
+                        )
+
+                    outputs = build_prefix_plots(
+                        init_root,
+                        figure_root,
+                        force_enable=False,
+                        progress_callback=report_plot_progress,
+                    )
+                    progress.progress(1.0, text=f"已更新 {len(outputs)} 张 prefix-plot")
+                    status.update(label="prefix-plot 更新完成", state="complete", expanded=False)
                 plots = state.dataset_builds.get("prefix_plots", {})
                 if not isinstance(plots, dict):
                     plots = {}
@@ -287,34 +304,36 @@ def _render_affine_compensation(context: PageContext, state, catalog: DatasetMap
 
 
 @st.cache_data(show_spinner=False)
-def _cached_test_sources(shift_root: str, date_names: tuple[str, ...], version: int) -> tuple[str, ...]:
-    """缓存日期下的候选目录扫描。"""
+def _cached_test_sources(shift_root: str, date_names: tuple[str, ...], version: int) -> tuple[tuple[str, int], ...]:
+    """缓存日期下的候选目录扫描，并统计每个文件夹的可用光谱数供旧规则迁移使用。"""
     del version
     root = Path(shift_root)
-    candidates: list[str] = []
+    candidates: list[tuple[str, int]] = []
     for date_name in date_names:
         date_dir = root / date_name
         if not date_dir.is_dir():
             continue
         for folder in sorted(date_dir.iterdir(), key=lambda item: build_natural_key(item.name)):
-            if folder.is_dir() and folder.name not in SOURCE_RESERVED_NAMES and any(folder.glob("*.arc_data")):
-                candidates.append(f"{date_name}/{folder.name}")
+            if not folder.is_dir() or folder.name in SOURCE_RESERVED_NAMES:
+                continue
+            sample_count = sum(1 for path in folder.glob("*.arc_data") if path.is_file())
+            if sample_count:
+                candidates.append((f"{date_name}/{folder.name}", sample_count))
     return tuple(candidates)
 
 
-def _list_test_sources(context: PageContext, date_names: list[str]) -> list[str]:
-    """列出指定日期中可放入 init_test 的测试文件夹。"""
-    return list(
-        _cached_test_sources(
-            str(context.shift_root.resolve()),
-            tuple(sorted(date_names, key=build_natural_key)),
-            ui_cache_version("dataset"),
-        )
+def _list_test_sources(context: PageContext, date_names: list[str]) -> tuple[list[str], dict[str, int]]:
+    """列出指定日期中可放入 init_test 的测试文件夹，并返回其样本数。"""
+    scanned = _cached_test_sources(
+        str(context.shift_root.resolve()),
+        tuple(sorted(date_names, key=build_natural_key)),
+        ui_cache_version("dataset"),
     )
+    return [candidate for candidate, _ in scanned], dict(scanned)
 
 
 # 默认选择逻辑版本号，修改逻辑时递增以强制重新初始化
-_TEST_SELECTION_LOGIC_VERSION = 5
+_TEST_SELECTION_LOGIC_VERSION = 7
 
 
 def _default_test_sources(candidates: list[str]) -> list[str]:
@@ -326,7 +345,7 @@ def _default_test_sources(candidates: list[str]) -> list[str]:
         prefix = parse_folder_prefix(folder_name, uppercase_enable=True)
         species_folders[prefix].append(candidate)
     selected: list[str] = []
-    for prefix, folders in species_folders.items():
+    for folders in species_folders.values():
         if len(folders) < 4:
             continue
         sorted_folders = sorted(folders, key=build_natural_key)
@@ -334,8 +353,8 @@ def _default_test_sources(candidates: list[str]) -> list[str]:
     return sorted(selected, key=build_natural_key)
 
 
-def _legacy_default_test_sources(candidates: list[str]) -> list[str]:
-    """返回旧版“第二个文件夹”规则，用于迁移已有会话选择。"""
+def _legacy_default_test_sources(candidates: list[str], sample_counts: dict[str, int]) -> list[str]:
+    """返回历史默认规则可能自动选中的文件夹，用于迁移已有会话选择。"""
     from collections import defaultdict
 
     species_folders: dict[str, list[str]] = defaultdict(list)
@@ -343,10 +362,23 @@ def _legacy_default_test_sources(candidates: list[str]) -> list[str]:
         folder_name = candidate.rsplit("/", 1)[-1]
         prefix = parse_folder_prefix(folder_name, uppercase_enable=True)
         species_folders[prefix].append(candidate)
-    selected = []
+    selected: set[str] = set()
     for folders in species_folders.values():
-        if len(folders) >= 4:
-            selected.append(sorted(folders, key=build_natural_key)[1])
+        if len(folders) < 4:
+            continue
+        sorted_folders = sorted(folders, key=build_natural_key)
+        # 旧版“第二个文件夹”、倒数第二个/倒数第三个规则，以及按样本数最少选择的规则，均视为旧默认项。
+        selected.add(sorted_folders[1])
+        selected.add(sorted_folders[-3] if len(sorted_folders) >= 5 else sorted_folders[-2])
+        selected.add(
+            min(
+                folders,
+                key=lambda candidate: (
+                    sample_counts.get(candidate, 0),
+                    -int(candidate.split("/", 1)[0]),
+                ),
+            )
+        )
     return sorted(selected, key=build_natural_key)
 
 
@@ -381,7 +413,7 @@ def _sync_test_selection(
             selected = [value for value in selected if value not in previous_defaults]
         if not version_changed:
             # 只记录仍然存在但被用户从选择中移除的旧默认项；候选已消失时，
-            # 允许排序变化后由新的第二个文件夹接替它。
+            # 允许候选变化后由新的默认文件夹接替它。
             suppressed_defaults.update(
                 value
                 for value in previous_defaults & current_candidates
@@ -485,14 +517,14 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     _render_count_metrics(full_summary)
     _render_taxon_counts(context.init_root)
     eligible_dates = sorted(state.affine_completed_dates, key=build_natural_key)
-    test_candidates = _list_test_sources(context, eligible_dates)
+    test_candidates, test_sample_counts = _list_test_sources(context, eligible_dates)
     test_selection_key = "full_init_test_selection"
     initialized_key = "full_init_test_selection_initialized"
     if not st.session_state.get(initialized_key, False) and isinstance(full_report, dict):
         st.session_state[test_selection_key] = list(full_report.get("selected_test_folders", []))
         st.session_state[initialized_key] = True
         st.session_state[f"{test_selection_key}_version"] = _TEST_SELECTION_LOGIC_VERSION - 1
-        st.session_state[f"{test_selection_key}_defaults"] = _legacy_default_test_sources(test_candidates)
+        st.session_state[f"{test_selection_key}_defaults"] = _legacy_default_test_sources(test_candidates, test_sample_counts)
         st.session_state[f"{test_selection_key}_candidates"] = list(test_candidates)
     returned_source = st.session_state.pop("test_return_removed_source", None)
     if returned_source is not None:
@@ -525,8 +557,15 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         else:
             try:
                 with st.status("正在重建全量 init…", expanded=True) as status:
-                    status.write("正在校验日期门禁并复制普通光谱。")
-                    status.write("正在按选择更新 init_test。")
+                    progress = st.progress(0.0, text="正在校验日期门禁并收集来源文件夹…")
+
+                    def report_copy_progress(date_name: str, processed: int, total: int) -> None:
+                        """按已复制光谱数刷新全量 init 构建进度。"""
+                        progress.progress(
+                            processed / total if total else 1.0,
+                            text=f"[{processed}/{total} 条光谱] 正在处理 {date_name}…",
+                        )
+
                     report = build_full_init(
                         context.shift_root,
                         context.init_root,
@@ -534,8 +573,9 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                         eligible_dates,
                         test_root=context.init_root.parent / TEST_ROOT_NAME,
                         selected_test_folders=selected_test,
+                        progress_callback=report_copy_progress,
                     )
-                    status.write("正在写入补充数据文件夹。")
+                    progress.progress(1.0, text="正在写入补充数据文件夹…")
                     try:
                         supplement = apply_supplement_plan(context.init_root, supplement_plan)
                     except (OSError, ValueError, RuntimeError) as error:
@@ -580,7 +620,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                 key="incremental_init_dates",
             )
             incremental_dates = st.session_state.get("incremental_init_dates", pending_dates)
-            test_candidates = _list_test_sources(context, incremental_dates)
+            test_candidates, _ = _list_test_sources(context, incremental_dates)
             test_selection_key = "incremental_init_test_selection"
             _sync_test_selection(
                 test_candidates,

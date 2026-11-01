@@ -15,11 +15,11 @@ from ramanv2.pipeline.state import PipelineState, save_pipeline_state
 
 
 DATE = "20240101"
-# 移入 init_test 的两个普通来源；init_test 目录名与 init 同规则：{prefix}{date}_{序号}。
+# 移入 init_test 的两个普通来源；统一编号后所有来源按前缀在日期内递增。
 SOURCE = f"{DATE}/EC02"
 SECOND = f"{DATE}/EC03"
-# 测试组按前缀在日期内递增编号：EC02 是第一个 EC 测试组，EC03 是第二个。
-_TEST_FOLDER_INDEX = {"EC02": 1, "EC03": 2}
+# 统一编号：EC01→01(init)，EC02→02(test)，EC03→03(test)。
+_TEST_FOLDER_INDEX = {"EC02": 2, "EC03": 3}
 
 
 def _test_folder_name(source_name: str) -> str:

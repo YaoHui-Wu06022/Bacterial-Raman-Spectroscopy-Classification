@@ -152,8 +152,6 @@ def _run_dataset_transfer(
             raise ValueError("init_test 文件夹被多个来源共用")
         if outputs.get("test") and Path(outputs["test"]).resolve() != source:
             raise ValueError("init_test 路径与来源走向不一致")
-        if outputs.get("init") and Path(outputs["init"]).exists():
-            raise ValueError("该来源已有 init 输出，不能重复移回")
         prefix = parse_folder_prefix(folder_name, uppercase_enable=True)
     filenames = {path.name for path in source.glob("*.arc_data") if path.is_file()}
     if not filenames:
@@ -169,31 +167,11 @@ def _run_dataset_transfer(
     if to_test_enable:
         if source.parent != genus_dir:
             raise ValueError("init 的属目录与种前缀映射不一致")
-        # init_test 命名沿用 init 模式：{prefix}{date}_{number}，扁平结构。
-        # 同时扫描物理文件夹与 lineage 中已声明的 test 路径，避免编号与残留记录冲突。
-        lineage_test_paths = {
-            Path(value["outputs"]["test"])
-            for value in records.values()
-            if value.get("outputs", {}).get("test")
-        }
-        existing_numbers = [
-            int(match.group(3))
-            for path in (*test_root.glob("*"), *lineage_test_paths)
-            if (path.is_dir() or path in lineage_test_paths)
-            and (match := CANONICAL_FOLDER_PATTERN.fullmatch(path.name))
-            and match.group(1).upper() == prefix and match.group(2) == date_name
-        ]
-        new_folder_name = f"{prefix}{date_name}_{max(existing_numbers, default=0) + 1:02d}"
-        target = test_root / new_folder_name
-        if any(other["target"] == target.name for other in exports):
-            raise ValueError("init_test 目标名称已被同批次其他来源保留")
+        # 统一编号后文件夹名已唯一，移入 init_test 保持原名、扁平存放。
+        target = test_root / source.name
     else:
-        # 跳过仍被其他来源（含删除归档）保留的编号，不改动现有组号。
-        reserved = [*genus_dir.glob("*"), *(Path(value["outputs"]["init"]) for value in records.values() if value.get("outputs", {}).get("init"))]
-        numbers = [int(match.group(3)) for path in reserved
-                   if path.parent.resolve() == genus_dir and (match := CANONICAL_FOLDER_PATTERN.fullmatch(path.name))
-                   and match.group(1).upper() == prefix and match.group(2) == date_name]
-        target = genus_dir / f"{prefix}{date_name}_{max(numbers, default=0) + 1:02d}"
+        # 移回 init 保持原名，放入对应属目录。
+        target = genus_dir / source.name
     if target.exists():
         raise FileExistsError(f"目标文件夹已存在：{target}")
     summary = summarize_dataset(init_root)

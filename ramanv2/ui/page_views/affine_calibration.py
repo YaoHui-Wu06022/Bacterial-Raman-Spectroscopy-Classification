@@ -149,6 +149,9 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
         message = st.session_state.pop("affine_date_rebuild_message", None)
         if message:
             st.success(message)
+        failure_message = st.session_state.pop("affine_date_rebuild_failure", None)
+        if failure_message:
+            st.error(failure_message)
         changes = _collect_folder_changes(context.data_root)
         pending = list(dict.fromkeys(row["date"] for row in changes if row["is_shift_pending"]))
         if pending:
@@ -177,6 +180,52 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
             st.info("当前没有可复用仿射参数的日期。")
             return
         st.caption("复用已有仿射参数，从 cosmic_data 更新所选日期的 shift_data。init/init_test 请到「数据集获取」页按文件夹更新。")
+        update_targets = [date_name for date_name in pending if date_name in dates]
+        skipped_targets = [date_name for date_name in pending if date_name not in dates]
+        if skipped_targets:
+            st.caption("缺少 cosmic 数据或已确认参数，暂无法更新：" + "、".join(skipped_targets))
+        if update_targets and st.button(
+            f"一键更新全部待更新日期（{len(update_targets)} 个）",
+            key="affine_rebuild_pending_confirm",
+            width="stretch",
+        ):
+            rebuilt_dates: list[str] = []
+            spectrum_total = 0
+            failures: list[str] = []
+            total = len(update_targets)
+            with st.status(f"正在更新 {total} 个日期的 shift_data…", expanded=True) as status:
+                progress = st.progress(0.0, text=f"0/{total}")
+                for index, date_name in enumerate(update_targets, start=1):
+                    progress.progress(
+                        (index - 1) / total,
+                        text=f"[{index}/{total}] 正在更新 {date_name}…",
+                    )
+                    try:
+                        result = run_date_rebuild(
+                            context.data_root, context.shift_root, state, context.state_file, date_name
+                        )
+                    except (OSError, ValueError, RuntimeError, TypeError) as error:
+                        failures.append(f"{date_name}：{error}")
+                        status.write(f"{date_name} 更新失败：{error}")
+                        progress.progress(index / total, text=f"[{index}/{total}] {date_name} 失败")
+                        continue
+                    count = int(result.get("spectrum_count", 0) or 0)
+                    rebuilt_dates.append(date_name)
+                    spectrum_total += count
+                    progress.progress(
+                        index / total,
+                        text=f"[{index}/{total}] {date_name} 完成（{count} 条光谱）",
+                    )
+                status.update(label=f"已处理 {total} 个日期", state="complete", expanded=False)
+            for name in ("cleaning", "affine", "dataset"):
+                invalidate_ui_cache(name)
+            st.session_state["affine_date_rebuild_message"] = (
+                f"已更新 {len(rebuilt_dates)} 个日期的 shift_data（{spectrum_total} 条光谱）。"
+                "init/init_test 可到「数据集获取」页按文件夹更新。"
+            )
+            if failures:
+                st.session_state["affine_date_rebuild_failure"] = "以下日期更新失败：" + "；".join(failures)
+            st.rerun()
         selected = st.selectbox("选择更新日期", dates, key="affine_rebuild_date")
         if not st.button("更新所选日期", key="affine_rebuild_date_confirm", width="stretch"):
             return

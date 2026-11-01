@@ -7,7 +7,7 @@ import json
 import shutil
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 from uuid import uuid4
 
 import numpy as np
@@ -60,8 +60,13 @@ def build_full_init(
     selected_test_folders: list[str] | set[str] | tuple[str, ...] | None = None,
     *,
     rebuild_test_enable: bool = True,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, object]:
-    """从通过门禁的 shift 日期构建普通 init 与选定的独立 init_test。"""
+    """从通过门禁的 shift 日期构建普通 init 与选定的独立 init_test。
+
+    ``progress_callback(日期, 已复制光谱数, 总光谱数)`` 在每个来源文件夹复制完成后调用，
+    供界面显示构建进度。
+    """
     cosmic_root = Path(shift_root).resolve().parent / "cosmic_data"
     if cosmic_root.is_dir():
         initialize_folder_lineage(cosmic_root, mapping)
@@ -92,6 +97,7 @@ def build_full_init(
         test_root=resolved_test_root,
         selected_test_folders=selected_test_folders,
         publish_test_enable=rebuild_test_enable,
+        progress_callback=progress_callback,
     )
     report["generated_profiles"] = []
     report["profile_stats"] = {}
@@ -324,6 +330,7 @@ def build_init_datasets(
     selected_test_folders: list[str] | set[str] | tuple[str, ...] | None = None,
     *,
     publish_test_enable: bool = True,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, object]:
     """按批准日期构建 init；replace_dates 仅替换已生成日期及已导出的测试组。"""
     if mode not in {"full", "incremental", "replace_dates"}:
@@ -373,6 +380,7 @@ def build_init_datasets(
         str(item).replace("\\", "/") for item in selected_test_folders
     }
     cosmic_root = source_root.parent / "cosmic_data"
+    # 旧测试组名仅用于 replace_dates 清理已存在的旧测试目录，不再参与命名。
     test_target_names = {
         source_id: Path(record["outputs"]["test"]).name
         for source_id, record in load_folder_lineage(cosmic_root)["folders"].items()
@@ -384,7 +392,6 @@ def build_init_datasets(
                 source_root / date_name,
                 prefix_to_genus,
                 selected_keys,
-                test_target_names=test_target_names,
             )
         )
     if cosmic_root.is_dir():
@@ -424,7 +431,7 @@ def build_init_datasets(
                 destination_roots.pop("__test__", None)
         groups = [
             group for group in groups
-            if (group.is_test and group.target_name in replaced_test_names)
+            if (group.is_test and f"{group.date_name}/{group.source_name}" in test_target_names)
             or (not group.is_test and replaced_init_dirs)
         ]
     _validate_test_group_targets(groups)
@@ -444,6 +451,8 @@ def build_init_datasets(
     test_files = 0
     test_folders: set[str] = set()
     test_exports: list[dict[str, object]] = []
+    total_source_files = sum(len(group.files) for group in groups)
+    processed_source_files = 0
     try:
         if mode == "replace_dates":
             for relative in replaced_init_dirs:
@@ -479,6 +488,9 @@ def build_init_datasets(
                         "file_count": len(group.files),
                     }
                 )
+            processed_source_files += len(group.files)
+            if progress_callback is not None:
+                progress_callback(group.date_name, processed_source_files, total_source_files)
         report = {
             "status": "ready",
             "mode": mode,
@@ -560,10 +572,10 @@ def _collect_source_groups(
     selected_test_folders: set[str],
     *,
     source_folder_names: set[str] | None = None,
-    test_target_names: dict[str, str] | None = None,
 ) -> list[_SourceGroup]:
-    by_prefix: dict[str, list[tuple[Path, tuple[Path, ...]]]] = {}
-    test_prefix_counts: dict[str, int] = {}
+    # 统一计数器：按前缀在日期内递增，先编号再分流到 init 或 init_test。
+    # 编号只由计数器决定，不沿用旧测试组名，避免历史名与新编号撞号（如两个 _01）。
+    prefix_counts: dict[str, int] = {}
     groups: list[_SourceGroup] = []
     for source_dir in sorted(date_dir.iterdir(), key=lambda path: build_natural_key(path.name)):
         if not source_dir.is_dir() or source_dir.name in SPECIAL_NAMES or source_dir.name.startswith("."):
@@ -583,38 +595,15 @@ def _collect_source_groups(
         genus = prefix_to_genus.get(prefix)
         if genus is None:
             raise ValueError(f"名单未映射来源前缀：{date_dir.name}/{source_dir.name} ({prefix})")
-        if source_key in selected_test_folders:
-            for source_path in files:
-                _validate_spectrum(source_path)
-            # 测试组与普通组共用 {prefix}{date}_{序号} 命名，按前缀在日期内递增；
-            # 早期用 {prefix}{date}_{来源目录名} 会产出 EC20231207_EC04 这类异形名。
-            test_prefix_counts[prefix] = test_prefix_counts.get(prefix, 0) + 1
-            default_name = f"{prefix}{date_dir.name}_{test_prefix_counts[prefix]:02d}"
-            target_name = (test_target_names or {}).get(source_key, default_name)
-            if Path(target_name).name != target_name or target_name in {".", ".."}:
-                raise ValueError("无效的 init_test 输出文件夹")
-            groups.append(_SourceGroup(
-                date_name=date_dir.name, source_dir=source_dir, genus=genus,
-                target_name=target_name, files=files, is_test=True, source_name=source_dir.name,
-            ))
-            continue
         for source_path in files:
             _validate_spectrum(source_path)
-        by_prefix.setdefault(prefix, []).append((source_dir, files))
-
-    for prefix in sorted(by_prefix, key=build_natural_key):
-        genus = prefix_to_genus[prefix]
-        for index, (source_dir, files) in enumerate(by_prefix[prefix], start=1):
-            groups.append(
-                _SourceGroup(
-                    date_name=date_dir.name,
-                    source_dir=source_dir,
-                    genus=genus,
-                    target_name=f"{prefix}{date_dir.name}_{index:02d}",
-                    files=files,
-                    source_name=source_dir.name,
-                )
-            )
+        prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
+        target_name = f"{prefix}{date_dir.name}_{prefix_counts[prefix]:02d}"
+        groups.append(_SourceGroup(
+            date_name=date_dir.name, source_dir=source_dir, genus=genus,
+            target_name=target_name, files=files,
+            is_test=source_key in selected_test_folders, source_name=source_dir.name,
+        ))
     return groups
 
 
