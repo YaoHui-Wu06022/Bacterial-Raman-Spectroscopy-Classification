@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import os
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,12 +26,13 @@ from ramanv2.common.arc_data import read_raw_arc_data
 from ramanv2.common.plotting import add_bad_band_spans, configure_matplotlib_fonts
 from ramanv2.core.config import InputConfig
 from ramanv2.data.config import DEFAULT_BUILD_CONFIG, DataBuildConfig
+from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.bands import build_valid_mask
 from ramanv2.spectra.normalize import normalize_spectrum
 from ramanv2.spectra.preprocess import estimate_baseline
 
 
-PLOT_STEP_CM = 0.2
+PLOT_CACHE_DIR_NAME = ".prefix_plot_cache"
 TARGET_CM = 1003.0
 PREFIX_PLOT_COLORS = (
     "#d60000",
@@ -87,14 +89,65 @@ def resolve_plot_config(config: PrefixPlotConfig | None = None) -> PrefixPlotCon
 
 
 def build_plot_axis(config: PrefixPlotConfig) -> np.ndarray:
-    """按数据输入范围构建等步长绘图波数轴。"""
+    """按模型输入网格构建绘图波数轴，让预览谱与训练看到的谱保持一致。"""
     input_config = config.input
-    return np.arange(
+    return build_wn_ref(
         input_config.cut_min,
-        input_config.cut_max + PLOT_STEP_CM * 0.5,
-        PLOT_STEP_CM,
-        dtype=np.float32,
-    )
+        input_config.cut_max,
+        input_config.target_points,
+    ).astype(np.float32)
+
+
+def _resolve_plot_cache_dir(init_dir: Path, config: PrefixPlotConfig) -> Path:
+    """返回中位谱缓存目录；按绘图参数分桶，并与图片输出目录解耦。"""
+    digest = hashlib.sha256(
+        repr((config.input, config.cleaning)).encode("utf-8")
+    ).hexdigest()[:12]
+    return Path(init_dir).resolve().parent / PLOT_CACHE_DIR_NAME / digest
+
+
+def _load_folder_median_cache(
+    path: Path,
+    axis: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """读取单个文件夹的 raw/SNV/minmax 中位谱缓存；缺失、损坏或轴长不符时返回 None。"""
+    if not path.is_file():
+        return None
+    try:
+        with np.load(path) as data:
+            curves = tuple(
+                np.asarray(data[name], dtype=np.float32) for name in ("raw", "snv", "minmax")
+            )
+    except (OSError, ValueError, KeyError):
+        return None
+    return curves if all(curve.shape == axis.shape for curve in curves) else None
+
+
+def _write_folder_median_cache(
+    path: Path,
+    curves: tuple[np.ndarray, np.ndarray, np.ndarray],
+) -> None:
+    """原子写入单个文件夹的中位谱缓存，供后续增量更新直接复用。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.tmp")
+    with temporary.open("wb") as file:
+        np.savez(file, raw=curves[0], snv=curves[1], minmax=curves[2])
+    os.replace(temporary, path)
+
+
+def _prune_folder_median_cache(cache_root: Path, state: list[dict[str, str]]) -> None:
+    """删除与当前 init 文件夹状态不再匹配的中位谱缓存。"""
+    if not cache_root.is_dir():
+        return
+    current = {
+        (row["genus"], f"{row['folder']}__{row['file_signature']}.npz") for row in state
+    }
+    for genus_dir in cache_root.iterdir():
+        if not genus_dir.is_dir():
+            continue
+        for path in genus_dir.iterdir():
+            if path.name.endswith(".npz") and (genus_dir.name, path.name) not in current:
+                path.unlink(missing_ok=True)
 
 
 def iter_init_folders(init_dir: Path) -> list[Path]:
@@ -116,8 +169,22 @@ def build_folder_median_curves(
     folder_dir: Path,
     axis: np.ndarray,
     config: PrefixPlotConfig,
+    cache_dir: Path | None = None,
+    signature: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-    """逐条处理文件夹光谱，再分别汇总 raw、SNV 与 minmax 中位谱。"""
+    """逐条处理文件夹光谱，再分别汇总 raw、SNV 与 minmax 中位谱。
+
+    同时给出 cache_dir 和文件摘要时优先命中缓存，只在文件夹内容变化后重算。
+    """
+    cache_path = (
+        cache_dir / f"{folder_dir.name}__{signature}.npz"
+        if cache_dir is not None and signature
+        else None
+    )
+    if cache_path is not None:
+        cached = _load_folder_median_cache(cache_path, axis)
+        if cached is not None:
+            return cached
     raw_curves = []
     snv_curves = []
     minmax_curves = []
@@ -139,10 +206,13 @@ def build_folder_median_curves(
         return None
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
-        return tuple(
+        curves = tuple(
             np.nanmedian(np.vstack(curves), axis=0).astype(np.float32, copy=False)
             for curves in (raw_curves, snv_curves, minmax_curves)
         )
+    if cache_path is not None:
+        _write_folder_median_cache(cache_path, curves)
+    return curves
 
 
 def preprocess_preview_curve(
@@ -205,16 +275,19 @@ def write_plot_state(path: Path, rows: list[dict[str, str]]) -> None:
 
 def build_plot_state(folders: list[Path]) -> list[dict[str, str]]:
     """整理文件夹前缀和文件摘要，用于增量更新总览图。"""
-    return [
-        {
-            "genus": folder.parent.name,
-            "folder": folder.name,
-            "prefix": parse_folder_prefix(folder.name),
-            "file_count": str(sum(1 for path in folder.glob("*.arc_data") if path.is_file())),
-            "file_signature": _folder_file_signature(folder),
-        }
-        for folder in folders
-    ]
+    rows = []
+    for folder in folders:
+        file_count, file_signature = _scan_folder_spectra(folder)
+        rows.append(
+            {
+                "genus": folder.parent.name,
+                "folder": folder.name,
+                "prefix": parse_folder_prefix(folder.name),
+                "file_count": str(file_count),
+                "file_signature": file_signature,
+            }
+        )
+    return rows
 
 
 def build_changed_plot_groups(
@@ -250,14 +323,20 @@ def build_changed_plot_groups(
     return changed
 
 
-def _folder_file_signature(folder: Path) -> str:
+def _scan_folder_spectra(folder: Path) -> tuple[int, str]:
+    """单次 scandir 统计源谱数量，并汇总名称、大小和修改时间摘要。"""
+    entries = [
+        (entry.name, entry.stat())
+        for entry in os.scandir(folder)
+        if entry.is_file() and entry.name.lower().endswith(".arc_data")
+    ]
+    entries.sort(key=lambda item: item[0].lower())
     digest = hashlib.sha256()
-    for path in sorted((item for item in folder.glob("*.arc_data") if item.is_file()), key=lambda item: item.name.lower()):
-        stat = path.stat()
-        digest.update(path.name.encode("utf-8"))
+    for name, stat in entries:
+        digest.update(name.encode("utf-8"))
         digest.update(str(stat.st_size).encode("ascii"))
         digest.update(str(stat.st_mtime_ns).encode("ascii"))
-    return digest.hexdigest()
+    return len(entries), digest.hexdigest()
 
 
 def plot_curve_outside_bad_bands(
@@ -340,6 +419,8 @@ def plot_prefix_init(
     figure_dir = Path(output_dir).resolve()
     folders = iter_init_folders(input_dir)
     state = build_plot_state(folders)
+    signatures = {(row["genus"], row["folder"]): row["file_signature"] for row in state}
+    cache_root = _resolve_plot_cache_dir(input_dir, plot_config)
     prior = read_plot_state(figure_dir / "prefix_plot_state.csv")
     changed = build_changed_plot_groups(state, prior)
     axis = build_plot_axis(plot_config)
@@ -363,7 +444,13 @@ def plot_prefix_init(
         output_path = figure_dir / genus / f"{prefix}.png"
         curves = {}
         for folder in group:
-            median_curves = build_folder_median_curves(folder, axis, plot_config)
+            median_curves = build_folder_median_curves(
+                folder,
+                axis,
+                plot_config,
+                cache_root / genus,
+                signatures.get((genus, folder.name)),
+            )
             if median_curves is not None:
                 curves[folder.name] = median_curves
         if curves:
@@ -371,6 +458,7 @@ def plot_prefix_init(
             outputs.append(output_path)
         if progress_callback is not None:
             progress_callback(genus, prefix, index, total)
+    _prune_folder_median_cache(cache_root, state)
     write_plot_state(figure_dir / "prefix_plot_state.csv", state)
     return outputs
 
@@ -399,6 +487,7 @@ def build_prefix_plots_for_groups(
     input_dir = Path(init_root).resolve()
     figure_dir = Path(output_root).resolve()
     axis = build_plot_axis(plot_config)
+    cache_root = _resolve_plot_cache_dir(input_dir, plot_config)
     wanted = {(str(genus), str(prefix).upper()) for genus, prefix in group_keys}
     outputs: list[Path] = []
     for genus, prefix in sorted(wanted, key=lambda item: (build_natural_key(item[0]), build_natural_key(item[1]))):
@@ -412,7 +501,13 @@ def build_prefix_plots_for_groups(
         ]
         curves = {}
         for folder in folders:
-            median_curves = build_folder_median_curves(folder, axis, plot_config)
+            median_curves = build_folder_median_curves(
+                folder,
+                axis,
+                plot_config,
+                cache_root / genus,
+                _scan_folder_spectra(folder)[1],
+            )
             if median_curves is not None:
                 curves[folder.name] = median_curves
         output_path = figure_dir / genus / f"{prefix}.png"
