@@ -149,7 +149,7 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
         build_augmentation_spec(config.training),
         augmentation_enable=True,
     )
-    validation_dataset = RamanDataset(dataset_index, input_spec)
+    validation_dataset = RamanDataset(dataset_index, input_spec, cache_input_enable=True)
     if skipped_entries:
         parent_models[level_name] = skipped_entries
 
@@ -233,6 +233,9 @@ def _set_random_seed(seed: int, deterministic_enable: bool) -> None:
     if deterministic_enable:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
+    else:
+        # 关闭确定性时允许 cuDNN 自动挑选卷积算法，输入形状固定可稳定复用结果。
+        torch.backends.cudnn.benchmark = True
 
 
 def _build_train_tasks(

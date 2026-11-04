@@ -4,15 +4,8 @@ import json
 from pathlib import Path
 
 from ramanv2.pipeline.cleaning import refresh_completed_dates, scan_review_folders
-from ramanv2.pipeline.restoration import (
-    restore_deleted_folder,
-    restore_deleted_spectra,
-    scan_deleted_folders,
-    scan_deleted_spectra,
-)
+from ramanv2.pipeline.restoration import purge_deleted_spectra, restore_deleted_folder
 from ramanv2.pipeline.state import PipelineState, load_pipeline_state, save_pipeline_state
-
-
 
 
 def _write_approved_report(
@@ -40,14 +33,6 @@ def _write_applied_report(shift_root: Path, date_name: str, folder_name: str) ->
         encoding="utf-8",
     )
     return summary_path
-
-
-
-
-
-
-
-
 
 
 def test_restore_folder_moves_cosmic_only_and_requeues(tmp_path: Path) -> None:
@@ -103,9 +88,69 @@ def test_restore_folder_moves_cosmic_only_and_requeues(tmp_path: Path) -> None:
     assert [folder.folder_name for folder in folders] == ["EC02"]
 
 
+def test_purge_deleted_spectra_removes_files_and_empty_folders(tmp_path: Path) -> None:
+    """彻底删除：文件不可恢复，清空的文件夹逐级删除，走向记录标记 purged。"""
+    date_name = "20240101"
+    data_root = tmp_path / "cosmic_data"
+    manual = data_root / "delete" / "manual" / date_name
+    (manual / "EC01").mkdir(parents=True)
+    (manual / "EC01" / "a.arc_data").write_text("1 2\n", encoding="utf-8")
+    (manual / "EC01" / "b.arc_data").write_text("1 2\n", encoding="utf-8")
+    (manual / "EC02").mkdir()
+    (manual / "EC02" / "c.arc_data").write_text("1 2\n", encoding="utf-8")
+    state_path = tmp_path / "state.json"
+    state = PipelineState()
+    state.cleaning.committed_paths = {
+        f"{date_name}/EC01/a.arc_data",
+        f"{date_name}/EC02/c.arc_data",
+    }
+    save_pipeline_state(state_path, state)
+
+    result = purge_deleted_spectra(
+        data_root,
+        state_path,
+        [f"{date_name}/EC01/a.arc_data", f"{date_name}/EC02/c.arc_data"],
+    )
+
+    assert result["purged_file_count"] == 2
+    assert not (manual / "EC01" / "a.arc_data").exists()
+    assert (manual / "EC01" / "b.arc_data").is_file()
+    assert not (manual / "EC02").exists()
+    assert manual.is_dir()
+    restored = load_pipeline_state(state_path)
+    assert restored.cleaning.committed_paths == set()
+    lineage = json.loads(
+        (tmp_path / ".raman_pipeline" / "folder_lineage.json").read_text(encoding="utf-8")
+    )
+    purged = lineage["folders"][f"{date_name}/EC01"]["files"]["a.arc_data"]
+    assert purged["status"] == "purged"
+    assert "deleted_path" not in purged
+
+    purge_deleted_spectra(data_root, state_path, [f"{date_name}/EC01/b.arc_data"])
+
+    assert not (data_root / "delete").exists()
 
 
+def test_purge_last_date_files_discards_stale_date_records(tmp_path: Path) -> None:
+    """彻底删除某个日期最后的文件后，仿射与清洗记录不能继续残留。"""
+    date_name = "20231130"
+    data_root = tmp_path / "cosmic_data"
+    manual = data_root / "delete" / "manual" / date_name / "EC03"
+    manual.mkdir(parents=True)
+    (manual / "a.arc_data").write_text("1 2\n", encoding="utf-8")
+    state_path = tmp_path / "state.json"
+    state = PipelineState()
+    state.affine_completed_dates.add(date_name)
+    state.cleaning.folder_catalog[date_name] = {"EC03"}
+    state.cleaning.completed_folder_keys = {f"{date_name}/EC03"}
+    state.cleaning.completed_date_names.add(date_name)
+    save_pipeline_state(state_path, state)
 
+    purge_deleted_spectra(data_root, state_path, [f"{date_name}/EC03/a.arc_data"])
 
-
-
+    assert not (data_root / date_name).exists()
+    restored = load_pipeline_state(state_path)
+    assert date_name not in restored.affine_completed_dates
+    assert date_name not in restored.cleaning.completed_date_names
+    assert date_name not in restored.cleaning.folder_catalog
+    assert restored.cleaning.completed_folder_keys == set()

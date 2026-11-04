@@ -247,12 +247,11 @@ def render_pipeline_figures(trace: PipelineTrace, output_dir: Path | str) -> tup
 def build_augmentation_trace(trace: PipelineTrace, seed: int = 42) -> AugmentationTrace:
     """对统一波数光谱分别施加单项训练增强，固定随机种子。"""
     specs = (
-        ("01_piecewise_gain", AugmentationSpec(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1)),
-        ("02_noise", AugmentationSpec(0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1)),
-        ("03_axis_warp", AugmentationSpec(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1)),
-        ("04_weak_baseline", AugmentationSpec(0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1)),
-        ("05_strong_baseline", AugmentationSpec(0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1)),
-        ("06_mask_attenuation", AugmentationSpec(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1)),
+        ("01_piecewise_gain", AugmentationSpec(1.0, 0.0, 0.0, 0.0, 0.0, 1)),
+        ("02_noise", AugmentationSpec(0.0, 1.0, 0.0, 0.0, 0.0, 1)),
+        ("03_axis_warp", AugmentationSpec(0.0, 0.0, 1.0, 0.0, 0.0, 1)),
+        ("04_weak_baseline", AugmentationSpec(0.0, 0.0, 0.0, 1.0, 0.0, 1)),
+        ("05_strong_baseline", AugmentationSpec(0.0, 0.0, 0.0, 0.0, 1.0, 1)),
     )
     with _temporary_numpy_seed(seed):
         variants = {}

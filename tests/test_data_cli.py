@@ -4,10 +4,6 @@ from pathlib import Path
 from ramanv2.common.arc_data import write_arc_data
 
 
-
-
-
-
 def test_build_test_reads_profile_test_root(tmp_path: Path) -> None:
     """独立测试集固定读取 profile 专属的 dataset/<profile>/init_test。"""
     from ramanv2.core.config import InputConfig
@@ -33,7 +29,3 @@ def test_build_test_reads_profile_test_root(tmp_path: Path) -> None:
 
     assert (dataset_dir / "test" / "ECL20240202_01" / "a.arc_data").is_file()
     assert not (dataset_dir / "test" / "ECL20240203_01").exists()
-
-
-
-

@@ -21,8 +21,8 @@ from ramanv2.pipeline.state import COMMIT_LOG_NAME, CleaningState, PipelineState
 
 
 DATE_PATTERN = re.compile(r"^\d{8}$")
-DEFAULT_CELL_PATTERN = re.compile(r"^cell[12](?:_|$)", re.IGNORECASE)
 SPECIAL_FOLDER_NAMES = PIPELINE_RESERVED_FOLDER_NAMES
+BEAD_FOLDER_NAME = "小球"
 
 
 @dataclass(frozen=True)
@@ -143,7 +143,6 @@ def discard_removed_folder(state: CleaningState, folder: ReviewFolder) -> None:
             state.folder_catalog.pop(folder.date_name, None)
     key = folder.key
     state.completed_folder_keys.discard(key)
-    state.seeded_folder_keys.discard(key)
     state.folder_page_indices.pop(key, None)
     prefix = f"{key}/"
     state.marked_paths = {path for path in state.marked_paths if not path.startswith(prefix)}
@@ -170,9 +169,6 @@ def reopen_date_review(
     state.completed_folder_keys = {
         key for key in state.completed_folder_keys if not key.startswith(prefix)
     }
-    state.seeded_folder_keys = {
-        key for key in state.seeded_folder_keys if not key.startswith(prefix)
-    }
     state.folder_page_indices = {
         key: value
         for key, value in state.folder_page_indices.items()
@@ -196,9 +192,6 @@ def discard_removed_date(state: CleaningState, date_name: str) -> None:
     prefix = f"{date_name}/"
     state.completed_folder_keys = {
         key for key in state.completed_folder_keys if not key.startswith(prefix)
-    }
-    state.seeded_folder_keys = {
-        key for key in state.seeded_folder_keys if not key.startswith(prefix)
     }
     state.folder_page_indices = {
         key: value
@@ -266,23 +259,6 @@ def toggle_mark_path(state: CleaningState, relative_path: str) -> bool:
     return True
 
 
-def seed_default_marks(folders: list[ReviewFolder], state: CleaningState) -> int:
-    """进入文件夹时仅为该文件夹标记 cell1/cell2，跳过小球目录。"""
-    count = 0
-    for folder in folders:
-        if folder.key in state.seeded_folder_keys or folder.folder_name == "小球":
-            continue
-        matched = [
-            path
-            for path in folder.relative_paths
-            if DEFAULT_CELL_PATTERN.match(path.rsplit("/", 1)[-1].rsplit(".", 1)[0])
-        ]
-        mark_paths(state, matched, "default_cell1_cell2")
-        state.seeded_folder_keys.add(folder.key)
-        count += len(matched)
-    return count
-
-
 def folder_has_pending(state: CleaningState, folder: ReviewFolder) -> bool:
     return bool(state.marked_paths.intersection(folder.relative_paths))
 
@@ -335,16 +311,22 @@ def commit_paths(
     target_root = root / "delete" / "manual"
     normalized = sorted({str(path).replace("\\\\", "/") for path in paths})
     moved, missing, moves = [], [], {}
+    purged: list[str] = []
     for relative in normalized:
         source, target = (root / relative).resolve(), (target_root / relative).resolve()
         if not source.is_relative_to(root) or not target.is_relative_to(target_root) or source.is_relative_to(root / "delete"):
             raise ValueError(f"拒绝处理源目录之外的路径：{relative}")
         if source.is_file():
-            moves[source] = target
-            moved.append(relative)
+            # 小球谱只服务日期级仿射，删掉即永久删除，不进入人工删除区。
+            parts = relative.split("/")
+            if len(parts) >= 2 and parts[1] == BEAD_FOLDER_NAME:
+                purged.append(relative)
+            else:
+                moves[source] = target
+                moved.append(relative)
         elif not target.is_file():
             missing.append(relative)
-    dates = {relative.split("/", 1)[0] for relative in moved}
+    dates = {relative.split("/", 1)[0] for relative in moved + purged}
     snapshots = [lineage_path(root), Path(state_path), Path(state_path).parent / COMMIT_LOG_NAME]
     snapshots.extend(root / date for date in dates)
     snapshots.extend(target_root / date for date in dates)
@@ -355,12 +337,20 @@ def commit_paths(
         move_files(moves)
         if moved:
             record_manual_move(root, moved, reason or "manual_selection")
+        # 小球谱直接永久删除，不写人工删除记录；失败时由日期级快照整体回滚。
+        for relative in purged:
+            (root / relative).unlink()
+            _remove_empty_parents(root / relative, root)
         reasons = {}
+        purged_set = set(purged)
         for relative in normalized:
             if relative in missing:
                 continue
             cleaning.marked_paths.discard(relative)
-            cleaning.committed_paths.add(relative)
+            if relative in purged_set:
+                cleaning.committed_paths.discard(relative)
+            else:
+                cleaning.committed_paths.add(relative)
             path_reasons = set(cleaning.mark_reasons.pop(relative, set()))
             if reason:
                 path_reasons.add(reason)
@@ -370,13 +360,17 @@ def commit_paths(
         invalidate_downstream(working, dates)
         refresh_completed_dates(cleaning)
         save_pipeline_state(state_path, working)
-        if moved:
+        if moved or purged:
             log_path = Path(state_path).parent / COMMIT_LOG_NAME
             with log_path.open("a", encoding="utf-8") as file:
                 timestamp = datetime.now().astimezone().isoformat()
-                file.write(json.dumps({"committed_at": timestamp, "paths": moved, "reasons": reasons}, ensure_ascii=False) + "\\n")
+                payload = {"committed_at": timestamp, "paths": moved, "reasons": reasons}
+                if purged:
+                    payload["purged_paths"] = purged
+                file.write(json.dumps(payload, ensure_ascii=False) + "\n")
     state.__dict__.update(working.__dict__)
-    return CommitResult(tuple(moved), tuple(missing))
+    missing_set = set(missing)
+    return CommitResult(tuple(relative for relative in normalized if relative not in missing_set), tuple(missing))
 
 
 def commit_marked_items(root_dir: Path | str, state: PipelineState, state_path: Path | str) -> CommitResult:
@@ -417,10 +411,10 @@ def commit_date_items(
     state_path: Path | str,
     folders: list[ReviewFolder] | tuple[ReviewFolder, ...],
 ) -> CommitResult:
-    """立即移动当前日期普通文件夹和小球文件夹的全部光谱。"""
+    """立即移除当前日期的普通与小球光谱：普通谱进人工删除区，小球谱直接永久删除。"""
     paths = [path for folder in folders for path in folder.relative_paths]
     mark_paths(state.cleaning, paths, "date_remove")
-    result = commit_paths(root_dir, state, state_path, paths)
+    result = commit_paths(root_dir, state, state_path, paths, reason="date_remove")
     root = Path(root_dir).resolve()
     date_names = {folder.date_name for folder in folders}
     for folder in folders:
@@ -437,7 +431,6 @@ def commit_date_items(
 
 __all__ = [
     "CommitResult",
-    "DEFAULT_CELL_PATTERN",
     "ReviewFolder",
     "SPECIAL_FOLDER_NAMES",
     "SpectrumItem",
@@ -455,7 +448,6 @@ __all__ = [
     "reopen_date_review",
     "scan_date_names",
     "scan_review_folders",
-    "seed_default_marks",
     "sync_folder_catalog",
     "toggle_mark_path",
     "unmark_paths",

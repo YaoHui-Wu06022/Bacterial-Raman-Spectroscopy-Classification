@@ -48,5 +48,3 @@ def test_root_cli_registers_migrated_commands() -> None:
         parser.parse_args(["pipeline", "audit", "--date", "20240101"])
     with pytest.raises(SystemExit):
         parser.parse_args(["stanford", "transfer"])
-
-

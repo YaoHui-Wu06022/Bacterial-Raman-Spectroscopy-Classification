@@ -30,8 +30,6 @@ def _build_project(tmp_path: Path, with_test_enable: bool = False) -> Path:
     return project_root
 
 
-
-
 def _load_notebook_data_restore():
     notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
     cell = next(cell for cell in notebook["cells"] if "def prepare_data_archive(" in "".join(cell["source"]))
@@ -44,8 +42,6 @@ def _load_notebook_data_restore():
 
 def _profile() -> SimpleNamespace:
     return SimpleNamespace(dataset_name="GN", root_init="init", root_init_test="init_test")
-
-
 
 
 def test_profile_data_archive_includes_independent_test_init(tmp_path: Path) -> None:
@@ -64,18 +60,6 @@ def test_profile_data_archive_includes_independent_test_init(tmp_path: Path) -> 
             "dataset/GN/init/Enterobacter/ECL20240101_01/sample.arc_data",
             "dataset/GN/init_test/ECL20240202_01/sample.arc_data",
         ]
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_notebook_restores_exported_archive_without_changing_files(tmp_path: Path) -> None:
@@ -101,9 +85,3 @@ def test_notebook_restores_exported_archive_without_changing_files(tmp_path: Pat
     assert not list(target_root.glob("data_unpack_*"))
     assert not list(init_dir.parent.glob(".init.previous_*"))
     assert not list(target_root.rglob(".init_test.previous_*"))
-
-
-
-
-
-

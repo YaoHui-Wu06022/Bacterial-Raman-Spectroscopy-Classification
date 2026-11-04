@@ -10,6 +10,8 @@ from typing import Callable
 import numpy as np
 import torch
 
+from ramanv2.common.publishing import create_temporary_path, publish_file
+
 
 @dataclass
 class TrainingState:
@@ -52,7 +54,14 @@ def save_training_checkpoint(
         "python_rng_state": random.getstate(),
         "grad_scaler_state": None if scaler is None else scaler.state_dict(),
     }
-    torch.save(checkpoint, checkpoint_path)
+    # 先写同级临时文件再原子替换，避免中断时留下不可恢复的半截 checkpoint。
+    temporary = create_temporary_path(checkpoint_path)
+    try:
+        torch.save(checkpoint, temporary)
+        publish_file(temporary, checkpoint_path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def restore_training_checkpoint(

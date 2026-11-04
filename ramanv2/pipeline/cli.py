@@ -85,17 +85,26 @@ def run_command(args: argparse.Namespace) -> int:
         print(json.dumps(reports, ensure_ascii=False, indent=2))
         return 0
     if args.command == "init":
-        from ramanv2.data.builders.init import build_full_init
         from ramanv2.data.catalog import ensure_dataset_mapping
+        from ramanv2.pipeline.supplement import (
+            build_full_init_with_supplements,
+            scan_supplement_plan,
+            validate_supplement_plan,
+        )
 
         workbook = PROJECT_ROOT / "dataset" / "病原菌分类与规范简称.xlsx"
         mapping_file = pipeline_metadata_dir(PROJECT_ROOT) / "profile_catalog.json"
         catalog = ensure_dataset_mapping(workbook, mapping_file)
-        report = build_full_init(
+        plan = scan_supplement_plan(PROJECT_ROOT / "dataset" / "extra_data", args.init_root, catalog)
+        errors = validate_supplement_plan(plan)
+        if errors:
+            raise ValueError("补充数据校验失败：" + "；".join(errors))
+        report = build_full_init_with_supplements(
             args.shift_root,
             args.init_root,
             catalog,
             sorted(state.affine_completed_dates),
+            plan,
             test_root=resolve_test_root(PROJECT_ROOT),
             selected_test_folders=args.test_folders,
         )

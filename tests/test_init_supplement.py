@@ -1,12 +1,7 @@
 from pathlib import Path
 
-
 from ramanv2.data.catalog import DatasetMapping
-from ramanv2.pipeline.supplement import (
-    apply_supplement_plan,
-    scan_supplement_plan,
-    validate_supplement_plan,
-)
+from ramanv2.pipeline.supplement import apply_supplement_plan, scan_supplement_plan
 
 
 def write_spectrum(path: Path, value: int) -> None:
@@ -21,8 +16,6 @@ def make_mapping() -> DatasetMapping:
     )
 
 
-
-
 def test_scan_supplement_plan_reports_unbacked_direct_init_folder(
     tmp_path: Path,
 ) -> None:
@@ -35,12 +28,6 @@ def test_scan_supplement_plan_reports_unbacked_direct_init_folder(
 
     assert plan.errors == ()
     assert plan.unbacked_init_folders == ("Corynebacterium/CAMY20261026",)
-
-
-
-
-
-
 
 
 def test_apply_supplement_plan_replaces_target_and_keeps_source(tmp_path: Path) -> None:
@@ -58,5 +45,3 @@ def test_apply_supplement_plan_replaces_target_and_keeps_source(tmp_path: Path) 
     assert result["targets"] == ["Corynebacterium/CAMY20261027"]
     assert sorted(path.name for path in target.iterdir()) == ["new.arc_data"]
     assert (root / "CAMY20261027" / "new.arc_data").is_file()
-
-

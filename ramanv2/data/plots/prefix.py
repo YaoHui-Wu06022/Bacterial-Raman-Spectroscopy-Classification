@@ -29,10 +29,11 @@ from ramanv2.data.config import DEFAULT_BUILD_CONFIG, DataBuildConfig
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.bands import build_valid_mask
 from ramanv2.spectra.normalize import normalize_spectrum
-from ramanv2.spectra.preprocess import estimate_baseline
+from ramanv2.spectra.preprocess import preprocess_single_spectrum
 
 
 PLOT_CACHE_DIR_NAME = ".prefix_plot_cache"
+PLOT_RENDER_VERSION = "2"
 TARGET_CM = 1003.0
 PREFIX_PLOT_COLORS = (
     "#d60000",
@@ -68,7 +69,7 @@ PREFIX_PLOT_COLORS = (
     "#bac389",
     "#5e7b87",
 )
-PLOT_STATE_FIELDS = ("genus", "folder", "prefix", "file_count", "file_signature")
+PLOT_STATE_FIELDS = ("genus", "folder", "prefix", "file_count", "file_signature", "render_version")
 PLOT_EXCLUDED_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
 
 
@@ -101,7 +102,7 @@ def build_plot_axis(config: PrefixPlotConfig) -> np.ndarray:
 def _resolve_plot_cache_dir(init_dir: Path, config: PrefixPlotConfig) -> Path:
     """返回中位谱缓存目录；按绘图参数分桶，并与图片输出目录解耦。"""
     digest = hashlib.sha256(
-        repr((config.input, config.cleaning)).encode("utf-8")
+        repr((PLOT_RENDER_VERSION, config.input, config.cleaning)).encode("utf-8")
     ).hexdigest()[:12]
     return Path(init_dir).resolve().parent / PLOT_CACHE_DIR_NAME / digest
 
@@ -165,6 +166,20 @@ def iter_init_folders(init_dir: Path) -> list[Path]:
     ]
 
 
+def _scatter_valid_segment(
+    shape: tuple[int, ...],
+    valid_mask: np.ndarray | None,
+    values: np.ndarray,
+) -> np.ndarray:
+    """把紧凑有效段的数值放回完整绘图轴，坏段位置保持 NaN 供绘图断线。"""
+    curve = np.full(shape, np.nan, dtype=np.float32)
+    if valid_mask is None:
+        curve[:] = values
+    else:
+        curve[valid_mask] = values
+    return curve
+
+
 def build_folder_median_curves(
     folder_dir: Path,
     axis: np.ndarray,
@@ -172,8 +187,10 @@ def build_folder_median_curves(
     cache_dir: Path | None = None,
     signature: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-    """逐条处理文件夹光谱，再分别汇总 raw、SNV 与 minmax 中位谱。
+    """逐条按训练清洗链路处理光谱，再汇总 raw、归一化与 minmax 中位谱。
 
+    预处理直接复用 :func:`preprocess_single_spectrum`，与 build_train 写入的
+    train 谱完全一致；坏段点位在绘图轴上留 NaN。
     同时给出 cache_dir 和文件摘要时优先命中缓存，只在文件夹内容变化后重算。
     """
     cache_path = (
@@ -185,8 +202,16 @@ def build_folder_median_curves(
         cached = _load_folder_median_cache(cache_path, axis)
         if cached is not None:
             return cached
+    input_config = config.input
+    build_config = config.cleaning
+    reference_axis = build_wn_ref(
+        input_config.cut_min,
+        input_config.cut_max,
+        int(input_config.target_points),
+    )
+    valid_mask = build_valid_mask(reference_axis, input_config.bad_bands)
     raw_curves = []
-    snv_curves = []
+    norm_curves = []
     minmax_curves = []
     for path in sorted(folder_dir.glob("*.arc_data")):
         wavenumbers, intensities, malformed_lines = read_raw_arc_data(path)
@@ -194,58 +219,52 @@ def build_folder_median_curves(
             continue
         if np.any(np.diff(wavenumbers) <= 0):
             continue
-        curve = np.full(axis.shape, np.nan, dtype=np.float32)
+        target_axis, corrected, _ = preprocess_single_spectrum(
+            wavenumbers,
+            intensities,
+            cut_min=input_config.cut_min,
+            cut_max=input_config.cut_max,
+            reference_wavenumbers=reference_axis,
+            bad_bands=input_config.bad_bands,
+            baseline_lam=build_config.baseline_lam,
+            baseline_asls_p=build_config.baseline_asls_p,
+            baseline_max_iter=build_config.baseline_max_iter,
+            baseline_fit_min=build_config.baseline_fit_min,
+            baseline_fit_max=build_config.baseline_fit_max,
+            baseline_method=build_config.baseline_method,
+        )
+        if target_axis is None:
+            continue
+        raw_curve = np.full(axis.shape, np.nan, dtype=np.float32)
         inside = (axis >= wavenumbers[0]) & (axis <= wavenumbers[-1])
         if inside.any():
-            curve[inside] = np.interp(axis[inside], wavenumbers, intensities)
-            raw_curves.append(curve)
-            snv_curve, minmax_curve = preprocess_preview_curve(curve, axis, config)
-            snv_curves.append(snv_curve)
-            minmax_curves.append(minmax_curve)
+            raw_curve[inside] = np.interp(axis[inside], wavenumbers, intensities)
+        raw_curves.append(raw_curve)
+        norm_curves.append(
+            _scatter_valid_segment(
+                axis.shape,
+                valid_mask,
+                normalize_spectrum(corrected, input_config.norm_method),
+            )
+        )
+        minmax_curves.append(
+            _scatter_valid_segment(
+                axis.shape,
+                valid_mask,
+                normalize_spectrum(corrected, "minmax"),
+            )
+        )
     if not raw_curves:
         return None
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         curves = tuple(
             np.nanmedian(np.vstack(curves), axis=0).astype(np.float32, copy=False)
-            for curves in (raw_curves, snv_curves, minmax_curves)
+            for curves in (raw_curves, norm_curves, minmax_curves)
         )
     if cache_path is not None:
         _write_folder_median_cache(cache_path, curves)
     return curves
-
-
-def preprocess_preview_curve(
-    raw_curve: np.ndarray,
-    axis: np.ndarray,
-    config: PrefixPlotConfig,
-) -> tuple[np.ndarray, np.ndarray]:
-    """将原始中位谱扣基线后生成 SNV 和 minmax 预览曲线。"""
-    corrected = np.full(raw_curve.shape, np.nan, dtype=np.float32)
-    finite = np.isfinite(raw_curve)
-    if finite.sum() >= 10:
-        input_config = config.input
-        build_config = config.cleaning
-        fit_mask = finite & (
-            (axis >= build_config.baseline_fit_min)
-            & (axis <= build_config.baseline_fit_max)
-        )
-        if fit_mask.sum() < 10:
-            fit_mask = finite
-        valid_mask = build_valid_mask(axis[fit_mask], input_config.bad_bands)
-        baseline = estimate_baseline(
-            raw_curve[fit_mask],
-            method=build_config.baseline_method,
-            lam=build_config.baseline_lam,
-            p=build_config.baseline_asls_p,
-            niter=build_config.baseline_max_iter,
-            valid_mask=valid_mask,
-        )
-        corrected[fit_mask] = raw_curve[fit_mask] - baseline
-    return (
-        normalize_spectrum(corrected, "snv", preserve_nan_enable=True),
-        normalize_spectrum(corrected, "minmax", preserve_nan_enable=True),
-    )
 
 
 def read_plot_state(path: Path) -> dict[tuple[str, str], object]:
@@ -260,7 +279,10 @@ def read_plot_state(path: Path) -> dict[tuple[str, str], object]:
                 "file_signature": row.get("file_signature", ""),
             }
             for row in csv.DictReader(file, delimiter="\t")
-            if row.get("genus") and row.get("folder") and row.get("prefix")
+            if row.get("genus")
+            and row.get("folder")
+            and row.get("prefix")
+            and row.get("render_version") == PLOT_RENDER_VERSION
         }
 
 
@@ -285,6 +307,7 @@ def build_plot_state(folders: list[Path]) -> list[dict[str, str]]:
                 "prefix": parse_folder_prefix(folder.name),
                 "file_count": str(file_count),
                 "file_signature": file_signature,
+                "render_version": PLOT_RENDER_VERSION,
             }
         )
     return rows
@@ -360,13 +383,15 @@ def plot_prefix_group(
     output_path: Path,
     title: str,
     bad_bands: tuple[tuple[float, float], ...],
+    norm_method: str,
 ) -> None:
-    """绘制同属同前缀的 raw、SNV 与 minmax 中位谱总览。"""
+    """绘制同属同前缀的 raw、归一化与 minmax 中位谱总览。"""
     figure, axes = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
-    labels = ("Raw intensity", "SNV intensity", "minmax intensity")
+    norm_label = str(norm_method).upper()
+    labels = ("Raw intensity", f"{norm_label} intensity", "minmax intensity")
     subtitles = (
         "raw median",
-        "SNV median with vertical offsets",
+        f"{norm_label} median with vertical offsets",
         "minmax median with vertical offsets",
     )
     for curve_index, subplot in enumerate(axes):
@@ -454,7 +479,14 @@ def plot_prefix_init(
             if median_curves is not None:
                 curves[folder.name] = median_curves
         if curves:
-            plot_prefix_group(curves, axis, output_path, f"{genus} {prefix} median spectra", plot_config.input.bad_bands)
+            plot_prefix_group(
+                curves,
+                axis,
+                output_path,
+                f"{genus} {prefix} median spectra",
+                plot_config.input.bad_bands,
+                plot_config.input.norm_method,
+            )
             outputs.append(output_path)
         if progress_callback is not None:
             progress_callback(genus, prefix, index, total)
@@ -519,6 +551,7 @@ def build_prefix_plots_for_groups(
             output_path,
             f"{genus} {prefix} median spectra",
             plot_config.input.bad_bands,
+            plot_config.input.norm_method,
         )
         outputs.append(output_path)
     return outputs

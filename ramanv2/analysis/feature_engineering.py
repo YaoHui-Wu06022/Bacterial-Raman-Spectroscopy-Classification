@@ -82,7 +82,7 @@ def _collect_records(root: Path, prefix_map: dict[str, str]) -> list[SpectrumRec
 
 
 def _segment_derivative(values: np.ndarray, axis: np.ndarray) -> np.ndarray:
-    """按坏段分割计算导数，避免跨越 890–950 cm⁻¹ 间隙。"""
+    """按坏段分割计算导数，避免跨越坏段间隙取邻点。"""
     derivative = np.zeros_like(values, dtype=np.float64)
     step = float(np.median(np.diff(axis)))
     breaks = np.flatnonzero(np.diff(axis) > step * 2.0) + 1

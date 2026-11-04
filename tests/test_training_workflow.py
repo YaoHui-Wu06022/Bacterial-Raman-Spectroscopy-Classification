@@ -77,10 +77,6 @@ def test_workflow_writes_global_run_and_uses_plugin_callbacks(
     assert not (output_dir / "class_names.json").exists()
 
 
-
-
-
-
 def test_species_run_can_train_reload_and_evaluate_across_dates(tmp_path, monkeypatch):
     train_dir = tmp_path / "train"
     for folder in ("GenusA/AB20231212_01", "GenusA/ab20231214_01", "GenusA/AJO20231214_01"):
@@ -115,10 +111,6 @@ def test_species_run_can_train_reload_and_evaluate_across_dates(tmp_path, monkey
     ))
     assert combined["level_models"]["level_2"] == entry
     assert "level_1" in combined["level_models"]
-
-
-
-
 
 
 def _write_spectra(directory: Path, prefix: str, value: float) -> None:
@@ -157,6 +149,5 @@ def _build_workflow_config(profile_id: str = "GN"):
             "p_axis": 0.0,
             "p_baseline_weak": 0.0,
             "p_baseline_strong": 0.0,
-            "p_cut": 0.0,
         }
     )

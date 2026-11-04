@@ -49,11 +49,6 @@ def _layout(tmp_path: Path) -> tuple[Path, Path, Path]:
     return cosmic, shift, state_path
 
 
-    # 审核没有 applied 报告可依，只能是待审核。
-
-
-
-
 def test_rebuild_records_is_idempotent(tmp_path: Path) -> None:
     """重复重建不改变结果，也不引入临时文件残留。"""
     cosmic, shift, state_path = _layout(tmp_path)

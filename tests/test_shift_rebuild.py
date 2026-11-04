@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 from ramanv2.common.arc_data import read_arc_data
-from ramanv2.pipeline.shift import load_date_affine_parameters, rebuild_shift_data
+from ramanv2.pipeline.shift import rebuild_shift_data
 
 
 DATE = "20240101"
@@ -23,8 +23,6 @@ def _write_affine(shift_root: Path, date_name: str = DATE, scale: float = 1.0, o
 def _write_spectrum(path: Path, rows: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(rows, encoding="utf-8")
-
-
 
 
 def test_rebuild_replaces_old_derived_spectra_after_generation(tmp_path: Path) -> None:
@@ -51,11 +49,3 @@ def test_rebuild_replaces_old_derived_spectra_after_generation(tmp_path: Path) -
     assert (shift_root / "delete" / DATE / "EC01" / "old.arc_data").is_file()
     # 参数文件与校准图所在目录保留。
     assert (shift_root / DATE / "shift" / "affine.json").is_file()
-
-
-
-
-
-
-
-

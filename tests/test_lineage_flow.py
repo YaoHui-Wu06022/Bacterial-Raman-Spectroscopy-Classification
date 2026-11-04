@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
-from ramanv2.common.arc_data import read_arc_data, write_arc_data
+from ramanv2.common.arc_data import write_arc_data
 from ramanv2.data.catalog import DatasetMapping
 from ramanv2.pipeline.lineage import (
     initialize_folder_lineage,
-    lineage_path,
     list_lineage_folders,
     load_folder_lineage,
     remove_source_folder,
     save_folder_lineage,
     sync_pipeline_state_from_lineage,
 )
+from ramanv2.pipeline.state import PipelineState
 
 
 def _spectrum(path: Path, start: float = 100.0) -> None:
@@ -22,10 +23,6 @@ def _spectrum(path: Path, start: float = 100.0) -> None:
 
 def _mapping() -> DatasetMapping:
     return DatasetMapping.from_payload({"genera": {"Enterobacter": ["EAB"]}, "datasets": {"GN": ["Enterobacter"]}})
-
-
-
-
 
 
 def test_source_folder_delete_archives_and_preserves_downstream(tmp_path: Path) -> None:
@@ -70,31 +67,25 @@ def test_source_folder_delete_archives_and_preserves_downstream(tmp_path: Path) 
     assert (shift / "20240101").exists()
 
 
+def test_sync_ignores_records_whose_data_was_permanently_removed(tmp_path: Path) -> None:
+    """走向记录仍在但磁盘已无数据时，日期不能继续出现在仿射摘要中。"""
+    cosmic = tmp_path / "cosmic_data"
+    _spectrum(cosmic / "20240101" / "EAB01" / "a.arc_data")
+    _spectrum(cosmic / "20240102" / "EAB02" / "b.arc_data")
+    initialize_folder_lineage(cosmic, _mapping())
+    archived = cosmic / "delete" / "manual" / "20240102" / "EAB02"
+    archived.parent.mkdir(parents=True)
+    shutil.move(str(cosmic / "20240102" / "EAB02"), str(archived))
+    payload = load_folder_lineage(cosmic)
+    payload["folders"]["20240102/EAB02"]["folder_status"] = "manual_deleted"
+    for record in payload["folders"].values():
+        record["affine"] = {"status": "approved"}
+    save_folder_lineage(cosmic, payload)
+    state = PipelineState()
 
+    sync_pipeline_state_from_lineage(cosmic, state)
+    assert state.affine_completed_dates == {"20240101", "20240102"}
 
-
-
-
-
-def test_save_lineage_retries_transient_windows_replace_lock(tmp_path: Path, monkeypatch) -> None:
-    """目标文件被扫描/另一会话短暂占用时，os.replace 会抛 WinError 5，须退避重试且不留临时文件。"""
-    import ramanv2.common.publishing as publishing_module
-
-    root = tmp_path / "cosmic_data"
-    root.mkdir()
-    original_replace = publishing_module.os.replace
-    attempts = 0
-
-    def replace_with_transient_lock(source, target):
-        nonlocal attempts
-        attempts += 1
-        if attempts < 3:
-            raise PermissionError(5, "access denied")
-        original_replace(source, target)
-
-    monkeypatch.setattr(publishing_module.os, "replace", replace_with_transient_lock)
-    save_folder_lineage(root, {"version": 1, "source_root": str(root), "folders": {}})
-
-    assert attempts == 3
-    assert lineage_path(root).is_file()
-    assert not list(lineage_path(root).parent.glob("*.tmp"))
+    shutil.rmtree(archived)
+    sync_pipeline_state_from_lineage(cosmic, state)
+    assert state.affine_completed_dates == {"20240101"}

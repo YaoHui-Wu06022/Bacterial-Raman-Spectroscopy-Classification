@@ -22,7 +22,7 @@ class InputSpec:
     norm_method: str = "snv"
     smooth_enable: bool = False
     d1_enable: bool = False
-    smooth_window: int = 15
+    smooth_window: int = 11
     d1_window: int = 15
     step_cm: float = 1.0
     segment_bounds: tuple[tuple[int, int], ...] = ()

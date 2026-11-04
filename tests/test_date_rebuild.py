@@ -94,21 +94,3 @@ def test_selected_date_updates_only_shift_preserving_downstream(layout, delete_c
     assert not records[f"{DATE}/EC03"].get("init_pending")
     assert state.dataset_builds["profiles"] == {"GN": {"status": "ready"}}
     assert not list(root.rglob(".*.tmp"))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

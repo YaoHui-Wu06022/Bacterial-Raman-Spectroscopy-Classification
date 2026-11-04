@@ -18,9 +18,11 @@ from ramanv2.common.arc_data import read_arc_data
 from ramanv2.common.naming import build_natural_key, parse_folder_prefix
 from ramanv2.data.calibration.affine import invalidate_calibration_report
 from ramanv2.data.catalog import DatasetMapping
+from ramanv2.pipeline.cleaning import discard_removed_date
 from ramanv2.pipeline.invalidation import invalidate_downstream
 from ramanv2.pipeline.lineage import (
     FOLDER_DELETE_RELATIVE,
+    record_purge,
     record_restore,
 )
 from ramanv2.pipeline.state import load_pipeline_state, save_pipeline_state
@@ -401,6 +403,79 @@ def restore_deleted_spectra(
         raise
 
 
+def purge_deleted_spectra(
+    data_root: Path | str,
+    state_path: Path | str,
+    selected_relative_paths: list[str] | tuple[str, ...] | set[str],
+) -> dict[str, object]:
+    """从人工删除区永久删除所选光谱，并清理因此变空的目录。
+
+    这是不可恢复操作：文件直接 unlink，随后把走向记录标记为 purged、从清洗提交记录中
+    移除。空文件夹会自下而上删除，直到 data_root 为止；活动区不受影响。
+    """
+    root = Path(data_root).resolve()
+    manual_root = root / MANUAL_DELETE_DIR
+    normalized = set()
+    for item in selected_relative_paths:
+        path = str(item).replace("\\", "/")
+        prefix = f"{MANUAL_DELETE_DIR}/"
+        normalized.add(path[len(prefix):] if path.startswith(prefix) else path)
+    selected = sorted(normalized, key=build_natural_key)
+    if not selected:
+        raise ValueError("至少选择一条需要彻底删除的光谱")
+    paths: dict[str, Path] = {}
+    for relative in selected:
+        path = (manual_root / relative).resolve()
+        if not path.is_relative_to(manual_root):
+            raise ValueError(f"拒绝处理删除区之外的路径：{relative}")
+        if not path.is_file():
+            raise FileNotFoundError(f"人工删除光谱不存在：{path}")
+        paths[relative] = path
+
+    record_purge(root, selected)
+    state = load_pipeline_state(state_path)
+    for relative in selected:
+        state.cleaning.committed_paths.discard(relative)
+    save_pipeline_state(state_path, state)
+
+    for path in paths.values():
+        path.unlink()
+    _prune_empty_directories({path.parent for path in paths.values()}, root)
+
+    # 整日期已无任何数据（活动或可恢复）时，仿射结论与清洗记录一并作废，
+    # 否则该日期会以“待增量建 init”的形式残留在页面上。
+    dates = sorted({path.split("/", 1)[0] for path in selected}, key=build_natural_key)
+    emptied = [date_name for date_name in dates if not (root / date_name).exists()]
+    if emptied:
+        for date_name in emptied:
+            discard_removed_date(state.cleaning, date_name)
+            state.affine_completed_dates.discard(date_name)
+        save_pipeline_state(state_path, state)
+
+    _append_log(
+        Path(state_path).resolve().parent / RESTORE_LOG_NAME,
+        {
+            "operation": "purge",
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "items": [
+                {
+                    "source_manual": str(paths[relative]),
+                    "date": relative.split("/", 1)[0],
+                    "folder": relative.split("/")[1],
+                    "file": "/".join(relative.split("/")[2:]),
+                }
+                for relative in selected
+            ],
+        },
+    )
+    return {
+        "status": "purged",
+        "purged_file_count": len(selected),
+        "dates": dates,
+        "paths": selected,
+    }
+
+
 def restore_deleted_folder(
     data_root: Path | str,
     shift_root: Path | str,
@@ -465,6 +540,7 @@ __all__ = [
     "DeletedFolder",
     "DeletedSpectrum",
     "RESTORE_LOG_NAME",
+    "purge_deleted_spectra",
     "restore_deleted_folder",
     "restore_deleted_spectra",
     "scan_deleted_folders",

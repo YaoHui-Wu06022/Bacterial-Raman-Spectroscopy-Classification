@@ -54,7 +54,7 @@ def save_task_reports(
         figure_dir / "band_importance_heatmap.png",
         class_names,
         band,
-        mean_spectra,
+        wavenumbers,
         row_norm,
     )
     if separate_class_plots_enable:
@@ -124,7 +124,7 @@ def write_aggregate_reports(
         figure_dir / "band_importance_heatmap_aggregate.png",
         names,
         band,
-        mean_spectra,
+        wavenumbers,
         row_norm,
     )
     layers: dict[str, float] = {}
@@ -238,30 +238,33 @@ def save_band_heatmap(
     output_path: Path,
     class_names,
     importance: np.ndarray,
-    mean_spectra: np.ndarray,
+    wavenumbers: np.ndarray,
     row_norm: str,
 ) -> None:
-    """保留一张按类别排列的整体波段归因概览图。"""
+    """以类别为行、波数为列的归因热图，便于横向比较各类关注的波段。"""
     values = normalize_band_importance(importance, row_norm)
-    figure, axes = plt.subplots(
-        len(class_names),
-        1,
-        figsize=(12, max(3, len(class_names) * 1.4)),
-        squeeze=False,
+    if len(wavenumbers) != values.shape[1]:
+        wavenumbers = np.arange(values.shape[1])
+    figure, axis = plt.subplots(figsize=(12, max(2.4, len(class_names) * 0.6)))
+    image = axis.imshow(
+        values,
+        aspect="auto",
+        cmap="Blues",
+        vmin=0.0,
+        vmax=1.0,
+        interpolation="nearest",
     )
-    for row, axis in enumerate(axes[:, 0]):
-        spectrum = mean_spectra[row]
-        normalized = (spectrum - spectrum.min()) / max(float(spectrum.max() - spectrum.min()), 1e-8)
-        axis.plot(normalized, color="black", linewidth=0.8)
-        axis.fill_between(
-            np.arange(len(normalized)),
-            0,
-            normalized,
-            color=plt.cm.Blues(float(values[row].mean())),
-            alpha=0.8,
-        )
-        axis.set_ylabel(class_names[row], fontsize=7)
-    axes[-1, 0].set_xlabel("Band Index")
+    axis.set_yticks(
+        np.arange(len(class_names)),
+        shorten_class_names(tuple(class_names)),
+        fontsize=8,
+    )
+    tick_indices = np.linspace(0, len(wavenumbers) - 1, 6, dtype=int)
+    axis.set_xticks(tick_indices, [f"{wavenumbers[index]:.0f}" for index in tick_indices])
+    axis.set_xlabel("Wavenumber")
+    colorbar = figure.colorbar(image, ax=axis, fraction=0.02, pad=0.02)
+    colorbar.set_label("Importance (normalized)")
+    colorbar.ax.tick_params(labelsize=8)
     figure.tight_layout()
     figure.savefig(output_path, dpi=300)
     plt.close(figure)

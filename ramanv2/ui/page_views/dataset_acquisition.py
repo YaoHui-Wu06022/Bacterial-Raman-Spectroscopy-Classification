@@ -7,7 +7,6 @@ import streamlit as st
 
 from ramanv2.data.count import summarize_dataset
 from ramanv2.data.builders.init import (
-    build_full_init,
     build_init_datasets,
     build_profile_dataset,
 )
@@ -24,7 +23,7 @@ from ramanv2.data.profiles import PIPELINE_PROFILE_IDS, TEST_ROOT_NAME, get_data
 from ramanv2.pipeline.dataset import collect_test_return_sources, collect_dataset_source_folders, collect_init_export_sources, run_test_to_init, run_folder_dataset_update, run_init_to_test
 from ramanv2.pipeline.supplement import (
     SupplementPlan,
-    apply_supplement_plan,
+    build_full_init_with_supplements,
     scan_supplement_plan,
     validate_supplement_plan,
 )
@@ -148,15 +147,12 @@ def _render_prefix_plot_section(
             st.image(str(selected), caption=f"{genus_name} / {prefix_name}", width="stretch")
 
 
-def _render_supplement_plan(
-    context: PageContext, catalog: DatasetMapping | None
-) -> SupplementPlan | None:
-    """展示补充数据预检表；有错误时返回 None，阻止全量重建。"""
-    if catalog is None:
-        return None
-    plan = scan_supplement_plan(context.supplement_root, context.init_root, catalog)
+def _render_supplement_plan(plan: SupplementPlan | None, supplement_root: Path) -> None:
+    """展示补充数据预检表；计划缺失或出错时由上游禁用重建。"""
+    if plan is None:
+        return
     st.markdown("**补充数据**")
-    st.caption(f"来源目录：{context.supplement_root}；重建后按文件夹写入 dataset/init/<属>/<文件夹>。")
+    st.caption(f"来源目录：{supplement_root}；重建后按文件夹写入 dataset/init/<属>/<文件夹>。")
     if plan.groups:
         st.dataframe(
             [
@@ -175,7 +171,6 @@ def _render_supplement_plan(
             "以下 init 直放组在补充数据中没有对应文件夹，重建后会被移除："
             + "、".join(plan.unbacked_init_folders)
         )
-    return plan if not plan.errors else None
 
 
 def _render_folder_dataset_update(context: PageContext, state) -> None:
@@ -331,23 +326,43 @@ def _list_test_sources(context: PageContext, date_names: list[str]) -> list[str]
 
 
 # 默认选择逻辑版本号，修改逻辑时递增以强制重新初始化
-_TEST_SELECTION_LOGIC_VERSION = 7
+_TEST_SELECTION_LOGIC_VERSION = 9
 
 
-def _default_test_sources(candidates: list[str]) -> list[str]:
-    """默认选择每个种的倒数第二个文件夹（恰好 4 个）或倒数第三个（>= 5 个）；少于 4 个则不选择。"""
+def _supplement_counted_candidates(plan: SupplementPlan | None) -> list[str]:
+    """补充文件夹按日期/名称参与测试选择计数，但不能被选为测试来源。"""
+    if plan is None or plan.errors:
+        return []
+    counted: list[str] = []
+    for group in plan.groups:
+        suffix = group.folder_name[len(group.prefix):]
+        counted.append(f"{suffix}/{group.folder_name}" if len(suffix) == 8 and suffix.isdigit() else group.folder_name)
+    return counted
+
+
+def _default_test_sources(
+    candidates: list[str],
+    *,
+    counted_candidates: list[str] | None = None,
+) -> list[str]:
+    """默认选择每个种的倒数第三个文件夹；少于 5 个则不选择。
+
+    ``counted_candidates`` 中的补充文件夹只参与计数与排序，不会被选入测试集。
+    """
     from collections import defaultdict
     species_folders: dict[str, list[str]] = defaultdict(list)
-    for candidate in candidates:
+    selectable = set(candidates)
+    for candidate in [*candidates, *(counted_candidates or [])]:
         folder_name = candidate.rsplit("/", 1)[-1]
         prefix = parse_folder_prefix(folder_name, uppercase_enable=True)
         species_folders[prefix].append(candidate)
     selected: list[str] = []
     for folders in species_folders.values():
-        if len(folders) < 4:
+        if len(folders) < 5:
             continue
-        sorted_folders = sorted(folders, key=build_natural_key)
-        selected.append(sorted_folders[-3] if len(folders) >= 5 else sorted_folders[-2])
+        pick = sorted(folders, key=build_natural_key)[-3]
+        if pick in selectable:
+            selected.append(pick)
     return sorted(selected, key=build_natural_key)
 
 
@@ -355,6 +370,8 @@ def _sync_test_selection(
     candidates: list[str],
     selection_key: str,
     initialized_key: str,
+    *,
+    counted_candidates: list[str] | None = None,
 ) -> None:
     """按当前候选集补齐默认选择，同时保留用户显式移除的默认项。"""
     version_key = f"{selection_key}_version"
@@ -365,10 +382,11 @@ def _sync_test_selection(
     initialized = st.session_state.get(initialized_key, False)
     previous_defaults = set(st.session_state.get(defaults_key, []))
     current_candidates = set(candidates)
+    default_sources = _default_test_sources(candidates, counted_candidates=counted_candidates)
 
     # 首次初始化或默认规则升级时直接采用当前规则的默认选择。
     if not initialized or version_changed:
-        selected = _default_test_sources(candidates)
+        selected = default_sources
         suppressed_defaults: set[str] = set()
     else:
         selected = [
@@ -386,7 +404,7 @@ def _sync_test_selection(
         )
         suppressed_defaults.difference_update(selected)
 
-    defaults = set(_default_test_sources(candidates))
+    defaults = set(default_sources)
     selected_set = set(selected)
     selected_set.update(defaults - suppressed_defaults)
     st.session_state[selection_key] = sorted(selected_set, key=build_natural_key)
@@ -397,15 +415,20 @@ def _sync_test_selection(
     st.session_state[initialized_key] = True
 
 
-def _render_default_test_selection_button(candidates: list[str], selection_key: str) -> None:
+def _render_default_test_selection_button(
+    candidates: list[str],
+    selection_key: str,
+    *,
+    counted_candidates: list[str] | None = None,
+) -> None:
     """提供显式的默认选择恢复入口，避免误用多选框的全选操作。"""
     if not st.button(
         "恢复默认选择",
         key=f"{selection_key}_reset_defaults",
-        help="按当前候选文件夹重新应用默认规则：每个前缀 4 个选倒数第二个，>= 5 个选倒数第三个。",
+        help="按当前候选文件夹重新应用默认规则：每个前缀至少 5 个才选，取倒数第三个。",
     ):
         return
-    defaults = _default_test_sources(candidates)
+    defaults = _default_test_sources(candidates, counted_candidates=counted_candidates)
     st.session_state[selection_key] = defaults
     st.session_state[f"{selection_key}_defaults"] = defaults
     st.session_state[f"{selection_key}_suppressed_defaults"] = []
@@ -482,6 +505,13 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     _render_count_metrics(full_summary)
     _render_taxon_counts(context.init_root)
     eligible_dates = sorted(state.affine_completed_dates, key=build_natural_key)
+    supplement_plan = (
+        scan_supplement_plan(context.supplement_root, context.init_root, catalog)
+        if catalog is not None
+        else None
+    )
+    supplement_ready = supplement_plan is not None and not supplement_plan.errors
+    supplement_counted = _supplement_counted_candidates(supplement_plan)
     test_candidates = _list_test_sources(context, eligible_dates)
     test_selection_key = "full_init_test_selection"
     initialized_key = "full_init_test_selection_initialized"
@@ -491,23 +521,32 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     exported_source = st.session_state.pop("test_export_added_source", None)
     if exported_source is not None:
         st.session_state[test_selection_key] = sorted(set(st.session_state.get(test_selection_key, [])) | {exported_source}, key=build_natural_key)
-    _sync_test_selection(test_candidates, test_selection_key, initialized_key)
-    _render_default_test_selection_button(test_candidates, test_selection_key)
+    _sync_test_selection(
+        test_candidates,
+        test_selection_key,
+        initialized_key,
+        counted_candidates=supplement_counted,
+    )
+    _render_default_test_selection_button(
+        test_candidates,
+        test_selection_key,
+        counted_candidates=supplement_counted,
+    )
     selected_test = st.multiselect(
         "选择进入 init_test 的来源文件夹",
         test_candidates,
         format_func=lambda value: value.replace("/", " / "),
         key=test_selection_key,
     )
-    supplement_plan = _render_supplement_plan(context, catalog)
+    _render_supplement_plan(supplement_plan, context.supplement_root)
     confirm_supplement = st.checkbox(
         "我确认按上述补充数据重建全量 init",
         key="full_init_supplement_confirm",
-        disabled=supplement_plan is None,
+        disabled=not supplement_ready,
     )
     if st.button(
         "从 shift_data 重建全量 init",
-        disabled=supplement_plan is None or not confirm_supplement,
+        disabled=not supplement_ready or not confirm_supplement,
         width="stretch",
     ):
         validation_errors = validate_supplement_plan(supplement_plan)
@@ -525,22 +564,17 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                             text=f"[{processed}/{total} 条光谱] 正在处理 {date_name}…",
                         )
 
-                    report = build_full_init(
+                    report = build_full_init_with_supplements(
                         context.shift_root,
                         context.init_root,
                         catalog,
                         eligible_dates,
+                        supplement_plan,
                         test_root=context.init_root.parent / TEST_ROOT_NAME,
                         selected_test_folders=selected_test,
                         progress_callback=report_copy_progress,
                     )
-                    progress.progress(1.0, text="正在写入补充数据文件夹…")
-                    try:
-                        supplement = apply_supplement_plan(context.init_root, supplement_plan)
-                    except (OSError, ValueError, RuntimeError) as error:
-                        raise RuntimeError(f"全量 init 已重建，但补充数据写入失败：{error}") from error
-                    report["supplement"] = supplement
-                    report["count"] = summarize_dataset(context.init_root.resolve())
+                    progress.progress(1.0, text="全量 init 与补充数据写入完成")
                     status.update(label="全量 init 重建完成", state="complete", expanded=False)
                 state.dataset_builds["full_init"] = report
                 invalidate_ui_cache("dataset")
@@ -549,6 +583,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                 invalidate_ui_cache("analysis")
                 save_page_state(context, state)
                 st.session_state.pop("full_init_supplement_confirm", None)
+                supplement = report["supplement"]
                 supplement_note = (
                     f"已写入 {supplement['folder_count']} 个补充文件夹（{supplement['file_count']} 条光谱）"
                     if supplement["folder_count"]
@@ -568,7 +603,10 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     if full_init_ready:
         st.success("全量 init 已生成；后续新增日期可以增量更新。")
         processed_dates = set(full_report.get("source_dates", []))
-        pending_dates = [date_name for date_name in eligible_dates if date_name not in processed_dates]
+        pending_dates = [
+            date_name for date_name in eligible_dates
+            if date_name not in processed_dates and (context.shift_root / date_name).is_dir()
+        ]
         if pending_dates:
             st.subheader("增量更新 init")
             st.caption("只处理尚未进入全量 init 的新日期，不重复构建已有数据。")

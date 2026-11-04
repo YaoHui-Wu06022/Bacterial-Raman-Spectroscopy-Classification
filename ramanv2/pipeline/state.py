@@ -30,7 +30,6 @@ class CleaningState:
     mark_reasons: dict[str, set[str]] = field(default_factory=dict)
     completed_folder_keys: set[str] = field(default_factory=set)
     completed_date_names: set[str] = field(default_factory=set)
-    seeded_folder_keys: set[str] = field(default_factory=set)
     folder_page_indices: dict[str, int] = field(default_factory=dict)
     committed_paths: set[str] = field(default_factory=set)
 
@@ -50,7 +49,6 @@ class CleaningState:
             },
             "completed_folder_keys": sorted(self.completed_folder_keys),
             "completed_date_names": sorted(self.completed_date_names),
-            "seeded_folder_keys": sorted(self.seeded_folder_keys),
             "folder_page_indices": dict(sorted(self.folder_page_indices.items())),
             "committed_paths": sorted(self.committed_paths),
         }
@@ -101,7 +99,6 @@ class CleaningState:
             mark_reasons=mark_reasons,
             completed_folder_keys=read_paths("completed_folder_keys"),
             completed_date_names=read_paths("completed_date_names"),
-            seeded_folder_keys=read_paths("seeded_folder_keys"),
             folder_page_indices=folder_page_indices,
             committed_paths=read_paths("committed_paths"),
         )

@@ -7,16 +7,12 @@ from ramanv2.data.calibration import affine
 from ramanv2.data.calibration.affine import (
     AUXILIARY_PEAKS,
     PRIMARY_PEAKS,
-    analyze_all_dates,
     analyze_date,
-    approve_and_apply_date,
 )
 
 
 TRUE_SCALE = 1.002
 TRUE_OFFSET = -3.5
-
-
 
 
 def _write_bead(
@@ -69,20 +65,6 @@ def test_analyze_date_recovers_affine_and_writes_bead_plots(tmp_path: Path) -> N
     shift_dir = tmp_path / "cosmic_data_shifted" / "20240101" / "shift"
     assert (shift_dir / "affine.json").is_file()
     assert len(list(shift_dir.glob("*_calibration.png"))) == 3
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_failed_rerun_preserves_previous_shift(tmp_path: Path, monkeypatch) -> None:

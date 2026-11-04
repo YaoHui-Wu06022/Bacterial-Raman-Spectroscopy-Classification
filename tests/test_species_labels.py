@@ -5,11 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from ramanv2.data.runtime.index import DatasetIndex
-from ramanv2.training.split import (
-    build_global_train_task,
-    build_parent_train_task,
-    split_by_lowest_level_ratio,
-)
+from ramanv2.training.split import build_global_train_task, build_parent_train_task
 
 
 def _write_group(root: Path, relative: str, count: int = 3) -> None:
@@ -51,7 +47,3 @@ def test_species_merge_dates_and_case_without_merging_sources(tmp_path):
     assert sorted(np.bincount(parent_task.weight_labels).tolist()) == [3, 6]
     other_id = index.label_maps_by_level[0]["OtherGenus"]
     assert build_parent_train_task(index, "level_2", other_id, indices, indices) is None
-
-
-
-

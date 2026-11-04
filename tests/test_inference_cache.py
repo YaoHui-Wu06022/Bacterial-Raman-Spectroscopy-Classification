@@ -52,5 +52,3 @@ def test_test_cache_reuses_unchanged_files_and_rebuilds_changed_file(tmp_path: P
     loaded = load_test_cache(cache, ["GN01"], predictor)
     payload = torch.load(loaded[0].files[0].path, map_location="cpu")
     assert payload["input"].shape == (1, 1, 2)
-
-

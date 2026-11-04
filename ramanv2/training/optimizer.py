@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import random
 from typing import Any
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -12,6 +14,17 @@ from ramanv2.training.spec import LoaderSpec, OptimizerSpec
 
 STEM_LEARNING_RATE_SCALE = 0.6
 HEAD_LEARNING_RATE_SCALE = 1.1
+
+
+def _seed_worker(_worker_id: int) -> None:
+    """按 PyTorch 派生的 worker 种子同步播种 NumPy 与 Python 随机数。
+
+    增强逻辑使用全局 ``np.random``；若不显式播种，各 worker 的增强序列
+    既无法复现，fork 启动时还会继承父进程的同一状态而彼此重复。
+    """
+    seed = torch.initial_seed() % (2**32)
+    np.random.seed(seed)
+    random.seed(seed)
 
 
 def build_loader(
@@ -31,6 +44,7 @@ def build_loader(
     if num_workers > 0:
         options["persistent_workers"] = loader_spec.persistent_workers_enable
         options["prefetch_factor"] = loader_spec.prefetch_factor
+        options["worker_init_fn"] = _seed_worker
     return DataLoader(dataset, **options)
 
 
@@ -73,9 +87,12 @@ def build_optimizer(
         )
     if not parameter_groups:
         raise ValueError("当前模型没有可训练参数")
+    # fused AdamW 只在 CUDA 参数上可用；CPU 路径保持默认实现。
+    use_fused_enable = parameter_groups[0]["params"][0].is_cuda
     return torch.optim.AdamW(
         parameter_groups,
         weight_decay=optimizer_spec.weight_decay,
+        fused=use_fused_enable,
     )
 
 

@@ -29,7 +29,7 @@ def build_page_context() -> PageContext:
         data_root=data_root,
         shift_root=PROJECT_ROOT / "dataset" / "shift_data",
         init_root=PROJECT_ROOT / "dataset" / "init",
-        supplement_root=PROJECT_ROOT / "补充数据",
+        supplement_root=PROJECT_ROOT / "dataset" / "extra_data",
         state_file=pipeline_state_path(PROJECT_ROOT),
         metadata_dir=pipeline_metadata_dir(PROJECT_ROOT),
         classification_workbook=PROJECT_ROOT / "dataset" / "病原菌分类与规范简称.xlsx",

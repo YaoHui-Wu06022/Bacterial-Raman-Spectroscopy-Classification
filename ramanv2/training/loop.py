@@ -332,49 +332,23 @@ def _run_train_epoch(
     diagnostic_path: Path,
     diagnostic_written_enable: bool,
 ) -> tuple[dict[str, float], bool]:
-    """训练一个 epoch，并在首个数值异常处写入有限摘要。"""
-    running_loss = 0.0
-    running_align_loss = 0.0
-    running_supcon_loss = 0.0
-    correct_count = 0
-    sample_count = 0
+    """训练一个 epoch；数值异常由梯度检查兜底，指标在 epoch 末统一回传。"""
+    running_classification = torch.zeros((), device=device)
+    running_align = torch.zeros((), device=device)
+    running_supcon = torch.zeros((), device=device)
+    correct_count = torch.zeros((), dtype=torch.long, device=device)
+    sample_count = torch.zeros((), dtype=torch.long, device=device)
     skipped_batches = 0
     amp_enable = runtime_spec.amp_enable and device.type == "cuda"
     supcon_criterion = SupConLoss(train_spec.loss.supcon_tau).to(device)
     loader_iter = tqdm(train_loader, desc=f"Epoch {epoch}/{train_spec.epochs}")
+    processed_batches = 0
     for batch_index, (inputs, labels, sample_paths) in enumerate(loader_iter):
-        inputs = inputs.to(device)
+        inputs = inputs.to(device, non_blocking=amp_enable)
         labels = labels.to(device)
         optimizer.zero_grad(set_to_none=True)
-        if not torch.isfinite(inputs).all().item():
-            skipped_batches += 1
-            diagnostic_written_enable = write_nonfinite_diagnostic(
-                diagnostic_written_enable,
-                diagnostic_path,
-                "input",
-                epoch,
-                batch_index,
-                inputs,
-                labels,
-                sample_paths,
-            )
-            continue
         with torch.autocast(device_type=device.type, enabled=amp_enable):
             logits, embeddings = model(inputs, return_embedding_enable=True)
-        if not torch.isfinite(logits).all().item() or not torch.isfinite(embeddings).all().item():
-            skipped_batches += 1
-            diagnostic_written_enable = write_nonfinite_diagnostic(
-                diagnostic_written_enable,
-                diagnostic_path,
-                "forward",
-                epoch,
-                batch_index,
-                inputs,
-                labels,
-                sample_paths,
-                tensors={"logits": logits, "embedding": embeddings},
-            )
-            continue
         loss_values = _compute_batch_losses(
             logits.float(),
             embeddings.float(),
@@ -386,21 +360,8 @@ def _run_train_epoch(
             align_weight,
             supcon_weight,
         )
-        if not torch.isfinite(loss_values["total"]).all().item():
-            skipped_batches += 1
-            diagnostic_written_enable = write_nonfinite_diagnostic(
-                diagnostic_written_enable,
-                diagnostic_path,
-                "loss",
-                epoch,
-                batch_index,
-                inputs,
-                labels,
-                sample_paths,
-                tensors={"logits": logits, "embedding": embeddings},
-                losses=loss_values,
-            )
-            continue
+        # 输入、前向和损失不再逐 batch 做 isfinite 同步；非有限梯度由
+        # ``clip_grad_norm_(error_if_nonfinite=True)`` 拦截并写入诊断。
         if not _apply_gradient_step(
             loss_values["total"],
             model,
@@ -422,27 +383,26 @@ def _run_train_epoch(
                 losses=loss_values,
             )
             continue
-        _update_ema_class_loss(train_state, loss_values, train_task, train_spec)
-        running_loss += float(loss_values["classification"].detach())
-        running_align_loss += float(loss_values["align"].detach())
-        running_supcon_loss += float(loss_values["supcon"].detach())
+        _update_ema_class_loss(train_state, loss_values, train_spec)
+        running_classification += loss_values["classification"].detach()
+        running_align += loss_values["align"].detach()
+        running_supcon += loss_values["supcon"].detach()
         valid_mask = loss_values["valid_mask"]
-        if valid_mask.any():
-            valid_logits = loss_values["logits"]
-            valid_labels = loss_values["targets"]
-            correct_count += int((valid_logits.argmax(1) == valid_labels).sum())
-            sample_count += int(valid_mask.sum())
-        loader_iter.set_postfix(
-            cls=f"{running_loss / max(batch_index + 1 - skipped_batches, 1):.4f}",
-            acc=f"{100 * correct_count / max(sample_count, 1):.2f}%",
-        )
+        correct_count += (loss_values["logits"].argmax(1) == loss_values["targets"]).sum()
+        sample_count += valid_mask.sum()
+        processed_batches += 1
+        if processed_batches % 20 == 0:
+            loader_iter.set_postfix(
+                cls=f"{float(running_classification) / processed_batches:.4f}",
+                acc=f"{100 * float(correct_count) / max(float(sample_count), 1.0):.2f}%",
+            )
 
-    effective_batches = max(len(train_loader) - skipped_batches, 1)
+    effective_batches = max(processed_batches, 1)
     return {
-        "classification_loss": running_loss / effective_batches,
-        "align_loss": align_weight * running_align_loss / effective_batches,
-        "supcon_loss": supcon_weight * running_supcon_loss / effective_batches,
-        "accuracy": correct_count / max(sample_count, 1),
+        "classification_loss": float(running_classification) / effective_batches,
+        "align_loss": align_weight * float(running_align) / effective_batches,
+        "supcon_loss": supcon_weight * float(running_supcon) / effective_batches,
+        "accuracy": float(correct_count) / max(float(sample_count), 1.0),
         "skipped_batches": float(skipped_batches),
     }, diagnostic_written_enable
 
@@ -511,24 +471,25 @@ def _apply_gradient_step(
     scaler: torch.amp.GradScaler | None,
     grad_clip_norm: float,
 ) -> bool:
-    """反向传播、可选梯度裁剪和优化器更新；异常梯度返回 ``False``。"""
+    """反向传播、梯度裁剪和优化器更新；异常梯度返回 ``False``。"""
     if scaler is None:
         total_loss.backward()
     else:
         scaler.scale(total_loss).backward()
         scaler.unscale_(optimizer)
-    if grad_clip_norm > 0:
-        try:
-            torch.nn.utils.clip_grad_norm_(
-                model.parameters(),
-                max_norm=grad_clip_norm,
-                error_if_nonfinite=True,
-            )
-        except RuntimeError:
-            if scaler is not None:
-                scaler.update()
-            optimizer.zero_grad(set_to_none=True)
-            return False
+    # 关闭裁剪时仍以 inf 阈值调用，借 error_if_nonfinite 拦截 NaN/Inf 梯度。
+    max_norm = grad_clip_norm if grad_clip_norm > 0 else float("inf")
+    try:
+        torch.nn.utils.clip_grad_norm_(
+            model.parameters(),
+            max_norm=max_norm,
+            error_if_nonfinite=True,
+        )
+    except RuntimeError:
+        if scaler is not None:
+            scaler.update()
+        optimizer.zero_grad(set_to_none=True)
+        return False
     if scaler is None:
         optimizer.step()
     else:
@@ -540,11 +501,10 @@ def _apply_gradient_step(
 def _update_ema_class_loss(
     train_state: TrainingState,
     loss_values: dict[str, torch.Tensor],
-    train_task: TrainTask,
     train_spec: TrainingSpec,
 ) -> None:
-    """用未加权交叉熵更新各类别的 EMA 难度。"""
-    if not train_spec.loss.ema_enable or not loss_values["valid_mask"].any():
+    """用未加权交叉熵更新各类别的 EMA 难度；按类别一次性向量化合并。"""
+    if not train_spec.loss.ema_enable or loss_values["targets"].numel() == 0:
         return
     with torch.no_grad():
         losses = torch.nn.functional.cross_entropy(
@@ -552,17 +512,22 @@ def _update_ema_class_loss(
             loss_values["targets"],
             reduction="none",
         )
+        targets = loss_values["targets"]
         finite_mask = torch.isfinite(losses)
-        for class_index in range(train_task.num_classes):
-            class_mask = (loss_values["targets"] == class_index) & finite_mask
-            if not class_mask.any():
-                continue
-            class_loss = losses[class_mask].mean()
-            train_state.ema_class_ce[class_index] = (
-                train_spec.loss.ema_alpha
-                * train_state.ema_class_ce[class_index]
-                + (1.0 - train_spec.loss.ema_alpha) * class_loss
-            )
+        safe_losses = torch.where(finite_mask, losses, torch.zeros_like(losses))
+        counts = torch.zeros_like(train_state.ema_class_ce)
+        sums = torch.zeros_like(train_state.ema_class_ce)
+        counts.scatter_add_(0, targets, finite_mask.to(counts.dtype))
+        sums.scatter_add_(0, targets, safe_losses.to(sums.dtype))
+        present_mask = counts > 0
+        if not present_mask.any():
+            return
+        current_mean = sums[present_mask] / counts[present_mask]
+        ema = train_state.ema_class_ce
+        ema[present_mask] = (
+            train_spec.loss.ema_alpha * ema[present_mask]
+            + (1.0 - train_spec.loss.ema_alpha) * current_mean
+        )
 
 
 def _update_best_model(
@@ -650,9 +615,12 @@ def write_training_metrics(
 
 def _raise_if_model_parameters_are_nonfinite(model: torch.nn.Module, epoch: int) -> None:
     """在恢复后和每个 epoch 后检查模型参数是否均为有限值。"""
-    if all(torch.isfinite(parameter).all().item() for parameter in model.parameters()):
-        return
-    raise FloatingPointError(f"model parameters are non-finite after epoch={epoch}")
+    finite_mask: torch.Tensor | None = None
+    for parameter in model.parameters():
+        check = torch.isfinite(parameter).all()
+        finite_mask = check if finite_mask is None else finite_mask & check
+    if finite_mask is not None and not bool(finite_mask.item()):
+        raise FloatingPointError(f"model parameters are non-finite after epoch={epoch}")
 
 
 def _zero_loss(values: torch.Tensor) -> torch.Tensor:

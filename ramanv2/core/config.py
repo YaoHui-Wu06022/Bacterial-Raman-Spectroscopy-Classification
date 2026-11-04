@@ -12,7 +12,7 @@ from typing import Any, Mapping
 from ramanv2.core.hierarchy_meta import LABEL_SCHEMA
 
 
-DEFAULT_BAD_BANDS = ((890.0, 950.0),)
+DEFAULT_BAD_BANDS = ((900.0, 940.0),)
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,7 @@ class InputConfig:
     norm_method: str = "snv"
     smooth_use: bool = True
     d1_use: bool = False
-    win_smooth: int = 15
+    win_smooth: int = 11
     win1: int = 15
 
 
@@ -113,11 +113,10 @@ class TrainingConfig:
     early_stop_w_acc: float = 0.4
     # 训练集随机增强的触发概率与单样本叠加上限。
     p_piecewise_gain: float = 0.40
-    p_noise: float = 0.70
+    p_noise: float = 0.55
     p_axis: float = 0.30
-    p_baseline_weak: float = 0.55
-    p_baseline_strong: float = 0.35
-    p_cut: float = 0.0
+    p_baseline_weak: float = 0.30
+    p_baseline_strong: float = 0.20
     max_pre_augs: int = 4
 
 

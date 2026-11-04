@@ -24,10 +24,11 @@ AXIS_WARP_ALPHA = 0.002
 AXIS_WARP_BETA = 1.0
 
 # 弱基线：线性项、正弦项相对振幅范围及正弦频率范围。
-BASELINE_LIN_MIN = 0.0
-BASELINE_LIN_MAX = 0.02
-BASELINE_SIN_MIN = 0.0
-BASELINE_SIN_MAX = 0.01
+# 原 0–2% / 0–1% 在 SNV 后接近空操作，抬到 2–5% / 0.5–2% 才形成真实的中等扰动。
+BASELINE_LIN_MIN = 0.02
+BASELINE_LIN_MAX = 0.05
+BASELINE_SIN_MIN = 0.005
+BASELINE_SIN_MAX = 0.02
 BASELINE_FREQ_MIN = 0.5
 BASELINE_FREQ_MAX = 2.0
 
@@ -36,12 +37,6 @@ BASELINE_STRONG_AMP_MIN = 0.05
 BASELINE_STRONG_AMP_MAX = 0.15
 BASELINE_STRONG_KNOTS_MIN = 5
 BASELINE_STRONG_KNOTS_MAX = 9
-
-# 原始强度上的局部遮罩参数。
-MASK_WIDTH_MIN = 20
-MASK_WIDTH_MAX = 50
-MASK_ATTEN_MIN = 0.5
-MASK_ATTEN_MAX = 0.8
 
 
 @dataclass(frozen=True)
@@ -53,7 +48,6 @@ class AugmentationSpec:
     p_axis: float
     p_baseline_weak: float
     p_baseline_strong: float
-    p_cut: float
     max_pre_augs: int
 
 
@@ -65,7 +59,6 @@ def build_augmentation_spec(training_config: TrainingConfig) -> AugmentationSpec
         p_axis=float(training_config.p_axis),
         p_baseline_weak=float(training_config.p_baseline_weak),
         p_baseline_strong=float(training_config.p_baseline_strong),
-        p_cut=float(training_config.p_cut),
         max_pre_augs=int(training_config.max_pre_augs),
     )
 
@@ -81,8 +74,6 @@ def augment_raw_spectrum(values: np.ndarray, augmentation_spec: AugmentationSpec
         operations.append(augment_gaussian_noise)
     if np.random.rand() < augmentation_spec.p_axis:
         operations.append(augment_axis_warp)
-    if np.random.rand() < augmentation_spec.p_cut:
-        operations.append(augment_mask_attenuation)
     baseline_random = np.random.rand()
     if baseline_random < augmentation_spec.p_baseline_weak:
         operations.append(augment_weak_baseline)
@@ -178,22 +169,3 @@ def augment_axis_warp(values: np.ndarray) -> np.ndarray:
     )
     warped = np.clip(positions + linear + nonlinear, 0, length - 1)
     return np.interp(positions, warped, values).astype(np.float32)
-
-
-def augment_mask_attenuation(values: np.ndarray) -> np.ndarray:
-    """随机衰减一段带平滑边缘的局部谱段。"""
-    values = np.asarray(values, dtype=np.float32)
-    if MASK_WIDTH_MIN <= 0 or MASK_WIDTH_MIN >= len(values):
-        return values
-    width = int(np.random.randint(MASK_WIDTH_MIN, min(MASK_WIDTH_MAX, len(values) - 1) + 1))
-    start = int(np.random.randint(0, len(values) - width))
-    attenuation = float(np.random.uniform(MASK_ATTEN_MIN, MASK_ATTEN_MAX))
-    window = np.ones(width, dtype=np.float32)
-    edge = int(0.2 * width)
-    if edge > 0:
-        ramp = 0.5 * (1 - np.cos(np.linspace(0, np.pi, edge)))
-        window[:edge] = ramp
-        window[-edge:] = ramp[::-1]
-    augmented = values.copy()
-    augmented[start : start + width] *= attenuation * window + (1.0 - window)
-    return augmented

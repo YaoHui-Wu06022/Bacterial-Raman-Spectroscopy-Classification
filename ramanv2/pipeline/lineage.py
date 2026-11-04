@@ -285,6 +285,52 @@ def record_restore(data_root: Path | str, relative_paths: list[str] | tuple[str,
     return payload
 
 
+def record_purge(
+    data_root: Path | str,
+    relative_paths: list[str] | tuple[str, ...] | set[str],
+) -> dict[str, object]:
+    """记录人工删除区的彻底删除：文件状态改为 purged，并移除可恢复路径。"""
+    payload = load_folder_lineage(data_root)
+    now = datetime.now(timezone.utc).isoformat()
+    touched: dict[str, dict[str, object]] = {}
+    for item in relative_paths:
+        normalized = str(item).replace("\\", "/")
+        parts = normalized.split("/")
+        if len(parts) < 3:
+            continue
+        date_name, folder_name = parts[0], parts[1]
+        relative = "/".join(parts[2:])
+        record = _ensure_folder(payload, date_name, folder_name)
+        files = record.setdefault("files", {})
+        if not isinstance(files, dict):
+            files = {}
+            record["files"] = files
+        current = files.get(relative, {})
+        entry = dict(current) if isinstance(current, dict) else {}
+        entry.update({"status": "purged", "purged_at": now})
+        entry.pop("deleted_path", None)
+        files[relative] = entry
+        record.setdefault("history", []).append(
+            {"operation": "purge", "path": normalized, "recorded_at": now}
+        )
+        record["updated_at"] = now
+        touched[f"{date_name}/{folder_name}"] = record
+    for record in touched.values():
+        file_records = record.get("files", {})
+        if isinstance(file_records, dict):
+            record["active_file_count"] = sum(
+                1 for item in file_records.values()
+                if isinstance(item, dict) and item.get("status") == "active"
+            )
+            record["deleted_file_count"] = sum(
+                1 for item in file_records.values()
+                if isinstance(item, dict) and item.get("status") == "manual_deleted"
+            )
+    payload["updated_at"] = now
+    save_folder_lineage(data_root, payload)
+    return payload
+
+
 def record_affine_approval(
     data_root: Path | str,
     date_name: str,
@@ -382,15 +428,32 @@ def record_output_path(
     return payload
 
 
+def _record_has_data(root: Path, record: dict[str, object]) -> bool:
+    """按磁盘判断来源是否仍有活动、人工删除或整夹归档数据。"""
+    date_name = str(record.get("date", ""))
+    folder_name = str(record.get("folder", ""))
+    if not date_name or not folder_name:
+        return True
+    status = record.get("folder_status")
+    if status == "folder_deleted":
+        return (root / FOLDER_DELETE_RELATIVE / date_name / folder_name).is_dir()
+    if status == "manual_deleted":
+        return (root / date_name / folder_name).is_dir() or (
+            root / MANUAL_DELETE_RELATIVE / date_name / folder_name
+        ).is_dir()
+    return (root / date_name / folder_name).is_dir()
+
+
 def sync_pipeline_state_from_lineage(data_root: Path | str, state: object) -> object:
-    """只从已有走向文件刷新日期摘要，不重新扫描源数据。"""
-    payload = load_folder_lineage(data_root)
+    """只从已有走向文件刷新日期摘要，并按磁盘排除已彻底消失的来源。"""
+    root = Path(data_root).resolve()
+    payload = load_folder_lineage(root)
     folders = payload.get("folders", {})
     if not isinstance(folders, dict):
         return state
     by_date: dict[str, list[dict[str, object]]] = {}
     for record in folders.values():
-        if isinstance(record, dict):
+        if isinstance(record, dict) and _record_has_data(root, record):
             by_date.setdefault(str(record.get("date", "")), []).append(record)
     affine_dates: set[str] = set()
     init_dates: set[str] = set()
@@ -549,6 +612,7 @@ __all__ = [
     "record_folder_move",
     "record_restore",
     "record_output_path",
+    "record_purge",
     "list_lineage_folders",
     "remove_source_folder",
     "save_folder_lineage",

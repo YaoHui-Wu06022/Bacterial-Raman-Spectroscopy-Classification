@@ -80,23 +80,3 @@ def test_offset_updates_sources_and_init_preserving_audit_cs_and_profiles(tmp_pa
     saved = state_file.read_text(encoding="utf-8")
     assert "affine_compensations" not in saved
     assert (shift / DATE / "shift" / "affine.json").read_bytes() == affine_before
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -1,6 +1,6 @@
 """把人工补充数据按文件夹发布到全量 init。
 
-补充数据目录约定为 ``补充数据/<文件夹>/*.arc_data``，文件夹名前缀通过
+补充数据目录约定为 ``dataset/extra_data/<文件夹>/*.arc_data``，文件夹名前缀通过
 ``profile_catalog`` 映射到属；全量 init 重建完成后，这些文件夹会被原样写入
 ``dataset/init/<属>/<文件夹>``。该类数据没有 cosmic/shift 来源，不能由
 ``build_full_init`` 从 shift_data 生成，因此必须单独保留。
@@ -8,13 +8,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from ramanv2.common.arc_data import read_arc_data
 from ramanv2.common.naming import build_natural_key, parse_folder_prefix
-from ramanv2.data.builders.init import CANONICAL_FOLDER_PATTERN, build_spectrum_folder
+from ramanv2.data.builders.init import CANONICAL_FOLDER_PATTERN, build_full_init, build_spectrum_folder
 from ramanv2.data.catalog import DatasetMapping
+from ramanv2.data.count import summarize_dataset
 
 
 @dataclass(frozen=True)
@@ -142,10 +144,43 @@ def apply_supplement_plan(init_root: Path | str, plan: SupplementPlan) -> dict[s
     }
 
 
+def build_full_init_with_supplements(
+    shift_root: Path | str,
+    init_root: Path | str,
+    mapping: DatasetMapping,
+    completed_dates: list[str] | set[str] | tuple[str, ...],
+    plan: SupplementPlan,
+    *,
+    test_root: Path | str | None = None,
+    selected_test_folders: list[str] | set[str] | tuple[str, ...] | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+) -> dict[str, object]:
+    """按页面流程生成全量 init：先构建 shift 数据，再写入补充文件夹。
+
+    ``plan`` 需由调用方预先扫描并校验；构建完成后用包含补充数据的目录重新统计。
+    """
+    if plan.errors:
+        raise ValueError("补充数据计划有错误：" + "；".join(plan.errors))
+    report = build_full_init(
+        shift_root,
+        init_root,
+        mapping,
+        completed_dates,
+        test_root=test_root,
+        selected_test_folders=selected_test_folders,
+        progress_callback=progress_callback,
+    )
+    supplement = apply_supplement_plan(init_root, plan)
+    report["supplement"] = supplement
+    report["count"] = summarize_dataset(Path(init_root).resolve())
+    return report
+
+
 __all__ = [
     "SupplementGroup",
     "SupplementPlan",
     "apply_supplement_plan",
+    "build_full_init_with_supplements",
     "scan_supplement_plan",
     "validate_supplement_plan",
 ]

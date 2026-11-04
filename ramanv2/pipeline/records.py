@@ -346,7 +346,6 @@ def rebuild_pipeline_records(
     }
     state.cleaning.marked_paths = set()
     state.cleaning.mark_reasons = {}
-    state.cleaning.seeded_folder_keys = set()
     state.cleaning.folder_page_indices = {}
     state.cleaning.current_date_name = None
     state.cleaning.current_folder_key = None

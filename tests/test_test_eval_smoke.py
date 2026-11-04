@@ -63,7 +63,6 @@ def _build_config():
             "p_axis": 0.0,
             "p_baseline_weak": 0.0,
             "p_baseline_strong": 0.0,
-            "p_cut": 0.0,
         }
     )
 
@@ -132,4 +131,3 @@ def test_evaluate_test_set_writes_summary_for_trained_experiment(
     assert "Spectrum Accuracy" in summary_text
     assert "Folder Accuracy" in summary_text
     assert "level_1" in summary_text
-

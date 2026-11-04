@@ -31,7 +31,6 @@ from ramanv2.pipeline.cleaning import (
     reconcile_cleaning_records,
     reopen_date_review,
     scan_review_folders,
-    seed_default_marks,
     sync_folder_catalog,
     toggle_mark_path,
     unmark_paths,
@@ -39,6 +38,7 @@ from ramanv2.pipeline.cleaning import (
 from ramanv2.pipeline.restoration import (
     DeletedFolder,
     DeletedSpectrum,
+    purge_deleted_spectra,
     restore_deleted_folder,
     restore_deleted_spectra,
     scan_deleted_folders,
@@ -260,8 +260,7 @@ def _render_reopen_section(
         return
     with st.expander("重新审核已完成日期", expanded=False):
         st.caption(
-            "将清空所选日期的审核完成状态和当前标记；该日期下的文件夹会重新进入待审核队列，"
-            "新文件夹默认标记 cell1/cell2。"
+            "将清空所选日期的审核完成状态和当前标记；该日期下的文件夹会重新进入待审核队列。"
         )
         selected = st.selectbox("选择日期", completed, key="cleaning_reopen_date")
         if st.button("重新审核该日期", key="cleaning_reopen_confirm", width="stretch"):
@@ -341,7 +340,7 @@ def _render_restore_section(context: PageContext) -> None:
             # 如果位置在末尾，循环到第一个；否则选择下一个
             next_species = species_options[0] if insert_pos >= len(species_options) else species_options[insert_pos]
             st.session_state["restore_species_label"] = next_species
-            st.info(f"物种「{current_species}」的所有光谱已恢复，已自动切换到「{next_species}」。")
+            st.info(f"删除区中「{current_species}」已没有光谱，已自动切换到「{next_species}」。")
         
         species_label = st.selectbox("选择物种", species_options, key="restore_species_label")
         _, selected_prefix, selected_folder = species_map[species_label]
@@ -363,6 +362,8 @@ def _render_restore_section(context: PageContext) -> None:
             st.session_state[scope_key] = scope
             st.session_state[page_key] = 0
             st.session_state["restore_selected_paths"] = set()
+            # 切换文件夹后必须重新确认，避免沿用上一批的彻底删除确认。
+            st.session_state["restore_purge_confirm"] = False
         page_index = min(int(st.session_state.get(page_key, 0)), page_count - 1)
         selected_paths = set(st.session_state.get("restore_selected_paths", set()))
         selected_paths.intersection_update(item.relative_path for item in visible)
@@ -397,7 +398,12 @@ def _render_restore_section(context: PageContext) -> None:
                     st.session_state["restore_selected_paths"] = selected_paths
                     st.rerun()
 
-        actions = st.columns(2)
+        confirm_purge = st.checkbox(
+            "我确认彻底删除（不可恢复）",
+            key="restore_purge_confirm",
+            value=False,
+        )
+        actions = st.columns(3)
         if actions[0].button("清除当前选择", key="restore_clear_selection", width="stretch"):
             st.session_state["restore_selected_paths"] = set()
             st.rerun()
@@ -446,6 +452,40 @@ def _render_restore_section(context: PageContext) -> None:
                 st.rerun()
             except (OSError, ValueError, RuntimeError) as error:
                 st.error(f"恢复失败：{error}")
+        if actions[2].button(
+            "彻底删除",
+            key="restore_purge_confirm_button",
+            disabled=not selected_paths or not confirm_purge,
+            width="stretch",
+        ):
+            try:
+                with st.status("正在彻底删除…", expanded=True) as purge_status:
+                    st.write(f"正在永久删除 {len(selected_paths)} 条光谱，无法恢复。")
+                    st.write("正在清理变空的删除文件夹。")
+                    result = purge_deleted_spectra(
+                        context.data_root,
+                        context.state_file,
+                        selected_paths,
+                    )
+                    purge_status.update(
+                        label=f"彻底删除完成：{result['purged_file_count']} 条光谱",
+                        state="complete",
+                        expanded=False,
+                    )
+                st.session_state.pop("pipeline_state", None)
+                st.session_state["pipeline_state"] = load_page_state(context)
+                st.session_state.pop("restore_selected_paths", None)
+                st.session_state.pop("restore_purge_confirm", None)
+                st.session_state["restore_expand"] = True
+                invalidate_ui_cache("cleaning")
+                invalidate_ui_cache("dataset")
+                st.session_state["cleaning_flash"] = (
+                    f"已彻底删除 {result['purged_file_count']} 条光谱，"
+                    "删除区空文件夹已同步清理。"
+                )
+                st.rerun()
+            except (OSError, ValueError, RuntimeError) as error:
+                st.error(f"彻底删除失败：{error}")
 
 
 def _render_folder_removal_section(context: PageContext, state: PipelineState) -> None:
@@ -622,10 +662,6 @@ def render_cleaning_page(context: PageContext) -> None:
         save_page_state(context, state)
     current_index = next(index for index, folder in enumerate(folders) if folder.key == state.cleaning.current_folder_key)
     current_folder = folders[current_index]
-
-    if current_folder.key not in state.cleaning.seeded_folder_keys:
-        seed_default_marks([current_folder], state.cleaning)
-        save_page_state(context, state)
 
     page_count = max((len(current_folder.relative_paths) + PAGE_SIZE - 1) // PAGE_SIZE, 1)
     page_index = min(state.cleaning.folder_page_indices.get(current_folder.key, 0), page_count - 1)

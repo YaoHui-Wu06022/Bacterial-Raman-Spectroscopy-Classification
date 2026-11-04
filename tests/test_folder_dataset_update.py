@@ -99,25 +99,3 @@ def test_folder_update_preserves_route_numbering_and_unrelated_files(layout, mon
     assert state.dataset_builds["full_init"]["pending_dates"] == [DATE, OTHER_DATE]
     report = state.dataset_builds["full_init"]
     assert report["output_files"] == len(list(init.rglob("*.arc_data"))) + len(list((cosmic.parent / "init_test").rglob("*.arc_data")))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

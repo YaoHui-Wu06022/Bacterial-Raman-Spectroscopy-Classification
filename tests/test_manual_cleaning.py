@@ -1,21 +1,13 @@
 from pathlib import Path
 
 from ramanv2.pipeline.cleaning import (
-    commit_marked_items,
+    ReviewFolder,
     commit_date_items,
-    commit_folder_items,
     commit_paths,
-    complete_folder,
-    reconcile_cleaning_records,
-    folder_has_pending,
-    mark_paths,
-    refresh_completed_dates,
-    reopen_date_review,
     scan_review_folders,
-    seed_default_marks,
-    toggle_mark_path,
 )
-from ramanv2.pipeline.state import CleaningState, PipelineState, load_pipeline_state, save_pipeline_state
+from ramanv2.pipeline.lineage import load_folder_lineage
+from ramanv2.pipeline.state import PipelineState, save_pipeline_state
 
 
 def write_spectrum(path: Path, value: int) -> None:
@@ -42,20 +34,6 @@ def test_scan_review_folders_sorts_naturally_and_skips_special_dirs(tmp_path: Pa
     ]
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_commit_paths_moves_only_requested_folder_paths(tmp_path: Path) -> None:
     root = tmp_path / "cosmic_data"
     first = "20240101/EC01/cell1.arc_data"
@@ -70,16 +48,48 @@ def test_commit_paths_moves_only_requested_folder_paths(tmp_path: Path) -> None:
     assert (root / second).is_file()
 
 
+def test_commit_paths_permanently_deletes_bead_spectra(tmp_path: Path) -> None:
+    """小球谱直接永久删除，不进入人工删除区，也不写可恢复记录。"""
+    root = tmp_path / "cosmic_data"
+    bead = "20240101/小球/bead1.arc_data"
+    normal = "20240101/EC01/cell1.arc_data"
+    write_spectrum(root / bead, 1)
+    write_spectrum(root / normal, 2)
+    state = PipelineState()
+    state_path = tmp_path / ".raman_pipeline" / "state.json"
+
+    result = commit_paths(root, state, state_path, [bead, normal], "manual_selection")
+
+    assert set(result.moved_paths) == {bead, normal}
+    assert not (root / bead).exists()
+    assert not (root / "20240101" / "小球").exists()
+    assert not (root / "delete" / "manual" / bead).exists()
+    assert (root / "delete" / "manual" / normal).is_file()
+    assert state.cleaning.committed_paths == {normal}
 
 
+def test_commit_date_items_records_date_removal_reason(tmp_path: Path) -> None:
+    """整日删除应写入 date_remove，而不是逐谱的 manual_selection。"""
+    root = tmp_path / "cosmic_data"
+    first = "20240101/EC01/cell1.arc_data"
+    second = "20240101/EC02/cell1.arc_data"
+    write_spectrum(root / first, 1)
+    write_spectrum(root / second, 2)
+    state = PipelineState()
+    state_path = tmp_path / ".raman_pipeline" / "state.json"
+    folders = [
+        ReviewFolder("20240101/EC01", "20240101", "EC01", (first,)),
+        ReviewFolder("20240101/EC02", "20240101", "EC02", (second,)),
+    ]
 
+    commit_date_items(root, state, state_path, folders)
 
-
-
-
-
-
-
+    lineage = load_folder_lineage(root)
+    for key in ("20240101/EC01", "20240101/EC02"):
+        record = lineage["folders"][key]
+        assert record["folder_status"] == "folder_deleted"
+        assert record["history"][-1]["operation"] == "date_remove"
+        assert record["files"]["cell1.arc_data"]["reason"] == "date_remove"
 
 
 def test_save_state_retries_transient_windows_replace_lock(tmp_path: Path, monkeypatch) -> None:
@@ -101,5 +111,3 @@ def test_save_state_retries_transient_windows_replace_lock(tmp_path: Path, monke
 
     assert attempts == 3
     assert state_path.is_file()
-
-

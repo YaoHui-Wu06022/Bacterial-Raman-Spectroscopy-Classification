@@ -104,6 +104,18 @@ def _parse_change_time(value: str) -> datetime:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
+def _has_date_sources(data_root: Path, date_name: str) -> bool:
+    """日期在活动区或任一删除归档中仍有内容时返回 True。"""
+    for candidate in (
+        data_root / date_name,
+        data_root / "delete" / "manual" / date_name,
+        data_root / "delete" / "folder_delete" / date_name,
+    ):
+        if candidate.is_dir() and any(candidate.iterdir()):
+            return True
+    return False
+
+
 def _collect_folder_changes(data_root: Path) -> list[dict[str, object]]:
     """按日期/文件夹展示删除恢复批次，shift 时间只用于判断同步状态。"""
     operation_labels = {
@@ -116,6 +128,8 @@ def _collect_folder_changes(data_root: Path) -> list[dict[str, object]]:
     }
     rows = []
     for record in load_folder_lineage(data_root)["folders"].values():
+        if not _has_date_sources(data_root, str(record["date"])):
+            continue
         # 同一批次逐谱写入的历史只展示一行，删除与恢复批次分别保留。
         events = {
             (_parse_change_time(event["recorded_at"]), operation_labels[event["operation"]])
@@ -377,7 +391,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
                     if result.missing_paths:
                         st.warning(f"有 {len(result.missing_paths)} 条光谱已经不存在，其余数据已移除。")
                     else:
-                        st.success(f"已将 {date_name} 的 {len(result.moved_paths)} 条原始光谱移入人工删除目录。")
+                        st.success(f"已移除 {date_name} 的 {len(result.moved_paths)} 条原始光谱（小球谱直接删除，其余进入人工删除目录）。")
                     st.rerun()
             _render_images(report)
 
