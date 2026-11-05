@@ -1,22 +1,5 @@
 """按当前磁盘重建流水线记录（走向树 + 页面状态）。
 
-元数据（``folder_lineage.json`` / ``state.json``）被删除或与磁盘分叉后，用本模块一次性重建：
-
-- 走向树：以 ``cosmic_data`` 活动区、``delete/manual``、``delete/folder_delete`` 的目录内容
-  为准（``initialize_folder_lineage`` 本来就是磁盘派生、幂等的）；
-- 日期级仿射参数：按 ``shift_data/<日期>/shift/affine.json`` 中状态为 ``manual_approved``
-  的报告回填到该日期所有文件夹，使下游页面的门禁与磁盘一致；
-- 产物路径：``outputs`` 中指向已不存在目录的条目一律清空（init 迁到 init_test、来源整夹删除后
-  的残留路径会让下游误判产物仍在）；
-- 全量 init 摘要：按存活记录的 ``outputs`` 与磁盘计数重写 ``dataset_builds.full_init``，
-  其中 ``test_exports`` 直接取自走向记录——``init_test`` 的目录名只有 ``{前缀}{日期}_{序号}``，
-  来源名不落盘，无法从目录结构反推；
-- 页面状态：目录清单取「活动区 + 人工删除区」的文件夹（整夹删除的已不在待审核范围），
-  提交记录取 ``delete/manual`` 当前的全部相对路径。
-
-**重建不了的部分**：清洗阶段逐文件夹的审核进度、以及每次移动的操作时间戳——磁盘上没有
-留下痕迹。因此清洗完成度按派生规则给出（每个有走向记录的日期都视为清洗完成）。
-本模块不移动、不删除任何光谱文件。
 """
 
 from __future__ import annotations
