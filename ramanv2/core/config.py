@@ -37,7 +37,7 @@ class InputConfig:
     smooth_use: bool = True
     d1_use: bool = False
     win_smooth: int = 11
-    win1: int = 15
+    win1: int = 11
 
 
 @dataclass(frozen=True)

@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from ramanv2.common.arc_data import iter_arc_data_paths
 from ramanv2.common.naming import PIPELINE_RESERVED_FOLDER_NAMES, build_natural_key
-from ramanv2.common.publishing import move_files, preserve_paths
+from ramanv2.common.publishing import (
+    move_files,
+    preserve_paths,
+    remove_empty_parent_directories,
+)
 from ramanv2.pipeline.invalidation import invalidate_downstream
 from ramanv2.pipeline.lineage import (
     initialize_folder_lineage,
@@ -73,15 +77,12 @@ def scan_date_names(root_dir: Path | str) -> list[str]:
 def _collect_paths(root: Path, folder_dir: Path) -> tuple[str, ...]:
     if not folder_dir.is_dir():
         return ()
-    # scandir 的 DirEntry 在 Windows 上直接带 stat 信息，比 glob + is_file 逐个 stat 快得多。
-    with os.scandir(folder_dir) as entries:
-        names = [
-            entry.name
-            for entry in entries
-            if entry.is_file() and entry.name.endswith(".arc_data")
-        ]
+    names = sorted(
+        (path.name for path in iter_arc_data_paths(folder_dir)),
+        key=build_natural_key,
+    )
     prefix = folder_dir.relative_to(root).as_posix()
-    return tuple(f"{prefix}/{name}" for name in sorted(names, key=build_natural_key))
+    return tuple(f"{prefix}/{name}" for name in names)
 
 
 def scan_review_folders(
@@ -281,30 +282,7 @@ def complete_folder(state: CleaningState, folder: ReviewFolder) -> None:
 
 
 def _remove_empty_parents(source: Path, root: Path) -> None:
-    _remove_empty_directories(source.parent, root)
-
-
-def _remove_empty_directories(directory: Path, root: Path) -> None:
-    """删除移动光谱后留下的空文件夹，兼容采集目录的只读属性。"""
-    parent = directory
-    while parent != root and root in parent.parents:
-        if not parent.is_dir():
-            parent = parent.parent
-            continue
-        try:
-            has_entries = any(parent.iterdir())
-        except PermissionError:
-            parent.chmod(0o700)
-            has_entries = any(parent.iterdir())
-        if has_entries:
-            break
-        try:
-            parent.rmdir()
-        except PermissionError:
-            # 采集目录可能带有 Windows 只读属性，先清除后再删除。
-            parent.chmod(0o700)
-            parent.rmdir()
-        parent = parent.parent
+    remove_empty_parent_directories(source.parent, root)
 
 
 def commit_paths(
@@ -426,9 +404,9 @@ def commit_date_items(
     root = Path(root_dir).resolve()
     date_names = {folder.date_name for folder in folders}
     for folder in folders:
-        _remove_empty_directories(root / folder.date_name / folder.folder_name, root)
+        remove_empty_parent_directories(root / folder.date_name / folder.folder_name, root)
     for date_name in date_names:
-        _remove_empty_directories(root / date_name, root)
+        remove_empty_parent_directories(root / date_name, root)
         discard_removed_date(state.cleaning, date_name)
     # 整日期移除后该日期已消失，其 shift 输出由重建入口清理；审核结论保持原样。
     invalidate_downstream(state, date_names)

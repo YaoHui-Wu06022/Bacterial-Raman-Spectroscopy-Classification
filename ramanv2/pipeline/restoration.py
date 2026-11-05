@@ -17,7 +17,7 @@ from pathlib import Path
 from ramanv2.common.arc_data import read_arc_data
 from ramanv2.common.naming import build_natural_key, parse_folder_prefix
 from ramanv2.data.calibration.affine import invalidate_calibration_report
-from ramanv2.data.catalog import DatasetMapping
+from ramanv2.data.catalog import DatasetMapping, build_prefix_to_genus
 from ramanv2.pipeline.cleaning import discard_removed_date
 from ramanv2.pipeline.invalidation import invalidate_downstream
 from ramanv2.pipeline.lineage import (
@@ -57,14 +57,6 @@ class DeletedFolder:
     date_name: str
     folder_name: str
     file_count: int
-
-
-def _prefix_to_genus(mapping: DatasetMapping) -> dict[str, str]:
-    return {
-        prefix.upper(): genus
-        for genus, prefixes in mapping.genera.items()
-        for prefix in prefixes
-    }
 
 
 def _sub_directories(path: Path) -> list[os.DirEntry[str]]:
@@ -116,7 +108,7 @@ def scan_deleted_spectra(
     manual_root = root / MANUAL_DELETE_DIR
     if not manual_root.is_dir():
         return []
-    prefix_genus = _prefix_to_genus(profile_catalog)
+    prefix_genus = build_prefix_to_genus(profile_catalog)
     records: list[DeletedSpectrum] = []
     for date_entry in sorted(_sub_directories(manual_root), key=lambda entry: build_natural_key(entry.name)):
         if date_name is not None and date_entry.name != str(date_name):
@@ -302,7 +294,7 @@ def restore_deleted_spectra(
     selected = sorted(normalized, key=build_natural_key)
     if not selected:
         raise ValueError("至少选择一条需要恢复的光谱")
-    prefix_genus = _prefix_to_genus(profile_catalog)
+    prefix_genus = build_prefix_to_genus(profile_catalog)
     records = {
         item.relative_path: item
         for item in scan_deleted_spectra(root, profile_catalog, include_bead=True)

@@ -32,6 +32,28 @@ def _remove_path(path: Path) -> None:
             _remove_readonly(os.unlink, path, (type(error), error, error.__traceback__))
 
 
+def remove_empty_parent_directories(directory: Path, root: Path) -> None:
+    """自下而上删除不再包含条目的父目录，兼容 Windows 采集目录的只读属性。"""
+    parent = directory
+    while parent != root and root in parent.parents:
+        if not parent.is_dir():
+            parent = parent.parent
+            continue
+        try:
+            has_entries = any(parent.iterdir())
+        except PermissionError:
+            parent.chmod(0o700)
+            has_entries = any(parent.iterdir())
+        if has_entries:
+            break
+        try:
+            parent.rmdir()
+        except PermissionError:
+            parent.chmod(0o700)
+            parent.rmdir()
+        parent = parent.parent
+
+
 def create_temporary_path(target_path: Path | str) -> Path:
     """为目标文件或目录创建同级临时路径，调用方负责写入内容。"""
     target = Path(target_path).resolve()
@@ -231,5 +253,6 @@ __all__ = [
     "publish_files",
     "preserve_paths",
     "move_files",
+    "remove_empty_parent_directories",
     "write_text_atomic",
 ]

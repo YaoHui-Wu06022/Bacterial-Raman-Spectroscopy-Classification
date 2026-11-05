@@ -133,6 +133,15 @@ class DatasetMapping:
         }
 
 
+def build_prefix_to_genus(mapping: DatasetMapping) -> dict[str, str]:
+    """把属到前缀的映射展开为规范前缀到属的反查表。"""
+    return {
+        str(prefix).upper(): str(genus)
+        for genus, prefixes in mapping.genera.items()
+        for prefix in prefixes
+    }
+
+
 def load_dataset_mapping(path: Path | str) -> DatasetMapping:
     """读取 UTF-8 JSON 映射文件。"""
     return DatasetMapping.from_json(path)
@@ -162,6 +171,7 @@ def ensure_dataset_mapping(workbook_path: Path | str, mapping_path: Path | str) 
 
 __all__ = [
     "DatasetMapping",
+    "build_prefix_to_genus",
     "ensure_dataset_mapping",
     "load_dataset_mapping",
 ]

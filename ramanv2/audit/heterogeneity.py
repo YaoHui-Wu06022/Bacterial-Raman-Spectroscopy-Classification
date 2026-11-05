@@ -25,7 +25,7 @@ from scipy.signal import savgol_filter
 from scipy.spatial.distance import squareform
 from scipy.stats import spearmanr
 
-from ramanv2.common.arc_data import read_arc_data
+from ramanv2.common.arc_data import iter_arc_data_paths, read_arc_data
 from ramanv2.common.naming import (
     NON_TRAINING_FOLDER_NAMES,
     PIPELINE_RESERVED_FOLDER_NAMES,
@@ -33,7 +33,7 @@ from ramanv2.common.naming import (
     parse_folder_prefix,
 )
 from ramanv2.core.config import InputConfig
-from ramanv2.data.catalog import DatasetMapping
+from ramanv2.data.catalog import DatasetMapping, build_prefix_to_genus
 from ramanv2.data.config import DataBuildConfig
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.bands import build_valid_mask
@@ -294,22 +294,10 @@ def _parse_date(folder_name: str) -> str:
 def _collect_arc_files(folder: Path) -> tuple[str, ...]:
     return tuple(
         sorted(
-            (
-                path.name
-                for path in folder.iterdir()
-                if path.is_file() and path.suffix.lower() == ".arc_data"
-            ),
+            (path.name for path in iter_arc_data_paths(folder)),
             key=build_natural_key,
         )
     )
-
-
-def _prefix_to_genus(mapping: DatasetMapping) -> dict[str, str]:
-    return {
-        str(prefix).upper(): str(genus)
-        for genus, prefixes in mapping.genera.items()
-        for prefix in prefixes
-    }
 
 
 def scan_analysis_folders(
@@ -325,7 +313,7 @@ def scan_analysis_folders(
     """
     shift = Path(shift_root).resolve()
     supplement = Path(supplement_root).resolve()
-    prefix_to_genus = _prefix_to_genus(mapping)
+    prefix_to_genus = build_prefix_to_genus(mapping)
     selected_dates = None if date_names is None else {str(name) for name in date_names}
     folders: list[AnalysisFolder] = []
 

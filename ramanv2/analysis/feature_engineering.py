@@ -14,7 +14,7 @@ import matplotlib
 matplotlib.use("Agg", force=True)
 from matplotlib import pyplot as plt
 import numpy as np
-from scipy.signal import find_peaks, peak_widths, savgol_filter
+from scipy.signal import peak_widths, savgol_filter
 from sklearn.decomposition import PCA
 from sklearn.metrics import (
     accuracy_score,
@@ -29,7 +29,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC, SVC
 
-from ramanv2.common.arc_data import read_raw_arc_data
+from ramanv2.common.arc_data import list_arc_data_paths, read_raw_arc_data
 from ramanv2.common.naming import build_natural_key, parse_folder_prefix
 from ramanv2.core.config import InputConfig
 from ramanv2.data.config import DataBuildConfig
@@ -65,13 +65,21 @@ def _load_prefix_map(catalog_path: Path) -> dict[str, str]:
 def _collect_records(root: Path, prefix_map: dict[str, str]) -> list[SpectrumRecord]:
     records: list[SpectrumRecord] = []
     init_root = root / "init"
-    for path in sorted(init_root.rglob("*.arc_data"), key=lambda item: build_natural_key(item.as_posix())):
+    for path in list_arc_data_paths(
+        init_root,
+        recursive=True,
+        key=lambda item: build_natural_key(item.as_posix()),
+    ):
         folder = path.parent.name
         genus = path.parent.parent.name
         prefix = parse_folder_prefix(folder, uppercase_enable=True)
         records.append(SpectrumRecord(path, "init", genus, f"{genus}/{prefix}", folder))
     test_root = root / "init_test"
-    for path in sorted(test_root.rglob("*.arc_data"), key=lambda item: build_natural_key(item.as_posix())):
+    for path in list_arc_data_paths(
+        test_root,
+        recursive=True,
+        key=lambda item: build_natural_key(item.as_posix()),
+    ):
         folder = path.parent.name
         prefix = parse_folder_prefix(folder, uppercase_enable=True)
         genus = prefix_map.get(prefix)

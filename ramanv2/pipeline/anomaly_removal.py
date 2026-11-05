@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -33,8 +32,14 @@ from ramanv2.audit.heterogeneity import (
     HeterogeneityReport,
     SampleReport,
 )
+from ramanv2.common.arc_data import count_arc_data, iter_arc_data_paths
 from ramanv2.common.naming import NON_TRAINING_FOLDER_NAMES, build_natural_key
-from ramanv2.common.publishing import move_files, preserve_paths, write_text_atomic
+from ramanv2.common.publishing import (
+    move_files,
+    preserve_paths,
+    remove_empty_parent_directories,
+    write_text_atomic,
+)
 from ramanv2.data.catalog import DatasetMapping
 from ramanv2.pipeline.cleaning import scan_date_names, scan_review_folders
 from ramanv2.pipeline.invalidation import invalidate_downstream
@@ -81,15 +86,8 @@ class RemovalTarget:
 
 
 def _arc_data_names(folder: Path) -> set[str]:
-    """列出文件夹的直接光谱名；scandir 的缓存 stat 避免逐文件再查磁盘。"""
-    if not folder.is_dir():
-        return set()
-    with os.scandir(folder) as entries:
-        return {
-            entry.name
-            for entry in entries
-            if entry.is_file() and entry.name.endswith(".arc_data")
-        }
+    """列出文件夹的直接光谱名。"""
+    return {path.name for path in iter_arc_data_paths(folder)}
 
 
 def check_analysis_gate(
@@ -317,27 +315,6 @@ def _plot_evidence(
     plt.close(figure)
 
 
-def _remove_empty_directories(directory: Path, root: Path) -> None:
-    parent = directory
-    while parent != root and root in parent.parents:
-        if not parent.is_dir():
-            parent = parent.parent
-            continue
-        try:
-            has_entries = any(parent.iterdir())
-        except PermissionError:
-            parent.chmod(0o700)
-            has_entries = any(parent.iterdir())
-        if has_entries:
-            break
-        try:
-            parent.rmdir()
-        except PermissionError:
-            parent.chmod(0o700)
-            parent.rmdir()
-        parent = parent.parent
-
-
 def _mark_full_init_pending(state: PipelineState) -> None:
     """补充数据没有日期键，只能把全量 init 整体标记为待重建。"""
     report = state.dataset_builds.get("full_init")
@@ -366,7 +343,7 @@ def write_removal_report(metadata_dir: Path | str, archive_root: Path | str) -> 
         raise ValueError("剔除日志为空")
     latest = runs[-1]
     archive = Path(archive_root)
-    archived_count = sum(1 for _ in archive.rglob("*.arc_data"))
+    archived_count = count_arc_data(archive, recursive=True)
     figure_count = sum(1 for _ in archive.rglob("*.png"))
 
     folder_rows: dict[str, dict[str, object]] = {}
@@ -541,11 +518,11 @@ def execute_analysis_removal(
         save_pipeline_state(state_file, working)
 
         for folder in sorted(cosmic_folders, key=str):
-            _remove_empty_directories(folder, root)
+            remove_empty_parent_directories(folder, root)
         for folder in sorted(shift_folders, key=str):
-            _remove_empty_directories(folder, shift)
+            remove_empty_parent_directories(folder, shift)
         for folder in sorted(extra_folders, key=str):
-            _remove_empty_directories(folder, supplement)
+            remove_empty_parent_directories(folder, supplement)
 
         timestamp = datetime.now().astimezone().isoformat()
         commit_paths = sorted(cosmic_removed)
