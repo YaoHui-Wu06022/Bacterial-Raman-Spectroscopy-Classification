@@ -9,6 +9,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Callable
 
+from ramanv2.common.arc_data import (
+    count_arc_data,
+    has_arc_data,
+    is_arc_data_name,
+    iter_arc_data_paths,
+)
 from ramanv2.common.naming import (
     NON_TRAINING_FOLDER_NAMES,
     PIPELINE_RESERVED_FOLDER_NAMES,
@@ -30,17 +36,6 @@ from ramanv2.pipeline.state import PipelineState, save_pipeline_state
 SOURCE_RESERVED_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
 
 
-def _has_arc_data(folder: Path) -> bool:
-    """目录直接包含光谱时立即返回；scandir 的 stat 信息避免逐个文件查询。"""
-    if not folder.is_dir():
-        return False
-    with os.scandir(folder) as entries:
-        return any(
-            entry.is_file() and entry.name.endswith(".arc_data")
-            for entry in entries
-        )
-
-
 def collect_test_return_sources(init_root: Path, state: PipelineState) -> list[str]:
     """只列出仍有实际 init_test 光谱且有来源记录的目录，不扫描全量 init。"""
     report = state.dataset_builds.get("full_init")
@@ -50,7 +45,7 @@ def collect_test_return_sources(init_root: Path, state: PipelineState) -> list[s
     sources = set()
     for entry in report.get("test_exports", []):
         target = root / str(entry["target"])
-        if target.parent == root and _has_arc_data(target):
+        if target.parent == root and has_arc_data(target):
             sources.add(entry["source"])
     return sorted(sources, key=build_natural_key)
 
@@ -82,7 +77,7 @@ def collect_init_export_sources(data_root: Path, init_root: Path, state: Pipelin
             continue
         # lineage 存绝对路径；用字符串比较父目录，避免为每个组做一次 resolve 磁盘查询。
         path = Path(value)
-        if os.path.normcase(str(path.parent.parent)) != init_key or not _has_arc_data(path):
+        if os.path.normcase(str(path.parent.parent)) != init_key or not has_arc_data(path):
             continue
         sources[source_id] = f"{path.parent.name}/{path.name}"
     return dict(sorted(sources.items(), key=lambda item: build_natural_key(item[1])))
@@ -157,13 +152,13 @@ def _run_dataset_transfer(
         if outputs.get("test") and Path(outputs["test"]).resolve() != source:
             raise ValueError("init_test 路径与来源走向不一致")
         prefix = parse_folder_prefix(folder_name, uppercase_enable=True)
-    filenames = {path.name for path in source.glob("*.arc_data") if path.is_file()}
+    filenames = {path.name for path in iter_arc_data_paths(source)}
     if not filenames:
         raise ValueError("所选文件夹没有光谱")
     genus = next((name for name, prefixes in mapping.genera.items() if prefix in prefixes), None)
     if genus is None:
         raise ValueError(f"种前缀 {prefix} 未映射到属，请先补充分类名单")
-    if record.get("init_pending") or filenames != {p.name for p in (data_root / source_id).glob("*.arc_data") if p.is_file()}:
+    if record.get("init_pending") or filenames != {p.name for p in iter_arc_data_paths(data_root / source_id)}:
         raise ValueError("所选数据尚未同步源谱变更，请先按日期更新后再迁移")
     genus_dir = (init_root / genus).resolve()
     if genus_dir.parent != init_root.resolve():
@@ -242,7 +237,7 @@ def _refresh_dataset_counts(
         target = (test_root / str(entry["target"])).resolve()
         if target.parent != test_root:
             raise ValueError("无效的 init_test 输出文件夹")
-        entry["file_count"] = sum(path.is_file() for path in target.glob("*.arc_data"))
+        entry["file_count"] = count_arc_data(target)
     report["count"] = summarize_dataset(init_root) if summary is None else summary
     init_count = report["count"]["file_count"]
     test_count = sum(int(entry["file_count"]) for entry in exports)
@@ -265,7 +260,7 @@ def _refresh_dataset_counts(
     for date_name in date_names:
         dirs = date_dirs.get(date_name, [])
         date_exports = [entry for entry in exports if entry.get("date") == date_name and int(entry["file_count"]) > 0]
-        date_init_count = sum(len(list(path.glob("*.arc_data"))) for path in dirs)
+        date_init_count = sum(count_arc_data(path) for path in dirs)
         date_test_count = sum(int(entry["file_count"]) for entry in date_exports)
         date_stats[date_name] = {
             "source_files": date_init_count + date_test_count,
@@ -285,7 +280,7 @@ def _arc_entries(folder: Path, allowed_names: set[str] | None = None) -> tuple[t
         return ()
     entries = []
     for entry in os.scandir(folder):
-        if not entry.is_file() or not entry.name.lower().endswith(".arc_data"):
+        if not entry.is_file() or not is_arc_data_name(entry.name):
             continue
         if allowed_names is not None and entry.name not in allowed_names:
             continue
@@ -303,10 +298,7 @@ def _active_cosmic_folders(data_root: Path, date_name: str) -> dict[str, set[str
     for folder in date_dir.iterdir():
         if not folder.is_dir() or folder.name in SOURCE_RESERVED_NAMES or folder.name.startswith("."):
             continue
-        names = {
-            path.name for path in folder.iterdir()
-            if path.is_file() and path.suffix.lower() == ".arc_data"
-        }
+        names = {path.name for path in iter_arc_data_paths(folder)}
         if names:
             active[folder.name] = names
     return active

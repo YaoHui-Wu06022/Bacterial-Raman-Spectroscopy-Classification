@@ -14,7 +14,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ramanv2.common.arc_data import read_arc_data
+from ramanv2.common.arc_data import (
+    count_arc_data,
+    list_arc_data_paths,
+    read_arc_data,
+)
 from ramanv2.common.naming import build_natural_key, parse_folder_prefix
 from ramanv2.data.calibration.affine import invalidate_calibration_report
 from ramanv2.data.catalog import DatasetMapping, build_prefix_to_genus
@@ -32,7 +36,6 @@ MANUAL_DELETE_DIR = "delete/manual"
 FOLDER_DELETE_DIR = FOLDER_DELETE_RELATIVE.as_posix()
 RESTORE_LOG_NAME = "restore_log.jsonl"
 BEAD_DIR_NAME = "小球"
-ARC_DATA_SUFFIX = ".arc_data"
 
 
 @dataclass(frozen=True)
@@ -69,33 +72,6 @@ def _sub_directories(path: Path) -> list[os.DirEntry[str]]:
         return [entry for entry in iterator if entry.is_dir()]
 
 
-def _arc_data_entries(path: Path) -> list[os.DirEntry[str]]:
-    """列出目录中直接的 ``.arc_data`` 文件。"""
-    with os.scandir(path) as iterator:
-        return [
-            entry
-            for entry in iterator
-            if entry.is_file() and entry.name.lower().endswith(ARC_DATA_SUFFIX)
-        ]
-
-
-def _count_arc_data(path: Path) -> int:
-    """递归统计目录下的 ``.arc_data`` 数量，等价 ``rglob("*.arc_data")`` + ``is_file``。"""
-    total = 0
-    pending = [path]
-    while pending:
-        try:
-            with os.scandir(pending.pop()) as iterator:
-                for entry in iterator:
-                    if entry.is_dir():
-                        pending.append(Path(entry.path))
-                    elif entry.is_file() and entry.name.lower().endswith(ARC_DATA_SUFFIX):
-                        total += 1
-        except OSError:
-            continue
-    return total
-
-
 def scan_deleted_spectra(
     data_root: Path | str,
     profile_catalog: DatasetMapping,
@@ -126,9 +102,9 @@ def scan_deleted_spectra(
             genus = prefix_genus.get(prefix, "")
             if species_name is not None and species_name not in {genus, prefix, folder_name}:
                 continue
-            for source in sorted(
-                _arc_data_entries(Path(folder_entry.path)),
-                key=lambda entry: build_natural_key(entry.name),
+            for source in list_arc_data_paths(
+                Path(folder_entry.path),
+                key=lambda path: build_natural_key(path.name),
             ):
                 relative = "/".join((date_entry.name, folder_name, source.name))
                 records.append(
@@ -159,7 +135,7 @@ def scan_deleted_folders(data_root: Path | str) -> list[DeletedFolder]:
             _sub_directories(Path(date_entry.path)),
             key=lambda entry: build_natural_key(entry.name),
         ):
-            file_count = _count_arc_data(Path(folder_entry.path))
+            file_count = count_arc_data(Path(folder_entry.path), recursive=True)
             if not file_count:
                 continue
             relative = f"{date_entry.name}/{folder_entry.name}"
@@ -493,8 +469,9 @@ def restore_deleted_folder(
         raise FileNotFoundError(f"整夹删除归档不存在：{archive}")
     if target.exists():
         raise FileExistsError(f"源文件夹目标已存在：{target}")
-    files = sorted(
-        (item for item in archive.rglob("*.arc_data") if item.is_file()),
+    files = list_arc_data_paths(
+        archive,
+        recursive=True,
         key=lambda item: build_natural_key(item.relative_to(archive).as_posix()),
     )
     if not files:

@@ -10,6 +10,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ramanv2.common.arc_data import has_arc_data, list_arc_data_paths
 from ramanv2.common.publishing import preserve_paths, write_text_atomic
 from ramanv2.common.naming import (
     NON_TRAINING_FOLDER_NAMES,
@@ -556,7 +557,7 @@ def has_active_source_folders(data_root: Path | str, date_name: str) -> bool:
     return any(
         folder.is_dir()
         and folder.name not in excluded
-        and any(folder.rglob("*.arc_data"))
+        and has_arc_data(folder, recursive=True)
         for folder in date_dir.iterdir()
     )
 
@@ -611,7 +612,10 @@ def remove_source_folder(
     if not source.is_dir() and not manual.is_dir():
         if not archive.is_dir():
             raise FileNotFoundError(f"源文件夹不存在：{source}")
-        paths = [f"{date_name}/{folder_name}/{path.relative_to(archive).as_posix()}" for path in sorted(archive.rglob("*.arc_data"))]
+        paths = [
+            f"{date_name}/{folder_name}/{path.relative_to(archive).as_posix()}"
+            for path in list_arc_data_paths(archive, recursive=True)
+        ]
         return {"status": "already_ready", "source_id": source_id, "moved_paths": paths}
     with preserve_paths([source, manual, archive, lineage_path(root)]):
         if manual.exists():
@@ -620,7 +624,11 @@ def remove_source_folder(
             else:
                 source.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(manual), str(source))
-        files = sorted(source.rglob("*.arc_data"), key=lambda path: build_natural_key(path.relative_to(source).as_posix()))
+        files = list_arc_data_paths(
+            source,
+            recursive=True,
+            key=lambda path: build_natural_key(path.relative_to(source).as_posix()),
+        )
         if not files:
             raise ValueError(f"源文件夹没有光谱：{source}")
         paths = [f"{date_name}/{folder_name}/{path.relative_to(source).as_posix()}" for path in files]

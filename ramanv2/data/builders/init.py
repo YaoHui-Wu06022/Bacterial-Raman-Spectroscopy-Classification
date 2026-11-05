@@ -14,7 +14,12 @@ from uuid import uuid4
 
 import numpy as np
 
-from ramanv2.common.arc_data import parse_raw_arc_data, read_arc_data
+from ramanv2.common.arc_data import (
+    has_arc_data,
+    list_arc_data_paths,
+    parse_raw_arc_data,
+    read_arc_data,
+)
 from ramanv2.common.naming import (
     NON_TRAINING_FOLDER_NAMES,
     PIPELINE_RESERVED_FOLDER_NAMES,
@@ -80,7 +85,7 @@ def build_full_init(
     }
     allowed_dates = set(completed_dates)
     blocked = [date for date in required_dates if (date not in allowed_dates or not _is_manual_approved(Path(shift_root) / date / "shift" / "affine.json")) and any(
-        path.is_dir() and path.name not in SPECIAL_NAMES and any(path.rglob("*.arc_data"))
+        path.is_dir() and path.name not in SPECIAL_NAMES and has_arc_data(path, recursive=True)
         for path in (cosmic_root / date).glob("*")
     )]
     if blocked:
@@ -118,7 +123,7 @@ def build_spectrum_folder(source_folder: Path, target_folder: Path, filenames: s
     target = target_folder.resolve()
     if target == source or source in target.parents or target in source.parents:
         raise ValueError("测试来源与输出目录不能互相包含")
-    files = sorted((path for path in source.iterdir() if path.is_file() and path.suffix.lower() == ".arc_data"), key=lambda path: build_natural_key(path.name))
+    files = list_arc_data_paths(source, key=lambda path: build_natural_key(path.name))
     if filenames is not None:
         if filenames - {path.name for path in files}:
             raise ValueError("shift 缺少活动光谱，请先更新对应 shift 文件夹")
@@ -201,9 +206,11 @@ def build_profile_datasets(
                 genus_dir = source_genera.get(genus)
                 if genus_dir is None:
                     raise ValueError(f"profile {profile_name} 引用了不存在的属目录：{genus}")
-                for source_file in sorted(genus_dir.rglob("*.arc_data"), key=lambda path: build_natural_key(path.as_posix())):
-                    if not source_file.is_file():
-                        continue
+                for source_file in list_arc_data_paths(
+                    genus_dir,
+                    recursive=True,
+                    key=lambda path: build_natural_key(path.as_posix()),
+                ):
                     _validate_spectrum(source_file)
                     relative = source_file.relative_to(source_root)
                     target = temporary / relative
@@ -302,7 +309,11 @@ def _stage_profile_test_set(
         prefix = parse_folder_prefix(folder.name, uppercase_enable=True)
         if prefix_to_genus.get(prefix) not in genera:
             continue
-        files = sorted(folder.rglob("*.arc_data"), key=lambda path: build_natural_key(path.as_posix()))
+        files = list_arc_data_paths(
+            folder,
+            recursive=True,
+            key=lambda path: build_natural_key(path.as_posix()),
+        )
         if not files:
             continue
         for source_file in files:
@@ -586,10 +597,7 @@ def _collect_source_groups(
         if source_folder_names is not None and source_dir.name not in source_folder_names:
             continue
         files = tuple(
-            sorted(
-                (path for path in source_dir.iterdir() if path.is_file() and path.suffix.lower() == ".arc_data"),
-                key=lambda path: build_natural_key(path.name),
-            )
+            list_arc_data_paths(source_dir, key=lambda path: build_natural_key(path.name))
         )
         if not files:
             continue
