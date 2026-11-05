@@ -50,7 +50,7 @@ def test_source_folder_delete_archives_and_preserves_downstream(tmp_path: Path) 
     (shift / "20240101" / "shift" / "affine.json").write_text("{}", encoding="utf-8")
     _spectrum(shift / "20240101" / "EAB01" / "remaining.arc_data", 110.0)
 
-    result = remove_source_folder(cosmic, "20240101/EAB01", shift_root=shift)
+    result = remove_source_folder(cosmic, "20240101/EAB01")
 
     assert result["status"] == "ready"
     archived = cosmic / "delete" / "folder_delete" / "20240101" / "EAB01"

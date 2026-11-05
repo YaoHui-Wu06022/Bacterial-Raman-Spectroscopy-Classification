@@ -15,14 +15,13 @@ from ramanv2.common.file_ops import (
     preserve_paths,
     remove_empty_parent_directories,
 )
-from ramanv2.pipeline.invalidation import invalidate_downstream
 from ramanv2.pipeline.lineage import (
     initialize_folder_lineage,
+    lineage_path,
     record_manual_move,
     remove_source_folder,
-    lineage_path,
 )
-from ramanv2.pipeline.state import COMMIT_LOG_NAME, CleaningState, PipelineState, write_pipeline_state
+from ramanv2.pipeline.state import COMMIT_LOG_NAME, CleaningState, PipelineState, invalidate_downstream, write_pipeline_state
 
 
 DATE_PATTERN = re.compile(r"^\d{8}$")

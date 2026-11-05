@@ -10,7 +10,7 @@ from ramanv2.data.builders.init import build_full_init
 from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.pipeline import dataset_sync
 from ramanv2.pipeline.lineage import load_folder_lineage, sync_pipeline_state_from_lineage
-from ramanv2.pipeline.shift import rebuild_shift_data
+from ramanv2.pipeline.calibration import rebuild_shift_data
 from ramanv2.pipeline.state import PipelineState, write_pipeline_state
 
 

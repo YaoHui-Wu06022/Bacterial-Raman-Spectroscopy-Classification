@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 from ramanv2.common.arc_data import read_arc_data
-from ramanv2.pipeline.shift import rebuild_shift_data
+from ramanv2.pipeline.calibration import rebuild_shift_data
 
 
 DATE = "20240101"

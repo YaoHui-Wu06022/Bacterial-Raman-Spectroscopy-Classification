@@ -587,11 +587,8 @@ def list_lineage_folders(
 def remove_source_folder(
     data_root: Path | str,
     source_id: str,
-    *,
-    shift_root: Path | str | None = None,
 ) -> dict[str, object]:
     """只归档 cosmic 整夹及其已有单谱归档；失败时恢复文件与走向记录。"""
-    del shift_root  # 保留旧调用签名，派生数据由显式重建更新。
     root = Path(data_root).resolve()
     parts = str(source_id).replace("\\\\", "/").split("/")
     if len(parts) != 2:

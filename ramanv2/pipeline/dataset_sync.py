@@ -29,7 +29,7 @@ from ramanv2.data.count import summarize_dataset
 from ramanv2.data.plots.prefix import build_prefix_plots, build_prefix_plots_for_groups
 from ramanv2.data.profiles import TEST_ROOT_NAME
 from ramanv2.pipeline.lineage import lineage_path, load_folder_lineage, write_folder_lineage
-from ramanv2.pipeline.shift import load_date_affine_parameters
+from ramanv2.pipeline.calibration import load_date_affine_parameters
 from ramanv2.pipeline.state import PipelineState, write_pipeline_state
 
 

@@ -63,7 +63,7 @@ def run_command(args: argparse.Namespace) -> int:
         return 0
     if args.command == "affine":
         from ramanv2.pipeline.calibration import run_affine_calibration
-        from ramanv2.pipeline.invalidation import invalidate_downstream
+        from ramanv2.pipeline.state import invalidate_downstream
 
         dates = args.date_names or sorted(state.cleaning.completed_date_names)
         reports = run_affine_calibration(args.source_root, dates, args.output_root)
@@ -108,8 +108,8 @@ def run_command(args: argparse.Namespace) -> int:
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     if args.command == "rebuild-shift":
-        from ramanv2.pipeline.shift import rebuild_shift_data
-        from ramanv2.pipeline.invalidation import invalidate_downstream
+        from ramanv2.pipeline.calibration import rebuild_shift_data
+        from ramanv2.pipeline.state import invalidate_downstream
 
         reports = rebuild_shift_data(
             PROJECT_ROOT / "dataset" / "cosmic_data",

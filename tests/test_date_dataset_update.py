@@ -12,7 +12,7 @@ from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.pipeline import dataset_sync
 from ramanv2.pipeline.dataset_sync import collect_date_update_candidates, run_date_dataset_update
 from ramanv2.pipeline.lineage import load_folder_lineage, record_restore
-from ramanv2.pipeline.shift import rebuild_shift_data
+from ramanv2.pipeline.calibration import rebuild_shift_data
 from ramanv2.pipeline.state import PipelineState, write_pipeline_state
 
 

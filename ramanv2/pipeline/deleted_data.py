@@ -1,9 +1,4 @@
-"""从人工清洗删除目录恢复普通光谱。
-
-恢复只作用于 ``cosmic_data`` 与清洗状态：源谱写回原位、受影响文件夹按需回到清洗队列。
-shift_data 与 init 都是可丢弃的派生数据，由各自的「重建」入口从 cosmic_data 整体生成，
-恢复流程不写 shift、不改仿射参数、不作废审核结论。
-"""
+"""从人工清洗删除目录恢复普通光谱。"""
 
 from __future__ import annotations
 
@@ -23,13 +18,12 @@ from ramanv2.common.naming import build_natural_key, parse_folder_prefix
 from ramanv2.data.calibration.affine import invalidate_calibration_report
 from ramanv2.data.dataset_mapping import DatasetMapping, build_prefix_to_genus
 from ramanv2.pipeline.cleaning import discard_removed_date
-from ramanv2.pipeline.invalidation import invalidate_downstream
 from ramanv2.pipeline.lineage import (
     FOLDER_DELETE_RELATIVE,
     record_purge,
     record_restore,
 )
-from ramanv2.pipeline.state import load_pipeline_state, write_pipeline_state
+from ramanv2.pipeline.state import invalidate_downstream, load_pipeline_state, write_pipeline_state
 
 
 MANUAL_DELETE_DIR = "delete/manual"

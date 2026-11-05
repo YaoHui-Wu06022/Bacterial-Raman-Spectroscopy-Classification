@@ -681,12 +681,10 @@ def build_corrected_date(
 
 def apply_folder_affine_compensation(
     source_root: Path | str,
-    output_root: Path | str,
     date_name: str,
     folder_offsets: dict[str, float],
 ) -> dict[str, object]:
     """按本次增量平移 cosmic 原轴及同来源归档谱，不读取或保存累计补偿。"""
-    del output_root  # 保留原调用接口；原轴平移不依赖仿射 scale。
     root = Path(source_root).resolve()
     if len(date_name) != 8 or not date_name.isascii() or not date_name.isdigit():
         raise ValueError("日期必须是八位数字")
