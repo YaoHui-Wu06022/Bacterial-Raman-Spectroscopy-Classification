@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 
-from ramanv2.core.paths import PROJECT_ROOT
+from ramanv2.common.file_ops import write_json
+from ramanv2.common.paths import PROJECT_ROOT
 from ramanv2.data.profiles import PIPELINE_PROFILE_IDS, resolve_test_root
 from ramanv2.pipeline.state import pipeline_metadata_dir, pipeline_state_path
 
@@ -47,14 +48,8 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     records.set_defaults(run_command=run_command)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Raman 前置数据流水线")
-    configure_parser(parser)
-    return parser
-
-
 def run_command(args: argparse.Namespace) -> int:
-    from ramanv2.pipeline.state import load_pipeline_state, save_pipeline_state
+    from ramanv2.pipeline.state import load_pipeline_state, write_pipeline_state
     from ramanv2.pipeline.lineage import initialize_folder_lineage, sync_pipeline_state_from_lineage
 
     state_path = pipeline_state_path(PROJECT_ROOT)
@@ -81,11 +76,11 @@ def run_command(args: argparse.Namespace) -> int:
             elif not report.get("skipped"):
                 state.affine_completed_dates.discard(date_name)
         state.dataset_builds.pop("latest", None)
-        save_pipeline_state(state_path, state)
+        write_pipeline_state(state_path, state)
         print(json.dumps(reports, ensure_ascii=False, indent=2))
         return 0
     if args.command == "init":
-        from ramanv2.data.catalog import ensure_dataset_mapping
+        from ramanv2.data.dataset_mapping import ensure_dataset_mapping
         from ramanv2.pipeline.supplement import (
             build_full_init_with_supplements,
             scan_supplement_plan,
@@ -109,7 +104,7 @@ def run_command(args: argparse.Namespace) -> int:
             selected_test_folders=args.test_folders,
         )
         state.dataset_builds["full_init"] = report
-        save_pipeline_state(state_path, state)
+        write_pipeline_state(state_path, state)
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     if args.command == "rebuild-shift":
@@ -127,13 +122,13 @@ def run_command(args: argparse.Namespace) -> int:
                 state.affine_completed_dates.add(date_name)
                 invalidate_downstream(state, [date_name])
         report_path = pipeline_metadata_dir(PROJECT_ROOT) / "shift_rebuild_report.json"
-        report_path.write_text(json.dumps(reports, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        save_pipeline_state(state_path, state)
+        write_json(report_path, reports)
+        write_pipeline_state(state_path, state)
         print(json.dumps(reports, ensure_ascii=False, indent=2))
         return 0
     if args.command == "rebuild-records":
-        from ramanv2.data.catalog import ensure_dataset_mapping
-        from ramanv2.pipeline.records import rebuild_pipeline_records
+        from ramanv2.data.dataset_mapping import ensure_dataset_mapping
+        from ramanv2.pipeline.reconcile import rebuild_pipeline_records
 
         workbook = PROJECT_ROOT / "dataset" / "病原菌分类与规范简称.xlsx"
         mapping_file = pipeline_metadata_dir(PROJECT_ROOT) / "profile_catalog.json"
@@ -148,14 +143,14 @@ def run_command(args: argparse.Namespace) -> int:
         return 0
     if args.command == "acquire":
         from ramanv2.data.builders.init import build_profile_dataset
-        from ramanv2.data.catalog import ensure_dataset_mapping
-        from ramanv2.data.profiles import get_dataset_dir, get_profile
+        from ramanv2.data.dataset_mapping import ensure_dataset_mapping
+        from ramanv2.data.profiles import resolve_dataset_dir, resolve_profile
 
         workbook = PROJECT_ROOT / "dataset" / "病原菌分类与规范简称.xlsx"
         mapping_file = pipeline_metadata_dir(PROJECT_ROOT) / "profile_catalog.json"
         catalog = ensure_dataset_mapping(workbook, mapping_file)
-        profile = get_profile(args.profile)
-        profile_root = get_dataset_dir(profile, PROJECT_ROOT) / profile.root_init
+        profile = resolve_profile(args.profile)
+        profile_root = resolve_dataset_dir(profile, PROJECT_ROOT) / profile.root_init
         report = build_profile_dataset(args.init_root, profile_root, args.profile, catalog)
         profiles = state.dataset_builds.setdefault("profiles", {})
         if not isinstance(profiles, dict):
@@ -165,7 +160,7 @@ def run_command(args: argparse.Namespace) -> int:
         plot_reports = state.dataset_builds.get("prefix_plots")
         if isinstance(plot_reports, dict):
             plot_reports.pop(args.profile, None)
-        save_pipeline_state(state_path, state)
+        write_pipeline_state(state_path, state)
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     if args.command == "plot-prefix":
@@ -177,9 +172,4 @@ def run_command(args: argparse.Namespace) -> int:
     raise RuntimeError(f"未知 pipeline 命令：{args.command}")
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    return args.run_command(args)
-
-
-__all__ = ["build_parser", "configure_parser", "main", "run_command"]
+__all__ = ["configure_parser", "run_command"]

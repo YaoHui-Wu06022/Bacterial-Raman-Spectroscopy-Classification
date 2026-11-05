@@ -11,7 +11,7 @@ from matplotlib.collections import PolyCollection
 
 from ramanv2.common.plotting import add_bad_band_spans, configure_matplotlib_fonts, shorten_class_names
 from ramanv2.spectra.axis import estimate_gap_indices
-from ramanv2.spectra.bands import normalize_bad_bands
+from ramanv2.spectra.bad_bands import normalize_bad_bands
 
 
 configure_matplotlib_fonts()
@@ -31,13 +31,13 @@ def save_task_reports(
     separate_class_plots_enable: bool,
 ) -> None:
     """写入一个模型任务的通道、层和类别波段产物。"""
-    save_channel_importance_plot(
+    write_channel_importance_plot(
         figure_dir / "channel_importance_IG.png",
         channel_names,
         channel,
         aggregate_enable=True,
     )
-    save_layer_attribution_plot(
+    write_layer_attribution_plot(
         figure_dir / "layer_importance.png",
         tuple(layer_scores),
         tuple(layer_scores.values()),
@@ -50,7 +50,7 @@ def save_task_reports(
         wavenumbers,
         row_norm,
     )
-    save_band_heatmap(
+    write_band_heatmap(
         figure_dir / "band_importance_heatmap.png",
         class_names,
         band,
@@ -84,7 +84,7 @@ def write_aggregate_reports(
         return
     weights = np.asarray([item["weight"] for item in summaries], dtype=float)
     channel = sum(item["channel"] * weight for item, weight in zip(summaries, weights)) / weights.sum()
-    save_channel_importance_plot(
+    write_channel_importance_plot(
         figure_dir / "channel_importance_IG_aggregate.png",
         channel_names,
         channel,
@@ -120,7 +120,7 @@ def write_aggregate_reports(
         wavenumbers,
         row_norm,
     )
-    save_band_heatmap(
+    write_band_heatmap(
         figure_dir / "band_importance_heatmap_aggregate.png",
         names,
         band,
@@ -145,7 +145,7 @@ def write_aggregate_reports(
             bad_bands,
             row_norm,
         )
-    save_layer_attribution_plot(
+    write_layer_attribution_plot(
         figure_dir / "layer_importance_aggregate.png",
         tuple(layers),
         tuple(layers.values()),
@@ -153,7 +153,7 @@ def write_aggregate_reports(
     )
 
 
-def save_channel_importance_plot(
+def write_channel_importance_plot(
     output_path: Path,
     channel_names: tuple[str, ...],
     values: np.ndarray,
@@ -180,7 +180,7 @@ def save_channel_importance_plot(
     plt.close(figure)
 
 
-def save_layer_attribution_plot(
+def write_layer_attribution_plot(
     output_path: Path,
     names: tuple[str, ...],
     values: tuple[float, ...],
@@ -234,7 +234,7 @@ def normalize_band_importance(values: np.ndarray, row_norm: str) -> np.ndarray:
     return normalized
 
 
-def save_band_heatmap(
+def write_band_heatmap(
     output_path: Path,
     class_names,
     importance: np.ndarray,
@@ -287,7 +287,7 @@ def save_class_band_heatmaps(
         bad_bands = ()
     for class_name, row, spectrum in zip(class_names, values, mean_spectra):
         output_path = figure_dir / f"{file_prefix}__{_build_class_plot_name(class_name)}.png"
-        save_class_band_heatmap(
+        write_class_band_heatmap(
             output_path,
             class_name,
             row,
@@ -297,7 +297,7 @@ def save_class_band_heatmaps(
         )
 
 
-def save_class_band_heatmap(
+def write_class_band_heatmap(
     output_path: Path,
     class_name: str,
     importance: np.ndarray,

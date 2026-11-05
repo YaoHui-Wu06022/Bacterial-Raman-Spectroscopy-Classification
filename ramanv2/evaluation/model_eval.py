@@ -7,8 +7,7 @@ from typing import Any
 
 import torch
 
-from ramanv2.common.run_manifest import write_run_manifest
-from ramanv2.core.runtime import resolve_device
+from ramanv2.common.device import resolve_device
 from ramanv2.data.runtime.input import InputPreprocessor
 from ramanv2.evaluation.context import (
     EvaluationContext,
@@ -18,10 +17,11 @@ from ramanv2.evaluation.context import (
     resolve_entry_path,
     resolve_level_name,
     resolve_result_dir,
+    resolve_run_class_ids,
     resolve_run_entry,
+    write_run_manifest,
 )
-from ramanv2.evaluation.report import write_model_report
-from ramanv2.evaluation.scope import resolve_run_class_ids
+from ramanv2.evaluation.metrics_report import write_model_report
 from ramanv2.inference.predictor import Predictor, load_predictor
 from ramanv2.inference.routing import predict_routed_labels
 

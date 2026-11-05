@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from ramanv2.core.paths import normalize_relpath
+from ramanv2.common.file_ops import read_json, write_json
+from ramanv2.common.hierarchy import select_parent_indices
+from ramanv2.common.paths import normalize_relpath
 
 
 DEFAULT_SPLIT_LEVEL = "leaf"
@@ -94,19 +95,23 @@ def build_parent_train_task(
 
     level_index = dataset.head_name_to_idx[resolved_level]
     parent_level_index = dataset.head_name_to_idx[parent_level]
-    task_train_indices = _select_parent_indices(
-        dataset.level_labels,
-        train_indices,
-        level_index,
-        parent_level_index,
-        parent_id,
+    task_train_indices = _freeze_indices(
+        select_parent_indices(
+            dataset.level_labels,
+            train_indices,
+            parent_index=parent_level_index,
+            level_index=level_index,
+            parent_id=parent_id,
+        )
     )
-    task_val_indices = _select_parent_indices(
-        dataset.level_labels,
-        val_indices,
-        level_index,
-        parent_level_index,
-        parent_id,
+    task_val_indices = _freeze_indices(
+        select_parent_indices(
+            dataset.level_labels,
+            val_indices,
+            parent_index=parent_level_index,
+            level_index=level_index,
+            parent_id=parent_id,
+        )
     )
     label_map = build_label_map_np(
         list(child_ids),
@@ -126,22 +131,6 @@ def build_parent_train_task(
         parent_id=int(parent_id),
         model_tag=f"{resolved_level}_{int(parent_id)}",
     )
-
-
-def _select_parent_indices(
-    labels: np.ndarray,
-    indices: np.ndarray | list[int],
-    level_index: int,
-    parent_level_index: int,
-    parent_id: int,
-) -> np.ndarray:
-    """筛选属于指定父类且当前层标签有效的样本索引。"""
-    candidate_indices = np.asarray(indices, dtype=np.int64)
-    candidate_labels = labels[candidate_indices]
-    mask = (candidate_labels[:, parent_level_index] == int(parent_id)) & (
-        candidate_labels[:, level_index] >= 0
-    )
-    return _freeze_indices(candidate_indices[mask])
 
 
 def _freeze_indices(indices: np.ndarray | list[int]) -> np.ndarray:
@@ -176,14 +165,8 @@ def save_split_files(
         normalize_relpath(Path(dataset.samples[index]).relative_to(root_dir))
         for index in val_indices
     ]
-    (target_dir / TRAIN_SPLIT_FILE_NAME).write_text(
-        json.dumps(train_files, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    (target_dir / VAL_SPLIT_FILE_NAME).write_text(
-        json.dumps(val_files, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    write_json(target_dir / TRAIN_SPLIT_FILE_NAME, train_files)
+    write_json(target_dir / VAL_SPLIT_FILE_NAME, val_files)
 
 
 def load_split_files(
@@ -197,8 +180,8 @@ def load_split_files(
     if not train_path.exists() or not val_path.exists():
         return None
 
-    train_files = json.loads(train_path.read_text(encoding="utf-8"))
-    val_files = json.loads(val_path.read_text(encoding="utf-8"))
+    train_files = read_json(train_path)
+    val_files = read_json(val_path)
     root_dir = Path(dataset.root_dir)
     index_by_path = {
         normalize_relpath(Path(path).relative_to(root_dir)): index

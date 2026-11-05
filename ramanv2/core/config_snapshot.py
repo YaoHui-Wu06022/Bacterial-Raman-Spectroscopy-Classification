@@ -10,7 +10,7 @@ from typing import Any, Mapping
 import yaml
 
 from ramanv2.core.config import Config
-from ramanv2.core.hierarchy_meta import validate_label_schema
+from ramanv2.common.hierarchy import validate_label_schema
 
 
 SHARED_CONFIG_NAME = "shared_config.yaml"
@@ -49,12 +49,12 @@ def write_yaml_dict(path: Path | str, data: Mapping[str, Any]) -> None:
         raise
 
 
-def save_shared_config(path: Path | str, config: Config) -> None:
+def write_shared_config(path: Path | str, config: Config) -> None:
     """保存实验根共享的 profile 与输入快照。"""
     write_yaml_dict(path, config.to_shared_dict())
 
 
-def save_model_config(
+def write_model_config(
     path: Path | str,
     config: Config,
     task_values: Mapping[str, Any] | None = None,
@@ -63,7 +63,7 @@ def save_model_config(
     write_yaml_dict(path, config.to_model_dict() | dict(task_values or {}))
 
 
-def save_resolved_config(
+def write_resolved_config(
     path: Path | str,
     config: Config,
     task_values: Mapping[str, Any] | None = None,

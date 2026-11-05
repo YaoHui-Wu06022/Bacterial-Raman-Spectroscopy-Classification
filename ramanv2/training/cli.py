@@ -17,13 +17,6 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     parser.set_defaults(run_command=run_command)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """构建独立执行 training 包时使用的参数解析器。"""
-    parser = argparse.ArgumentParser(description="Raman 层级模型训练")
-    configure_parser(parser)
-    return parser
-
-
 def _resolve_parent(value: str | None) -> tuple[int | None, str | None]:
     """将父类命令参数区分为稳定索引或类别名称。"""
     if value is None:
@@ -50,9 +43,3 @@ def run_command(args: argparse.Namespace) -> int:
     )
     run_training(request)
     return 0
-
-
-def main(argv: list[str] | None = None) -> int:
-    """解析并执行一次训练请求。"""
-    args = build_parser().parse_args(argv)
-    return args.run_command(args)

@@ -33,10 +33,10 @@ from ramanv2.common.naming import (
     parse_folder_prefix,
 )
 from ramanv2.core.config import InputConfig
-from ramanv2.data.catalog import DatasetMapping, build_prefix_to_genus
+from ramanv2.data.dataset_mapping import DatasetMapping, build_prefix_to_genus
 from ramanv2.data.config import DataBuildConfig
 from ramanv2.spectra.axis import build_wn_ref
-from ramanv2.spectra.bands import build_valid_mask
+from ramanv2.spectra.bad_bands import build_valid_mask
 from ramanv2.spectra.normalize import normalize_spectrum
 from ramanv2.spectra.preprocess import preprocess_single_spectrum
 
@@ -199,15 +199,6 @@ class HeterogeneityReport:
         return sum(folder.n_samples for folder in self.folders)
 
     @property
-    def auto_sample_ids(self) -> tuple[str, ...]:
-        return tuple(
-            sample.sample_id
-            for folder in self.folders
-            for sample in folder.samples
-            if sample.auto_candidate
-        )
-
-    @property
     def folders_by_key(self) -> dict[str, FolderReport]:
         return {folder.folder_key: folder for folder in self.folders}
 
@@ -366,7 +357,11 @@ def scan_analysis_folders(
             ),
             key=lambda path: build_natural_key(path.name),
         ):
-            nested = [path for path in folder_dir.rglob("*.arc_data") if path.parent != folder_dir]
+            nested = [
+                path
+                for path in iter_arc_data_paths(folder_dir, recursive=True)
+                if path.parent != folder_dir
+            ]
             if nested:
                 raise ValueError(f"补充文件夹只支持单层光谱：{folder_dir}")
             files = _collect_arc_files(folder_dir)

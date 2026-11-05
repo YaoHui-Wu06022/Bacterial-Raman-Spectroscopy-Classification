@@ -8,13 +8,13 @@ from typing import Any
 import streamlit as st
 
 from ramanv2.core.config import build_config
-from ramanv2.core.paths import PROJECT_ROOT
-from ramanv2.packaging.data_archive import build_platform_bundle
+from ramanv2.common.paths import PROJECT_ROOT
+from ramanv2.packaging.platform_bundle import build_platform_bundle
 from ramanv2.data.runtime.index import DatasetIndex
-from ramanv2.data.profiles import get_profile, list_profiles, resolve_training_dir
+from ramanv2.data.profiles import resolve_profile, list_profiles, resolve_training_dir
 from ramanv2.training.workflow import TrainRequest, run_training
-from ramanv2.ui.cache import cached_dataset_index, cached_file_bytes
-from ramanv2.ui.state import invalidate_ui_cache, ui_cache_version
+from ramanv2.ui.read_cache import cached_dataset_index, cached_file_bytes
+from ramanv2.ui.page_state import invalidate_ui_cache, ui_cache_version
 
 
 BATCH_SIZES = (8, 16, 32, 48, 64, 96, 128)
@@ -37,7 +37,7 @@ def render_hierarchical_training_page() -> None:
         index=profile_ids.index("GN") if "GN" in profile_ids else 0,
         key="training_profile",
     )
-    profile = get_profile(profile_id)
+    profile = resolve_profile(profile_id)
     train_dir = resolve_training_dir(profile_id)
     index = _load_dataset_index(train_dir)
     if index is None:

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from ramanv2.common.publishing import create_temporary_path, publish_file
+from ramanv2.common.file_ops import create_temporary_path, publish_file, read_json, write_json
 
 GRAM_PROFILE_NAMES = {"阴性": "GN", "阳性": "GP", "真菌": "FUNG"}
 REQUIRED_COLUMNS = ("革兰氏", "属英文", "规范种简称")
@@ -67,7 +67,7 @@ class DatasetMapping:
 
     @classmethod
     def from_json(cls, path: Path | str) -> "DatasetMapping":
-        return cls.from_payload(json.loads(Path(path).read_text(encoding="utf-8")))
+        return cls.from_payload(read_json(path))
 
     @classmethod
     def from_workbook(cls, workbook_path: Path | str) -> "DatasetMapping":
@@ -162,7 +162,7 @@ def ensure_dataset_mapping(workbook_path: Path | str, mapping_path: Path | str) 
     mapping = DatasetMapping.from_workbook(workbook)
     temporary = create_temporary_path(target)
     try:
-        temporary.write_text(json.dumps(mapping.to_payload(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        write_json(temporary, mapping.to_payload())
         publish_file(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)

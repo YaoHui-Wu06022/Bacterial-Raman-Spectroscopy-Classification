@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from ramanv2.training.spec import LoaderSpec, OptimizerSpec
+from ramanv2.training.train_spec import LoaderSpec, OptimizerSpec
 
 
 STEM_LEARNING_RATE_SCALE = 0.6

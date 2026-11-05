@@ -7,11 +7,11 @@ import pytest
 
 from ramanv2.common.arc_data import write_arc_data
 from ramanv2.data.builders.init import build_full_init
-from ramanv2.data.catalog import DatasetMapping
-from ramanv2.pipeline import dataset
+from ramanv2.data.dataset_mapping import DatasetMapping
+from ramanv2.pipeline import dataset_sync
 from ramanv2.pipeline.lineage import load_folder_lineage, sync_pipeline_state_from_lineage
 from ramanv2.pipeline.shift import rebuild_shift_data
-from ramanv2.pipeline.state import PipelineState, save_pipeline_state
+from ramanv2.pipeline.state import PipelineState, write_pipeline_state
 
 
 DATE = "20240101"
@@ -47,7 +47,7 @@ def layout(tmp_path):
         "full_init": report, "profiles": {"GN": {"status": "ready"}},
     })
     state_file = tmp_path / ".raman_pipeline/state.json"
-    save_pipeline_state(state_file, state)
+    write_pipeline_state(state_file, state)
     write_arc_data(tmp_path / "GN/init/old.arc_data", [600, 700], [1, 2])
     plot = tmp_path / "fig_init/Escherichia/EC.png"
     plot.parent.mkdir(parents=True)
@@ -71,9 +71,9 @@ def test_test_return_moves_only_selected_group_and_updates_future_route(layout, 
     source = root / "init_test" / _test_folder_name("EC02")
     original = (source / "a.arc_data").read_bytes()
     before = _snapshot(root)
-    monkeypatch.setattr(dataset, "build_prefix_plots_for_groups", _fake_plot)
-    assert dataset.collect_test_return_sources(init, state) == [SOURCE, SECOND]
-    result = dataset.run_test_to_init(*layout, SOURCE)
+    monkeypatch.setattr(dataset_sync, "build_prefix_plots_for_groups", _fake_plot)
+    assert dataset_sync.collect_test_return_sources(init, state) == [SOURCE, SECOND]
+    result = dataset_sync.run_test_to_init(*layout, SOURCE)
     target = init / "Escherichia" / f"EC{DATE}_02"
     assert result["target_dir"] == str(target)
     assert result["spectrum_count"] == 1
@@ -91,7 +91,7 @@ def test_test_return_moves_only_selected_group_and_updates_future_route(layout, 
     assert not record["outputs"].get("test")
     sync_pipeline_state_from_lineage(cosmic, state)
     assert DATE in state.init_generated_dates
-    assert dataset.collect_test_return_sources(init, state) == [SECOND]
+    assert dataset_sync.collect_test_return_sources(init, state) == [SECOND]
     allowed = {".raman_pipeline/state.json", ".raman_pipeline/folder_lineage.json",
                "fig_init/Escherichia/EC.png", f"init_test/{_test_folder_name('EC02')}/a.arc_data",
                f"init/Escherichia/EC{DATE}_02/a.arc_data"}

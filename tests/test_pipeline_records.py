@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ramanv2.data.catalog import DatasetMapping
-from ramanv2.pipeline.records import rebuild_pipeline_records
+from ramanv2.data.dataset_mapping import DatasetMapping
+from ramanv2.pipeline.reconcile import rebuild_pipeline_records
 from ramanv2.pipeline.state import load_pipeline_state
 
 

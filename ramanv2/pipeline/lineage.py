@@ -5,13 +5,12 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
 from ramanv2.common.arc_data import has_arc_data, list_arc_data_paths
-from ramanv2.common.publishing import preserve_paths, write_text_atomic
+from ramanv2.common.file_ops import preserve_paths, read_json, write_json
 from ramanv2.common.naming import (
     NON_TRAINING_FOLDER_NAMES,
     PIPELINE_RESERVED_FOLDER_NAMES,
@@ -37,7 +36,7 @@ def load_folder_lineage(data_root: Path | str) -> dict[str, object]:
     path = lineage_path(data_root)
     if not path.is_file():
         return {"version": LINEAGE_VERSION, "source_root": str(Path(data_root).resolve()), "folders": {}}
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = read_json(path)
     if not isinstance(payload, dict) or payload.get("version") != LINEAGE_VERSION:
         raise ValueError("folder_lineage.json 版本不受支持")
     folders = payload.get("folders", {})
@@ -46,11 +45,8 @@ def load_folder_lineage(data_root: Path | str) -> dict[str, object]:
     return payload
 
 
-def save_folder_lineage(data_root: Path | str, payload: dict[str, object]) -> None:
-    write_text_atomic(
-        lineage_path(data_root),
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-    )
+def write_folder_lineage(data_root: Path | str, payload: dict[str, object]) -> None:
+    write_json(lineage_path(data_root), payload)
 
 
 def _record_template(date_name: str, folder_name: str) -> dict[str, object]:
@@ -120,8 +116,9 @@ def initialize_folder_lineage(
             for folder_dir in sorted((item for item in date_dir.iterdir() if item.is_dir()), key=lambda item: build_natural_key(item.name)):
                 if folder_dir.name in SPECIAL_NAMES or folder_dir.name.startswith("."):
                     continue
-                files = sorted(
-                    (item for item in folder_dir.rglob("*.arc_data") if item.is_file()),
+                files = list_arc_data_paths(
+                    folder_dir,
+                    recursive=True,
                     key=lambda item: build_natural_key(item.relative_to(folder_dir).as_posix()),
                 )
                 if not files:
@@ -184,7 +181,7 @@ def initialize_folder_lineage(
         record["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-    save_folder_lineage(root, payload)
+    write_folder_lineage(root, payload)
     return payload
 
 
@@ -222,7 +219,7 @@ def record_manual_move(
         record.setdefault("history", []).append({"operation": reason, "path": relative, "recorded_at": now})
         record["updated_at"] = now
     payload["updated_at"] = now
-    save_folder_lineage(data_root, payload)
+    write_folder_lineage(data_root, payload)
     return payload
 
 
@@ -257,7 +254,7 @@ def record_folder_move(
         record.setdefault("history", []).append({"operation": "folder_remove", "path": normalized, "recorded_at": now})
         record["updated_at"] = now
     payload["updated_at"] = now
-    save_folder_lineage(data_root, payload)
+    write_folder_lineage(data_root, payload)
     return payload
 
 
@@ -324,7 +321,7 @@ def record_analysis_removal(
                 if isinstance(item, dict) and item.get("status") == "analysis_deleted"
             )
     payload["updated_at"] = now
-    save_folder_lineage(data_root, payload)
+    write_folder_lineage(data_root, payload)
     return payload
 
 
@@ -350,7 +347,7 @@ def record_restore(data_root: Path | str, relative_paths: list[str] | tuple[str,
         record["init_pending"] = True
         record["updated_at"] = now
     payload["updated_at"] = now
-    save_folder_lineage(data_root, payload)
+    write_folder_lineage(data_root, payload)
     return payload
 
 
@@ -396,7 +393,7 @@ def record_purge(
                 if isinstance(item, dict) and item.get("status") == "manual_deleted"
             )
     payload["updated_at"] = now
-    save_folder_lineage(data_root, payload)
+    write_folder_lineage(data_root, payload)
     return payload
 
 
@@ -436,7 +433,7 @@ def record_affine_approval(
             record.setdefault("history", []).append({"operation": "affine_approved", "recorded_at": now})
             record["updated_at"] = now
     payload["updated_at"] = now
-    save_folder_lineage(data_root, payload)
+    write_folder_lineage(data_root, payload)
     return payload
 
 
@@ -493,7 +490,7 @@ def record_output_path(
         test_path=test_path,
         shift_path=shift_path,
     )
-    save_folder_lineage(data_root, payload)
+    write_folder_lineage(data_root, payload)
     return payload
 
 
@@ -693,6 +690,6 @@ __all__ = [
     "record_purge",
     "list_lineage_folders",
     "remove_source_folder",
-    "save_folder_lineage",
+    "write_folder_lineage",
     "sync_pipeline_state_from_lineage",
 ]

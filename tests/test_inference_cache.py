@@ -6,7 +6,7 @@ import torch
 from ramanv2.common.arc_data import write_arc_data
 from ramanv2.core.config import InputConfig
 from ramanv2.core.input_spec import build_input_spec
-from ramanv2.inference.cache import build_test_cache, load_test_cache
+from ramanv2.inference.input_cache import build_test_cache, load_test_cache
 
 
 def _predictor() -> SimpleNamespace:

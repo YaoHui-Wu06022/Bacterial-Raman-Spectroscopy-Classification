@@ -9,7 +9,7 @@ from uuid import uuid4
 
 
 from ramanv2.common.arc_data import write_arc_data
-from ramanv2.packaging import data_archive
+from ramanv2.packaging import platform_bundle
 
 
 NOTEBOOK_PATH = Path("colab/colab_train_ramanv2.ipynb")
@@ -48,7 +48,7 @@ def test_profile_data_archive_and_notebook_restore_round_trip(tmp_path: Path) ->
     project_root = _build_project(tmp_path, with_test_enable=True)
     output = tmp_path / "data.tar.xz"
 
-    report = data_archive.build_profile_data_archive("GN", output, project_root)
+    report = platform_bundle.build_profile_data_archive("GN", output, project_root)
 
     assert report["sample_counts"] == {
         "init": 1,

@@ -6,15 +6,16 @@ import math
 from copy import deepcopy
 from pathlib import Path
 
-from ramanv2.common.publishing import preserve_paths
+from ramanv2.common.arc_data import count_arc_data, has_arc_data
+from ramanv2.common.file_ops import preserve_paths
 from ramanv2.data.calibration.affine import analyze_date, approve_and_apply_date, apply_folder_affine_compensation, load_calibration_report
-from ramanv2.pipeline.lineage import lineage_path, load_folder_lineage, save_folder_lineage, record_affine_approval, record_output_path
+from ramanv2.pipeline.lineage import lineage_path, load_folder_lineage, write_folder_lineage, record_affine_approval, record_output_path
 from ramanv2.data.builders.init import CANONICAL_FOLDER_PATTERN, build_test_folder, build_spectrum_folder
-from ramanv2.data.catalog import DatasetMapping
+from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.data.plots.prefix import build_prefix_plots_for_groups
 from ramanv2.data.profiles import TEST_ROOT_NAME
 from ramanv2.pipeline.invalidation import invalidate_downstream
-from ramanv2.pipeline.state import PipelineState, save_pipeline_state
+from ramanv2.pipeline.state import PipelineState, write_pipeline_state
 from ramanv2.pipeline.shift import load_date_affine_parameters, rebuild_shift_data, rebuild_shift_folder
 
 
@@ -41,7 +42,7 @@ def run_affine_calibration(
                 reports.append({**report, **rebuilt, "status": "manual_approved", "reused": True})
                 continue
             date_dir = source / date_name
-            if not ready and not any((date_dir / "小球").glob("*.arc_data")):
+            if not ready and not has_arc_data(date_dir / "小球"):
                 reports.append({"date": date_name, "status": "skipped", "error": "缺少小球光谱"})
                 continue
             with preserve_paths([output / date_name, lineage_path(source)]):
@@ -79,7 +80,7 @@ def run_date_rebuild(
             invalidate_downstream(working, [date_name])
         working.affine_completed_dates.add(date_name)
         working.dataset_builds.pop("latest", None)
-        save_pipeline_state(state_file, working)
+        write_pipeline_state(state_file, working)
     state.__dict__.update(working.__dict__)
     return rebuilt
 
@@ -144,7 +145,7 @@ def run_folder_offset(
         if not init_target.is_dir():
             raise ValueError("该文件夹尚未生成 init，请先按日期更新")
         plot_groups = {(init_target.parent.name, match.group(1).upper())}
-    old_count = len(list(init_target.glob("*.arc_data"))) if init_target is not None else 0
+    old_count = count_arc_data(init_target) if init_target is not None else 0
     snapshots = [*folders, shift_root / date_name / folder_name, lineage_path(root), state_file]
     snapshots.append(test_target if test_target is not None else init_target)
     snapshots.extend(figure_root / genus / f"{prefix}.png" for genus, prefix in plot_groups)
@@ -178,7 +179,7 @@ def run_folder_offset(
                 previous["count"]["file_count"] += change
             payload = load_folder_lineage(root)
             payload["folders"][source_id]["init_pending"] = False
-            save_folder_lineage(root, payload)
+            write_folder_lineage(root, payload)
             pending = set(previous.get("pending_dates", []))
             if not any(record.get("date") == date_name and record.get("init_pending") for record in payload["folders"].values()):
                 pending.discard(date_name)
@@ -187,7 +188,7 @@ def run_folder_offset(
             previous["status"] = "pending" if pending else "ready"
             build_prefix_plots_for_groups(init_root, figure_root, plot_groups)
         working.dataset_builds.pop("affine_compensations", None)
-        save_pipeline_state(state_file, working)
+        write_pipeline_state(state_file, working)
     state.__dict__.update(working.__dict__)
     return result
 

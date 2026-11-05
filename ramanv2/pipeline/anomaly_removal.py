@@ -34,13 +34,13 @@ from ramanv2.audit.heterogeneity import (
 )
 from ramanv2.common.arc_data import count_arc_data, iter_arc_data_paths
 from ramanv2.common.naming import NON_TRAINING_FOLDER_NAMES, build_natural_key
-from ramanv2.common.publishing import (
+from ramanv2.common.file_ops import (
     move_files,
     preserve_paths,
     remove_empty_parent_directories,
     write_text_atomic,
 )
-from ramanv2.data.catalog import DatasetMapping
+from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.pipeline.cleaning import scan_date_names, scan_review_folders
 from ramanv2.pipeline.invalidation import invalidate_downstream
 from ramanv2.pipeline.lineage import (
@@ -52,7 +52,7 @@ from ramanv2.pipeline.shift import load_date_affine_parameters
 from ramanv2.pipeline.state import (
     COMMIT_LOG_NAME,
     PipelineState,
-    save_pipeline_state,
+    write_pipeline_state,
 )
 from ramanv2.pipeline.supplement import scan_supplement_plan
 
@@ -515,7 +515,7 @@ def execute_analysis_removal(
             invalidate_downstream(working, dates)
         if any(target.extra_source is not None for target in targets):
             _mark_full_init_pending(working)
-        save_pipeline_state(state_file, working)
+        write_pipeline_state(state_file, working)
 
         for folder in sorted(cosmic_folders, key=str):
             remove_empty_parent_directories(folder, root)

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ramanv2.common.arc_data import iter_arc_data_paths
 from ramanv2.common.naming import PIPELINE_RESERVED_FOLDER_NAMES, build_natural_key
-from ramanv2.common.publishing import (
+from ramanv2.common.file_ops import (
     move_files,
     preserve_paths,
     remove_empty_parent_directories,
@@ -22,7 +22,7 @@ from ramanv2.pipeline.lineage import (
     remove_source_folder,
     lineage_path,
 )
-from ramanv2.pipeline.state import COMMIT_LOG_NAME, CleaningState, PipelineState, save_pipeline_state
+from ramanv2.pipeline.state import COMMIT_LOG_NAME, CleaningState, PipelineState, write_pipeline_state
 
 
 DATE_PATTERN = re.compile(r"^\d{8}$")
@@ -345,7 +345,7 @@ def commit_paths(
             _remove_empty_parents(root / relative, root)
         invalidate_downstream(working, dates)
         refresh_completed_dates(cleaning)
-        save_pipeline_state(state_path, working)
+        write_pipeline_state(state_path, working)
         if moved or purged:
             log_path = Path(state_path).parent / COMMIT_LOG_NAME
             with log_path.open("a", encoding="utf-8") as file:
@@ -357,10 +357,6 @@ def commit_paths(
     state.__dict__.update(working.__dict__)
     missing_set = set(missing)
     return CommitResult(tuple(relative for relative in normalized if relative not in missing_set), tuple(missing))
-
-
-def commit_marked_items(root_dir: Path | str, state: PipelineState, state_path: Path | str) -> CommitResult:
-    return commit_paths(root_dir, state, state_path, state.cleaning.marked_paths)
 
 
 def commit_folder_items(
@@ -386,7 +382,7 @@ def commit_folder_items(
             working.cleaning.mark_reasons.pop(path, None)
         discard_removed_folder(working.cleaning, folder)
         invalidate_downstream(working, [folder.date_name])
-        save_pipeline_state(state_path, working)
+        write_pipeline_state(state_path, working)
     state.__dict__.update(working.__dict__)
     return CommitResult(paths, ())
 
@@ -411,7 +407,7 @@ def commit_date_items(
     # 整日期移除后该日期已消失，其 shift 输出由重建入口清理；审核结论保持原样。
     invalidate_downstream(state, date_names)
     # commit_paths 已经保存过移动记录；目录清理后再保存一次，确保状态落盘顺序完整。
-    save_pipeline_state(state_path, state)
+    write_pipeline_state(state_path, state)
     return result
 
 
@@ -420,7 +416,6 @@ __all__ = [
     "ReviewFolder",
     "SPECIAL_FOLDER_NAMES",
     "SpectrumItem",
-    "commit_marked_items",
     "commit_date_items",
     "commit_folder_items",
     "commit_paths",

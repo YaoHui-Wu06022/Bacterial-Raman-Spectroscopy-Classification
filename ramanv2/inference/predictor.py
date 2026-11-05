@@ -8,14 +8,13 @@ from typing import Any, Mapping
 
 import torch
 
-from ramanv2.core.experiment_reader import RunSnapshot, load_run_snapshot
+from ramanv2.core.run_snapshot import RunSnapshot, load_run_snapshot
 from ramanv2.core.config import InputConfig
-from ramanv2.core.hierarchy import normalize_level_name, resolve_allowed_indices
-from ramanv2.core.hierarchy_meta import load_hierarchy_meta
+from ramanv2.common.hierarchy import load_hierarchy_meta, normalize_level_name, resolve_allowed_indices
 from ramanv2.core.input_spec import InputSpec, build_input_spec
-from ramanv2.core.paths import find_ancestor_dir
+from ramanv2.common.paths import find_ancestor_dir
 from ramanv2.modeling.factory import build_model, validate_model_input
-from ramanv2.modeling.spec import build_model_spec
+from ramanv2.modeling.model_spec import build_model_spec
 
 
 @dataclass(frozen=True)

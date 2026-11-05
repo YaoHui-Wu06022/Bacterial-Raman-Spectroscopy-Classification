@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ramanv2.core.paths import DATASET_ROOT
+from ramanv2.common.paths import DATASET_ROOT
 
 
 PIPELINE_PROFILE_IDS = ("MICRO", "GN", "GP", "FUNG")
@@ -46,7 +46,7 @@ def list_profiles() -> list[DatasetProfile]:
     return list(PROFILES.values())
 
 
-def get_profile(profile_key: str) -> DatasetProfile:
+def resolve_profile(profile_key: str) -> DatasetProfile:
     """按稳定 profile 名或显示数据集名解析常规 profile。"""
     try:
         return PROFILE_LOOKUP[profile_key]
@@ -54,7 +54,7 @@ def get_profile(profile_key: str) -> DatasetProfile:
         raise KeyError(f"Unknown regular dataset profile: {profile_key}") from exc
 
 
-def get_dataset_dir(profile: DatasetProfile, project_root: Path | str | None = None) -> Path:
+def resolve_dataset_dir(profile: DatasetProfile, project_root: Path | str | None = None) -> Path:
     """返回 profile 在项目数据集根目录下的目录。"""
     root = DATASET_ROOT if project_root is None else Path(project_root) / "dataset"
     return (root / profile.dataset_name).resolve()
@@ -67,8 +67,8 @@ def resolve_training_dir(
     fallback_to_init_enable: bool = True,
 ) -> Path:
     """优先解析构建后的 train 目录，缺失时使用可直接训练的 init 目录。"""
-    profile = get_profile(profile_key)
-    dataset_dir = get_dataset_dir(profile, project_root)
+    profile = resolve_profile(profile_key)
+    dataset_dir = resolve_dataset_dir(profile, project_root)
     train_dir = dataset_dir / profile.root_train_clean
     if train_dir.is_dir():
         return train_dir
@@ -82,7 +82,7 @@ def resolve_test_root(project_root: Path | str | None = None) -> Path:
     """返回全局测试母本 ``dataset/init_test``。
 
     该目录只有一层文件夹，命名形如 ``{前缀}{日期}_{来源}``；属名不入路径，
-    由 :func:`ramanv2.inference.labels.build_expected_label_lookup` 从文件夹
+    由 :func:`ramanv2.inference.test_labels.build_expected_label_lookup` 从文件夹
     前缀反查。Profile 专属测试集在构建 Profile 时由母本按前缀派生到
     ``dataset/<profile>/init_test``，不由此函数定位。
     """

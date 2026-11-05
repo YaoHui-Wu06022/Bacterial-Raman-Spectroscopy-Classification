@@ -11,16 +11,17 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
+from ramanv2.common.hierarchy import select_parent_indices
 from ramanv2.data.runtime.input import InputPreprocessor
 from ramanv2.evaluation.context import (
     EvaluationContext,
     load_evaluation_context,
     resolve_level_name,
     resolve_result_dir,
+    resolve_run_class_ids,
     resolve_run_entry,
 )
-from ramanv2.evaluation.report import write_baseline_report, write_pca_scatter
-from ramanv2.evaluation.scope import resolve_run_class_ids, select_parent_indices
+from ramanv2.evaluation.metrics_report import write_baseline_report, write_pca_scatter
 
 
 @dataclass(frozen=True)
@@ -89,16 +90,16 @@ def evaluate_baseline_parent_routed(
         train_indices = select_parent_indices(
             context.dataset_index.level_labels,
             context.train_indices,
-            parent_index,
-            level_index,
-            parent_id,
+            parent_index=parent_index,
+            level_index=level_index,
+            parent_id=parent_id,
         )
         validation_indices = select_parent_indices(
             context.dataset_index.level_labels,
             context.validation_indices,
-            parent_index,
-            level_index,
-            parent_id,
+            parent_index=parent_index,
+            level_index=level_index,
+            parent_id=parent_id,
         )
         if len(child_ids) == 1:
             valid_labels = context.dataset_index.level_labels[validation_indices, level_index]

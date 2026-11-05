@@ -30,19 +30,12 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     count.set_defaults(run_command=run_command)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """构建单独执行 data 包时使用的参数解析器。"""
-    parser = argparse.ArgumentParser(description="Raman 数据集构建工具")
-    configure_parser(parser)
-    return parser
-
-
 def _resolve_profile_dir(profile_key: str):
     """解析常规 profile 及其固定数据集目录。"""
-    from ramanv2.data.profiles import get_dataset_dir, get_profile
+    from ramanv2.data.profiles import resolve_dataset_dir, resolve_profile
 
-    profile = get_profile(profile_key)
-    return profile, get_dataset_dir(profile)
+    profile = resolve_profile(profile_key)
+    return profile, resolve_dataset_dir(profile)
 
 
 def run_command(args: argparse.Namespace) -> int:
@@ -50,7 +43,7 @@ def run_command(args: argparse.Namespace) -> int:
     profile, dataset_dir = _resolve_profile_dir(args.profile)
     if args.command == "build":
         from ramanv2.core.config import InputConfig
-        from ramanv2.data.builders.stage import build_test, build_train
+        from ramanv2.data.builders.train_test import build_test, build_train
 
         if args.build_target == "train":
             build_train(profile, dataset_dir, input_config=InputConfig())
@@ -71,9 +64,3 @@ def run_command(args: argparse.Namespace) -> int:
         plot_train(profile, dataset_dir, InputConfig())
         return 0
     raise RuntimeError(f"未知 data 命令：{args.command}")
-
-
-def main(argv: list[str] | None = None) -> int:
-    """解析并执行一个 data 子命令。"""
-    args = build_parser().parse_args(argv)
-    return args.run_command(args)

@@ -7,17 +7,18 @@ from pathlib import Path
 
 import streamlit as st
 
+from ramanv2.common.arc_data import count_arc_data, has_arc_data
 from ramanv2.pipeline.calibration import run_affine_calibration, run_date_rebuild
 from ramanv2.pipeline.cleaning import commit_date_items, reconcile_cleaning_records, scan_review_folders
 from ramanv2.pipeline.invalidation import invalidate_downstream
 from ramanv2.pipeline.lineage import has_active_source_folders, lineage_path, load_folder_lineage
 from ramanv2.pipeline.shift import rebuild_shift_data
-from ramanv2.ui.cache import cached_calibration_reports
+from ramanv2.ui.read_cache import cached_calibration_reports
 from ramanv2.ui.page_context import PageContext
-from ramanv2.ui.state import (
+from ramanv2.ui.page_state import (
     invalidate_ui_cache,
     load_page_state,
-    save_page_state,
+    write_page_state,
 )
 
 
@@ -282,7 +283,7 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
 def render_affine_calibration_page(context: PageContext) -> None:
     state = load_page_state(context)
     if reconcile_cleaning_records(context.data_root, state.cleaning):
-        save_page_state(context, state)
+        write_page_state(context, state)
     cleaned_dates = sorted(state.cleaning.completed_date_names)
     all_reports = cached_calibration_reports(
         str(context.shift_root.resolve()),
@@ -291,7 +292,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
     eligible_dates = [
         date_name for date_name in cleaned_dates
         if has_active_source_folders(context.data_root, date_name)
-        and (all_reports.get(date_name) is not None or any((context.data_root / date_name / "小球").glob("*.arc_data")))
+        and (all_reports.get(date_name) is not None or has_arc_data(context.data_root / date_name / "小球"))
     ]
     reports = {date_name: all_reports.get(date_name) for date_name in eligible_dates}
     report_affine_dates = {
@@ -302,7 +303,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
     affine_dates = sorted(report_affine_dates)
     if state.affine_completed_dates != report_affine_dates:
         state.affine_completed_dates = set(report_affine_dates)
-        save_page_state(context, state)
+        write_page_state(context, state)
     failed_dates = [
         date_name
         for date_name, report in reports.items()
@@ -358,7 +359,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
         invalidate_ui_cache("dataset")
         invalidate_ui_cache("cleaning")
         invalidate_ui_cache("affine")
-        save_page_state(context, state)
+        write_page_state(context, state)
         st.session_state["affine_analyze_reports"] = reports
         st.rerun()
     _render_analyze_reports(st.session_state.pop("affine_analyze_reports", None))
@@ -375,7 +376,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
     for date_name in pending_dates:
         report = reports.get(date_name)
         status = "待分析" if report is None else str(report.get("status", "unknown"))
-        bead_count = len(list((context.data_root / date_name / "小球").glob("*.arc_data")))
+        bead_count = count_arc_data(context.data_root / date_name / "小球")
         with st.container(border=True):
             columns = st.columns((1.2, 1.0, 1.2, 2.0))
             columns[0].markdown(f"**{date_name}**")
@@ -409,7 +410,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
                     state.dataset_builds.pop("latest", None)
                     invalidate_ui_cache("cleaning")
                     invalidate_ui_cache("dataset")
-                    save_page_state(context, state)
+                    write_page_state(context, state)
                     if result.missing_paths:
                         st.warning(f"有 {len(result.missing_paths)} 条光谱已经不存在，其余数据已移除。")
                     else:

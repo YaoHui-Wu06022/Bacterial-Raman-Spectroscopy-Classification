@@ -1,7 +1,7 @@
 """模型构建的唯一应用入口。"""
 
 from ramanv2.modeling.classifier import RamanClassifier1D
-from ramanv2.modeling.spec import ModelSpec, validate_model_spec
+from ramanv2.modeling.model_spec import ModelSpec, validate_model_spec
 
 
 def build_model(num_classes: int, model_spec: ModelSpec) -> RamanClassifier1D:

@@ -16,7 +16,7 @@ from ramanv2.audit.heterogeneity import (
     scan_analysis_folders,
     _classify_folder,
 )
-from ramanv2.data.catalog import DatasetMapping
+from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.pipeline.anomaly_removal import (
     ANALYSIS_REMOVAL_LOG_NAME,
     ANALYSIS_REMOVAL_REPORT_NAME,

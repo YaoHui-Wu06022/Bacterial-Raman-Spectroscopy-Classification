@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ramanv2.common.publishing import create_temporary_path, publish_directory
-from ramanv2.core.paths import normalize_relpath
+from ramanv2.common.file_ops import create_temporary_path, publish_directory, read_json, write_json
+from ramanv2.common.paths import normalize_relpath
 
 
 def save_or_validate_train_snapshot(dataset: Any, train_task: Any, run_context: Any) -> Path:
@@ -46,10 +45,7 @@ def save_or_validate_train_snapshot(dataset: Any, train_task: Any, run_context: 
             "config_snapshot_path": str(run_context.resolved_config_path),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        (temporary / "manifest.json").write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        write_json(temporary / "manifest.json", payload)
         publish_directory(temporary, target_dir)
     finally:
         if temporary.exists():
@@ -78,7 +74,7 @@ def _build_sample_records(dataset: Any, train_task: Any) -> list[dict[str, Any]]
 
 
 def _validate_existing_snapshot(target_dir: Path, manifest_path: Path, records: list[dict[str, Any]], train_task: Any) -> None:
-    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload = read_json(manifest_path)
     expected_paths = [item["path"] for item in records]
     actual_paths = [item.get("path") for item in payload.get("samples", [])]
     if (

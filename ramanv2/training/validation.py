@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from ramanv2.common.metrics import compute_classification_metrics
-from ramanv2.core.hierarchy import select_level_targets
+from ramanv2.common.hierarchy import select_level_targets
 from ramanv2.training.se_stats import (
     accumulate_se_stats,
     build_se_stats_accumulator,

@@ -11,11 +11,14 @@ from typing import Any
 
 import torch
 
+from ramanv2.common.file_ops import create_temporary_path, publish_directory, read_json, write_json
 from ramanv2.common.naming import build_natural_key
-from ramanv2.common.publishing import create_temporary_path, publish_directory
-from ramanv2.inference.directory import list_spectrum_paths
+from ramanv2.inference.spectrum_input import (
+    build_inference_preprocessor,
+    list_spectrum_paths,
+    preprocess_spectrum_path,
+)
 from ramanv2.inference.predictor import Predictor
-from ramanv2.inference.spectra import build_inference_preprocessor, preprocess_spectrum_path
 
 
 MANIFEST_NAME = "cache_manifest.json"
@@ -141,10 +144,7 @@ def build_test_cache(
             "folders": entries,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
-        (temporary / MANIFEST_NAME).write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        write_json(temporary / MANIFEST_NAME, manifest)
         if failures:
             raise RuntimeError("部分光谱预处理失败，缓存未发布：" + str(failures))
         publish_directory(temporary, cache)
@@ -205,7 +205,7 @@ def load_test_cache(
 def _read_manifest(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {"version": CACHE_VERSION, "folders": {}}
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = read_json(path)
     if not isinstance(payload, dict) or payload.get("version") != CACHE_VERSION:
         return {"version": CACHE_VERSION, "folders": {}}
     return payload

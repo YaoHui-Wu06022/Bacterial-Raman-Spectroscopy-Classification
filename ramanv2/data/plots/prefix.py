@@ -22,12 +22,12 @@ from ramanv2.common.naming import (
     build_natural_key,
     parse_folder_prefix,
 )
-from ramanv2.common.arc_data import read_raw_arc_data
+from ramanv2.common.arc_data import is_arc_data_name, list_arc_data_paths, read_raw_arc_data
 from ramanv2.common.plotting import add_bad_band_spans, configure_matplotlib_fonts
 from ramanv2.core.config import InputConfig
 from ramanv2.data.config import DEFAULT_BUILD_CONFIG, DataBuildConfig
 from ramanv2.spectra.axis import build_wn_ref
-from ramanv2.spectra.bands import build_valid_mask
+from ramanv2.spectra.bad_bands import build_valid_mask
 from ramanv2.spectra.normalize import normalize_spectrum
 from ramanv2.spectra.preprocess import preprocess_single_spectrum
 
@@ -213,7 +213,7 @@ def build_folder_median_curves(
     raw_curves = []
     norm_curves = []
     minmax_curves = []
-    for path in sorted(folder_dir.glob("*.arc_data")):
+    for path in list_arc_data_paths(folder_dir):
         wavenumbers, intensities, malformed_lines = read_raw_arc_data(path)
         if malformed_lines or wavenumbers.size < 2:
             continue
@@ -351,7 +351,7 @@ def _scan_folder_spectra(folder: Path) -> tuple[int, str]:
     entries = [
         (entry.name, entry.stat())
         for entry in os.scandir(folder)
-        if entry.is_file() and entry.name.lower().endswith(".arc_data")
+        if entry.is_file() and is_arc_data_name(entry.name)
     ]
     entries.sort(key=lambda item: item[0].lower())
     digest = hashlib.sha256()

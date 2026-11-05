@@ -13,10 +13,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from ramanv2.common.arc_data import read_arc_data
+from ramanv2.common.arc_data import (
+    count_arc_data,
+    is_arc_data_name,
+    list_arc_data_paths,
+    read_arc_data,
+)
 from ramanv2.common.naming import build_natural_key, parse_folder_prefix
 from ramanv2.data.builders.init import CANONICAL_FOLDER_PATTERN, build_full_init, build_spectrum_folder
-from ramanv2.data.catalog import DatasetMapping
+from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.data.count import summarize_dataset
 
 
@@ -71,8 +76,8 @@ def scan_supplement_plan(
             with os.scandir(folder) as entries:
                 for entry in entries:
                     if entry.is_dir():
-                        nested_count += sum(1 for _ in Path(entry.path).rglob("*.arc_data"))
-                    elif entry.is_file() and entry.name.lower().endswith(".arc_data"):
+                        nested_count += count_arc_data(Path(entry.path), recursive=True)
+                    elif entry.is_file() and is_arc_data_name(entry.name):
                         direct_count += 1
             if nested_count:
                 errors.append(f"{folder.name}：补充文件夹只支持单层光谱，发现 {nested_count} 条嵌套文件")
@@ -119,8 +124,8 @@ def validate_supplement_plan(plan: SupplementPlan) -> tuple[str, ...]:
     errors = list(plan.errors)
     for group in plan.groups:
         try:
-            for path in sorted(
-                (item for item in group.source_dir.iterdir() if item.is_file() and item.suffix.lower() == ".arc_data"),
+            for path in list_arc_data_paths(
+                group.source_dir,
                 key=lambda item: build_natural_key(item.name),
             ):
                 wavenumbers, intensities = read_arc_data(path)

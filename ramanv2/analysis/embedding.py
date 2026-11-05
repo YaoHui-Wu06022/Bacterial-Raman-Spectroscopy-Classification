@@ -17,7 +17,7 @@ from ramanv2.common.plotting import configure_matplotlib_fonts
 configure_matplotlib_fonts()
 
 
-def save_train_val_umap(
+def write_train_val_umap(
     model: torch.nn.Module,
     train_inputs: torch.Tensor,
     validation_inputs: torch.Tensor,

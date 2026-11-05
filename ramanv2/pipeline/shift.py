@@ -11,7 +11,7 @@ from ramanv2.common.naming import (
     PIPELINE_RESERVED_FOLDER_NAMES,
     build_natural_key,
 )
-from ramanv2.common.publishing import create_temporary_path, preserve_paths, publish_directory
+from ramanv2.common.file_ops import create_temporary_path, preserve_paths, publish_directory
 from ramanv2.data.calibration.affine import build_corrected_date, build_corrected_folder, load_calibration_report
 from ramanv2.pipeline.lineage import lineage_path, record_affine_approval, record_output_path
 

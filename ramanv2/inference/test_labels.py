@@ -6,7 +6,7 @@ from collections import Counter
 from typing import Any, Mapping
 
 from ramanv2.common.naming import parse_folder_prefix
-from ramanv2.core.hierarchy import normalize_level_name
+from ramanv2.common.hierarchy import normalize_level_name
 
 
 def build_expected_label_lookup(

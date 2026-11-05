@@ -8,12 +8,12 @@ import pytest
 
 from ramanv2.common.arc_data import write_arc_data
 from ramanv2.data.builders.init import build_full_init
-from ramanv2.data.catalog import DatasetMapping
-from ramanv2.pipeline import dataset
-from ramanv2.pipeline.dataset import collect_date_update_candidates, run_date_dataset_update
+from ramanv2.data.dataset_mapping import DatasetMapping
+from ramanv2.pipeline import dataset_sync
+from ramanv2.pipeline.dataset_sync import collect_date_update_candidates, run_date_dataset_update
 from ramanv2.pipeline.lineage import load_folder_lineage, record_restore
 from ramanv2.pipeline.shift import rebuild_shift_data
-from ramanv2.pipeline.state import PipelineState, save_pipeline_state
+from ramanv2.pipeline.state import PipelineState, write_pipeline_state
 
 
 DATE = "20240101"
@@ -53,8 +53,8 @@ def layout(tmp_path, monkeypatch):
         dataset_builds={"full_init": report},
     )
     state_file = tmp_path / ".raman_pipeline/state.json"
-    save_pipeline_state(state_file, state)
-    monkeypatch.setattr(dataset, "build_prefix_plots", lambda *args, **kwargs: [])
+    write_pipeline_state(state_file, state)
+    monkeypatch.setattr(dataset_sync, "build_prefix_plots", lambda *args, **kwargs: [])
     return cosmic, shift, init, mapping, state, state_file
 
 

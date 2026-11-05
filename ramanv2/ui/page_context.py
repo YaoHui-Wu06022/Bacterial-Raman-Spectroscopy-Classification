@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ramanv2.core.paths import PROJECT_ROOT
+from ramanv2.common.paths import PROJECT_ROOT
 from ramanv2.pipeline.state import pipeline_metadata_dir, pipeline_state_path
 
 

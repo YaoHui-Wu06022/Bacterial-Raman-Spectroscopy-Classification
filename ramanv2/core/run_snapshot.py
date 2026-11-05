@@ -7,14 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from ramanv2.core.config import Config, build_config
-from ramanv2.core.config_file import (
+from ramanv2.core.config_snapshot import (
     MODEL_CONFIG_NAME,
     RESOLVED_CONFIG_NAME,
     SHARED_CONFIG_NAME,
     read_yaml_dict,
 )
-from ramanv2.core.paths import find_ancestor_dir
-from ramanv2.core.hierarchy_meta import validate_label_schema
+from ramanv2.common.paths import find_ancestor_dir
+from ramanv2.common.hierarchy import validate_label_schema
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,5 @@
-"""离线单谱清洗的基础算子。"
+"""离线单谱清洗的基础算子。
+
 此模块只处理数值数组，不负责数据集目录遍历、日志写入或绘图。"""
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from scipy import sparse
 from scipy.signal import savgol_filter
 from scipy.sparse.linalg import spsolve
 
-from .bands import build_valid_mask, normalize_bad_bands
+from .bad_bands import build_valid_mask, normalize_bad_bands
 from .filters import median_filter_1d, odd_window_points
 
 
@@ -113,9 +114,6 @@ class CosmicRayStats:
     """记录一条光谱被局部中值替换的宇宙射线尖峰点数。"""
 
     cosmic_ray: int = 0
-
-    def __int__(self) -> int:
-        return int(self.cosmic_ray)
 
 
 def _residual_z_score(residual, valid_mask):

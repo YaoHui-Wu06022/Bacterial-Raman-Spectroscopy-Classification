@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ramanv2.analysis.embedding import save_train_val_umap
+from ramanv2.analysis.embedding import write_train_val_umap
 from ramanv2.analysis.integrated_gradients import (
     collect_task_inputs,
     compute_integrated_gradients,
@@ -17,11 +17,9 @@ from ramanv2.analysis.layer_attribution import (
     compute_layer_attribution,
     merge_layer_attribution_scores,
 )
-from ramanv2.analysis.report import save_task_reports, write_aggregate_reports
-from ramanv2.analysis.se_summary import write_se_summary
+from ramanv2.analysis.attribution_report import save_task_reports, write_aggregate_reports
 from ramanv2.analysis.task import build_parent_tasks, build_run_task
-from ramanv2.common.run_manifest import write_run_manifest
-from ramanv2.evaluation.context import load_evaluation_context, resolve_level_name
+from ramanv2.evaluation.context import load_evaluation_context, resolve_level_name, write_run_manifest
 from ramanv2.inference.predictor import load_predictor
 from ramanv2.spectra.axis import expected_wavenumbers
 
@@ -245,7 +243,7 @@ def _save_task_umap(context, task, model, device, output_path: Path) -> None:
     train_inputs, train_labels = collect_task_inputs(context, task, "train", device)
     validation_inputs, validation_labels = collect_task_inputs(context, task, "val", device)
     config = context.config.analysis
-    save_train_val_umap(
+    write_train_val_umap(
         model,
         train_inputs,
         validation_inputs,
@@ -433,3 +431,31 @@ def _aggregate_layer_scores(summaries) -> dict[str, float]:
     total = max(float(weights.sum()), 1.0)
     normalized = {name: value / total for name, value in scores.items()}
     return merge_layer_attribution_scores(normalized)
+
+
+def write_se_summary(tasks, output_path: Path) -> list[str]:
+    """汇总各分析 run 的 SE sidecar，并写入独立摘要文件。"""
+    lines = build_se_summary_lines(tasks)
+    if lines:
+        output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return lines
+
+
+def build_se_summary_lines(tasks) -> list[str]:
+    """读取 SE 通道缩放统计并整理为分析日志行。"""
+    lines: list[str] = []
+    for task in tasks:
+        model_tag = task.level_name if task.parent_id is None else f"{task.level_name}_{task.parent_id}"
+        stats_path = Path(task.run_dir) / f"{model_tag}_se_stats.pt"
+        if not stats_path.is_file():
+            continue
+        stats = torch.load(stats_path, map_location="cpu")
+        for name, values in stats.items():
+            lines.append(
+                f"{name}: mean={float(values['channel_mean'].mean()):.4f}, "
+                f"std={float(values['channel_std'].mean()):.4f}, "
+                f"min={float(values['channel_min'].min()):.4f}, "
+                f"max={float(values['channel_max'].max()):.4f}, "
+                f"samples={int(values['sample_count'])}"
+            )
+    return lines

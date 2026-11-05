@@ -12,11 +12,11 @@ import numpy as np
 from ramanv2.common.plotting import add_bad_band_spans, configure_matplotlib_fonts
 from ramanv2.common.arc_data import read_arc_data
 from ramanv2.core.config import InputConfig
-from ramanv2.core.paths import resolve_path
-from ramanv2.spectra.bands import build_valid_mask, normalize_bad_bands
+from ramanv2.common.paths import resolve_path
+from ramanv2.spectra.bad_bands import build_valid_mask, normalize_bad_bands
 from ramanv2.spectra.normalize import normalize_spectrum
 
-from ramanv2.data.io import iter_arc_dirs
+from ramanv2.data.dataset_io import iter_arc_dirs
 
 
 @dataclass(frozen=True)

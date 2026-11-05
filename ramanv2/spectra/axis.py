@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .bands import build_valid_mask
+from .bad_bands import build_valid_mask
 
 
 def build_wn_ref(cut_min, cut_max, target_points):

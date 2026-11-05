@@ -14,18 +14,18 @@ import torch
 from torch.utils.data import Subset
 
 from ramanv2.core.config import Config
-from ramanv2.core.experiment_reader import load_run_snapshot
-from ramanv2.core.hierarchy_meta import (
+from ramanv2.core.run_snapshot import load_run_snapshot
+from ramanv2.common.hierarchy import (
     assert_hierarchy_compatible,
     build_hierarchy_entry,
     build_hierarchy_meta,
     compute_split_hash,
     load_hierarchy_meta,
     merge_hierarchy_meta,
-    save_hierarchy_meta,
+    write_hierarchy_meta,
 )
 from ramanv2.core.input_spec import build_input_spec
-from ramanv2.core.paths import PROJECT_ROOT, relpath, resolve_path
+from ramanv2.common.paths import PROJECT_ROOT, relpath, resolve_path
 from ramanv2.core.run_context import (
     ExperimentContext,
     RunContext,
@@ -36,9 +36,9 @@ from ramanv2.core.run_context import (
 from ramanv2.data.runtime.augmentation import build_augmentation_spec
 from ramanv2.data.runtime.dataset import RamanDataset
 from ramanv2.data.runtime.index import DatasetIndex
-from ramanv2.data.profiles import get_profile, resolve_training_dir
+from ramanv2.data.profiles import resolve_profile, resolve_training_dir
 from ramanv2.modeling.factory import build_model, validate_model_input
-from ramanv2.modeling.spec import ModelSpec, build_model_spec
+from ramanv2.modeling.model_spec import ModelSpec, build_model_spec
 from ramanv2.training.loop import TrainArtifacts, TrainResult, run_train_loop
 from ramanv2.training.optimizer import build_loader
 from ramanv2.training.snapshot import save_or_validate_train_snapshot
@@ -50,7 +50,7 @@ from ramanv2.training.split import (
     build_train_scope,
     resolve_train_split,
 )
-from ramanv2.training.spec import (
+from ramanv2.training.train_spec import (
     ExecutionSpec,
     TrainingSpec,
     build_execution_spec,
@@ -189,7 +189,7 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
         load_hierarchy_meta(experiment_context.hierarchy_meta_path),
         current_meta,
     )
-    save_hierarchy_meta(experiment_context.hierarchy_meta_path, merged_meta)
+    write_hierarchy_meta(experiment_context.hierarchy_meta_path, merged_meta)
     return merged_meta
 
 
@@ -208,7 +208,7 @@ def _resolve_experiment_dir(request: TrainRequest, config: Config) -> Path:
     """解析当前训练使用的实验根目录，不写回配置。"""
     if request.experiment_dir is not None:
         return resolve_path(request.experiment_dir)
-    profile = get_profile(config.dataset.profile_id)
+    profile = resolve_profile(config.dataset.profile_id)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return PROJECT_ROOT / "output" / profile.dataset_name / timestamp
 

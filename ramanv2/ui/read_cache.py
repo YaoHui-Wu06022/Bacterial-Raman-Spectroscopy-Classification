@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import streamlit as st
 
+from ramanv2.common.arc_data import has_arc_data
+from ramanv2.common.file_ops import read_json
 from ramanv2.common.naming import build_natural_key
 from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.data.count import collect_taxon_counts, summarize_dataset
@@ -57,7 +58,7 @@ def cached_json_file(path_string: str, modified_ns: int, size: int) -> dict[str,
     del modified_ns, size
     path = Path(path_string)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = read_json(path)
     except (OSError, ValueError, TypeError):
         return None
     return payload if isinstance(payload, dict) else None
@@ -149,7 +150,7 @@ def cached_test_folder_names(root_dir: str, version: int) -> tuple[str, ...]:
     return tuple(
         path.name
         for path in sorted(root.iterdir(), key=lambda item: build_natural_key(item.name))
-        if path.is_dir() and any(path.glob("*.arc_data"))
+        if path.is_dir() and has_arc_data(path)
     )
 
 

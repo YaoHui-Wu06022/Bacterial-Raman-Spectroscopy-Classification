@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
+
+from ramanv2.common.file_ops import write_json
 
 
 
@@ -127,10 +128,7 @@ def write_summary_report(
 
 def write_summary_json(output_path: Path | str, summary: Mapping[str, Any]) -> None:
     """写入供页面读取的结构化推理汇总。"""
-    Path(output_path).write_text(
-        json.dumps(dict(summary), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    write_json(output_path, dict(summary))
 
 
 def plot_folder_spectra(

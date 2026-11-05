@@ -76,15 +76,15 @@ def _resolve_layer_group_name(name: str) -> str:
 
 def _build_forward_hook(storage: dict[str, torch.Tensor], name: str):
     """构建保存层输出的临时 hook。"""
-    def save_output(_module, _inputs, output) -> None:
+    def store_output(_module, _inputs, output) -> None:
         storage[name] = output[0] if isinstance(output, tuple) else output
 
-    return save_output
+    return store_output
 
 
 def _build_backward_hook(storage: dict[str, torch.Tensor], name: str):
     """构建保存层输出梯度的临时 hook。"""
-    def save_gradient(_module, _grad_inputs, grad_outputs) -> None:
+    def store_gradient(_module, _grad_inputs, grad_outputs) -> None:
         storage[name] = grad_outputs[0]
 
-    return save_gradient
+    return store_gradient

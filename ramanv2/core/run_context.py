@@ -8,15 +8,15 @@ from typing import Any, Mapping, TextIO
 
 from ramanv2.core.config import Config
 
-from ramanv2.core.config_file import (
+from ramanv2.core.config_snapshot import (
     MODEL_CONFIG_NAME,
     RESOLVED_CONFIG_NAME,
     SHARED_CONFIG_NAME,
     assert_shared_compatible,
     read_yaml_dict,
-    save_model_config,
-    save_resolved_config,
-    save_shared_config,
+    write_model_config,
+    write_resolved_config,
+    write_shared_config,
 )
 
 
@@ -79,7 +79,7 @@ def open_experiment_context(
     if shared_config_path.is_file():
         assert_shared_compatible(config, read_yaml_dict(shared_config_path))
     else:
-        save_shared_config(shared_config_path, config)
+        write_shared_config(shared_config_path, config)
     return ExperimentContext(
         experiment_dir=target_dir,
         shared_config_path=shared_config_path,
@@ -134,12 +134,12 @@ def open_run_context(
         "experiment_dir": str(experiment_context.experiment_dir),
         "run_dir": str(target_dir),
     }
-    save_model_config(
+    write_model_config(
         target_dir / MODEL_CONFIG_NAME,
         config,
         task_values=task_values,
     )
-    save_resolved_config(
+    write_resolved_config(
         target_dir / RESOLVED_CONFIG_NAME,
         config,
         task_values=task_values,

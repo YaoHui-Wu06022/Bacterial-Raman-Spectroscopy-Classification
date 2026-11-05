@@ -4,7 +4,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from ramanv2.inference.labels import build_test_input_selection
+from ramanv2.inference.test_labels import build_test_input_selection
 from ramanv2.inference.predictor import Prediction, Predictor
 from ramanv2.inference.routing import predict_routed_labels
 

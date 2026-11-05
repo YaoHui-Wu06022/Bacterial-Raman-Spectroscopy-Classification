@@ -10,7 +10,7 @@ from typing import Callable
 import numpy as np
 import torch
 
-from ramanv2.common.publishing import create_temporary_path, publish_file
+from ramanv2.common.file_ops import create_temporary_path, publish_file
 
 
 @dataclass
@@ -26,7 +26,7 @@ class TrainingState:
     checkpoint_path: Path | None = None
 
 
-def save_training_checkpoint(
+def write_training_checkpoint(
     checkpoint_path: Path | str,
     epoch: int,
     model: torch.nn.Module,

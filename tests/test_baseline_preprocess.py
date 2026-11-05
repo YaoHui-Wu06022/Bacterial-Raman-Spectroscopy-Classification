@@ -4,7 +4,7 @@ import numpy as np
 from scipy.signal import savgol_filter
 
 from ramanv2.spectra import preprocess
-from ramanv2.spectra.bands import build_valid_mask
+from ramanv2.spectra.bad_bands import build_valid_mask
 
 
 def test_bad_band_masks_isolate_airpls_and_interpolation():

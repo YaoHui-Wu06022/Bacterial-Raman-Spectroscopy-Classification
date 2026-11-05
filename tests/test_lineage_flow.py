@@ -5,13 +5,13 @@ import shutil
 from pathlib import Path
 
 from ramanv2.common.arc_data import write_arc_data
-from ramanv2.data.catalog import DatasetMapping
+from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.pipeline.lineage import (
     initialize_folder_lineage,
     list_lineage_folders,
     load_folder_lineage,
     remove_source_folder,
-    save_folder_lineage,
+    write_folder_lineage,
     sync_pipeline_state_from_lineage,
 )
 from ramanv2.pipeline.state import PipelineState
@@ -39,7 +39,7 @@ def test_source_folder_delete_archives_and_preserves_downstream(tmp_path: Path) 
     (output / "a.arc_data").write_text("100 1\n101 2\n", encoding="utf-8")
     payload = load_folder_lineage(cosmic)
     payload["folders"]["20240101/EAB01"]["outputs"]["init"] = str(output)
-    save_folder_lineage(cosmic, payload)
+    write_folder_lineage(cosmic, payload)
     run_dir = shift / "audit_runs" / "run_1"
     run_dir.mkdir(parents=True)
     (run_dir / "summary.json").write_text(
@@ -80,7 +80,7 @@ def test_sync_ignores_records_whose_data_was_permanently_removed(tmp_path: Path)
     payload["folders"]["20240102/EAB02"]["folder_status"] = "manual_deleted"
     for record in payload["folders"].values():
         record["affine"] = {"status": "approved"}
-    save_folder_lineage(cosmic, payload)
+    write_folder_lineage(cosmic, payload)
     state = PipelineState()
 
     sync_pipeline_state_from_lineage(cosmic, state)

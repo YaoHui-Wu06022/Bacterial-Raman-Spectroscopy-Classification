@@ -8,21 +8,21 @@ from typing import Any
 import streamlit as st
 
 from ramanv2.common.naming import build_natural_key, parse_folder_prefix
-from ramanv2.core.paths import PROJECT_ROOT
-from ramanv2.core.runtime import resolve_device
-from ramanv2.data.profiles import get_dataset_dir, list_profiles, resolve_test_root
-from ramanv2.inference.cache import build_test_cache
-from ramanv2.inference.labels import build_expected_label_lookup
+from ramanv2.common.paths import PROJECT_ROOT
+from ramanv2.common.device import resolve_device
+from ramanv2.data.profiles import resolve_dataset_dir, list_profiles, resolve_test_root
+from ramanv2.inference.input_cache import build_test_cache
+from ramanv2.inference.test_labels import build_expected_label_lookup
 from ramanv2.inference.predictor import load_predictor
-from ramanv2.inference.runner import run_independent_inference
-from ramanv2.ui.cache import (
+from ramanv2.inference.folder_inference import run_independent_inference
+from ramanv2.ui.read_cache import (
     cached_test_folder_names,
     cached_experiment_dirs,
     cached_json_file,
     cached_text_file,
 )
 from ramanv2.ui.formatting import format_ratio
-from ramanv2.ui.state import invalidate_ui_cache, ui_cache_version
+from ramanv2.ui.page_state import invalidate_ui_cache, ui_cache_version
 
 
 TEST_ROOT = resolve_test_root(PROJECT_ROOT)
@@ -108,7 +108,7 @@ def render_sample_inference_page() -> None:
     st.caption("样本推理会从每个文件夹随机抽取最多 10 条光谱，同一 cell 只取 1 条。")
 
     profile = next(profile for profile in profiles if profile.profile_id == profile_id)
-    cache_root = get_dataset_dir(profile, PROJECT_ROOT) / profile.root_test
+    cache_root = resolve_dataset_dir(profile, PROJECT_ROOT) / profile.root_test
     st.caption(f"测试数据缓存：{cache_root}")
     actions = st.columns(2)
     if actions[0].button("构建/更新测试数据", width="stretch"):

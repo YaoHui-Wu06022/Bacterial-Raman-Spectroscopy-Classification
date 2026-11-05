@@ -8,8 +8,8 @@ from ramanv2.data.builders.init import (
     build_init_datasets,
     build_profile_datasets,
 )
-from ramanv2.data.catalog import DatasetMapping
-from ramanv2.pipeline.lineage import load_folder_lineage, save_folder_lineage
+from ramanv2.data.dataset_mapping import DatasetMapping
+from ramanv2.pipeline.lineage import load_folder_lineage, write_folder_lineage
 
 
 def write_spectrum(path: Path, value: int) -> None:
@@ -83,7 +83,7 @@ def test_rebuild_ignores_stale_test_names_and_keeps_unified_numbers(tmp_path: Pa
     payload["folders"][f"{date}/EC02"]["outputs"]["test"] = str(
         tmp_path / "init_test" / f"EC{date}_01"
     )
-    save_folder_lineage(cosmic, payload)
+    write_folder_lineage(cosmic, payload)
 
     build_full_init(shift, init, mapping, [date], selected_test_folders=[f"{date}/EC02"])
 

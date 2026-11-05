@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ramanv2.data.catalog import DatasetMapping
+from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.pipeline.supplement import apply_supplement_plan, scan_supplement_plan
 
 

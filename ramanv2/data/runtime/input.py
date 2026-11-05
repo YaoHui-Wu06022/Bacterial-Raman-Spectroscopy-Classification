@@ -66,7 +66,7 @@ def build_model_input(
     if augmentation_enable:
         if augmentation_spec is None:
             raise ValueError("启用增强时必须提供 AugmentationSpec")
-        values = augment_raw_spectrum(values, augmentation_spec)
+        values = augment_raw_spectrum(values, augmentation_spec, input_spec.axis_cm)
     values = values.copy()
     segment_bounds = input_spec.segment_bounds or ((0, values.size),)
 

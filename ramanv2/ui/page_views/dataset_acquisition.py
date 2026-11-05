@@ -6,18 +6,19 @@ import json
 from pathlib import Path
 import streamlit as st
 
+from ramanv2.common.arc_data import has_arc_data
 from ramanv2.data.builders.init import build_profile_dataset
 from ramanv2.data.plots.prefix import build_prefix_plots
 from ramanv2.pipeline.calibration import run_folder_offset
-from ramanv2.data.catalog import DatasetMapping, ensure_dataset_mapping
+from ramanv2.data.dataset_mapping import DatasetMapping, ensure_dataset_mapping
 from ramanv2.common.naming import (
     NON_TRAINING_FOLDER_NAMES,
     PIPELINE_RESERVED_FOLDER_NAMES,
     build_natural_key,
     parse_folder_prefix,
 )
-from ramanv2.data.profiles import PIPELINE_PROFILE_IDS, TEST_ROOT_NAME, get_dataset_dir, get_profile
-from ramanv2.pipeline.dataset import (
+from ramanv2.data.profiles import PIPELINE_PROFILE_IDS, TEST_ROOT_NAME, resolve_dataset_dir, resolve_profile
+from ramanv2.pipeline.dataset_sync import (
     collect_date_update_candidates,
     collect_init_export_sources,
     collect_test_return_sources,
@@ -34,11 +35,11 @@ from ramanv2.pipeline.supplement import (
 )
 from ramanv2.pipeline.state import PipelineState
 from ramanv2.ui.page_context import PageContext
-from ramanv2.ui.cache import cached_dataset_summary, cached_dataset_taxon_counts
-from ramanv2.ui.state import (
+from ramanv2.ui.read_cache import cached_dataset_summary, cached_dataset_taxon_counts
+from ramanv2.ui.page_state import (
     invalidate_ui_cache,
     load_page_state,
-    save_page_state,
+    write_page_state,
     ui_cache_version,
 )
 
@@ -134,7 +135,7 @@ def _render_prefix_plot_section(
                     plots = {}
                 plots[key] = {"output_root": str(figure_root), "plot_count": len(outputs)}
                 state.dataset_builds["prefix_plots"] = plots
-                save_page_state(context, state)
+                write_page_state(context, state)
                 st.success(f"已更新 {len(outputs)} 张 prefix-plot。")
             except (OSError, ValueError, RuntimeError) as error:
                 st.error(f"prefix-plot 更新失败：{error}")
@@ -469,7 +470,7 @@ def _cached_date_source_folders(
         if not date_dir.is_dir():
             continue
         for folder in sorted(date_dir.iterdir(), key=lambda item: build_natural_key(item.name)):
-            if folder.is_dir() and folder.name not in SOURCE_RESERVED_NAMES and any(folder.glob("*.arc_data")):
+            if folder.is_dir() and folder.name not in SOURCE_RESERVED_NAMES and has_arc_data(folder):
                 folders.append(f"{date_name}/{folder.name}")
     return tuple(folders)
 
@@ -701,7 +702,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                 invalidate_ui_cache("training")
                 invalidate_ui_cache("inference")
                 invalidate_ui_cache("analysis")
-                save_page_state(context, state)
+                write_page_state(context, state)
                 st.session_state.pop("full_init_supplement_confirm", None)
                 supplement = report["supplement"]
                 supplement_note = (
@@ -729,8 +730,8 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
 
     st.subheader("Profile 数据集")
     profile_name = st.selectbox("选择 Profile", PIPELINE_PROFILE_IDS, key="dataset_profile_name")
-    profile = get_profile(profile_name)
-    profile_root = get_dataset_dir(profile, context.init_root.parent.parent) / profile.root_init
+    profile = resolve_profile(profile_name)
+    profile_root = resolve_dataset_dir(profile, context.init_root.parent.parent) / profile.root_init
     profile_summary = cached_dataset_summary(
         str(profile_root.resolve()), ui_cache_version("dataset")
     )
@@ -756,7 +757,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
             invalidate_ui_cache("training")
             invalidate_ui_cache("inference")
             invalidate_ui_cache("analysis")
-            save_page_state(context, state)
+            write_page_state(context, state)
             st.success(f"{profile_name} 数据集生成完成。")
             st.rerun()
         except (OSError, ValueError, RuntimeError) as error:

@@ -26,11 +26,11 @@ from ramanv2.common.naming import (
     build_natural_key,
     parse_folder_prefix,
 )
-from ramanv2.common.publishing import create_temporary_path, publish_directory, rename_directory, _remove_path
+from ramanv2.common.file_ops import create_temporary_path, publish_directory, read_json, rename_directory, _remove_path
 from ramanv2.data.count import summarize_dataset
 from ramanv2.data.profiles import TEST_ROOT_NAME
-from ramanv2.data.catalog import DatasetMapping
-from ramanv2.pipeline.lineage import apply_output_path, initialize_folder_lineage, load_folder_lineage, save_folder_lineage
+from ramanv2.data.dataset_mapping import DatasetMapping
+from ramanv2.pipeline.lineage import apply_output_path, initialize_folder_lineage, load_folder_lineage, write_folder_lineage
 
 
 SPECIAL_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
@@ -564,7 +564,7 @@ def build_init_datasets(
             for record in payload.get("folders", {}).values():
                 if record.get("date") in eligible_dates and (mode != "replace_dates" or replaced_init_dirs):
                     record["init_pending"] = False
-            save_folder_lineage(cosmic_root, payload)
+            write_folder_lineage(cosmic_root, payload)
         return report
     except Exception:
         for temporary in temporary_roots.values():
@@ -774,7 +774,7 @@ def _is_manual_approved(path: Path) -> bool:
     if not path.is_file():
         return False
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = read_json(path)
     except (OSError, json.JSONDecodeError):
         return False
     return isinstance(payload, dict) and payload.get("status") == "manual_approved"

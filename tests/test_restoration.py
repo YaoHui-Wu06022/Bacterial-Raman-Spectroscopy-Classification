@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 
 from ramanv2.pipeline.cleaning import refresh_completed_dates, scan_review_folders
-from ramanv2.pipeline.restoration import purge_deleted_spectra, restore_deleted_folder
-from ramanv2.pipeline.state import PipelineState, load_pipeline_state, save_pipeline_state
+from ramanv2.pipeline.deleted_data import purge_deleted_spectra, restore_deleted_folder
+from ramanv2.pipeline.state import PipelineState, load_pipeline_state, write_pipeline_state
 
 
 def _write_approved_report(
@@ -54,7 +54,7 @@ def test_restore_folder_moves_cosmic_only_and_requeues(tmp_path: Path) -> None:
     state.cleaning.folder_catalog[date_name] = {"EC01", "EC02"}
     state.cleaning.completed_folder_keys = {f"{date_name}/EC01", f"{date_name}/EC02"}
     refresh_completed_dates(state.cleaning)
-    save_pipeline_state(state_path, state)
+    write_pipeline_state(state_path, state)
 
     result = restore_deleted_folder(
         data_root,
@@ -104,7 +104,7 @@ def test_purge_deleted_spectra_cleans_files_and_stale_date_records(tmp_path: Pat
         f"{date_name}/EC01/a.arc_data",
         f"{date_name}/EC02/c.arc_data",
     }
-    save_pipeline_state(state_path, state)
+    write_pipeline_state(state_path, state)
 
     result = purge_deleted_spectra(
         data_root,
@@ -140,7 +140,7 @@ def test_purge_deleted_spectra_cleans_files_and_stale_date_records(tmp_path: Pat
     state.cleaning.folder_catalog[last_date] = {"EC03"}
     state.cleaning.completed_folder_keys = {f"{last_date}/EC03"}
     state.cleaning.completed_date_names.add(last_date)
-    save_pipeline_state(state_path, state)
+    write_pipeline_state(state_path, state)
 
     purge_deleted_spectra(data_root, state_path, [f"{last_date}/EC03/a.arc_data"])
 

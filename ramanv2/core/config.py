@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, fields
 from typing import Any, Mapping
 
-from ramanv2.core.hierarchy_meta import LABEL_SCHEMA
+from ramanv2.common.hierarchy import LABEL_SCHEMA
 
 
 DEFAULT_BAD_BANDS = ((900.0, 940.0),)
@@ -80,7 +80,7 @@ class TrainingConfig:
     epochs: int = 80
     patience: int = 50
     batch_size: int = 64
-    # -1 表示按 CPU 核数自动解析（上限见 training.spec.MAX_LOADER_WORKERS），0 表示不用额外进程。
+    # -1 表示按 CPU 核数自动解析（上限见 training.train_spec.MAX_LOADER_WORKERS），0 表示不用额外进程。
     train_loader_num_workers: int = -1
     val_loader_num_workers: int = -1
     loader_pin_memory: bool = True
@@ -112,11 +112,10 @@ class TrainingConfig:
     early_stop_w_f1: float = 0.6
     early_stop_w_acc: float = 0.4
     # 训练集随机增强的触发概率与单样本叠加上限。
-    p_piecewise_gain: float = 0.40
-    p_noise: float = 0.55
-    p_axis: float = 0.30
-    p_baseline_weak: float = 0.30
-    p_baseline_strong: float = 0.20
+    p_piecewise_gain: float = 0.60
+    p_axis: float = 0.35
+    p_baseline_broad: float = 0.35
+    p_baseline_region: float = 0.20
     max_pre_augs: int = 4
 
 

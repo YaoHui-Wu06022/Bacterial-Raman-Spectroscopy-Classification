@@ -6,7 +6,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from ramanv2.pipeline.state import PipelineState, load_pipeline_state, save_pipeline_state
+from ramanv2.pipeline.state import PipelineState, load_pipeline_state, write_pipeline_state
 from ramanv2.pipeline.lineage import sync_pipeline_state_from_lineage
 from ramanv2.ui.page_context import PageContext
 
@@ -73,7 +73,7 @@ def load_page_state(context: PageContext) -> PipelineState:
     return state
 
 
-def save_page_state(context: PageContext, state: PipelineState) -> None:
+def write_page_state(context: PageContext, state: PipelineState) -> None:
     """持久化页面共享状态并刷新当前会话缓存；与磁盘内容一致时跳过写盘。"""
     payload = state.to_payload()
     payload.pop("updated_at", None)
@@ -81,7 +81,7 @@ def save_page_state(context: PageContext, state: PipelineState) -> None:
     current.pop("updated_at", None)
     if payload == current:
         return
-    save_pipeline_state(context.state_file, state)
+    write_pipeline_state(context.state_file, state)
 
 
-__all__ = ["UI_CACHE_NAMES", "invalidate_ui_cache", "load_page_state", "save_page_state", "ui_cache_version"]
+__all__ = ["UI_CACHE_NAMES", "invalidate_ui_cache", "load_page_state", "write_page_state", "ui_cache_version"]

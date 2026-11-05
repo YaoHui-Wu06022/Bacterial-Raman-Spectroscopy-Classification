@@ -6,10 +6,25 @@ from functools import partial
 
 import torch
 import torch.nn as nn
+from torch.nn import functional
 
-from ramanv2.modeling.heads import CosineClassifier
 from ramanv2.modeling.layers import PositionalEncoding1D, ResidualBottleneck1D, build_activation, build_conv_block
-from ramanv2.modeling.spec import ModelSpec
+from ramanv2.modeling.model_spec import ModelSpec
+
+
+class CosineClassifier(nn.Module):
+    """使用特征和类别向量方向相似度的分类头。"""
+
+    def __init__(self, in_features: int, out_features: int, scale: float = 30.0):
+        super().__init__()
+        self.scale = float(scale)
+        self.weight = nn.Parameter(torch.empty(out_features, in_features))
+        nn.init.xavier_uniform_(self.weight)
+
+    def forward(self, values: torch.Tensor) -> torch.Tensor:
+        features = functional.normalize(values, p=2, dim=1)
+        weights = functional.normalize(self.weight, p=2, dim=1)
+        return self.scale * torch.matmul(features, weights.t())
 
 
 class RamanClassifier1D(nn.Module):

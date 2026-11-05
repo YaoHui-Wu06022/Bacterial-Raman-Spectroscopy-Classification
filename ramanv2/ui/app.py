@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from ramanv2.pipeline.state import load_pipeline_state, save_pipeline_state
+from ramanv2.pipeline.state import load_pipeline_state, write_pipeline_state
 from ramanv2.ui.page_context import build_page_context
 
 
@@ -30,7 +30,7 @@ def main() -> None:
     st.session_state["active_page"] = page_name
     if state.active_page != page_name:
         state.active_page = page_name
-        save_pipeline_state(context.state_file, state)
+        write_pipeline_state(context.state_file, state)
 
     if page_name == "数据清洗":
         from ramanv2.ui.page_views.cleaning import render_cleaning_page
@@ -45,7 +45,7 @@ def main() -> None:
 
         render_dataset_acquisition_page(context)
     elif page_name == "层级训练":
-        from ramanv2.ui.page_views.hierarchical_training import render_hierarchical_training_page
+        from ramanv2.ui.page_views.model_training import render_hierarchical_training_page
 
         render_hierarchical_training_page()
     elif page_name == "结果分析":
@@ -56,6 +56,3 @@ def main() -> None:
         from ramanv2.ui.page_views.sample_inference import render_sample_inference_page
 
         render_sample_inference_page()
-
-
-__all__ = ["PAGE_NAMES", "main"]

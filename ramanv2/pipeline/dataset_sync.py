@@ -21,16 +21,16 @@ from ramanv2.common.naming import (
     build_natural_key,
     parse_folder_prefix,
 )
-from ramanv2.common.publishing import preserve_paths, publish_file, rename_directory, _remove_path
+from ramanv2.common.file_ops import preserve_paths, publish_file, rename_directory, _remove_path
 from ramanv2.data.builders.init import CANONICAL_FOLDER_PATTERN, build_init_datasets
 from ramanv2.data.calibration.affine import load_calibration_report
-from ramanv2.data.catalog import DatasetMapping
+from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.data.count import summarize_dataset
 from ramanv2.data.plots.prefix import build_prefix_plots, build_prefix_plots_for_groups
 from ramanv2.data.profiles import TEST_ROOT_NAME
-from ramanv2.pipeline.lineage import lineage_path, load_folder_lineage, save_folder_lineage
+from ramanv2.pipeline.lineage import lineage_path, load_folder_lineage, write_folder_lineage
 from ramanv2.pipeline.shift import load_date_affine_parameters
-from ramanv2.pipeline.state import PipelineState, save_pipeline_state
+from ramanv2.pipeline.state import PipelineState, write_pipeline_state
 
 
 SOURCE_RESERVED_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
@@ -177,11 +177,16 @@ def _run_dataset_transfer(
     if to_test_enable:
         summary["file_count"] -= len(filenames)
         summary["folder_count"] -= 1
-        summary["genus_count"] -= int(not any(not path.is_relative_to(source) for path in genus_dir.rglob("*.arc_data")))
+        summary["genus_count"] -= int(
+            not any(
+                not path.is_relative_to(source)
+                for path in iter_arc_data_paths(genus_dir, recursive=True)
+            )
+        )
     else:
         summary["file_count"] += len(filenames)
         summary["folder_count"] += 1
-        summary["genus_count"] += int(not any(genus_dir.rglob("*.arc_data")))
+        summary["genus_count"] += int(not has_arc_data(genus_dir, recursive=True))
     figure_root = init_root.parent / "fig_init"
     plot_path = figure_root / genus / f"{prefix}.png"
     snapshots = [source, target if target.parent.exists() else target.parent, plot_path, lineage_path(data_root), state_file]
@@ -212,9 +217,9 @@ def _run_dataset_transfer(
             report["test_exports"] = [other for other in exports if other is not entry]
             report["selected_test_folders"] = [value for value in report.get("selected_test_folders", []) if value != source_id]
         _update_dataset_counts(report, init_root, date_name, summary)
-        save_folder_lineage(data_root, payload)
+        write_folder_lineage(data_root, payload)
         working.dataset_builds.pop("latest", None)
-        save_pipeline_state(state_file, working)
+        write_pipeline_state(state_file, working)
     state.__dict__.update(working.__dict__)
     return {"source_id": source_id, "target_dir": str(target), "spectrum_count": len(filenames)}
 
@@ -605,7 +610,7 @@ def run_date_dataset_update(
     merged["status"] = "pending" if pending else "ready"
     working.dataset_builds["full_init"] = merged
     working.dataset_builds.pop("latest", None)
-    save_pipeline_state(state_file, working)
+    write_pipeline_state(state_file, working)
     figure_root = init_root.parent / "fig_init"
     plot_error = None
     plot_count = 0
@@ -619,7 +624,7 @@ def run_date_dataset_update(
             plot_state = {}
         plot_state["full_init"] = {"output_root": str(figure_root), "plot_count": plot_count}
         working.dataset_builds["prefix_plots"] = plot_state
-        save_pipeline_state(state_file, working)
+        write_pipeline_state(state_file, working)
     date_stats = merged.get("date_stats", {})
     state.__dict__.update(working.__dict__)
     return {

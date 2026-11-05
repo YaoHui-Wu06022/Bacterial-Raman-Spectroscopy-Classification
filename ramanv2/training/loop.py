@@ -1,4 +1,4 @@
-"""训练循环使用的 DataLoader 与优化器构建。"""
+"""单模型的 epoch 训练循环与指标记录。"""
 
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from ramanv2.training.spec import ExecutionSpec, TrainingSpec
-from ramanv2.core.runtime import resolve_device
+from ramanv2.training.train_spec import ExecutionSpec, TrainingSpec
+from ramanv2.common.device import resolve_device
 from ramanv2.training.checkpoint import (
     TrainingState,
     remove_training_checkpoint,
     restore_training_checkpoint,
-    save_training_checkpoint,
+    write_training_checkpoint,
 )
 from ramanv2.training.diagnostics import write_nonfinite_diagnostic
 from ramanv2.training.losses import (
@@ -170,7 +170,7 @@ def run_train_loop(
                 log_message("EarlyStopping Triggered by 100% validation accuracy!")
                 break
             if epoch % runtime_spec.checkpoint_interval == 0:
-                save_training_checkpoint(
+                write_training_checkpoint(
                     train_artifacts.checkpoint_path,
                     epoch,
                     model,

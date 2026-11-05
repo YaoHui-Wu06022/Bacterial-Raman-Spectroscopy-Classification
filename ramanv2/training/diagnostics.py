@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import torch
+
+from ramanv2.common.file_ops import write_json
 
 
 def write_nonfinite_diagnostic(
@@ -44,10 +45,7 @@ def write_nonfinite_diagnostic(
             for name, values in losses.items()
             if values.ndim == 0
         }
-    diagnostic_path.write_text(
-        json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    write_json(diagnostic_path, record)
     return True
 
 

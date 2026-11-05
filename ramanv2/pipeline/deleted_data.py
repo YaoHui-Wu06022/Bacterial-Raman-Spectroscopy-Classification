@@ -21,7 +21,7 @@ from ramanv2.common.arc_data import (
 )
 from ramanv2.common.naming import build_natural_key, parse_folder_prefix
 from ramanv2.data.calibration.affine import invalidate_calibration_report
-from ramanv2.data.catalog import DatasetMapping, build_prefix_to_genus
+from ramanv2.data.dataset_mapping import DatasetMapping, build_prefix_to_genus
 from ramanv2.pipeline.cleaning import discard_removed_date
 from ramanv2.pipeline.invalidation import invalidate_downstream
 from ramanv2.pipeline.lineage import (
@@ -29,7 +29,7 @@ from ramanv2.pipeline.lineage import (
     record_purge,
     record_restore,
 )
-from ramanv2.pipeline.state import load_pipeline_state, save_pipeline_state
+from ramanv2.pipeline.state import load_pipeline_state, write_pipeline_state
 
 
 MANUAL_DELETE_DIR = "delete/manual"
@@ -207,7 +207,7 @@ def _restore_bead_spectra(
         for date_name in dates:
             invalidate_calibration_report(shift_root, date_name)
             state.affine_completed_dates.discard(date_name)
-        save_pipeline_state(state_path, state)
+        write_pipeline_state(state_path, state)
 
         for source in sources.values():
             source.unlink()
@@ -331,7 +331,7 @@ def restore_deleted_spectra(
                 "recorded_at": datetime.now(timezone.utc).isoformat(),
             }
             state.dataset_builds["full_init"] = updated_full
-        save_pipeline_state(state_path, state)
+        write_pipeline_state(state_path, state)
 
         for path in source_raw.values():
             path.unlink()
@@ -404,7 +404,7 @@ def purge_deleted_spectra(
     state = load_pipeline_state(state_path)
     for relative in selected:
         state.cleaning.committed_paths.discard(relative)
-    save_pipeline_state(state_path, state)
+    write_pipeline_state(state_path, state)
 
     for path in paths.values():
         path.unlink()
@@ -418,7 +418,7 @@ def purge_deleted_spectra(
         for date_name in emptied:
             discard_removed_date(state.cleaning, date_name)
             state.affine_completed_dates.discard(date_name)
-        save_pipeline_state(state_path, state)
+        write_pipeline_state(state_path, state)
 
     _append_log(
         Path(state_path).resolve().parent / RESTORE_LOG_NAME,
@@ -489,7 +489,7 @@ def restore_deleted_folder(
         # 整夹恢复后文件夹内容已变，必须重新清洗确认；审核结论保持原样（审核只做一次）。
         state.cleaning.completed_folder_keys.discard(f"{date_name}/{folder_name}")
         invalidate_downstream(state, [date_name])
-        save_pipeline_state(state_path, state)
+        write_pipeline_state(state_path, state)
     except Exception:
         if target.exists() and not archive.exists():
             archive.parent.mkdir(parents=True, exist_ok=True)

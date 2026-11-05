@@ -1,15 +1,88 @@
-"""实验层级模型元数据的构建与读写。"""
+"""层级标签选择与实验层级元数据。"""
 
 from __future__ import annotations
 
 import hashlib
-import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import torch
 
+from ramanv2.common.file_ops import read_json, write_json
+
+
+ROOT_TAG = "__root__"
 LABEL_SCHEMA = "genus_species_prefix_v1"
+
+
+def parts_to_key(parts: Sequence[str]) -> str:
+    """将目录层级片段转换为稳定的层级类别键。"""
+    if not parts:
+        return ROOT_TAG
+    return "/".join(str(part) for part in parts)
+
+
+def normalize_level_name(level: int | str) -> str:
+    """将 ``1``、``level1``、``level_1`` 规范为 ``level_1``。"""
+    text = str(level).strip()
+    if text.startswith("level_"):
+        return text
+    if text.startswith("level"):
+        return f"level_{text[5:].lstrip('_')}"
+    if text.isdigit():
+        return f"level_{text}"
+    raise ValueError(f"Invalid level: {level}")
+
+
+def select_level_targets(labels: torch.Tensor, level_index: int | None = None) -> torch.Tensor:
+    """从多层标签矩阵选择指定层级；一维标签直接返回。"""
+    if labels.ndim != 2:
+        return labels
+    target_index = labels.size(1) - 1 if level_index is None else level_index
+    return labels[:, target_index]
+
+
+def resolve_allowed_indices(
+    class_names: Sequence[str],
+    allowed_values: Sequence[int | str] | int | str | None,
+) -> list[int]:
+    """将类别名称或全局索引解析为排序后的允许索引。"""
+    if not allowed_values:
+        return []
+    values = (
+        list(allowed_values)
+        if isinstance(allowed_values, (list, tuple, set))
+        else [allowed_values]
+    )
+    index_by_name = {name: index for index, name in enumerate(class_names)}
+    return sorted(
+        {
+            int(value)
+            if isinstance(value, int)
+            else index_by_name[str(value)]
+            for value in values
+            if isinstance(value, int) or str(value) in index_by_name
+        }
+    )
+
+
+def select_parent_indices(
+    labels: np.ndarray,
+    indices: np.ndarray | list[int],
+    *,
+    parent_index: int,
+    level_index: int,
+    parent_id: int,
+) -> np.ndarray:
+    """筛选属于指定父类且目标层标签有效的样本索引。"""
+    candidate_indices = np.asarray(indices, dtype=np.int64)
+    candidate_labels = labels[candidate_indices]
+    mask = (candidate_labels[:, parent_index] == int(parent_id)) & (
+        candidate_labels[:, level_index] >= 0
+    )
+    return candidate_indices[mask]
 
 
 def validate_label_schema(values: Mapping[str, Any]) -> None:
@@ -34,7 +107,7 @@ def load_hierarchy_meta(path: Path | str) -> dict[str, Any] | None:
     target = Path(path)
     if not target.is_file():
         return None
-    meta = json.loads(target.read_text(encoding="utf-8"))
+    meta = read_json(target)
     validate_label_schema(meta)
     return meta
 
@@ -195,11 +268,6 @@ def _merge_run_history(
     return history
 
 
-def save_hierarchy_meta(path: Path | str, meta: dict[str, Any]) -> None:
+def write_hierarchy_meta(path: Path | str, meta: dict[str, Any]) -> None:
     """以缩进 JSON 写入完整层级元数据文件。"""
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    write_json(path, meta)

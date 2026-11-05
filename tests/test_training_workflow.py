@@ -9,7 +9,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from ramanv2.core.config import build_config
-from ramanv2.core.hierarchy_meta import LABEL_SCHEMA
+from ramanv2.common.hierarchy import LABEL_SCHEMA
 from ramanv2.evaluation.context import load_evaluation_context, resolve_run_entry
 from ramanv2.evaluation.model_eval import _predict_run
 from ramanv2.inference.predictor import load_predictor
@@ -143,9 +143,8 @@ def _build_workflow_config(profile_id: str = "GN"):
             "train_loader_num_workers": 0,
             "val_loader_num_workers": 0,
             "p_piecewise_gain": 0.0,
-            "p_noise": 0.0,
             "p_axis": 0.0,
-            "p_baseline_weak": 0.0,
-            "p_baseline_strong": 0.0,
+            "p_baseline_broad": 0.0,
+            "p_baseline_region": 0.0,
         }
     )

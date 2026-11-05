@@ -1,16 +1,18 @@
-"""临时产物的原子发布工具。
+"""文件读写、原子发布与目录移动工具。
 
-业务模块负责生成和校验内容，本模块只负责在最终路径上安全替换文件或目录。
+业务模块负责生成和校验内容，本模块只负责在最终路径上安全读写、替换或移动文件。
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import stat
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 
@@ -245,14 +247,27 @@ def move_files(files: dict[Path, Path]) -> None:
         raise
 
 
+def read_json(path: Path | str) -> Any:
+    """读取 UTF-8 JSON 文件并返回解析结果。"""
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def write_json(path: Path | str, payload: Any) -> Path:
+    """以两空格缩进原子写入 JSON，并保留末尾换行。"""
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    return write_text_atomic(path, text)
+
+
 __all__ = [
     "create_temporary_path",
-    "rename_directory",
     "publish_directory",
     "publish_file",
     "publish_files",
     "preserve_paths",
     "move_files",
+    "read_json",
     "remove_empty_parent_directories",
+    "rename_directory",
+    "write_json",
     "write_text_atomic",
 ]

@@ -14,13 +14,6 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     _configure_baseline_parser(baseline)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """构建独立调用时使用的 evaluation 参数解析器。"""
-    parser = argparse.ArgumentParser(description="Raman 验证集评估")
-    configure_parser(parser)
-    return parser
-
-
 def run_command(args: argparse.Namespace) -> int:
     """执行已经解析完成的模型评估或 PCA-SVM baseline。"""
     if args.target == "model":
@@ -38,7 +31,7 @@ def run_command(args: argparse.Namespace) -> int:
         else:
             result_dir = evaluate_model_cascade(args.source_dir, args.level, device)
     else:
-        from ramanv2.evaluation.baseline import (
+        from ramanv2.evaluation.pca_svm import (
             BaselineSpec,
             evaluate_baseline_parent_routed,
             evaluate_baseline_run,
@@ -58,12 +51,6 @@ def run_command(args: argparse.Namespace) -> int:
             result_dir = evaluate_baseline_parent_routed(args.source_dir, args.level, spec)
     print(result_dir)
     return 0
-
-
-def main(argv: list[str] | None = None) -> int:
-    """解析并执行 evaluation 命令。"""
-    args = build_parser().parse_args(argv)
-    return run_command(args)
 
 
 def _configure_model_parser(parser: argparse.ArgumentParser) -> None:

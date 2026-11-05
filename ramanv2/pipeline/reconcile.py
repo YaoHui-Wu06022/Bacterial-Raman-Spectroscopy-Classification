@@ -24,19 +24,20 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ramanv2.common.arc_data import count_arc_data, iter_arc_data_paths
 from ramanv2.common.naming import build_natural_key
 from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.data.profiles import resolve_test_root
 from ramanv2.pipeline.lineage import (
     initialize_folder_lineage,
     lineage_path,
-    save_folder_lineage,
+    write_folder_lineage,
     sync_pipeline_state_from_lineage,
 )
 from ramanv2.pipeline.state import (
     load_pipeline_state,
     pipeline_state_path,
-    save_pipeline_state,
+    write_pipeline_state,
 )
 
 
@@ -127,8 +128,7 @@ def _manual_deleted_paths(data_root: Path) -> set[str]:
         return set()
     return {
         path.relative_to(base).as_posix()
-        for path in base.rglob("*.arc_data")
-        if path.is_file()
+        for path in iter_arc_data_paths(base, recursive=True)
     }
 
 
@@ -151,10 +151,6 @@ def _folder_catalog(payload: dict[str, object]) -> dict[str, set[str]]:
     return catalog
 
 
-def _count_arc_files(path: Path) -> int:
-    return sum(1 for item in path.glob("*.arc_data") if item.is_file())
-
-
 def _direct_init_folders(init_root: Path, referenced: set[Path]) -> tuple[list[str], int]:
     """列出直接放进 ``init``、没有 cosmic 来源的组。
 
@@ -168,7 +164,7 @@ def _direct_init_folders(init_root: Path, referenced: set[Path]) -> tuple[list[s
     for group in sorted(init_root.glob("*/*"), key=lambda item: build_natural_key(item.as_posix())):
         if not group.is_dir() or group.resolve() in referenced:
             continue
-        count = _count_arc_files(group)
+        count = count_arc_data(group)
         if not count:
             continue
         names.append(group.relative_to(init_root).as_posix())
@@ -246,13 +242,13 @@ def _rebuild_full_init_report(
             init_path = outputs.get("init")
             if init_path:
                 referenced.add(Path(init_path).resolve())
-                count = _count_arc_files(Path(init_path))
+                count = count_arc_data(Path(init_path))
                 init_files += count
                 stats["output_files"] += count
             test_path = outputs.get("test")
             if test_path:
                 target = Path(test_path)
-                count = _count_arc_files(target)
+                count = count_arc_data(target)
                 test_files += count
                 stats["output_files"] += count
                 stats["test_files"] += count
@@ -326,7 +322,7 @@ def rebuild_pipeline_records(
     affine_backfilled = _backfill_affine(payload, reports, recorded_at)
     pruned = _prune_missing_outputs(payload)
     payload["updated_at"] = recorded_at
-    save_folder_lineage(root, payload)
+    write_folder_lineage(root, payload)
 
     full_report = _rebuild_full_init_report(
         payload, init_target, test_target if test_target.is_dir() else None
@@ -349,7 +345,7 @@ def rebuild_pipeline_records(
     state.cleaning.folder_page_indices = {}
     state.cleaning.current_date_name = None
     state.cleaning.current_folder_key = None
-    save_pipeline_state(target_state, state)
+    write_pipeline_state(target_state, state)
 
     folders = payload.get("folders", {})
     folder_records = folders.values() if isinstance(folders, dict) else ()

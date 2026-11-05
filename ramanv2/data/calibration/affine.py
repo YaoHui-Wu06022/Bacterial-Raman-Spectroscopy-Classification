@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 import shutil
 from dataclasses import dataclass
@@ -17,15 +16,15 @@ from scipy.optimize import curve_fit
 matplotlib.use("Agg", force=True)
 from matplotlib import pyplot as plt
 
-from ramanv2.common.arc_data import read_arc_data, write_arc_data
+from ramanv2.common.arc_data import is_arc_data_name, list_arc_data_paths, read_arc_data, write_arc_data
+from ramanv2.common.file_ops import create_temporary_path, publish_file, publish_files, read_json, rename_directory, write_json
 from ramanv2.common.naming import (
     NON_TRAINING_FOLDER_NAMES,
     PIPELINE_RESERVED_FOLDER_NAMES,
     build_natural_key,
 )
 from ramanv2.common.plotting import configure_matplotlib_fonts
-from ramanv2.common.publishing import create_temporary_path, publish_file, publish_files, rename_directory
-from ramanv2.core.paths import PROJECT_ROOT
+from ramanv2.common.paths import PROJECT_ROOT
 
 
 configure_matplotlib_fonts()
@@ -468,7 +467,7 @@ def _publish_shift(temp_shift: Path, output_date: Path) -> Path:
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
     payload = {key: value for key, value in payload.items() if key not in {"folder_compensations", "effective_offsets", "operator_input", "compensation_history", "compensated_at", "compensation_record_only", "changed_folders"}}
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json(path, payload)
 
 
 def _failure_payload(date_name: str, error: str) -> dict[str, object]:
@@ -509,7 +508,7 @@ def analyze_date(date_dir: Path | str, output_root: Path | str = OUTPUT_ROOT) ->
     try:
         temporary.mkdir(parents=True, exist_ok=False)
         bead_dir = date_path / BEAD_DIR_NAME
-        bead_paths = sorted(bead_dir.glob("*.arc_data"), key=lambda path: build_natural_key(path.name))
+        bead_paths = list_arc_data_paths(bead_dir, key=lambda path: build_natural_key(path.name))
         if not bead_paths:
             payload = _failure_payload(date_path.name, f"未找到小球谱：{bead_dir}")
             _write_json(temporary / "affine.json", payload)
@@ -595,44 +594,12 @@ def analyze_date(date_dir: Path | str, output_root: Path | str = OUTPUT_ROOT) ->
         raise
 
 
-def analyze_all_dates(source_root: Path | str, output_root: Path | str = OUTPUT_ROOT) -> list[dict[str, object]]:
-    """分析所有日期；单个日期失败时写入诊断并继续。"""
-    root = Path(source_root).resolve()
-    if not root.is_dir():
-        raise FileNotFoundError(f"数据根目录不存在：{root}")
-    reports = []
-    for date_dir in sorted((path for path in root.iterdir() if path.is_dir() and path.name.isdigit()), key=lambda path: path.name):
-        try:
-            reports.append(analyze_date(date_dir, output_root))
-        except (OSError, RuntimeError, ValueError) as error:
-            output_date = Path(output_root).resolve() / date_dir.name
-            existing_shift = output_date / SHIFT_DIR_NAME
-            if existing_shift.is_dir():
-                payload = _failure_payload(date_dir.name, str(error))
-                reports.append({**payload, "shift_dir": str(existing_shift)})
-                continue
-            had_output_date = output_date.exists()
-            temporary = output_date / f".shift_building_{uuid4().hex}"
-            payload = _failure_payload(date_dir.name, str(error))
-            try:
-                temporary.mkdir(parents=True, exist_ok=False)
-                _write_json(temporary / "affine.json", payload)
-                published = _publish_shift(temporary, output_date)
-            except Exception:
-                shutil.rmtree(temporary, ignore_errors=True)
-                if not had_output_date and output_date.exists() and not any(output_date.iterdir()):
-                    output_date.rmdir()
-                raise
-            reports.append({**payload, "shift_dir": str(published)})
-    return reports
-
-
 def load_calibration_report(output_root: Path | str, date_name: str) -> dict[str, object] | None:
     """读取一个日期的 affine.json；尚未分析时返回 None。"""
     path = Path(output_root).resolve() / date_name / SHIFT_DIR_NAME / "affine.json"
     if not path.is_file():
         return None
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = read_json(path)
     if not isinstance(payload, dict):
         raise ValueError(f"校正报告必须是 JSON 对象：{path}")
     payload["shift_dir"] = str(path.parent)
@@ -648,7 +615,7 @@ def invalidate_calibration_report(output_root: Path | str, date_name: str) -> bo
     report_path = Path(output_root).resolve() / str(date_name) / SHIFT_DIR_NAME / "affine.json"
     if not report_path.is_file():
         return False
-    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload = read_json(report_path)
     if not isinstance(payload, dict) or payload.get("status") != "manual_approved":
         return False
     updated = {
@@ -684,7 +651,7 @@ def build_corrected_folder(
         if source.is_dir():
             target.mkdir(parents=True, exist_ok=True)
             continue
-        if source.suffix.lower() == ".arc_data":
+        if is_arc_data_name(source.name):
             wavenumbers, intensities = read_arc_data(source)
             if not wavenumbers.size or wavenumbers.size != intensities.size or not np.isfinite(wavenumbers).all() or not np.isfinite(intensities).all():
                 raise ValueError(f"无效光谱：{source}")
@@ -708,7 +675,7 @@ def build_corrected_date(
     shutil.copytree(shift_source, temporary_date / SHIFT_DIR_NAME)
     report_path = temporary_date / SHIFT_DIR_NAME / "affine.json"
     if report_path.is_file():
-        _write_json(report_path, json.loads(report_path.read_text(encoding="utf-8")))
+        _write_json(report_path, read_json(report_path))
     return count
 
 
@@ -743,7 +710,7 @@ def apply_folder_affine_compensation(
             for folder in folders:
                 if not folder.resolve().is_relative_to(root):
                     raise ValueError("补偿目标超出 cosmic 目录")
-                sources.extend(sorted(folder.rglob("*.arc_data")))
+                sources.extend(list_arc_data_paths(folder, recursive=True))
             if not sources:
                 raise FileNotFoundError(f"补偿文件夹没有光谱：{date_name}/{name}")
             for source in sources:
@@ -821,7 +788,6 @@ __all__ = [
     "AUXILIARY_PEAKS",
     "OUTPUT_ROOT",
     "PRIMARY_PEAKS",
-    "analyze_all_dates",
     "analyze_date",
     "apply_folder_affine_compensation",
     "build_corrected_date",

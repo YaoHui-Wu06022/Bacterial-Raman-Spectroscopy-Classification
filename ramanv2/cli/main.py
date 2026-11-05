@@ -3,6 +3,18 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
+
+
+def _run_zip_command(_args) -> int:
+    """执行顶层源码 ZIP 命令。"""
+    from ramanv2.common.paths import PROJECT_ROOT
+    from ramanv2.packaging.source_archive import build_package_archive
+
+    package_dir = Path(__file__).resolve().parents[1]
+    archive_path = build_package_archive(package_dir, PROJECT_ROOT / "ramanv2.zip")
+    print(archive_path)
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -14,7 +26,6 @@ def build_parser() -> argparse.ArgumentParser:
     import ramanv2.data.cli
     import ramanv2.evaluation.cli
     import ramanv2.inference.cli
-    import ramanv2.packaging.source_archive
     import ramanv2.pipeline.cli
     import ramanv2.training.cli
 
@@ -40,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     ramanv2.analysis.cli.configure_parser(analysis_parser)
 
     zip_parser = domains.add_parser("zip", help="仅打包 ramanv2，不包含数据集")
-    zip_parser.set_defaults(run_command=ramanv2.packaging.source_archive.run_command)
+    zip_parser.set_defaults(run_command=_run_zip_command)
     return parser
 
 

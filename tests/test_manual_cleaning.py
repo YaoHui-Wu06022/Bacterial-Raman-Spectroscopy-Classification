@@ -7,7 +7,7 @@ from ramanv2.pipeline.cleaning import (
     scan_review_folders,
 )
 from ramanv2.pipeline.lineage import load_folder_lineage
-from ramanv2.pipeline.state import PipelineState, save_pipeline_state
+from ramanv2.pipeline.state import PipelineState, write_pipeline_state
 
 
 def write_spectrum(path: Path, value: int) -> None:
@@ -82,7 +82,7 @@ def test_commit_paths_and_date_items_record_removal_reasons(tmp_path: Path) -> N
 
 
 def test_save_state_retries_transient_windows_replace_lock(tmp_path: Path, monkeypatch) -> None:
-    import ramanv2.common.publishing as publishing_module
+    import ramanv2.common.file_ops as publishing_module
 
     state_path = tmp_path / ".raman_pipeline" / "state.json"
     original_replace = publishing_module.os.replace
@@ -96,7 +96,7 @@ def test_save_state_retries_transient_windows_replace_lock(tmp_path: Path, monke
         original_replace(source, target)
 
     monkeypatch.setattr(publishing_module.os, "replace", replace_with_transient_lock)
-    save_pipeline_state(state_path, PipelineState())
+    write_pipeline_state(state_path, PipelineState())
 
     assert attempts == 3
     assert state_path.is_file()

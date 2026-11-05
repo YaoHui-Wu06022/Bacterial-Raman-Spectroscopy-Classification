@@ -8,11 +8,12 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from ramanv2.common.file_ops import write_json
 from ramanv2.core.config import Config, build_config
-from ramanv2.core.config_file import SHARED_CONFIG_NAME, read_yaml_dict
-from ramanv2.core.hierarchy_meta import assert_hierarchy_compatible, load_hierarchy_meta, validate_label_schema
+from ramanv2.core.config_snapshot import SHARED_CONFIG_NAME, read_yaml_dict
+from ramanv2.common.hierarchy import assert_hierarchy_compatible, load_hierarchy_meta, validate_label_schema
 from ramanv2.core.input_spec import InputSpec, build_input_spec
-from ramanv2.core.paths import find_ancestor_dir
+from ramanv2.common.paths import find_ancestor_dir
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.data.profiles import resolve_training_dir
 from ramanv2.training.split import load_split_files
@@ -145,3 +146,21 @@ def build_used_runs(values: Mapping[str, Any]) -> dict[str, Any]:
         for key in ("run_dir", "model_path", "config_path", "trained_at")
         if values.get(key) is not None
     }
+
+
+def resolve_run_class_ids(dataset_index: Any, run_entry: Any) -> list[int]:
+    """解析一个全局或父类 run 对应的全局类别标识。"""
+    if run_entry.parent_id is None:
+        return list(range(dataset_index.num_classes_by_level[run_entry.level_name]))
+    return [int(item) for item in run_entry.values.get("child_ids") or []]
+
+
+def write_run_manifest(
+    output_path: Path | str,
+    mode: str,
+    level_name: str,
+    runs: Mapping[str, Any],
+) -> None:
+    """写出本次评估或推理实际使用的模型 run。"""
+    payload = {"mode": mode, "target_level": level_name, "runs": dict(runs)}
+    write_json(output_path, payload)

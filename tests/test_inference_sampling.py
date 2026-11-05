@@ -1,10 +1,10 @@
 from pathlib import Path
 
-from ramanv2.inference.runner import (
+from ramanv2.inference.folder_inference import (
     INFERENCE_SAMPLES_PER_FOLDER,
     _sample_folder_spectra,
-    _scan_test_set,
 )
+from ramanv2.inference.test_evaluation import _scan_test_set
 
 
 def make_items(file_names: list[str]) -> list[tuple[str, Path]]:

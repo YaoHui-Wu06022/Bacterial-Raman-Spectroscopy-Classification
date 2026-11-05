@@ -5,8 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from ramanv2.common.publishing import create_temporary_path, publish_file
-from ramanv2.core.paths import PROJECT_ROOT
+from ramanv2.common.file_ops import create_temporary_path, publish_file
 
 
 def build_package_archive(package_dir: Path, archive_path: Path) -> Path:
@@ -27,14 +26,6 @@ def build_package_archive(package_dir: Path, archive_path: Path) -> Path:
         temp_path.unlink(missing_ok=True)
         raise
     return target_path
-
-
-def run_command(_args) -> int:
-    """执行顶层源码 ZIP 命令。"""
-    package_dir = Path(__file__).resolve().parents[1]
-    archive_path = build_package_archive(package_dir, PROJECT_ROOT / "ramanv2.zip")
-    print(archive_path)
-    return 0
 
 
 def _exclude_from_package(source_path: Path, package_dir: Path) -> bool:

@@ -19,17 +19,6 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
         command.set_defaults(run_command=run_command)
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    return run_command(args)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Raman 模型分析")
-    configure_parser(parser)
-    return parser
-
-
 def run_command(args: argparse.Namespace) -> int:
     from ramanv2.analysis.runner import run_interpret_parent_routed, run_interpret_run
 

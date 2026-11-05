@@ -7,14 +7,14 @@ from pathlib import Path
 
 import numpy as np
 
-from ramanv2.common.arc_data import read_arc_data
+from ramanv2.common.arc_data import is_arc_data_name, read_arc_data
 
 
 def iter_arc_dirs(root_dir: Path | str):
     """递归返回包含 `.arc_data` 文件的目录及其排序后的文件名。"""
     for root, directories, filenames in os.walk(os.fspath(root_dir)):
         directories.sort()
-        arc_files = sorted(name for name in filenames if name.lower().endswith(".arc_data"))
+        arc_files = sorted(name for name in filenames if is_arc_data_name(name))
         if arc_files:
             yield Path(root), arc_files
 

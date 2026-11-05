@@ -22,16 +22,9 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--plot-train-mean", action="store_true", help="绘图时叠加训练类别均值")
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """构建独立调用时使用的参数解析器。"""
-    parser = argparse.ArgumentParser(description="Run independent Raman inference")
-    configure_parser(parser)
-    return parser
-
-
 def run_command(args: argparse.Namespace) -> int:
     """执行已经解析完成的独立推理请求。"""
-    from ramanv2.inference.runner import run_independent_inference
+    from ramanv2.inference.folder_inference import run_independent_inference
 
     run_independent_inference(
         args.source_dir,
@@ -45,9 +38,3 @@ def run_command(args: argparse.Namespace) -> int:
         plot_train_mean_enable=args.plot_train_mean,
     )
     return 0
-
-
-def main(argv: list[str] | None = None) -> int:
-    """解析并执行独立推理命令。"""
-    args = build_parser().parse_args(argv)
-    return run_command(args)

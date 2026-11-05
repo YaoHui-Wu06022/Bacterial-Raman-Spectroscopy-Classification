@@ -7,12 +7,12 @@ import numpy as np
 
 from ramanv2.common.arc_data import read_arc_data, write_arc_data
 from ramanv2.data.builders.init import build_full_init
-from ramanv2.data.catalog import DatasetMapping
+from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.pipeline import calibration
 from ramanv2.pipeline.calibration import run_date_rebuild
 from ramanv2.pipeline.lineage import load_folder_lineage, record_restore
 from ramanv2.pipeline.shift import rebuild_shift_data
-from ramanv2.pipeline.state import PipelineState, save_pipeline_state
+from ramanv2.pipeline.state import PipelineState, write_pipeline_state
 
 
 DATE = "20240101"
@@ -39,7 +39,7 @@ def _build_layout(tmp_path):
     report = build_full_init(shift, init, mapping, [DATE, OTHER_DATE], selected_test_folders=[f"{DATE}/EC03", f"{OTHER_DATE}/EC04"])
     state = PipelineState(affine_completed_dates={DATE, OTHER_DATE}, init_generated_dates={DATE, OTHER_DATE}, dataset_builds={"full_init": report, "profiles": {"GN": {"status": "ready"}}})
     state_file = tmp_path / ".raman_pipeline/state.json"
-    save_pipeline_state(state_file, state)
+    write_pipeline_state(state_file, state)
     write_arc_data(tmp_path / "GN/existing.arc_data", [600, 700], [1, 2])
     figure = tmp_path / "fig_init/Escherichia/EC.png"
     figure.parent.mkdir(parents=True)

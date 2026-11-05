@@ -1,4 +1,4 @@
-"""为远程训练平台导出 init/init_test 数据 TAR.XZ 和 ramanv2 源码 ZIP。"""
+"""为远程训练平台导出数据 TAR.XZ 与源码 ZIP 平台包。"""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ import shutil
 import tarfile
 from pathlib import Path
 
-from ramanv2.common.arc_data import read_arc_data
-from ramanv2.common.publishing import create_temporary_path, publish_file, publish_files
-from ramanv2.core.paths import PROJECT_ROOT
-from ramanv2.data.profiles import get_dataset_dir, get_profile
+from ramanv2.common.arc_data import list_arc_data_paths, read_arc_data
+from ramanv2.common.file_ops import create_temporary_path, publish_file, publish_files
+from ramanv2.common.paths import PROJECT_ROOT
+from ramanv2.data.profiles import resolve_dataset_dir, resolve_profile
 from ramanv2.packaging.source_archive import build_package_archive
 
 
@@ -26,7 +26,7 @@ def build_profile_data_archive(
     project_root: Path | str = PROJECT_ROOT,
 ) -> dict[str, object]:
     """将 profile 的 init 与已存在的 profile 测试集打包为 data.tar.xz。"""
-    profile = get_profile(profile_id)
+    profile = resolve_profile(profile_id)
     stage_dirs = _resolve_stage_dirs(profile, project_root)
 
     target = Path(output_path).resolve()
@@ -52,7 +52,7 @@ def build_platform_bundle(
     project_root: Path | str = PROJECT_ROOT,
 ) -> dict[str, object]:
     """原子生成只含目录数据的 data.tar.xz 和源码 ramanv2.zip。"""
-    profile = get_profile(profile_id)
+    profile = resolve_profile(profile_id)
     stage_dirs = _resolve_stage_dirs(profile, project_root)
 
     target_dir = Path(output_dir).resolve()
@@ -104,7 +104,7 @@ def _resolve_stage_dirs(
     ``init`` 必需；profile 测试集存在时一并打包，缺失时跳过。两者都只在
     ``dataset/<profile>/`` 下取，全局测试母本 ``dataset/init_test`` 不进入数据包。
     """
-    dataset_dir = get_dataset_dir(profile, project_root)
+    dataset_dir = resolve_dataset_dir(profile, project_root)
     profile_root = Path("dataset") / profile.dataset_name
     init_dir = dataset_dir / profile.root_init
     if not init_dir.is_dir():
@@ -129,7 +129,7 @@ def _build_data_archive(
     sample_counts: dict[str, int] = {}
     with tarfile.open(output_path, "w:xz", preset=XZ_PRESET, dereference=True) as archive:
         for stage_name, (archive_root, source_dir) in stage_dirs.items():
-            files = sorted(path for path in source_dir.rglob("*.arc_data") if path.is_file())
+            files = list_arc_data_paths(source_dir, recursive=True)
             if not files:
                 if stage_name == STAGE_INIT:
                     raise RuntimeError(f"init 目录中没有 .arc_data 光谱：{source_dir}")

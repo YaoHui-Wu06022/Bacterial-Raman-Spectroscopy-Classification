@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Sequence
 
@@ -12,6 +11,7 @@ import pandas as pd
 import seaborn as sns
 from sklearn.metrics import classification_report, confusion_matrix
 
+from ramanv2.common.file_ops import write_json
 from ramanv2.common.metrics import compute_classification_metrics
 from ramanv2.common.plotting import (
     configure_matplotlib_fonts,
@@ -164,9 +164,7 @@ def _write_metrics_json(
         "classes": classes,
         "matrix": matrix.astype(int).tolist(),
     }
-    (result_dir / "metrics.json").write_text(
-        json.dumps(values, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    write_json(result_dir / "metrics.json", values)
 
 
 def _format_report(report: dict, class_names: Sequence[str], metrics: dict[str, float]) -> str:

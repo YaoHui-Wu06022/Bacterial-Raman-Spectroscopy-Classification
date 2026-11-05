@@ -5,12 +5,11 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ramanv2.common.publishing import write_text_atomic
+from ramanv2.common.file_ops import read_json, write_json
 
 
 PIPELINE_STATE_VERSION = 1
@@ -155,16 +154,13 @@ def load_pipeline_state(path: Path | str) -> PipelineState:
     target = Path(path)
     if not target.is_file():
         return PipelineState()
-    payload = json.loads(target.read_text(encoding="utf-8"))
+    payload = read_json(target)
     return PipelineState.from_payload(payload)
 
 
-def save_pipeline_state(path: Path | str, state: PipelineState) -> None:
+def write_pipeline_state(path: Path | str, state: PipelineState) -> None:
     state.updated_at = datetime.now(timezone.utc).isoformat()
-    write_text_atomic(
-        path,
-        json.dumps(state.to_payload(), ensure_ascii=False, indent=2) + "\n",
-    )
+    write_json(path, state.to_payload())
 
 
 def _optional_string(value: object) -> str | None:
@@ -196,5 +192,5 @@ __all__ = [
     "load_pipeline_state",
     "pipeline_metadata_dir",
     "pipeline_state_path",
-    "save_pipeline_state",
+    "write_pipeline_state",
 ]
