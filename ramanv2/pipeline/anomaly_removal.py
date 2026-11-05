@@ -1,13 +1,4 @@
 """init 生成前的全库高异常剔除事务。
-
-分析由 :mod:`ramanv2.audit.heterogeneity` 完成；本模块负责：
-
-1. 门禁：所有文件夹已完成人工清洗，且 cosmic 来源都有可用的 shift_data；
-2. 归档：把选中的 cosmic / extra 原谱移入 ``dataset/analysis_delete``，并为每条
-   样本生成同目录证据图；
-3. 清理：删除对应 shift 派生谱，不直接修改 init，只把 init 标记为待重建；
-4. 记录：更新 folder_lineage、pipeline state、commit_log 与剔除日志，并在归档目录
-   写出 Markdown 汇总，标明本次删除数量与当前归档总数。
 """
 
 from __future__ import annotations
