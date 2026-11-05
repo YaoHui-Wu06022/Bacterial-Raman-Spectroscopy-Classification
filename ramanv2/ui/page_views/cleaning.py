@@ -10,13 +10,23 @@ import matplotlib
 
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
+import pandas as pd
 import streamlit as st
 
+from ramanv2.audit.heterogeneity import (
+    AUTO_MIN_SEPARATION,
+    HeterogeneityReport,
+    analyze_library,
+)
 from ramanv2.common.arc_data import read_arc_data
 from ramanv2.common.naming import NON_TRAINING_FOLDER_NAMES, build_natural_key
 from ramanv2.common.plotting import configure_matplotlib_fonts
 from ramanv2.data.catalog import ensure_dataset_mapping
 from ramanv2.data.calibration.affine import load_calibration_report
+from ramanv2.pipeline.anomaly_removal import (
+    check_analysis_gate,
+    execute_analysis_removal,
+)
 from ramanv2.pipeline.cleaning import (
     SPECIAL_FOLDER_NAMES,
     ReviewFolder,
@@ -68,7 +78,6 @@ def _deleted_records(
     data_root: Path | str,
     workbook_path: Path | str,
     mapping_path: Path | str,
-    include_bead: bool = False,
 ) -> list[DeletedSpectrum]:
     """扫描人工删除区，**不缓存**。
 
@@ -79,7 +88,7 @@ def _deleted_records(
     整树扫描约 65ms，直接每次扫描，换取「列表永远与磁盘一致」。
     """
     mapping = ensure_dataset_mapping(workbook_path, mapping_path)
-    return scan_deleted_spectra(Path(data_root), mapping, include_bead=include_bead)
+    return scan_deleted_spectra(Path(data_root), mapping, include_bead=True)
 
 
 def _deleted_folders(data_root: Path | str) -> list[DeletedFolder]:
@@ -155,20 +164,32 @@ def _folder_items(folder: ReviewFolder) -> list[SpectrumItem]:
     ]
 
 
+def _spectrum_card(
+    read_path: Path,
+    relative_path: str,
+    label: str,
+    status_text: str | None = None,
+) -> dict[str, object]:
+    """生成选择网格卡片；读取失败时保留错误占位，不中断整页渲染。"""
+    card: dict[str, object] = {"relative_path": relative_path, "label": label}
+    if status_text is not None:
+        card["status_text"] = status_text
+    try:
+        card["image_data"] = build_spectrum_image(str(read_path), read_path.stat().st_mtime_ns)
+    except (OSError, ValueError) as error:
+        card["error"] = f"读取失败：{error}"
+    return card
+
+
 def _build_cards(root: Path, items: list[SpectrumItem]) -> list[dict[str, object]]:
-    cards = []
-    for item in items:
-        path = root / item.relative_path
-        card = {
-            "relative_path": item.relative_path,
-            "label": f"{item.date_name} / {item.folder_name} / {item.file_name}",
-        }
-        try:
-            card["image_data"] = build_spectrum_image(str(path), path.stat().st_mtime_ns)
-        except (OSError, ValueError) as error:
-            card["error"] = f"读取失败：{error}"
-        cards.append(card)
-    return cards
+    return [
+        _spectrum_card(
+            root / item.relative_path,
+            item.relative_path,
+            f"{item.date_name} / {item.folder_name} / {item.file_name}",
+        )
+        for item in items
+    ]
 
 
 def _is_review_date_available(root: Path, date_name: str) -> bool:
@@ -229,17 +250,12 @@ def _commit_current_folder(
 
 def _restore_card_data(root: Path, record: DeletedSpectrum) -> dict[str, object]:
     """将删除目录中的光谱转换为选择网格卡片。"""
-    path = root / record.source_relative_path
-    card = {
-        "relative_path": record.relative_path,
-        "label": f"{record.date_name} / {record.folder_name} / {record.file_name}",
-        "status_text": "待恢复",
-    }
-    try:
-        card["image_data"] = build_spectrum_image(str(path), path.stat().st_mtime_ns)
-    except (OSError, ValueError) as error:
-        card["error"] = f"读取失败：{error}"
-    return card
+    return _spectrum_card(
+        root / record.source_relative_path,
+        record.relative_path,
+        f"{record.date_name} / {record.folder_name} / {record.file_name}",
+        "待恢复",
+    )
 
 
 def _render_flash() -> None:
@@ -280,7 +296,6 @@ def _render_restore_section(context: PageContext) -> None:
             context.data_root,
             context.classification_workbook,
             context.dataset_mapping_file,
-            True,
         )
     except (OSError, ValueError, RuntimeError) as error:
         st.error(f"删除数据扫描失败：{error}")
@@ -430,8 +445,6 @@ def _render_restore_section(context: PageContext) -> None:
                         state="complete",
                         expanded=False,
                     )
-                st.session_state.pop("pipeline_state", None)
-                st.session_state["pipeline_state"] = load_page_state(context)
                 st.session_state.pop("restore_selected_paths", None)
                 st.session_state["restore_expand"] = True
                 _clear_date_cache()
@@ -472,8 +485,6 @@ def _render_restore_section(context: PageContext) -> None:
                         state="complete",
                         expanded=False,
                     )
-                st.session_state.pop("pipeline_state", None)
-                st.session_state["pipeline_state"] = load_page_state(context)
                 st.session_state.pop("restore_selected_paths", None)
                 st.session_state.pop("restore_purge_confirm", None)
                 st.session_state["restore_expand"] = True
@@ -562,7 +573,6 @@ def _render_folder_restore_section(context: PageContext) -> None:
                 selected.relative_path,
             )
             st.session_state.pop("folder_restore_source", None)
-            st.session_state.pop("pipeline_state", None)
             st.session_state["folder_restore_expand"] = True
             _clear_date_cache()
             invalidate_ui_cache("cleaning")
@@ -594,6 +604,272 @@ def _save_grid_selection(context: PageContext, grid_key: str, page_paths: set[st
     for path in chosen - marked:
         toggle_mark_path(state.cleaning, path)
     save_page_state(context, state)
+
+
+ANALYSIS_EDITOR_KEY = "analysis_removal_editor"
+ANALYSIS_REPORT_KEY = "analysis_removal_report"
+
+
+def _analysis_report() -> HeterogeneityReport | None:
+    report = st.session_state.get(ANALYSIS_REPORT_KEY)
+    return report if isinstance(report, HeterogeneityReport) else None
+
+
+def _run_analysis_removal_analysis(context: PageContext, mapping, gate) -> None:
+    def update(message: str, done: int, total: int) -> None:
+        ratio = 1.0 if total <= 0 else min(max(done / total, 0.0), 1.0)
+        progress.progress(ratio, text=f"{message}（{done}/{total}）")
+
+    try:
+        with st.status("正在分析全库光谱…", expanded=True) as status:
+            progress = st.progress(0.0, text="扫描来源文件夹")
+            report = analyze_library(
+                context.shift_root,
+                context.supplement_root,
+                mapping,
+                cosmic_folder_keys=set(gate.cosmic_folder_keys),
+                progress_callback=update,
+            )
+            status.update(
+                label=(
+                    f"分析完成：{len(report.folders)} 个文件夹 / "
+                    f"{report.sample_count} 条光谱"
+                ),
+                state="complete",
+                expanded=False,
+            )
+    except (OSError, ValueError, RuntimeError, TypeError) as error:
+        st.error(f"分析失败：{error}")
+        return
+    st.session_state[ANALYSIS_REPORT_KEY] = report
+    st.session_state.pop(ANALYSIS_EDITOR_KEY, None)
+    st.rerun()
+
+
+def _render_analysis_removal_section(context: PageContext, state: PipelineState) -> None:
+    """全库高异常分析、预览勾选与二次确认剔除，只在清洗完成后出现。"""
+    st.divider()
+    st.subheader("全库高异常剔除")
+    st.caption(
+        "分析 shift_data 与 extra_data，用训练同一预处理链识别夹内少数子簇与样本级异常。"
+        "剔除会归档到 dataset/analysis_delete，并删除 cosmic/shift/extra 中的对应光谱；"
+        "init 不直接删除，只标记待重建。"
+    )
+    try:
+        mapping = ensure_dataset_mapping(
+            context.classification_workbook,
+            context.dataset_mapping_file,
+        )
+    except (OSError, ValueError, RuntimeError) as error:
+        st.error(f"Profile 配置加载失败：{error}")
+        return
+    gate = check_analysis_gate(
+        context.data_root,
+        context.shift_root,
+        context.supplement_root,
+        context.init_root,
+        mapping,
+        state.cleaning.folder_catalog,
+        state.cleaning.completed_folder_keys,
+    )
+    report = _analysis_report()
+
+    with st.container(border=True):
+        if not gate.ready_enable:
+            st.warning("当前还不能进行全库分析：")
+            for issue in gate.issues[:8]:
+                st.write(f"- {issue}")
+            if len(gate.issues) > 8:
+                st.caption(f"另有 {len(gate.issues) - 8} 条问题未显示，修正后重试。")
+            if report is not None and st.button("清除已有分析结果", key="analysis_clear_stale"):
+                st.session_state.pop(ANALYSIS_REPORT_KEY, None)
+                st.session_state.pop(ANALYSIS_EDITOR_KEY, None)
+                st.rerun()
+            return
+
+        actions = st.columns([1, 1, 2])
+        if actions[0].button(
+            "重新分析" if report is not None else "开始分析",
+            key="analysis_run",
+            width="stretch",
+        ):
+            _run_analysis_removal_analysis(context, mapping, gate)
+        if report is not None and actions[1].button(
+            "清除分析结果",
+            key="analysis_clear",
+            width="stretch",
+        ):
+            st.session_state.pop(ANALYSIS_REPORT_KEY, None)
+            st.session_state.pop(ANALYSIS_EDITOR_KEY, None)
+            st.rerun()
+
+        if report is None:
+            st.info(
+                "点击开始分析。自动勾选只针对“少数样本子簇”的 minority 样本；"
+                "双群分裂、整体弥散和单点异常只进入人工复核列表。"
+            )
+            return
+
+        folder_frame = pd.DataFrame(report.folder_records())
+        sample_frame = pd.DataFrame(report.sample_records())
+        auto_count = int(sample_frame["auto_candidate"].sum())
+        auto_folders = int((folder_frame["auto_candidate_count"] > 0).sum())
+        metrics = st.columns(5)
+        metrics[0].metric("分析文件夹", len(folder_frame))
+        metrics[1].metric("分析光谱", report.sample_count)
+        metrics[2].metric("自动候选夹", auto_folders)
+        metrics[3].metric("自动候选光谱", auto_count)
+        metrics[4].metric("跳过光谱", len(report.errors))
+        st.caption(
+            f"自动勾选条件：判定为「少数样本子簇」且子簇质心距离 ≥ "
+            f"{AUTO_MIN_SEPARATION:.2f}。"
+        )
+        if report.errors:
+            with st.expander(f"跳过的光谱（{len(report.errors)} 条）", expanded=False):
+                for error in report.errors[:50]:
+                    st.write(error)
+                if len(report.errors) > 50:
+                    st.caption(f"另有 {len(report.errors) - 50} 条未显示。")
+
+        with st.expander("文件夹级判定", expanded=False):
+            display_columns = [
+                "folder_key",
+                "label",
+                "genus",
+                "source_kind",
+                "n_samples",
+                "verdict",
+                "minority_count",
+                "cluster_separation",
+                "dispersion_ratio",
+                "drift_rho",
+                "auto_candidate_count",
+                "recommendation",
+            ]
+            st.dataframe(
+                folder_frame[display_columns].sort_values(
+                    ["auto_candidate_count", "n_samples"],
+                    ascending=[False, False],
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+
+        review_frame = sample_frame[sample_frame["review_candidate"]].copy()
+        show_all = st.checkbox(
+            "显示全部样本（含未触发复核的样本）",
+            value=False,
+            key=f"analysis_show_all_{report.generated_at}",
+        )
+        if show_all:
+            review_frame = sample_frame.copy()
+        if review_frame.empty:
+            st.info("没有进入复核列表的样本。")
+            return
+        review_frame = review_frame.sort_values(
+            ["auto_candidate", "distance_rank"],
+            ascending=[False, True],
+        )
+        editor_frame = pd.DataFrame(
+            {
+                "剔除": review_frame["auto_candidate"].astype(bool).to_numpy(),
+                "文件夹": review_frame["folder_key"].to_numpy(),
+                "样本": review_frame["file_name"].to_numpy(),
+                "来源": review_frame["source_kind"].to_numpy(),
+                "判定": review_frame["verdict"].to_numpy(),
+                "子簇": review_frame["cluster"].to_numpy(),
+                "子簇距离": review_frame["cluster_separation"].round(3).to_numpy(),
+                "到质心": review_frame["distance_to_centroid"].round(3).to_numpy(),
+                "排名": review_frame["distance_rank"].to_numpy(),
+                "cos_z": review_frame["cos_z"].round(2).to_numpy(),
+                "knn_z": review_frame["knn_z"].round(2).to_numpy(),
+                "粗糙度z": review_frame["roughness_z"].round(2).to_numpy(),
+                "投票": review_frame["outlier_vote"].to_numpy(),
+                "自动候选": review_frame["auto_candidate"].to_numpy(),
+            },
+            index=review_frame["sample_id"].to_numpy(),
+        )
+        editor_key = f"{ANALYSIS_EDITOR_KEY}_{report.generated_at}"
+        edited = st.data_editor(
+            editor_frame,
+            hide_index=True,
+            width="stretch",
+            disabled=[column for column in editor_frame.columns if column != "剔除"],
+            column_config={
+                "剔除": st.column_config.CheckboxColumn("剔除", width="small"),
+            },
+            key=editor_key,
+        )
+        selected_ids = [
+            str(sample_id)
+            for sample_id, remove in zip(edited.index, edited["剔除"].astype(bool))
+            if remove
+        ]
+        selected_frame = sample_frame[sample_frame["sample_id"].isin(selected_ids)]
+        cosmic_count = int((selected_frame["source_kind"] == "cosmic").sum())
+        extra_count = int((selected_frame["source_kind"] == "extra").sum())
+        st.caption(
+            f"已选 {len(selected_ids)} 条：cosmic {cosmic_count} 条"
+            f"（同时删除对应 shift 派生谱），extra {extra_count} 条；"
+            "init 不会直接删除，只标记待重建。"
+        )
+        if st.button("重置为自动候选", key="analysis_reset_selection"):
+            st.session_state.pop(editor_key, None)
+            st.rerun()
+
+        confirm = st.checkbox(
+            "我确认把选中光谱归档到 dataset/analysis_delete，并从 cosmic/shift/extra 移除；"
+            "init 标记待重建",
+            value=False,
+            key=f"analysis_confirm_{report.generated_at}",
+        )
+        if st.button(
+            "执行剔除",
+            key="analysis_execute",
+            disabled=not selected_ids or not confirm,
+            width="stretch",
+        ):
+            def update_removal(message: str, done: int, total: int) -> None:
+                ratio = 1.0 if total <= 0 else min(max(done / total, 0.0), 1.0)
+                removal_progress.progress(ratio, text=f"{message}（{done}/{total}）")
+
+            try:
+                with st.status("正在归档并更新派生记录…", expanded=True) as status:
+                    removal_progress = st.progress(0.0, text="准备归档")
+                    result = execute_analysis_removal(
+                        context.data_root,
+                        context.shift_root,
+                        context.supplement_root,
+                        state,
+                        context.state_file,
+                        report,
+                        selected_ids,
+                        progress_callback=update_removal,
+                    )
+                    status.update(
+                        label=(
+                            f"剔除完成：{result['sample_count']} 条光谱"
+                            f"（cosmic {result['cosmic_count']} / extra {result['extra_count']}）"
+                        ),
+                        state="complete",
+                        expanded=False,
+                    )
+                st.session_state.pop(ANALYSIS_REPORT_KEY, None)
+                st.session_state.pop(editor_key, None)
+                _clear_date_cache()
+                invalidate_ui_cache("cleaning")
+                invalidate_ui_cache("dataset")
+                invalidate_ui_cache("affine")
+                invalidate_ui_cache("training")
+                invalidate_ui_cache("inference")
+                invalidate_ui_cache("analysis")
+                st.session_state["cleaning_flash"] = (
+                    f"已剔除 {result['sample_count']} 条光谱，归档到 dataset/analysis_delete；"
+                    f"清单见 {result['report_path']}；init 已标记待重建。"
+                )
+                st.rerun()
+            except (OSError, ValueError, RuntimeError, TypeError) as error:
+                st.error(f"剔除失败：{error}")
 
 
 def render_cleaning_page(context: PageContext) -> None:
@@ -640,6 +916,7 @@ def render_cleaning_page(context: PageContext) -> None:
         _render_folder_restore_section(context)
         _render_folder_removal_section(context, state)
         _render_restore_section(context)
+        _render_analysis_removal_section(context, state)
         return
 
     try:
@@ -773,6 +1050,7 @@ def render_cleaning_page(context: PageContext) -> None:
     _render_folder_restore_section(context)
     _render_folder_removal_section(context, state)
     _render_restore_section(context)
+    st.caption("完成所有文件夹审核后，可在本页进行全库高异常剔除。")
 
 
 __all__ = ["render_cleaning_page"]

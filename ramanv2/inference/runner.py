@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import json
+import random
+import re
 import shutil
 from collections import defaultdict
 from pathlib import Path
@@ -53,6 +55,35 @@ from ramanv2.inference.spectra import (
 )
 
 
+INFERENCE_SAMPLES_PER_FOLDER = 10
+_CELL_NAME_PATTERN = re.compile(r"^cell(\d+)", re.IGNORECASE)
+
+
+def _cell_key(file_name: str) -> str:
+    """提取 cell 编号作为去重键；非 cell 文件按文件名独立成组。"""
+    stem = Path(file_name).stem
+    match = _CELL_NAME_PATTERN.match(stem)
+    return f"cell{int(match.group(1))}" if match else stem.lower()
+
+
+def _sample_folder_spectra(
+    spectrum_items: list[tuple[str, Path]],
+    limit: int = INFERENCE_SAMPLES_PER_FOLDER,
+) -> list[tuple[str, Path]]:
+    """每个 cell 至多一条，随机抽取不超过 limit 条光谱。
+
+    cell 数不足 limit 时逐 cell 取一条，避免同一 cell 出现两条。
+    """
+    groups: dict[str, list[tuple[str, Path]]] = {}
+    for item in spectrum_items:
+        groups.setdefault(_cell_key(item[0]), []).append(item)
+    if not groups:
+        return []
+    keys = list(groups) if len(groups) <= limit else random.sample(list(groups), limit)
+    keys.sort(key=build_natural_key)
+    return [random.choice(groups[key]) for key in keys]
+
+
 def run_independent_inference(
     source_dir: Path | str,
     level_name: int | str,
@@ -68,7 +99,11 @@ def run_independent_inference(
     cached_test_root: Path | str | None = None,
     folder_names: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> Path:
-    """运行独立文件夹推理并发布 `test_result/` 产物目录。"""
+    """运行独立文件夹推理并发布 `test_result/` 产物目录。
+
+    每个文件夹按 cell 分组随机抽取最多 ``INFERENCE_SAMPLES_PER_FOLDER`` 条，
+    同一 cell 至多一条。
+    """
     target_device = predictor.device if predictor is not None else resolve_device(device)
     if predictor is None:
         predictor = load_predictor(
@@ -176,7 +211,7 @@ def _run_folder_predictions(
     for folder_name, spectrum_items in folder_inputs:
         row = _run_single_folder(
             folder_name,
-            spectrum_items,
+            _sample_folder_spectra(spectrum_items),
             output_dir,
             predictor,
             preprocessor,
@@ -383,8 +418,10 @@ def evaluate_test_set(
     测试目录应是 ``build_test`` 预处理后的 ``dataset/<profile>/test``；缺省
     时按实验配置的 profile 解析。只评估 ``level_name`` 指定的层级：该层有
     全局模型时用 ``model``，只有父类子模型时用 ``parent-routed``，若该层是
-    最深层再追加端到端 ``cascade``。测试样本按文件夹前缀对齐实验类别空间，
-    对不上的整组计入忽略清单，不参与指标计算。
+    最深层再追加端到端 ``cascade``。每个测试文件夹按 cell 分组随机抽取最多
+    ``INFERENCE_SAMPLES_PER_FOLDER`` 条光谱（同一 cell 至多一条），与样本推理
+    口径一致。测试样本按文件夹前缀对齐实验类别空间，对不上的整组计入忽略
+    清单，不参与指标计算。
     """
     context = load_evaluation_context(experiment_dir)
     target_device = resolve_device(device)
@@ -508,7 +545,11 @@ def compute_folder_metrics(
 
 
 def _scan_test_set(test_path: Path) -> tuple[list[str], list[Path], list[str]]:
-    """按自然序扫描扁平测试集，返回文件夹名、光谱路径与逐谱所属文件夹。"""
+    """按自然序扫描扁平测试集，返回文件夹名、抽样光谱路径与逐谱所属文件夹。
+
+    每个文件夹按 cell 分组随机抽取最多 ``INFERENCE_SAMPLES_PER_FOLDER`` 条，
+    与样本推理保持一致的独立测试口径。
+    """
     folder_names: list[str] = []
     sample_paths: list[Path] = []
     sample_folders: list[str] = []
@@ -519,9 +560,10 @@ def _scan_test_set(test_path: Path) -> tuple[list[str], list[Path], list[str]]:
         paths = list_spectrum_paths(folder_dir)
         if not paths:
             continue
+        sampled = _sample_folder_spectra([(path.name, path) for path in paths])
         folder_names.append(folder_dir.name)
-        sample_paths.extend(paths)
-        sample_folders.extend([folder_dir.name] * len(paths))
+        sample_paths.extend(path for _, path in sampled)
+        sample_folders.extend([folder_dir.name] * len(sampled))
     if not sample_paths:
         raise RuntimeError(f"测试目录中没有 .arc_data 光谱：{test_path}")
     return folder_names, sample_paths, sample_folders

@@ -8,9 +8,16 @@ from pathlib import Path
 import streamlit as st
 
 from ramanv2.analysis.runner import run_interpret_run, run_umap_run
+from ramanv2.common.naming import build_natural_key
 from ramanv2.core.paths import PROJECT_ROOT
 from ramanv2.evaluation.model_eval import evaluate_model_run
-from ramanv2.ui.cache import cached_json_file, cached_result_experiment_dirs, cached_run_dirs
+from ramanv2.ui.cache import (
+    cached_json_file,
+    cached_result_experiment_dirs,
+    cached_run_dirs,
+    cached_text_file,
+)
+from ramanv2.ui.formatting import format_ratio
 from ramanv2.ui.state import invalidate_ui_cache, ui_cache_version
 
 
@@ -71,7 +78,7 @@ def find_level_dirs(experiment_dir: Path | str) -> list[Path]:
     root = Path(experiment_dir)
     return sorted(
         (path for path in root.iterdir() if path.is_dir() and _LEVEL_PATTERN.match(path.name)),
-        key=lambda path: _natural_key(path.name),
+        key=lambda path: build_natural_key(path.name),
     )
 
 
@@ -114,9 +121,9 @@ def _render_confusion_section(run_dir: Path, level_name: str) -> None:
             return
         summary = payload.get("summary", {})
         columns = st.columns(3)
-        columns[0].metric("Accuracy", _format_metric(summary.get("accuracy")))
-        columns[1].metric("Macro F1", _format_metric(summary.get("macro_f1")))
-        columns[2].metric("Macro Recall", _format_metric(summary.get("macro_recall")))
+        columns[0].metric("Accuracy", format_ratio(summary.get("accuracy"), "—"))
+        columns[1].metric("Macro F1", format_ratio(summary.get("macro_f1"), "—"))
+        columns[2].metric("Macro Recall", format_ratio(summary.get("macro_recall"), "—"))
         with st.expander("分类报告", expanded=False):
             st.dataframe(payload.get("classes", []), width="stretch")
 
@@ -144,8 +151,9 @@ def _render_analysis_section(run_dir: Path, level_name: str) -> None:
     _render_figures(analysis_dir / "figures", "Analysis 图表")
     log_path = run_dir / "analysis_result" / "logs" / "analysis_log.txt"
     if log_path.is_file():
+        stat = log_path.stat()
         with st.expander("Analysis 日志", expanded=False):
-            st.code(log_path.read_text(encoding="utf-8"), language="text")
+            st.code(cached_text_file(str(log_path.resolve()), stat.st_mtime_ns, stat.st_size), language="text")
 
 
 def _render_umap_section(run_dir: Path, level_name: str) -> None:
@@ -183,17 +191,6 @@ def _render_figures(figure_dir: Path, caption: str) -> None:
 def _selected_index(key: str, options: list[str]) -> int:
     value = st.session_state.get(key)
     return options.index(value) if value in options else 0
-
-
-def _natural_key(value: str) -> list[object]:
-    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", value)]
-
-
-def _format_metric(value: object) -> str:
-    try:
-        return f"{float(value) * 100:.2f}%"
-    except (TypeError, ValueError):
-        return "—"
 
 
 __all__ = ["find_level_dirs", "find_run_dirs", "render_result_analysis_page"]

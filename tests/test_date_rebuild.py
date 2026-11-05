@@ -4,7 +4,6 @@ import json
 import shutil
 
 import numpy as np
-import pytest
 
 from ramanv2.common.arc_data import read_arc_data, write_arc_data
 from ramanv2.data.builders.init import build_full_init
@@ -27,8 +26,7 @@ def _snapshot(root):
     }
 
 
-@pytest.fixture
-def layout(tmp_path):
+def _build_layout(tmp_path):
     cosmic, shift, init = (tmp_path / name for name in ("cosmic_data", "shift_data", "init"))
     mapping = DatasetMapping(genera={"Escherichia": ("EC",)}, datasets={"GN": ("Escherichia",)})
     for date, cs_name in ((DATE, "EC03"), (OTHER_DATE, "EC04")):
@@ -49,9 +47,8 @@ def layout(tmp_path):
     return cosmic, shift, state, state_file
 
 
-@pytest.mark.parametrize("delete_cs", [False, True])
-def test_selected_date_updates_only_shift_preserving_downstream(layout, delete_cs, monkeypatch):
-    cosmic, shift, state, state_file = layout
+def _run_date_rebuild_case(tmp_path, monkeypatch, delete_cs, preserve):
+    cosmic, shift, state, state_file = _build_layout(tmp_path)
     root = cosmic.parent
     before = {name: _snapshot(root / name) for name in ("init", "init_test", "GN", "fig_init")}
     other_before = _snapshot(shift / OTHER_DATE)
@@ -70,14 +67,13 @@ def test_selected_date_updates_only_shift_preserving_downstream(layout, delete_c
     monkeypatch.setattr(calibration, "build_spectrum_folder", unexpected)
     monkeypatch.setattr(calibration, "build_test_folder", unexpected)
     monkeypatch.setattr(calibration, "build_prefix_plots_for_groups", unexpected)
-    preserve = calibration.preserve_paths
 
     def preserve_selected_paths(paths):
         assert set(paths) == {shift / DATE, root / ".raman_pipeline/folder_lineage.json", state_file}
         return preserve(paths)
 
     monkeypatch.setattr(calibration, "preserve_paths", preserve_selected_paths)
-    result = run_date_rebuild(*layout, DATE)
+    result = run_date_rebuild(cosmic, shift, state, state_file, DATE)
     assert result["status"] == "rebuilt"
     axis, intensity = read_arc_data(shift / DATE / "EC02/a.arc_data")
     np.testing.assert_array_equal(axis, np.array([602, 1002, 1802]) * 2 + 10)
@@ -94,3 +90,9 @@ def test_selected_date_updates_only_shift_preserving_downstream(layout, delete_c
     assert not records[f"{DATE}/EC03"].get("init_pending")
     assert state.dataset_builds["profiles"] == {"GN": {"status": "ready"}}
     assert not list(root.rglob(".*.tmp"))
+
+
+def test_selected_date_updates_only_shift_preserving_downstream(tmp_path, monkeypatch):
+    original_preserve = calibration.preserve_paths
+    for delete_cs in (False, True):
+        _run_date_rebuild_case(tmp_path / f"case_{delete_cs}", monkeypatch, delete_cs, original_preserve)

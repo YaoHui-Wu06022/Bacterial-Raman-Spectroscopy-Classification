@@ -70,7 +70,6 @@ def load_page_state(context: PageContext) -> PipelineState:
         state.cleaning.completed_date_names = set(derived["cleaning"])
         state.affine_completed_dates = set(derived["affine"])
         state.init_generated_dates = set(derived["init"])
-    st.session_state["pipeline_state"] = state
     return state
 
 
@@ -81,10 +80,8 @@ def save_page_state(context: PageContext, state: PipelineState) -> None:
     current = load_pipeline_state(context.state_file).to_payload()
     current.pop("updated_at", None)
     if payload == current:
-        st.session_state["pipeline_state"] = state
         return
     save_pipeline_state(context.state_file, state)
-    st.session_state["pipeline_state"] = state
 
 
 __all__ = ["UI_CACHE_NAMES", "invalidate_ui_cache", "load_page_state", "save_page_state", "ui_cache_version"]

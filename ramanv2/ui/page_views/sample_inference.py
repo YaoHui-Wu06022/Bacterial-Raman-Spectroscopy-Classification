@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +19,9 @@ from ramanv2.ui.cache import (
     cached_test_folder_names,
     cached_experiment_dirs,
     cached_json_file,
+    cached_text_file,
 )
+from ramanv2.ui.formatting import format_ratio
 from ramanv2.ui.state import invalidate_ui_cache, ui_cache_version
 
 
@@ -103,6 +104,8 @@ def render_sample_inference_page() -> None:
         st.warning("请至少选择一个测试文件夹。")
         _render_existing_result(experiment_dir, level_name)
         return
+
+    st.caption("样本推理会从每个文件夹随机抽取最多 10 条光谱，同一 cell 只取 1 条。")
 
     profile = next(profile for profile in profiles if profile.profile_id == profile_id)
     cache_root = get_dataset_dir(profile, PROJECT_ROOT) / profile.root_test
@@ -207,7 +210,7 @@ def _run_inference(
             predictor = _get_cached_predictor(experiment_dir, level_name)
             status.write("正在检查测试数据缓存。")
             build_report = build_test_cache(TEST_ROOT, cache_root, folder_names, predictor)
-            status.write("正在执行预测并生成结果报告。")
+            status.write("正在从每个文件夹随机抽取光谱（每个 cell 至多 1 条）。")
             result_dir = run_independent_inference(
                 experiment_dir,
                 level_name,
@@ -245,8 +248,8 @@ def _render_existing_result(experiment_dir: Path, level_name: str) -> None:
     metrics = st.columns(5)
     metrics[0].metric("推理文件夹", int(summary.get("folder_count", 0)))
     metrics[1].metric("已评估文件夹", int(summary.get("evaluated_folder_count", 0)))
-    metrics[2].metric("文件夹准确率", _format_ratio(summary.get("folder_accuracy")))
-    metrics[3].metric("光谱准确率", _format_ratio(summary.get("spectrum_accuracy")))
+    metrics[2].metric("文件夹准确率", format_ratio(summary.get("folder_accuracy"), "未评估"))
+    metrics[3].metric("光谱准确率", format_ratio(summary.get("spectrum_accuracy"), "未评估"))
     metrics[4].metric("未识别类别", int(summary.get("unevaluated_folder_count", 0)))
     rows = summary.get("rows", [])
     if isinstance(rows, list) and rows:
@@ -255,7 +258,7 @@ def _render_existing_result(experiment_dir: Path, level_name: str) -> None:
                 "文件夹": row.get("folder", ""),
                 "真实类别": row.get("expected_label", "未评估"),
                 "预测类别": row.get("predicted_label", ""),
-                "光谱正确率": _format_ratio(row.get("correct_ratio")),
+                "光谱正确率": format_ratio(row.get("correct_ratio"), "未评估"),
                 "文件夹正确": "是" if row.get("folder_correct") else "否",
             }
             for row in rows
@@ -295,16 +298,8 @@ def _render_existing_result(experiment_dir: Path, level_name: str) -> None:
         st.write(str(result_dir))
         summary_text = result_dir / "summary.txt"
         if summary_text.is_file():
-            st.code(summary_text.read_text(encoding="utf-8"), language="text")
-
-
-def _format_ratio(value: object) -> str:
-    if value is None:
-        return "未评估"
-    try:
-        return f"{float(value) * 100:.2f}%"
-    except (TypeError, ValueError):
-        return "未评估"
+            stat = summary_text.stat()
+            st.code(cached_text_file(str(summary_text.resolve()), stat.st_mtime_ns, stat.st_size), language="text")
 
 
 __all__ = ["render_sample_inference_page"]

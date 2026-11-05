@@ -44,7 +44,7 @@ def _profile() -> SimpleNamespace:
     return SimpleNamespace(dataset_name="GN", root_init="init", root_init_test="init_test")
 
 
-def test_profile_data_archive_includes_independent_test_init(tmp_path: Path) -> None:
+def test_profile_data_archive_and_notebook_restore_round_trip(tmp_path: Path) -> None:
     project_root = _build_project(tmp_path, with_test_enable=True)
     output = tmp_path / "data.tar.xz"
 
@@ -61,11 +61,6 @@ def test_profile_data_archive_includes_independent_test_init(tmp_path: Path) -> 
             "dataset/GN/init_test/ECL20240202_01/sample.arc_data",
         ]
 
-
-def test_notebook_restores_exported_archive_without_changing_files(tmp_path: Path) -> None:
-    project_root = _build_project(tmp_path, with_test_enable=True)
-    archive_path = tmp_path / "data.tar.xz"
-    data_archive.build_profile_data_archive("GN", archive_path, project_root)
     target_root = tmp_path / "remote"
     init_dir = target_root / "dataset/GN/init"
     init_dir.mkdir(parents=True)
@@ -73,7 +68,7 @@ def test_notebook_restores_exported_archive_without_changing_files(tmp_path: Pat
     other = target_root / "dataset/other.arc_data"
     other.write_bytes(b"unchanged")
 
-    _load_notebook_data_restore()(archive_path, target_root, _profile())
+    _load_notebook_data_restore()(output, target_root, _profile())
 
     init_relative = Path("dataset/GN/init/Enterobacter/ECL20240101_01/sample.arc_data")
     profile_test_relative = Path("dataset/GN/init_test/ECL20240202_01/sample.arc_data")

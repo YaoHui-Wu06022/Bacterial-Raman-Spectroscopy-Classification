@@ -23,7 +23,7 @@ from ramanv2.data.runtime.augmentation import AugmentationSpec, augment_raw_spec
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.filters import sg_coeff
 from ramanv2.spectra.normalize import normalize_spectrum
-from ramanv2.spectra.preprocess import estimate_baseline
+from ramanv2.spectra.preprocess import estimate_baseline, smooth_baseline_input
 
 
 DEFAULT_SPECTRUM_PATH = Path(
@@ -94,7 +94,7 @@ def build_pipeline_trace(
         raise ValueError(f"光谱在基线拟合范围内的点数不足：{source_path}")
 
     baseline = estimate_baseline(
-        fit_intensities,
+        smooth_baseline_input(fit_intensities),
         method=build_config.baseline_method,
         lam=build_config.baseline_lam,
         p=build_config.baseline_asls_p,

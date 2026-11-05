@@ -32,7 +32,7 @@ def test_test_input_selection_uses_current_model_labels() -> None:
     ]
 
 
-def test_predict_tensor_directly_inherits_single_child_branch(
+def test_routing_shortcuts_single_child_and_skips_invalid(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -74,7 +74,6 @@ def test_predict_tensor_directly_inherits_single_child_branch(
     assert predictions == [Prediction("GenusA/SpeciesA", 1.0, 0)]
 
 
-def test_routed_labels_skip_invalid_and_shortcut_single_child() -> None:
     loaded: list[int] = []
 
     def load_parent(parent_id: int):

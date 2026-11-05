@@ -23,6 +23,7 @@ LINEAGE_FILE_NAME = "folder_lineage.json"
 LINEAGE_VERSION = 1
 MANUAL_DELETE_RELATIVE = Path("delete") / "manual"
 FOLDER_DELETE_RELATIVE = Path("delete") / "folder_delete"
+ANALYSIS_DELETE_RELATIVE = Path("analysis_delete")
 SPECIAL_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
 
 
@@ -254,6 +255,73 @@ def record_folder_move(
         record["folder_status"] = "folder_deleted"
         record.setdefault("history", []).append({"operation": "folder_remove", "path": normalized, "recorded_at": now})
         record["updated_at"] = now
+    payload["updated_at"] = now
+    save_folder_lineage(data_root, payload)
+    return payload
+
+
+def record_analysis_removal(
+    data_root: Path | str,
+    removed: dict[str, str],
+) -> dict[str, object]:
+    """记录 init 前的分析剔除；removed 为 cosmic 相对路径到归档相对路径的映射。"""
+    payload = load_folder_lineage(data_root)
+    now = datetime.now(timezone.utc).isoformat()
+    touched: dict[str, dict[str, object]] = {}
+    for source_relative, archive_relative in removed.items():
+        normalized = str(source_relative).replace("\\", "/")
+        parts = normalized.split("/")
+        if len(parts) < 3:
+            continue
+        date_name, folder_name = parts[0], parts[1]
+        relative = "/".join(parts[2:])
+        record = _ensure_folder(payload, date_name, folder_name)
+        files = record.setdefault("files", {})
+        if not isinstance(files, dict):
+            files = {}
+            record["files"] = files
+        current = files.get(relative, {})
+        entry = dict(current) if isinstance(current, dict) else {}
+        entry.update(
+            {
+                "status": "analysis_deleted",
+                "source_path": normalized,
+                "analysis_deleted_path": str(archive_relative).replace("\\", "/"),
+                "reason": "analysis_subcluster_removal",
+                "recorded_at": now,
+            }
+        )
+        entry.pop("deleted_path", None)
+        files[relative] = entry
+        record["init_pending"] = True
+        record["folder_status"] = "active"
+        record.setdefault("history", []).append(
+            {
+                "operation": "analysis_anomaly_removal",
+                "path": normalized,
+                "recorded_at": now,
+            }
+        )
+        record["updated_at"] = now
+        touched[f"{date_name}/{folder_name}"] = record
+    for record in touched.values():
+        file_records = record.get("files", {})
+        if isinstance(file_records, dict):
+            record["active_file_count"] = sum(
+                1
+                for item in file_records.values()
+                if isinstance(item, dict) and item.get("status") == "active"
+            )
+            record["deleted_file_count"] = sum(
+                1
+                for item in file_records.values()
+                if isinstance(item, dict) and item.get("status") == "manual_deleted"
+            )
+            record["analysis_deleted_count"] = sum(
+                1
+                for item in file_records.values()
+                if isinstance(item, dict) and item.get("status") == "analysis_deleted"
+            )
     payload["updated_at"] = now
     save_folder_lineage(data_root, payload)
     return payload
@@ -600,6 +668,7 @@ def _move_folder_contents(source_folder: Path, target_folder: Path) -> list[tupl
 
 
 __all__ = [
+    "ANALYSIS_DELETE_RELATIVE",
     "FOLDER_DELETE_RELATIVE",
     "LINEAGE_FILE_NAME",
     "apply_output_path",
@@ -608,6 +677,7 @@ __all__ = [
     "lineage_path",
     "load_folder_lineage",
     "record_affine_approval",
+    "record_analysis_removal",
     "record_manual_move",
     "record_folder_move",
     "record_restore",

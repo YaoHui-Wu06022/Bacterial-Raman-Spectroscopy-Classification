@@ -88,8 +88,8 @@ def test_restore_folder_moves_cosmic_only_and_requeues(tmp_path: Path) -> None:
     assert [folder.folder_name for folder in folders] == ["EC02"]
 
 
-def test_purge_deleted_spectra_removes_files_and_empty_folders(tmp_path: Path) -> None:
-    """彻底删除：文件不可恢复，清空的文件夹逐级删除，走向记录标记 purged。"""
+def test_purge_deleted_spectra_cleans_files_and_stale_date_records(tmp_path: Path) -> None:
+    """彻底删除：文件不可恢复、清空文件夹逐级删除，并清理失效日期记录。"""
     date_name = "20240101"
     data_root = tmp_path / "cosmic_data"
     manual = data_root / "delete" / "manual" / date_name
@@ -130,27 +130,23 @@ def test_purge_deleted_spectra_removes_files_and_empty_folders(tmp_path: Path) -
 
     assert not (data_root / "delete").exists()
 
-
-def test_purge_last_date_files_discards_stale_date_records(tmp_path: Path) -> None:
-    """彻底删除某个日期最后的文件后，仿射与清洗记录不能继续残留。"""
-    date_name = "20231130"
-    data_root = tmp_path / "cosmic_data"
-    manual = data_root / "delete" / "manual" / date_name / "EC03"
-    manual.mkdir(parents=True)
-    (manual / "a.arc_data").write_text("1 2\n", encoding="utf-8")
-    state_path = tmp_path / "state.json"
+    # 彻底删除某个日期最后的文件后，仿射与清洗记录不能继续残留。
+    last_date = "20231130"
+    last_manual = data_root / "delete" / "manual" / last_date / "EC03"
+    last_manual.mkdir(parents=True)
+    (last_manual / "a.arc_data").write_text("1 2\n", encoding="utf-8")
     state = PipelineState()
-    state.affine_completed_dates.add(date_name)
-    state.cleaning.folder_catalog[date_name] = {"EC03"}
-    state.cleaning.completed_folder_keys = {f"{date_name}/EC03"}
-    state.cleaning.completed_date_names.add(date_name)
+    state.affine_completed_dates.add(last_date)
+    state.cleaning.folder_catalog[last_date] = {"EC03"}
+    state.cleaning.completed_folder_keys = {f"{last_date}/EC03"}
+    state.cleaning.completed_date_names.add(last_date)
     save_pipeline_state(state_path, state)
 
-    purge_deleted_spectra(data_root, state_path, [f"{date_name}/EC03/a.arc_data"])
+    purge_deleted_spectra(data_root, state_path, [f"{last_date}/EC03/a.arc_data"])
 
-    assert not (data_root / date_name).exists()
+    assert not (data_root / last_date).exists()
     restored = load_pipeline_state(state_path)
-    assert date_name not in restored.affine_completed_dates
-    assert date_name not in restored.cleaning.completed_date_names
-    assert date_name not in restored.cleaning.folder_catalog
+    assert last_date not in restored.affine_completed_dates
+    assert last_date not in restored.cleaning.completed_date_names
+    assert last_date not in restored.cleaning.folder_catalog
     assert restored.cleaning.completed_folder_keys == set()

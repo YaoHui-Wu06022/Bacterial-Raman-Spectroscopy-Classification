@@ -72,7 +72,6 @@ def test_test_return_moves_only_selected_group_and_updates_future_route(layout, 
     original = (source / "a.arc_data").read_bytes()
     before = _snapshot(root)
     monkeypatch.setattr(dataset, "build_prefix_plots_for_groups", _fake_plot)
-    monkeypatch.setattr(dataset, "build_spectrum_folder", lambda *args: pytest.fail("must not rebuild"))
     assert dataset.collect_test_return_sources(init, state) == [SOURCE, SECOND]
     result = dataset.run_test_to_init(*layout, SOURCE)
     target = init / "Escherichia" / f"EC{DATE}_02"

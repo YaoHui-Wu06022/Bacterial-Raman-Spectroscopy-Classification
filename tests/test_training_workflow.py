@@ -30,7 +30,7 @@ class WorkflowModel(torch.nn.Module):
         return (logits, embeddings) if return_embedding_enable else logits
 
 
-def test_workflow_writes_global_run_and_uses_plugin_callbacks(
+def test_workflow_writes_global_run_and_reloads_across_levels(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -77,18 +77,16 @@ def test_workflow_writes_global_run_and_uses_plugin_callbacks(
     assert not (output_dir / "class_names.json").exists()
 
 
-def test_species_run_can_train_reload_and_evaluate_across_dates(tmp_path, monkeypatch):
-    train_dir = tmp_path / "train"
+    # 跨日期种级训练、重载评估，并在同一实验中补训练另一层。
+    species_train_dir = tmp_path / "train"
     for folder in ("GenusA/AB20231212_01", "GenusA/ab20231214_01", "GenusA/AJO20231214_01"):
-        _write_spectra(train_dir / folder, "cell", 1.0)
-    config = _build_workflow_config()
-    monkeypatch.setattr("ramanv2.training.workflow.build_model", lambda n, spec: WorkflowModel(n))
+        _write_spectra(species_train_dir / folder, "cell", 1.0)
     monkeypatch.setattr("ramanv2.inference.predictor.build_model", lambda n, spec: WorkflowModel(n))
-    monkeypatch.setattr("ramanv2.evaluation.context.resolve_training_dir", lambda profile: train_dir)
+    monkeypatch.setattr("ramanv2.evaluation.context.resolve_training_dir", lambda profile: species_train_dir)
     output = tmp_path / "experiment"
     meta = run_training(TrainRequest(
         config, "level_2", train_per_parent_enable=False,
-        train_dir=train_dir, experiment_dir=output,
+        train_dir=species_train_dir, experiment_dir=output,
     ))
     assert meta["label_schema"] == LABEL_SCHEMA
     assert meta["class_names_by_level"]["level_2"] == ["GenusA/AB", "GenusA/AJO"]
@@ -107,7 +105,7 @@ def test_species_run_can_train_reload_and_evaluate_across_dates(tmp_path, monkey
     # 同一实验可补训练另一个层，已经训练的种级条目不得丢失。
     combined = run_training(TrainRequest(
         config, "level_1", train_per_parent_enable=False,
-        train_dir=train_dir, experiment_dir=output,
+        train_dir=species_train_dir, experiment_dir=output,
     ))
     assert combined["level_models"]["level_2"] == entry
     assert "level_1" in combined["level_models"]

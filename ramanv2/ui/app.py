@@ -16,7 +16,6 @@ def main() -> None:
     context = build_page_context()
     # 状态文件是跨页面和跨浏览器会话的唯一来源，避免使用旧会话对象覆盖新状态。
     state = load_pipeline_state(context.state_file)
-    st.session_state["pipeline_state"] = state
     current = st.session_state.get("active_page", state.active_page)
     if current not in PAGE_NAMES:
         current = PAGE_NAMES[0]

@@ -8,10 +8,15 @@ from functools import lru_cache
 
 import numpy as np
 from scipy import sparse
+from scipy.signal import savgol_filter
 from scipy.sparse.linalg import spsolve
 
 from .bands import build_valid_mask, normalize_bad_bands
 from .filters import median_filter_1d, odd_window_points
+
+
+# 基线拟合前只压制单点噪声，避免 airPLS 重加权在相近谱之间跳到不同不动点。
+BASELINE_INPUT_SMOOTH_WINDOW = 5
 
 
 @lru_cache(maxsize=32)
@@ -166,6 +171,19 @@ def remove_cosmic_rays(
     return cleaned, CosmicRayStats(cosmic_ray=int(replaced_mask.sum()))
 
 
+def smooth_baseline_input(spectrum):
+    """给基线估计提供轻度平滑输入；后续相减仍使用原始拟合段。"""
+    values = np.asarray(spectrum, dtype=np.float64)
+    if values.size < BASELINE_INPUT_SMOOTH_WINDOW:
+        return values
+    return savgol_filter(
+        values,
+        BASELINE_INPUT_SMOOTH_WINDOW,
+        3,
+        mode="interp",
+    )
+
+
 def interpolate_valid_bands(wavenumbers, spectrum, target_axis, bad_bands):
     """分有效波段插值，边界取本段端点值，禁止跨坏段借用另一侧采样点。"""
     bands = normalize_bad_bands(bad_bands)
@@ -242,7 +260,7 @@ def preprocess_single_spectrum(
         return None, None, cosmic_stats
 
     baseline = estimate_baseline(
-        fitted_spectrum,
+        smooth_baseline_input(fitted_spectrum),
         method=baseline_method,
         lam=baseline_lam,
         p=baseline_asls_p,

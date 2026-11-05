@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -72,11 +73,15 @@ def scan_date_names(root_dir: Path | str) -> list[str]:
 def _collect_paths(root: Path, folder_dir: Path) -> tuple[str, ...]:
     if not folder_dir.is_dir():
         return ()
-    paths = [path for path in folder_dir.glob("*.arc_data") if path.is_file()]
-    return tuple(
-        path.relative_to(root).as_posix()
-        for path in sorted(paths, key=lambda item: build_natural_key(item.name))
-    )
+    # scandir 的 DirEntry 在 Windows 上直接带 stat 信息，比 glob + is_file 逐个 stat 快得多。
+    with os.scandir(folder_dir) as entries:
+        names = [
+            entry.name
+            for entry in entries
+            if entry.is_file() and entry.name.endswith(".arc_data")
+        ]
+    prefix = folder_dir.relative_to(root).as_posix()
+    return tuple(f"{prefix}/{name}" for name in sorted(names, key=build_natural_key))
 
 
 def scan_review_folders(
@@ -107,6 +112,9 @@ def scan_review_folders(
         names = physical_names | set(catalog.get(date_name, set()))
         for folder_name in sorted(names, key=build_natural_key):
             key = f"{date_name}/{folder_name}"
+            # 已完成文件夹不再列举光谱：全库门禁检查会对所有日期调用本函数。
+            if key in completed:
+                continue
             folders.append(
                 ReviewFolder(
                     key=key,
@@ -115,7 +123,7 @@ def scan_review_folders(
                     relative_paths=_collect_paths(root, date_dir / folder_name),
                 )
             )
-    return [folder for folder in folders if folder.key not in completed]
+    return folders
 
 
 def sync_folder_catalog(state: CleaningState, folders: list[ReviewFolder]) -> None:

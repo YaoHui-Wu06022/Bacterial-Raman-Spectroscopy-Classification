@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
 
+from ramanv2.common.naming import build_natural_key
+from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.data.count import collect_taxon_counts, summarize_dataset
 from ramanv2.data.runtime.index import DatasetIndex
-from ramanv2.common.naming import build_natural_key
+from ramanv2.pipeline.cleaning import scan_date_names
 
 
 @st.cache_data(show_spinner=False)
@@ -34,16 +35,7 @@ def cached_directory_names(root_dir: str, version: int) -> tuple[str, ...]:
     root = Path(root_dir)
     if not root.is_dir():
         return ()
-    dates = []
-    for path in root.iterdir():
-        if not path.is_dir() or len(path.name) != 8 or not path.name.isdigit():
-            continue
-        try:
-            parsed = datetime.strptime(path.name, "%Y%m%d")
-        except ValueError:
-            continue
-        dates.append((parsed, path.name))
-    return tuple(name for _, name in sorted(dates))
+    return tuple(scan_date_names(root))
 
 
 @st.cache_resource(show_spinner=False)
@@ -76,6 +68,29 @@ def cached_file_bytes(path_string: str, modified_ns: int, size: int) -> bytes:
     """缓存下载文件内容，避免页面重跑时重复读取大压缩包。"""
     del modified_ns, size
     return Path(path_string).read_bytes()
+
+
+@st.cache_data(show_spinner=False)
+def cached_text_file(path_string: str, modified_ns: int, size: int) -> str:
+    """缓存日志/摘要等只读文本；修改时间或大小变化会自动失效。"""
+    del modified_ns, size
+    try:
+        return Path(path_string).read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+@st.cache_data(show_spinner=False)
+def cached_calibration_reports(
+    shift_root: str,
+    report_fingerprint: tuple[tuple[str, int, int], ...],
+) -> dict[str, dict[str, object] | None]:
+    """缓存日期级仿射报告；报告文件的 mtime/size 指纹变化时自动失效。"""
+    root = Path(shift_root)
+    return {
+        date_name: load_calibration_report(root, date_name)
+        for date_name, _, _ in report_fingerprint
+    }
 
 
 @st.cache_data(show_spinner=False)
@@ -139,6 +154,7 @@ def cached_test_folder_names(root_dir: str, version: int) -> tuple[str, ...]:
 
 
 __all__ = [
+    "cached_calibration_reports",
     "cached_dataset_index",
     "cached_dataset_summary",
     "cached_dataset_taxon_counts",
@@ -149,4 +165,5 @@ __all__ = [
     "cached_json_file",
     "cached_run_dirs",
     "cached_result_experiment_dirs",
+    "cached_text_file",
 ]

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,15 +65,19 @@ def scan_supplement_plan(
             (path for path in root.iterdir() if path.is_dir() and not path.name.startswith(".")),
             key=lambda path: build_natural_key(path.name),
         ):
-            files = sorted(
-                (path for path in folder.iterdir() if path.is_file() and path.suffix.lower() == ".arc_data"),
-                key=lambda path: build_natural_key(path.name),
-            )
-            nested = [path for path in folder.rglob("*.arc_data") if path.parent != folder]
-            if nested:
-                errors.append(f"{folder.name}：补充文件夹只支持单层光谱，发现 {len(nested)} 条嵌套文件")
+            # 预检只需要计数：单次 scandir 同时统计直接光谱与嵌套光谱，避免排序和二次遍历。
+            direct_count = 0
+            nested_count = 0
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    if entry.is_dir():
+                        nested_count += sum(1 for _ in Path(entry.path).rglob("*.arc_data"))
+                    elif entry.is_file() and entry.name.lower().endswith(".arc_data"):
+                        direct_count += 1
+            if nested_count:
+                errors.append(f"{folder.name}：补充文件夹只支持单层光谱，发现 {nested_count} 条嵌套文件")
                 continue
-            if not files:
+            if not direct_count:
                 errors.append(f"{folder.name}：补充文件夹没有 .arc_data 光谱")
                 continue
             prefix = parse_folder_prefix(folder.name, uppercase_enable=True)
@@ -87,7 +92,7 @@ def scan_supplement_plan(
                     genus=genus,
                     source_dir=folder,
                     target_relative=Path(genus) / folder.name,
-                    file_count=len(files),
+                    file_count=direct_count,
                 )
             )
     planned_targets = {group.target_relative.as_posix() for group in groups}

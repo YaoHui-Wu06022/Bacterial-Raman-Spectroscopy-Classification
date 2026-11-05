@@ -16,24 +16,22 @@ def make_mapping() -> DatasetMapping:
     )
 
 
-def test_scan_supplement_plan_reports_unbacked_direct_init_folder(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "补充数据"
+def test_scan_and_apply_supplement_plan(tmp_path: Path) -> None:
+    scan_root = tmp_path / "scan"
+    root = scan_root / "补充数据"
     write_spectrum(root / "CAMY20261027" / "cell1.arc_data", 1)
-    write_spectrum(tmp_path / "init" / "Corynebacterium" / "CAMY20261027" / "cell1.arc_data", 1)
-    write_spectrum(tmp_path / "init" / "Corynebacterium" / "CAMY20261026" / "cell1.arc_data", 2)
+    write_spectrum(scan_root / "init" / "Corynebacterium" / "CAMY20261027" / "cell1.arc_data", 1)
+    write_spectrum(scan_root / "init" / "Corynebacterium" / "CAMY20261026" / "cell1.arc_data", 2)
 
-    plan = scan_supplement_plan(root, tmp_path / "init", make_mapping())
+    plan = scan_supplement_plan(root, scan_root / "init", make_mapping())
 
     assert plan.errors == ()
     assert plan.unbacked_init_folders == ("Corynebacterium/CAMY20261026",)
 
-
-def test_apply_supplement_plan_replaces_target_and_keeps_source(tmp_path: Path) -> None:
-    root = tmp_path / "补充数据"
+    apply_root = tmp_path / "apply"
+    root = apply_root / "补充数据"
     write_spectrum(root / "CAMY20261027" / "new.arc_data", 1)
-    init = tmp_path / "init"
+    init = apply_root / "init"
     write_spectrum(init / "Corynebacterium" / "CAMY20261027" / "old.arc_data", 2)
     plan = scan_supplement_plan(root, init, make_mapping())
 

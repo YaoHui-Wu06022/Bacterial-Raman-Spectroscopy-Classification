@@ -356,8 +356,6 @@ def build_init_datasets(
         for prefix in prefixes
     }
     selected_names = _select_date_names(source_root, date_names)
-    if mode == "replace_dates" and len(selected_names) != 1:
-        raise ValueError("按日期替换一次只能更新一个日期")
     affine_dates = {str(name) for name in affine_completed_dates}
     eligible_dates: list[str] = []
     skipped_dates: list[str] = []

@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import streamlit as st
 
-from ramanv2.data.count import summarize_dataset
-from ramanv2.data.builders.init import (
-    build_init_datasets,
-    build_profile_dataset,
-)
+from ramanv2.data.builders.init import build_profile_dataset
 from ramanv2.data.plots.prefix import build_prefix_plots
 from ramanv2.pipeline.calibration import run_folder_offset
 from ramanv2.data.catalog import DatasetMapping, ensure_dataset_mapping
@@ -20,13 +17,22 @@ from ramanv2.common.naming import (
     parse_folder_prefix,
 )
 from ramanv2.data.profiles import PIPELINE_PROFILE_IDS, TEST_ROOT_NAME, get_dataset_dir, get_profile
-from ramanv2.pipeline.dataset import collect_test_return_sources, collect_dataset_source_folders, collect_init_export_sources, run_test_to_init, run_folder_dataset_update, run_init_to_test
+from ramanv2.pipeline.dataset import (
+    collect_date_update_candidates,
+    collect_init_export_sources,
+    collect_test_return_sources,
+    run_date_dataset_update,
+    run_init_to_test,
+    run_test_to_init,
+)
+from ramanv2.pipeline.lineage import lineage_path
 from ramanv2.pipeline.supplement import (
     SupplementPlan,
     build_full_init_with_supplements,
     scan_supplement_plan,
     validate_supplement_plan,
 )
+from ramanv2.pipeline.state import PipelineState
 from ramanv2.ui.page_context import PageContext
 from ramanv2.ui.cache import cached_dataset_summary, cached_dataset_taxon_counts
 from ramanv2.ui.state import (
@@ -53,11 +59,17 @@ def _load_catalog(context: PageContext) -> DatasetMapping:
     return catalog
 
 
-def _render_count_metrics(summary: dict[str, int | bool]) -> None:
+def _render_count_metrics(summary: dict[str, int | bool], test_summary: dict[str, int | bool]) -> None:
+    """标出 init 与 init_test 的分配，避免把 init 单独的光谱数误认为数据丢失。"""
     metrics = st.columns(3)
     metrics[0].metric("属数量", f"{summary['genus_count']} 个")
     metrics[1].metric("种数量", f"{summary['species_count']} 个")
-    metrics[2].metric("光谱数量", f"{summary['file_count']} 条")
+    metrics[2].metric("init 光谱数量", f"{summary['file_count']} 条")
+    if test_summary["exists"]:
+        st.caption(
+            f"init_test 另有 {test_summary['folder_count']} 个文件夹、{test_summary['file_count']} 条；"
+            f"两处合计 {summary['file_count'] + test_summary['file_count']} 条。"
+        )
 
 
 def _render_taxon_counts(init_root: Path) -> None:
@@ -173,50 +185,182 @@ def _render_supplement_plan(plan: SupplementPlan | None, supplement_root: Path) 
         )
 
 
-def _render_folder_dataset_update(context: PageContext, state) -> None:
-    """已有日期恢复光谱后，按原走向从 shift 更新一个目标组。"""
-    with st.expander("按文件夹更新 init/init_test", expanded=False):
-        message = st.session_state.pop("dataset_update_message", None)
+def _build_scan_state(affine_dates: tuple[str, ...], report_json: str) -> PipelineState:
+    """用缓存键里的原始值重建扫描所需的最小状态，避免把整份 state 放进缓存键。"""
+    report = json.loads(report_json) if report_json else None
+    return PipelineState(
+        affine_completed_dates=set(affine_dates),
+        dataset_builds={"full_init": report} if isinstance(report, dict) else {},
+    )
+
+
+def _report_cache_key(state) -> str:
+    report = state.dataset_builds.get("full_init")
+    return json.dumps(report, ensure_ascii=False, sort_keys=True, default=str) if isinstance(report, dict) else ""
+
+
+@st.cache_data(show_spinner=False)
+def _cached_init_export_sources(
+    data_root: str,
+    init_root: str,
+    report_json: str,
+    lineage_modified_ns: int,
+    version: int,
+) -> dict[str, str]:
+    """缓存 init 移入 init_test 的候选；走向文件或数据集版本变化时失效。"""
+    del lineage_modified_ns, version
+    return collect_init_export_sources(
+        Path(data_root),
+        Path(init_root),
+        _build_scan_state((), report_json),
+    )
+
+
+_DATE_UPDATE_STATUS_LABELS = {
+    "new": "新增",
+    "shift_missing": "shift 待更新",
+    "changed": "待更新",
+    "ready": "已最新",
+}
+
+
+@st.cache_data(show_spinner=False)
+def _cached_date_update_candidates(
+    data_root: str,
+    shift_root: str,
+    init_root: str,
+    report_json: str,
+    lineage_modified_ns: int,
+    version: int,
+) -> tuple[dict[str, object], ...]:
+    """缓存日期检测结果；报告、走向文件或写入版本变化时失效。"""
+    del lineage_modified_ns, version
+    report = json.loads(report_json) if report_json else {}
+    return tuple(collect_date_update_candidates(Path(data_root), Path(shift_root), Path(init_root), report))
+
+
+def _render_date_dataset_update(context: PageContext, state, catalog: DatasetMapping | None) -> None:
+    """自动检测新增与变化日期，也可手动勾选；只重建所选日期的组。"""
+    report = state.dataset_builds.get("full_init")
+    if not isinstance(report, dict) or not context.init_root.is_dir():
+        return
+    with st.expander("按日期更新", expanded=False):
+        message = st.session_state.pop("date_update_message", None)
         if message:
             st.success(message)
-        folders = collect_dataset_source_folders(context.data_root, context.shift_root, state)
-        if not folders:
-            st.info("当前没有已有输出走向的 shift 文件夹，请先生成全量 init。")
-            return
-        st.caption("活动来源从 shift_data 更新；已整夹删除的来源同步移除旧产物。沿用原输出目录和测试分流，其他组编号不变。")
-        selected = st.selectbox(
-            "选择更新文件夹", folders, key="dataset_update_source",
-            format_func=lambda value: value if (context.data_root / value).is_dir() else f"{value}（已整夹删除）",
+        lineage_file = lineage_path(context.data_root)
+        candidates = _cached_date_update_candidates(
+            str(context.data_root.resolve()),
+            str(context.shift_root.resolve()),
+            str(context.init_root.resolve()),
+            json.dumps(report, ensure_ascii=False, sort_keys=True, default=str),
+            lineage_file.stat().st_mtime_ns if lineage_file.is_file() else 0,
+            ui_cache_version("dataset"),
         )
-        is_deleted = not (context.data_root / selected).exists()
-        if is_deleted:
-            st.info("此来源已整夹删除；同步将移除它对应的旧 init/init_test 文件夹，cosmic 删除归档保留。")
-        if not st.button("同步所选文件夹删除" if is_deleted else "从 shift_data 更新所选文件夹", key="dataset_update_confirm", width="stretch"):
+        if not candidates:
+            st.info("当前没有可更新的日期：请先完成日期仿射校正并生成 shift_data。")
+            return
+        st.caption(
+            "自动检测新增、待同步和 shift 文件变化的日期并默认勾选；已有日期沿用原 init/init_test 分流，"
+            "同时重建两处产物；新增日期可在下方选择进入 init_test 的文件夹，其余进入 init。"
+            "其他日期编号保持不变。已有 Profile 需另行重新生成。"
+        )
+        st.dataframe(
+            [
+                {
+                    "日期": item["date"],
+                    "状态": _DATE_UPDATE_STATUS_LABELS.get(str(item["status"]), str(item["status"])),
+                    "来源文件夹": item["folder_count"],
+                    "init / init_test": (
+                        "待选" if item["is_new"]
+                        else f"{item['init_folder_count']} / {item['test_folder_count']}"
+                    ),
+                    "光谱": item["file_count"],
+                    "待同步": len(item["pending_folders"]),
+                    "文件变化": len(item["drifted_folders"]),
+                    "shift 缺失": len(item["shift_missing_folders"]),
+                }
+                for item in candidates
+            ],
+            hide_index=True,
+            width="stretch",
+        )
+        detected = [str(item["date"]) for item in candidates if item["status"] in {"new", "changed"}]
+        signature = tuple(
+            (
+                item["date"], item["status"], item["folder_count"],
+                item["pending_folders"], item["drifted_folders"], item["shift_missing_folders"],
+            )
+            for item in candidates
+        )
+        if st.session_state.get("date_update_signature") != signature:
+            st.session_state["date_update_dates"] = detected
+            st.session_state["date_update_signature"] = signature
+        selected_dates = st.multiselect(
+            "选择要更新的日期",
+            [str(item["date"]) for item in candidates],
+            key="date_update_dates",
+        )
+        new_date_names = {str(item["date"]) for item in candidates if item["is_new"]}
+        selected_new_dates = [date_name for date_name in selected_dates if date_name in new_date_names]
+        selected_test: list[str] = []
+        if selected_new_dates:
+            test_candidates = _list_test_sources(context, selected_new_dates)
+            _sync_test_selection(
+                test_candidates,
+                "date_update_test_selection",
+                "date_update_test_selection_initialized",
+            )
+            _render_default_test_selection_button(test_candidates, "date_update_test_selection")
+            selected_test = st.multiselect(
+                "新增日期中选择进入 init_test 的文件夹",
+                test_candidates,
+                format_func=lambda value: value.replace("/", " / "),
+                key="date_update_test_selection",
+            )
+        if not st.button(
+            "从 shift_data 更新所选日期",
+            disabled=catalog is None or not selected_dates,
+            width="stretch",
+        ):
             return
         try:
-            with st.spinner(f"正在同步 {selected}……"):
-                result = run_folder_dataset_update(context.data_root, context.shift_root, context.init_root, state, context.state_file, selected)
+            with st.status("正在按日期更新…", expanded=True) as status:
+                progress = st.progress(0.0, text="正在重建所选日期的组…")
+
+                def report_progress(date_name: str, processed: int, total: int) -> None:
+                    """按当前构建批次的复制进度刷新进度条。"""
+                    progress.progress(
+                        processed / total if total else 1.0,
+                        text=f"[{processed}/{total}] 正在同步 {date_name}…",
+                    )
+
+                result = run_date_dataset_update(
+                    context.data_root,
+                    context.shift_root,
+                    context.init_root,
+                    catalog,
+                    state,
+                    context.state_file,
+                    selected_dates,
+                    selected_test,
+                    progress_callback=report_progress,
+                )
+                progress.progress(1.0, text="init 与 init_test 写入完成")
+                status.update(label="按日期更新完成", state="complete", expanded=False)
             for name in ("dataset", "training", "inference", "analysis"):
                 invalidate_ui_cache(name)
-            destination = "init_test" if result["test_updated"] else "init 及对应前缀图"
-            if result.get("deleted"):
-                target_name = "init_test" if result["test_updated"] else "init"
-                st.session_state["dataset_update_message"] = f"{selected} 已同步整夹删除，移除对应旧 {target_name} 文件夹（{result['removed_file_count']} 条光谱），其他组编号不变。"
-            else:
-                st.session_state["dataset_update_message"] = f"{selected} 已更新 {destination}（{result['spectrum_count']} 条光谱）。"
+            message = (
+                f"已更新 {len(result['updated_dates'])} 个日期"
+                f"（新增 {len(result['new_dates'])}，同步 {len(result['changed_dates'])}），"
+                f"共 {result['spectrum_count']} 条光谱。"
+            )
+            if result["plot_error"]:
+                message += f" prefix-plot 更新失败：{result['plot_error']}"
+            st.session_state["date_update_message"] = message
             st.rerun()
         except (OSError, ValueError, RuntimeError, TypeError) as error:
-            st.error(f"文件夹更新失败：{error}")
-
-
-def _render_test_return(context: PageContext, state, catalog: DatasetMapping | None) -> None:
-    """渲染 init_test 到 init 的快速迁移。"""
-    _render_dataset_transfer(context, state, catalog, False)
-
-
-def _render_init_export(context: PageContext, state, catalog: DatasetMapping | None) -> None:
-    """渲染 init 到 init_test 的快速迁移。"""
-    _render_dataset_transfer(context, state, catalog, True)
+            st.error(f"按日期更新失败：{error}")
 
 
 def _render_dataset_transfer(context: PageContext, state, catalog: DatasetMapping | None, to_test_enable: bool) -> None:
@@ -228,9 +372,17 @@ def _render_dataset_transfer(context: PageContext, state, catalog: DatasetMappin
         message = st.session_state.pop(f"{key}_message", None)
         if message:
             st.success(message)
-        sources = collect_init_export_sources(context.data_root, context.init_root, state) if to_test_enable else {
-            source: source for source in collect_test_return_sources(context.init_root, state)
-        }
+        if to_test_enable:
+            lineage_file = lineage_path(context.data_root)
+            sources = _cached_init_export_sources(
+                str(context.data_root.resolve()),
+                str(context.init_root.resolve()),
+                _report_cache_key(state),
+                lineage_file.stat().st_mtime_ns if lineage_file.is_file() else 0,
+                ui_cache_version("dataset"),
+            )
+        else:
+            sources = {source: source for source in collect_test_return_sources(context.init_root, state)}
         if not sources:
             st.info(f"当前没有带来源记录、可迁移的 {'init' if to_test_enable else 'init_test'} 文件夹。")
             return
@@ -267,13 +419,17 @@ def _render_affine_compensation(context: PageContext, state, catalog: DatasetMap
     message = st.session_state.pop("folder_offset_message", None)
     if message:
         st.success(message)
-    dates = state.affine_completed_dates
-    folders = [
-        f"{date}/{folder.name}"
-        for date in sorted(dates)
-        for folder in sorted((context.data_root / date).glob("*"), key=lambda item: build_natural_key(item.name))
-        if folder.is_dir() and folder.name not in SOURCE_RESERVED_NAMES and any(folder.rglob("*.arc_data"))
-    ]
+    folders = list(
+        _cached_date_source_folders(
+            str(context.data_root.resolve()),
+            tuple(sorted(state.affine_completed_dates)),
+            (
+                ui_cache_version("cleaning"),
+                ui_cache_version("affine"),
+                ui_cache_version("dataset"),
+            ),
+        )
+    )
     if not folders or not context.init_root.is_dir():
         st.info("请先完成仿射校正并生成全量 init。")
         return
@@ -299,25 +455,29 @@ def _render_affine_compensation(context: PageContext, state, catalog: DatasetMap
 
 
 @st.cache_data(show_spinner=False)
-def _cached_test_sources(shift_root: str, date_names: tuple[str, ...], version: int) -> tuple[str, ...]:
-    """缓存日期下的候选目录扫描。"""
-    del version
-    root = Path(shift_root)
-    candidates: list[str] = []
+def _cached_date_source_folders(
+    root: str,
+    date_names: tuple[str, ...],
+    cache_version: int | tuple[int, int, int],
+) -> tuple[str, ...]:
+    """缓存日期下可用的来源文件夹；调用方用页面版本控制失效。"""
+    del cache_version
+    base = Path(root)
+    folders: list[str] = []
     for date_name in date_names:
-        date_dir = root / date_name
+        date_dir = base / date_name
         if not date_dir.is_dir():
             continue
         for folder in sorted(date_dir.iterdir(), key=lambda item: build_natural_key(item.name)):
             if folder.is_dir() and folder.name not in SOURCE_RESERVED_NAMES and any(folder.glob("*.arc_data")):
-                candidates.append(f"{date_name}/{folder.name}")
-    return tuple(candidates)
+                folders.append(f"{date_name}/{folder.name}")
+    return tuple(folders)
 
 
 def _list_test_sources(context: PageContext, date_names: list[str]) -> list[str]:
     """列出指定日期中可放入 init_test 的测试文件夹。"""
     return list(
-        _cached_test_sources(
+        _cached_date_source_folders(
             str(context.shift_root.resolve()),
             tuple(sorted(date_names, key=build_natural_key)),
             ui_cache_version("dataset"),
@@ -375,7 +535,6 @@ def _sync_test_selection(
 ) -> None:
     """按当前候选集补齐默认选择，同时保留用户显式移除的默认项。"""
     version_key = f"{selection_key}_version"
-    previous_candidates_key = f"{selection_key}_candidates"
     defaults_key = f"{selection_key}_defaults"
     suppressed_key = f"{selection_key}_suppressed_defaults"
     version_changed = st.session_state.get(version_key) != _TEST_SELECTION_LOGIC_VERSION
@@ -411,7 +570,6 @@ def _sync_test_selection(
     st.session_state[defaults_key] = sorted(defaults, key=build_natural_key)
     st.session_state[suppressed_key] = sorted(suppressed_defaults, key=build_natural_key)
     st.session_state[version_key] = _TEST_SELECTION_LOGIC_VERSION
-    st.session_state[previous_candidates_key] = list(candidates)
     st.session_state[initialized_key] = True
 
 
@@ -433,47 +591,6 @@ def _render_default_test_selection_button(
     st.session_state[f"{selection_key}_defaults"] = defaults
     st.session_state[f"{selection_key}_suppressed_defaults"] = []
     st.rerun()
-
-
-def _merge_incremental_init_report(
-    previous: dict[str, object],
-    update: dict[str, object],
-    init_root: Path,
-) -> dict[str, object]:
-    """把新增日期报告合并到全量 init 的累计报告。"""
-    merged = dict(previous)
-    for key in ("source_dates", "eligible_dates"):
-        merged[key] = sorted(
-            set(previous.get(key, [])) | set(update.get(key, [])),
-            key=build_natural_key,
-        )
-    for key in ("skipped_dates",):
-        merged[key] = sorted(
-            set(previous.get(key, [])) | set(update.get(key, [])),
-            key=build_natural_key,
-        )
-    for key in ("source_files", "output_files", "init_source_files", "init_output_files", "test_files", "test_output_files", "test_source_files", "test_output_files"):
-        merged[key] = int(previous.get(key, 0)) + int(update.get(key, 0))
-    date_status = dict(previous.get("date_status", {}))
-    date_status.update(update.get("date_status", {}))
-    merged["date_status"] = date_status
-    date_stats = dict(previous.get("date_stats", {}))
-    date_stats.update(update.get("date_stats", {}))
-    merged["date_stats"] = date_stats
-    merged["test_folders"] = sorted(
-        set(previous.get("test_folders", [])) | set(update.get("test_folders", [])),
-        key=build_natural_key,
-    )
-    merged["test_folder_count"] = len(merged["test_folders"])
-    merged["selected_test_folders"] = sorted(
-        set(previous.get("selected_test_folders", [])) | set(update.get("selected_test_folders", [])),
-        key=build_natural_key,
-    )
-    merged["test_exports"] = [*previous.get("test_exports", []), *update.get("test_exports", [])]
-    merged["count"] = summarize_dataset(init_root)
-    merged["mode"] = "full"
-    merged["status"] = "ready"
-    return merged
 
 
 def render_dataset_acquisition_page(context: PageContext) -> None:
@@ -502,7 +619,10 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         and full_report.get("status") == "ready"
     )
     st.metric("状态", "待重建" if full_summary["exists"] and not full_init_ready else ("已生成" if full_summary["exists"] else "未生成"))
-    _render_count_metrics(full_summary)
+    test_summary = cached_dataset_summary(
+        str((context.init_root.parent / TEST_ROOT_NAME).resolve()), ui_cache_version("dataset")
+    )
+    _render_count_metrics(full_summary, test_summary)
     _render_taxon_counts(context.init_root)
     eligible_dates = sorted(state.affine_completed_dates, key=build_natural_key)
     supplement_plan = (
@@ -596,72 +716,9 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
             except (OSError, ValueError, RuntimeError) as error:
                 st.error(f"全量 init 生成失败：{error}")
 
-    _render_folder_dataset_update(context, state)
-    _render_test_return(context, state, catalog)
-    _render_init_export(context, state, catalog)
-
-    if full_init_ready:
-        st.success("全量 init 已生成；后续新增日期可以增量更新。")
-        processed_dates = set(full_report.get("source_dates", []))
-        pending_dates = [
-            date_name for date_name in eligible_dates
-            if date_name not in processed_dates and (context.shift_root / date_name).is_dir()
-        ]
-        if pending_dates:
-            st.subheader("增量更新 init")
-            st.caption("只处理尚未进入全量 init 的新日期，不重复构建已有数据。")
-            st.multiselect(
-                "选择新增日期",
-                pending_dates,
-                default=pending_dates,
-                key="incremental_init_dates",
-            )
-            incremental_dates = st.session_state.get("incremental_init_dates", pending_dates)
-            test_candidates = _list_test_sources(context, incremental_dates)
-            test_selection_key = "incremental_init_test_selection"
-            _sync_test_selection(
-                test_candidates,
-                test_selection_key,
-                "incremental_init_test_selection_initialized",
-            )
-            _render_default_test_selection_button(test_candidates, test_selection_key)
-            selected_test = st.multiselect(
-                "新增来源中选择进入 init_test 的文件夹",
-                test_candidates,
-                format_func=lambda value: value.replace("/", " / "),
-                key=test_selection_key,
-            )
-            if st.button("增量更新 init", disabled=catalog is None, width="stretch"):
-                try:
-                    with st.status("正在增量更新 init…", expanded=True) as status:
-                        status.write("正在检查新增日期和目标目录。")
-                        update = build_init_datasets(
-                            context.shift_root,
-                            context.init_root,
-                            {},
-                            catalog,
-                            incremental_dates,
-                            mode="incremental",
-                            test_root=context.init_root.parent / TEST_ROOT_NAME,
-                            selected_test_folders=selected_test,
-                        )
-                        status.update(label="增量更新完成", state="complete", expanded=False)
-                    state.dataset_builds["full_init"] = _merge_incremental_init_report(
-                        full_report,
-                        update,
-                        context.init_root,
-                    )
-                    invalidate_ui_cache("dataset")
-                    invalidate_ui_cache("training")
-                    invalidate_ui_cache("inference")
-                    invalidate_ui_cache("analysis")
-                    save_page_state(context, state)
-                    st.success("init 已完成增量更新。")
-                    st.rerun()
-                except (OSError, ValueError, RuntimeError) as error:
-                    st.error(f"init 增量更新失败：{error}")
-        else:
-            st.info("当前没有尚未进入 init 的新日期。")
+    _render_date_dataset_update(context, state, catalog)
+    _render_dataset_transfer(context, state, catalog, False)
+    _render_dataset_transfer(context, state, catalog, True)
 
     if catalog is None:
         st.info("请先修复本地病原菌分类 Excel 文件。")

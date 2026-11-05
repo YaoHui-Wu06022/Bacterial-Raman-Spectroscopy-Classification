@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from ramanv2.common.arc_data import write_arc_data
 from ramanv2.data.calibration import affine
@@ -52,39 +53,31 @@ def _write_date(root: Path, date_name: str, bead_count: int = 3, include_auxilia
     return date_dir
 
 
-def test_analyze_date_recovers_affine_and_writes_bead_plots(tmp_path: Path) -> None:
+def test_analyze_date_recovers_affine_and_preserves_previous_output_on_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
     source_root = tmp_path / "cosmic_data"
     date_dir = _write_date(source_root, "20240101")
+    output_root = tmp_path / "cosmic_data_shifted"
 
-    report = analyze_date(date_dir, tmp_path / "cosmic_data_shifted")
+    report = analyze_date(date_dir, output_root)
 
     assert report["status"] == "ready"
     assert report["valid_repeat_count"] == 3
     assert abs(float(report["scale"]) - TRUE_SCALE) < 0.001
     assert abs(float(report["offset"]) - TRUE_OFFSET) < 0.2
-    shift_dir = tmp_path / "cosmic_data_shifted" / "20240101" / "shift"
-    assert (shift_dir / "affine.json").is_file()
+    shift_dir = output_root / "20240101" / "shift"
+    affine_path = shift_dir / "affine.json"
+    assert affine_path.is_file()
     assert len(list(shift_dir.glob("*_calibration.png"))) == 3
-
-
-def test_failed_rerun_preserves_previous_shift(tmp_path: Path, monkeypatch) -> None:
-    source_root = tmp_path / "cosmic_data"
-    date_dir = _write_date(source_root, "20240101", bead_count=1)
-    output_root = tmp_path / "cosmic_data_shifted"
-    analyze_date(date_dir, output_root)
-    affine_path = output_root / "20240101" / "shift" / "affine.json"
     previous = affine_path.read_text(encoding="utf-8")
 
     def fail_figure(*args, **kwargs):
         raise RuntimeError("simulated publish failure")
 
     monkeypatch.setattr(affine, "_save_calibration_figure", fail_figure)
-    try:
+    with pytest.raises(RuntimeError):
         analyze_date(date_dir, output_root)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("分析失败应当抛出异常")
 
     assert affine_path.read_text(encoding="utf-8") == previous
     assert not any(path.name.startswith("shift_previous_") for path in (output_root / "20240101").iterdir())

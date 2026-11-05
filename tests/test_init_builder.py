@@ -92,7 +92,7 @@ def test_rebuild_ignores_stale_test_names_and_keeps_unified_numbers(tmp_path: Pa
     assert not (tmp_path / "init_test" / f"EC{date}_01").exists()
 
 
-def test_build_init_rejects_invalid_spectrum(tmp_path: Path) -> None:
+def test_invalid_spectrum_rejects_build_and_keeps_previous_output(tmp_path: Path) -> None:
     """坏谱在复制阶段即被拒绝，不留下半成品 init。"""
     shift = tmp_path / "shift_data"
     approved = approve_date(shift, "20240101")
@@ -107,7 +107,6 @@ def test_build_init_rejects_invalid_spectrum(tmp_path: Path) -> None:
     assert not (tmp_path / "init").exists()
 
 
-def test_profile_build_failure_keeps_previous_output(tmp_path: Path) -> None:
     init_root = tmp_path / "init"
     write_spectrum(init_root / "Enterobacter" / "ECL20240101_01" / "sample.arc_data", 1)
     mapping = DatasetMapping.from_payload(
