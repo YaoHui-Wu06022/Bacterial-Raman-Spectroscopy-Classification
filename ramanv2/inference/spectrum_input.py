@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+import re
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +14,32 @@ from ramanv2.common.naming import build_natural_key
 from ramanv2.core.input_spec import InputSpec
 from ramanv2.data.runtime.input import InputPreprocessor
 from ramanv2.spectra.bad_bands import build_valid_mask
+
+
+INFERENCE_SAMPLES_PER_FOLDER = 10
+_CELL_NAME_PATTERN = re.compile(r"^cell(\d+)", re.IGNORECASE)
+
+
+def _cell_key(file_name: str) -> str:
+    """提取 cell 编号作为去重键；非 cell 文件按文件名独立成组。"""
+    stem = Path(file_name).stem
+    match = _CELL_NAME_PATTERN.match(stem)
+    return f"cell{int(match.group(1))}" if match else stem.lower()
+
+
+def sample_folder_spectra(
+    spectrum_items: list[tuple[str, Path]],
+    limit: int = INFERENCE_SAMPLES_PER_FOLDER,
+) -> list[tuple[str, Path]]:
+    """每个 cell 至多一条，随机抽取不超过 limit 条光谱。"""
+    groups: dict[str, list[tuple[str, Path]]] = {}
+    for item in spectrum_items:
+        groups.setdefault(_cell_key(item[0]), []).append(item)
+    if not groups:
+        return []
+    keys = list(groups) if len(groups) <= limit else random.sample(list(groups), limit)
+    keys.sort(key=build_natural_key)
+    return [random.choice(groups[key]) for key in keys]
 
 
 def resolve_input_dirs(

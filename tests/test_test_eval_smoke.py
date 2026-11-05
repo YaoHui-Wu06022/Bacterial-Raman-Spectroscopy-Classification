@@ -9,7 +9,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from ramanv2.core.config import build_config
-from ramanv2.inference.test_evaluation import evaluate_test_set
+from ramanv2.evaluation.test_set import evaluate_test_set
 from ramanv2.training.workflow import TrainRequest, run_training
 
 
@@ -80,7 +80,7 @@ def test_evaluate_test_set_writes_summary_for_trained_experiment(
 
     build_model = lambda num_classes, model_spec: SmokeModel(num_classes)
     monkeypatch.setattr("ramanv2.training.workflow.build_model", build_model)
-    monkeypatch.setattr("ramanv2.inference.predictor.build_model", build_model)
+    monkeypatch.setattr("ramanv2.modeling.predictor.build_model", build_model)
     resolve_train_dir = lambda profile_key, project_root=None: train_dir
     monkeypatch.setattr("ramanv2.training.workflow.resolve_training_dir", resolve_train_dir)
     monkeypatch.setattr("ramanv2.evaluation.context.resolve_training_dir", resolve_train_dir)

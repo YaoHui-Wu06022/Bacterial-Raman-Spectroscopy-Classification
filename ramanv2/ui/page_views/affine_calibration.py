@@ -11,7 +11,7 @@ from ramanv2.common.arc_data import count_arc_data, has_arc_data
 from ramanv2.pipeline.calibration import rebuild_shift_data, run_affine_calibration, run_date_rebuild
 from ramanv2.pipeline.cleaning import commit_date_items, reconcile_cleaning_records, scan_review_folders
 from ramanv2.pipeline.state import invalidate_downstream
-from ramanv2.pipeline.lineage import has_active_source_folders, lineage_path, load_folder_lineage
+from ramanv2.records.lineage import has_active_source_folders, lineage_path, load_folder_lineage
 from ramanv2.ui.read_cache import cached_calibration_reports
 from ramanv2.ui.page_context import PageContext
 from ramanv2.ui.page_state import (

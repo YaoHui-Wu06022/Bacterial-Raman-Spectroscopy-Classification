@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import csv
-import random
-import re
 import shutil
 from collections import defaultdict
 from pathlib import Path
@@ -19,7 +17,7 @@ from ramanv2.common.device import resolve_device
 from ramanv2.common.naming import build_natural_key, parse_folder_prefix
 from ramanv2.common.paths import DATASET_ROOT
 from ramanv2.data.profiles import resolve_test_root, resolve_training_dir
-from ramanv2.evaluation.context import write_run_manifest
+from ramanv2.modeling.run_manifest import write_run_manifest
 from ramanv2.inference.folder_report import (
     plot_folder_spectra,
     write_file_report,
@@ -27,12 +25,13 @@ from ramanv2.inference.folder_report import (
     write_summary_report,
 )
 from ramanv2.inference.input_cache import CachedFolder, load_test_cache
-from ramanv2.inference.predictor import Predictor, load_predictor
+from ramanv2.modeling.predictor import Predictor, load_predictor
 from ramanv2.inference.spectrum_input import (
     build_inference_preprocessor,
     list_spectrum_paths,
     preprocess_spectrum_path,
     resolve_input_dirs,
+    sample_folder_spectra,
 )
 from ramanv2.inference.test_labels import (
     build_expected_label_lookup,
@@ -41,33 +40,10 @@ from ramanv2.inference.test_labels import (
 )
 
 
-INFERENCE_SAMPLES_PER_FOLDER = 10
-_CELL_NAME_PATTERN = re.compile(r"^cell(\d+)", re.IGNORECASE)
 
 
-def _cell_key(file_name: str) -> str:
-    """提取 cell 编号作为去重键；非 cell 文件按文件名独立成组。"""
-    stem = Path(file_name).stem
-    match = _CELL_NAME_PATTERN.match(stem)
-    return f"cell{int(match.group(1))}" if match else stem.lower()
 
 
-def _sample_folder_spectra(
-    spectrum_items: list[tuple[str, Path]],
-    limit: int = INFERENCE_SAMPLES_PER_FOLDER,
-) -> list[tuple[str, Path]]:
-    """每个 cell 至多一条，随机抽取不超过 limit 条光谱。
-
-    cell 数不足 limit 时逐 cell 取一条，避免同一 cell 出现两条。
-    """
-    groups: dict[str, list[tuple[str, Path]]] = {}
-    for item in spectrum_items:
-        groups.setdefault(_cell_key(item[0]), []).append(item)
-    if not groups:
-        return []
-    keys = list(groups) if len(groups) <= limit else random.sample(list(groups), limit)
-    keys.sort(key=build_natural_key)
-    return [random.choice(groups[key]) for key in keys]
 
 
 def run_independent_inference(
@@ -197,7 +173,7 @@ def _run_folder_predictions(
     for folder_name, spectrum_items in folder_inputs:
         row = _run_single_folder(
             folder_name,
-            _sample_folder_spectra(spectrum_items),
+            sample_folder_spectra(spectrum_items),
             output_dir,
             predictor,
             preprocessor,

@@ -8,7 +8,6 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from ramanv2.common.file_ops import write_json
 from ramanv2.core.config import Config, build_config
 from ramanv2.core.config_snapshot import SHARED_CONFIG_NAME, read_yaml_dict
 from ramanv2.common.hierarchy import assert_hierarchy_compatible, load_hierarchy_meta, validate_label_schema
@@ -153,14 +152,3 @@ def resolve_run_class_ids(dataset_index: Any, run_entry: Any) -> list[int]:
     if run_entry.parent_id is None:
         return list(range(dataset_index.num_classes_by_level[run_entry.level_name]))
     return [int(item) for item in run_entry.values.get("child_ids") or []]
-
-
-def write_run_manifest(
-    output_path: Path | str,
-    mode: str,
-    level_name: str,
-    runs: Mapping[str, Any],
-) -> None:
-    """写出本次评估或推理实际使用的模型 run。"""
-    payload = {"mode": mode, "target_level": level_name, "runs": dict(runs)}
-    write_json(output_path, payload)

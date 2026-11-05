@@ -30,7 +30,7 @@ from ramanv2.common.file_ops import create_temporary_path, publish_directory, re
 from ramanv2.data.count import summarize_dataset
 from ramanv2.data.profiles import TEST_ROOT_NAME
 from ramanv2.data.dataset_mapping import DatasetMapping
-from ramanv2.pipeline.lineage import apply_output_path, initialize_folder_lineage, load_folder_lineage, write_folder_lineage
+from ramanv2.records.lineage import apply_output_path, initialize_folder_lineage, load_folder_lineage, write_folder_lineage
 
 
 SPECIAL_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES

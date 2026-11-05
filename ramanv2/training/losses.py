@@ -38,6 +38,18 @@ def compute_linear_weight(
     return minimum + ratio * (maximum - minimum)
 
 
+def compute_difficulty_weights(
+    base_weights: torch.Tensor,
+    ema_class_ce: torch.Tensor,
+    difficulty_weight: float,
+) -> torch.Tensor:
+    """按当前 EMA 难度从基础类别权重重新计算，避免逐轮累乘。"""
+    difficulty = ema_class_ce / (ema_class_ce.mean() + 1e-12)
+    factor = 1.0 + difficulty_weight * (difficulty - 1.0)
+    weights = base_weights * factor
+    return weights / (weights.mean() + 1e-12)
+
+
 class FocalLoss(torch.nn.Module):
     """逐样本 Focal 分类损失，调用方负责对返回值进行聚合。"""
 

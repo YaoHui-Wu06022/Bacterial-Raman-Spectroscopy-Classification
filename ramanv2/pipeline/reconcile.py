@@ -11,7 +11,7 @@ from ramanv2.common.arc_data import count_arc_data, iter_arc_data_paths
 from ramanv2.common.naming import build_natural_key
 from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.data.profiles import resolve_test_root
-from ramanv2.pipeline.lineage import (
+from ramanv2.records.lineage import (
     initialize_folder_lineage,
     lineage_path,
     write_folder_lineage,

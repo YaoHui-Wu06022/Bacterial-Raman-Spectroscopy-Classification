@@ -15,7 +15,7 @@ from ramanv2.common.file_ops import (
     preserve_paths,
     remove_empty_parent_directories,
 )
-from ramanv2.pipeline.lineage import (
+from ramanv2.records.lineage import (
     initialize_folder_lineage,
     lineage_path,
     record_manual_move,

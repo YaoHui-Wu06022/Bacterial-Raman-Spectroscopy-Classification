@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 
-from ramanv2.inference.predictor import Predictor
+from ramanv2.modeling.predictor import Predictor
 
 
 def predict_routed_labels(

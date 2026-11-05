@@ -19,11 +19,11 @@ from ramanv2.evaluation.context import (
     resolve_result_dir,
     resolve_run_class_ids,
     resolve_run_entry,
-    write_run_manifest,
 )
 from ramanv2.evaluation.metrics_report import write_model_report
-from ramanv2.inference.predictor import Predictor, load_predictor
-from ramanv2.inference.routing import predict_routed_labels
+from ramanv2.modeling.predictor import Predictor, load_predictor
+from ramanv2.modeling.routing import predict_routed_labels
+from ramanv2.modeling.run_manifest import write_run_manifest
 
 
 def evaluate_model_run(

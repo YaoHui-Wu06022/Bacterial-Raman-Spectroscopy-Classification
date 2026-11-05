@@ -20,9 +20,9 @@ from ramanv2.evaluation.context import (
     resolve_entry_path,
 )
 from ramanv2.evaluation.metrics_report import write_model_report
-from ramanv2.inference.folder_inference import _sample_folder_spectra
-from ramanv2.inference.predictor import Predictor, load_predictor
-from ramanv2.inference.routing import predict_routed_labels
+from ramanv2.inference.spectrum_input import sample_folder_spectra
+from ramanv2.modeling.predictor import Predictor, load_predictor
+from ramanv2.modeling.routing import predict_routed_labels
 from ramanv2.inference.spectrum_input import build_inference_preprocessor, list_spectrum_paths
 from ramanv2.inference.test_labels import build_folder_summary, build_test_folder_labels
 
@@ -199,7 +199,7 @@ def _scan_test_set(test_path: Path) -> tuple[list[str], list[Path], list[str]]:
         paths = list_spectrum_paths(folder_dir)
         if not paths:
             continue
-        sampled = _sample_folder_spectra([(path.name, path) for path in paths])
+        sampled = sample_folder_spectra([(path.name, path) for path in paths])
         folder_names.append(folder_dir.name)
         sample_paths.extend(path for _, path in sampled)
         sample_folders.extend([folder_dir.name] * len(sampled))

@@ -18,7 +18,7 @@ from ramanv2.inference.spectrum_input import (
     list_spectrum_paths,
     preprocess_spectrum_path,
 )
-from ramanv2.inference.predictor import Predictor
+from ramanv2.modeling.predictor import Predictor
 
 
 MANIFEST_NAME = "cache_manifest.json"

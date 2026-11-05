@@ -9,7 +9,7 @@ from ramanv2.data.builders.init import (
     build_profile_datasets,
 )
 from ramanv2.data.dataset_mapping import DatasetMapping
-from ramanv2.pipeline.lineage import load_folder_lineage, write_folder_lineage
+from ramanv2.records.lineage import load_folder_lineage, write_folder_lineage
 
 
 def write_spectrum(path: Path, value: int) -> None:

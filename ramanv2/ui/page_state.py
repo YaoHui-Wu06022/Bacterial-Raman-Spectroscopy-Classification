@@ -7,7 +7,7 @@ from pathlib import Path
 import streamlit as st
 
 from ramanv2.pipeline.state import PipelineState, load_pipeline_state, write_pipeline_state
-from ramanv2.pipeline.lineage import sync_pipeline_state_from_lineage
+from ramanv2.records.lineage import sync_pipeline_state_from_lineage
 from ramanv2.ui.page_context import PageContext
 
 

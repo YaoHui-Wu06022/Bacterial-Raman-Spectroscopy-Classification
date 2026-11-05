@@ -50,7 +50,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 def run_command(args: argparse.Namespace) -> int:
     from ramanv2.pipeline.state import load_pipeline_state, write_pipeline_state
-    from ramanv2.pipeline.lineage import initialize_folder_lineage, sync_pipeline_state_from_lineage
+    from ramanv2.records.lineage import initialize_folder_lineage, sync_pipeline_state_from_lineage
 
     state_path = pipeline_state_path(PROJECT_ROOT)
     state = load_pipeline_state(state_path)

@@ -26,6 +26,7 @@ from ramanv2.training.losses import (
     SupConLoss,
     build_class_weights,
     compute_align_loss,
+    compute_difficulty_weights,
     compute_linear_weight,
 )
 from ramanv2.training.optimizer import build_optimizer, build_scheduler
@@ -214,7 +215,8 @@ def _build_training_loss(
     )
     criterion = FocalLoss(train_spec.loss.focal_gamma, weights, -1)
     train_state = TrainingState(
-        ema_class_ce=torch.ones(train_task.num_classes, device=device)
+        ema_class_ce=torch.ones(train_task.num_classes, device=device),
+        class_weights=weights,
     )
     return criterion, train_state
 
@@ -276,10 +278,11 @@ def _update_ema_class_weights(
         return
     if not torch.isfinite(train_state.ema_class_ce).all().item():
         train_state.ema_class_ce = torch.ones_like(train_state.ema_class_ce)
-    difficulty = train_state.ema_class_ce / (train_state.ema_class_ce.mean() + 1e-12)
-    factor = 1.0 + spec.ema_difficulty_weight * (difficulty - 1.0)
-    weights = criterion.weight * factor
-    criterion.weight = weights / (weights.mean() + 1e-12)
+    criterion.weight = compute_difficulty_weights(
+        train_state.class_weights,
+        train_state.ema_class_ce,
+        spec.ema_difficulty_weight,
+    )
 
 
 def _compute_auxiliary_weights(train_spec: TrainingSpec, epoch: int) -> tuple[float, float]:

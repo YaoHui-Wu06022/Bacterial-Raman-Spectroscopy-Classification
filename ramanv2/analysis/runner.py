@@ -19,8 +19,9 @@ from ramanv2.analysis.layer_attribution import (
 )
 from ramanv2.analysis.attribution_report import save_task_reports, write_aggregate_reports
 from ramanv2.analysis.task import build_parent_tasks, build_run_task
-from ramanv2.evaluation.context import load_evaluation_context, resolve_level_name, write_run_manifest
-from ramanv2.inference.predictor import load_predictor
+from ramanv2.evaluation.context import load_evaluation_context, resolve_level_name
+from ramanv2.modeling.run_manifest import write_run_manifest
+from ramanv2.modeling.predictor import load_predictor
 from ramanv2.spectra.axis import expected_wavenumbers
 
 

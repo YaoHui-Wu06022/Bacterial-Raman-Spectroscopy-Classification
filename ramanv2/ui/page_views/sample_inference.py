@@ -13,7 +13,7 @@ from ramanv2.common.device import resolve_device
 from ramanv2.data.profiles import resolve_dataset_dir, list_profiles, resolve_test_root
 from ramanv2.inference.input_cache import build_test_cache
 from ramanv2.inference.test_labels import build_expected_label_lookup
-from ramanv2.inference.predictor import load_predictor
+from ramanv2.modeling.predictor import load_predictor
 from ramanv2.inference.folder_inference import run_independent_inference
 from ramanv2.ui.read_cache import (
     cached_test_folder_names,

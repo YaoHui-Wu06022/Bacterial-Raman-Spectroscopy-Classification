@@ -21,6 +21,7 @@ class TrainingState:
     best_epoch: int = -1
     patience_counter: int = 0
     ema_class_ce: torch.Tensor | None = None
+    class_weights: torch.Tensor | None = None
     model_path: Path | None = None
     se_stats_path: Path | None = None
     checkpoint_path: Path | None = None

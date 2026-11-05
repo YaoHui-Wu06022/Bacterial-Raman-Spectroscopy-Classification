@@ -12,7 +12,7 @@ from ramanv2.core.config import build_config
 from ramanv2.common.hierarchy import LABEL_SCHEMA
 from ramanv2.evaluation.context import load_evaluation_context, resolve_run_entry
 from ramanv2.evaluation.model_eval import _predict_run
-from ramanv2.inference.predictor import load_predictor
+from ramanv2.modeling.predictor import load_predictor
 from ramanv2.training.workflow import TrainRequest, run_training
 
 
@@ -81,7 +81,7 @@ def test_workflow_writes_global_run_and_reloads_across_levels(
     species_train_dir = tmp_path / "train"
     for folder in ("GenusA/AB20231212_01", "GenusA/ab20231214_01", "GenusA/AJO20231214_01"):
         _write_spectra(species_train_dir / folder, "cell", 1.0)
-    monkeypatch.setattr("ramanv2.inference.predictor.build_model", lambda n, spec: WorkflowModel(n))
+    monkeypatch.setattr("ramanv2.modeling.predictor.build_model", lambda n, spec: WorkflowModel(n))
     monkeypatch.setattr("ramanv2.evaluation.context.resolve_training_dir", lambda profile: species_train_dir)
     output = tmp_path / "experiment"
     meta = run_training(TrainRequest(

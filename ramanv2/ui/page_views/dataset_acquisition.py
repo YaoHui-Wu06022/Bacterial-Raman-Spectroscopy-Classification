@@ -26,7 +26,7 @@ from ramanv2.pipeline.dataset_sync import (
     run_init_to_test,
     run_test_to_init,
 )
-from ramanv2.pipeline.lineage import lineage_path
+from ramanv2.records.lineage import lineage_path
 from ramanv2.pipeline.supplement import (
     SupplementPlan,
     build_full_init_with_supplements,

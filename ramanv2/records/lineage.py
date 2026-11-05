@@ -559,29 +559,6 @@ def has_active_source_folders(data_root: Path | str, date_name: str) -> bool:
     )
 
 
-def list_lineage_folders(
-    data_root: Path | str,
-    genus: str | None = None,
-    prefix: str | None = None,
-) -> list[dict[str, object]]:
-    payload = initialize_folder_lineage(data_root)
-    folders = payload.get("folders", {})
-    result = []
-    if not isinstance(folders, dict):
-        return result
-    root = Path(data_root).resolve()
-    for record in folders.values():
-        if not isinstance(record, dict) or record.get("folder_status") == "folder_deleted":
-            continue
-        source_path = root / str(record.get("date", "")) / str(record.get("folder", ""))
-        if not source_path.is_dir():
-            continue
-        if genus is not None and str(record.get("genus", "")) != str(genus):
-            continue
-        if prefix is not None and str(record.get("prefix", "")).upper() != str(prefix).upper():
-            continue
-        result.append(dict(record))
-    return sorted(result, key=lambda item: build_natural_key(str(item.get("source_id", ""))))
 
 
 def remove_source_folder(
@@ -685,7 +662,6 @@ __all__ = [
     "record_restore",
     "record_output_path",
     "record_purge",
-    "list_lineage_folders",
     "remove_source_folder",
     "write_folder_lineage",
     "sync_pipeline_state_from_lineage",
