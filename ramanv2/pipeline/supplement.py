@@ -1,9 +1,4 @@
 """把人工补充数据按文件夹发布到全量 init。
-
-补充数据目录约定为 ``dataset/extra_data/<文件夹>/*.arc_data``，文件夹名前缀通过
-``profile_catalog`` 映射到属；全量 init 重建完成后，这些文件夹会被原样写入
-``dataset/init/<属>/<文件夹>``。该类数据没有 cosmic/shift 来源，不能由
-``build_full_init`` 从 shift_data 生成，因此必须单独保留。
 """
 
 from __future__ import annotations
