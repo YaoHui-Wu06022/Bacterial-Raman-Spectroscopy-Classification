@@ -1,7 +1,4 @@
-"""Cosmic 源头文件夹走向记录与日期级摘要。
-
-记录文件以 cosmic_data 下的日期/文件夹为稳定主键，不依赖 init 的序号目录。
-"""
+"""Cosmic 源头文件夹走向记录与日期级摘要（SQLite 元数据）。"""
 
 from __future__ import annotations
 
@@ -10,16 +7,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ramanv2.common.arc_data import has_arc_data, list_arc_data_paths
-from ramanv2.common.file_ops import preserve_paths, read_json, write_json
+from ramanv2.common.file_ops import preserve_paths
 from ramanv2.common.naming import (
     NON_TRAINING_FOLDER_NAMES,
     PIPELINE_RESERVED_FOLDER_NAMES,
     build_natural_key,
     parse_folder_prefix,
 )
-
-
-LINEAGE_FILE_NAME = "folder_lineage.json"
+from ramanv2.pipeline.db import (
+    DATABASE_FILE_NAME,
+    load_lineage_payload,
+    save_lineage_payload,
+)
 LINEAGE_VERSION = 1
 MANUAL_DELETE_RELATIVE = Path("delete") / "manual"
 FOLDER_DELETE_RELATIVE = Path("delete") / "folder_delete"
@@ -29,15 +28,15 @@ SPECIAL_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
 
 def lineage_path(data_root: Path | str) -> Path:
     root = Path(data_root).resolve()
-    return root.parent / ".raman_pipeline" / LINEAGE_FILE_NAME
+    return root.parent / ".raman_pipeline" / DATABASE_FILE_NAME
 
 
 def load_folder_lineage(data_root: Path | str) -> dict[str, object]:
     path = lineage_path(data_root)
-    if not path.is_file():
+    payload = load_lineage_payload(path) if path.is_file() else None
+    if payload is None:
         return {"version": LINEAGE_VERSION, "source_root": str(Path(data_root).resolve()), "folders": {}}
-    payload = read_json(path)
-    if not isinstance(payload, dict) or payload.get("version") != LINEAGE_VERSION:
+    if payload.get("version") != LINEAGE_VERSION:
         raise ValueError("folder_lineage.json 版本不受支持")
     folders = payload.get("folders", {})
     if not isinstance(folders, dict):
@@ -46,7 +45,7 @@ def load_folder_lineage(data_root: Path | str) -> dict[str, object]:
 
 
 def write_folder_lineage(data_root: Path | str, payload: dict[str, object]) -> None:
-    write_json(lineage_path(data_root), payload)
+    save_lineage_payload(lineage_path(data_root), payload)
 
 
 def _record_template(date_name: str, folder_name: str) -> dict[str, object]:
@@ -649,7 +648,6 @@ def _move_folder_contents(source_folder: Path, target_folder: Path) -> list[tupl
 __all__ = [
     "ANALYSIS_DELETE_RELATIVE",
     "FOLDER_DELETE_RELATIVE",
-    "LINEAGE_FILE_NAME",
     "apply_output_path",
     "has_active_source_folders",
     "initialize_folder_lineage",

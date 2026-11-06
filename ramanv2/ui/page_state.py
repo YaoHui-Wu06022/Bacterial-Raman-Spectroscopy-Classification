@@ -7,7 +7,7 @@ from pathlib import Path
 import streamlit as st
 
 from ramanv2.pipeline.state import PipelineState, load_pipeline_state, write_pipeline_state
-from ramanv2.records.lineage import sync_pipeline_state_from_lineage
+from ramanv2.records.lineage import lineage_path, sync_pipeline_state_from_lineage
 from ramanv2.ui.page_context import PageContext
 
 
@@ -32,11 +32,10 @@ def ui_cache_version(name: str) -> int:
     return int(_cache_version_registry().get(name, 0))
 
 
-def invalidate_ui_cache(name: str | None = None) -> None:
-    """递增指定页面缓存版本；不清理其他页面的缓存。"""
-    names = UI_CACHE_NAMES if name is None else (name,)
+def invalidate_ui_cache(*names: str) -> None:
+    """递增给定页面的缓存版本；不传名称时清理全部页面。"""
     registry = _cache_version_registry()
-    for cache_name in names:
+    for cache_name in names or UI_CACHE_NAMES:
         if cache_name not in UI_CACHE_NAMES:
             raise ValueError(f"未知 UI 缓存：{cache_name}")
         registry[cache_name] = int(registry.get(cache_name, 0)) + 1
@@ -61,7 +60,7 @@ def _cached_lineage_date_sets(data_root: str, lineage_modified_ns: int) -> dict[
 def load_page_state(context: PageContext) -> PipelineState:
     """每次页面运行都从磁盘读取共享状态，避免旧会话覆盖新状态。"""
     state = load_pipeline_state(context.state_file)
-    lineage_file = context.data_root.parent / ".raman_pipeline" / "folder_lineage.json"
+    lineage_file = lineage_path(context.data_root)
     if context.data_root.is_dir() and lineage_file.is_file():
         derived = _cached_lineage_date_sets(
             str(context.data_root.resolve()),

@@ -17,6 +17,7 @@ from ramanv2.common.naming import (
     build_natural_key,
     parse_folder_prefix,
 )
+from ramanv2.common.paths import PROJECT_ROOT
 from ramanv2.data.profiles import PIPELINE_PROFILE_IDS, TEST_ROOT_NAME, resolve_dataset_dir, resolve_profile
 from ramanv2.pipeline.dataset_sync import (
     collect_date_update_candidates,
@@ -34,6 +35,8 @@ from ramanv2.pipeline.supplement import (
     validate_supplement_plan,
 )
 from ramanv2.pipeline.state import PipelineState
+from ramanv2.pipeline.db import database_path, load_test_defaults
+from ramanv2.ui.formatting import progress_ratio
 from ramanv2.ui.page_context import PageContext
 from ramanv2.ui.read_cache import cached_dataset_summary, cached_dataset_taxon_counts
 from ramanv2.ui.page_state import (
@@ -95,11 +98,9 @@ def _render_taxon_counts(init_root: Path) -> None:
 
 
 def _render_prefix_plot_section(
-    context: PageContext,
     init_root: Path,
     figure_root: Path,
     key: str,
-    state,
 ) -> None:
     """将已有图片查看和增量更新分开，默认不展开图像区域。"""
     if not init_root.is_dir():
@@ -118,7 +119,7 @@ def _render_prefix_plot_section(
                     def report_plot_progress(genus: str, prefix: str, done: int, total: int) -> None:
                         """按已处理的分组数刷新绘图进度。"""
                         progress.progress(
-                            done / total,
+                            progress_ratio(done, total),
                             text=f"[{done}/{total}] 已绘制 {genus} / {prefix}",
                         )
 
@@ -130,12 +131,6 @@ def _render_prefix_plot_section(
                     )
                     progress.progress(1.0, text=f"已更新 {len(outputs)} 张 prefix-plot")
                     status.update(label="prefix-plot 更新完成", state="complete", expanded=False)
-                plots = state.dataset_builds.get("prefix_plots", {})
-                if not isinstance(plots, dict):
-                    plots = {}
-                plots[key] = {"output_root": str(figure_root), "plot_count": len(outputs)}
-                state.dataset_builds["prefix_plots"] = plots
-                write_page_state(context, state)
                 st.success(f"已更新 {len(outputs)} 张 prefix-plot。")
             except (OSError, ValueError, RuntimeError) as error:
                 st.error(f"prefix-plot 更新失败：{error}")
@@ -332,7 +327,7 @@ def _render_date_dataset_update(context: PageContext, state, catalog: DatasetMap
                 def report_progress(date_name: str, processed: int, total: int) -> None:
                     """按当前构建批次的复制进度刷新进度条。"""
                     progress.progress(
-                        processed / total if total else 1.0,
+                        progress_ratio(processed, total),
                         text=f"[{processed}/{total}] 正在同步 {date_name}…",
                     )
 
@@ -349,8 +344,7 @@ def _render_date_dataset_update(context: PageContext, state, catalog: DatasetMap
                 )
                 progress.progress(1.0, text="init 与 init_test 写入完成")
                 status.update(label="按日期更新完成", state="complete", expanded=False)
-            for name in ("dataset", "training", "inference", "analysis"):
-                invalidate_ui_cache(name)
+            invalidate_ui_cache("dataset", "training", "inference", "analysis")
             message = (
                 f"已更新 {len(result['updated_dates'])} 个日期"
                 f"（新增 {len(result['new_dates'])}，同步 {len(result['changed_dates'])}），"
@@ -403,8 +397,7 @@ def _render_dataset_transfer(context: PageContext, state, catalog: DatasetMappin
             with st.spinner("正在迁移所选文件夹并更新分流记录……"):
                 run_transfer = run_init_to_test if to_test_enable else run_test_to_init
                 result = run_transfer(context.data_root, context.init_root, catalog, state, context.state_file, selected)
-            for name in ("dataset", "training", "inference", "analysis"):
-                invalidate_ui_cache(name)
+            invalidate_ui_cache("dataset", "training", "inference", "analysis")
             st.session_state["test_export_added_source" if to_test_enable else "test_return_removed_source"] = selected
             st.session_state[f"{key}_message"] = f"{selected} 已直接{'移入' if to_test_enable else '移回'} {destination}（{result['spectrum_count']} 条）：{Path(result['target_dir']).name}。"
             st.rerun()
@@ -445,8 +438,7 @@ def _render_affine_compensation(context: PageContext, state, catalog: DatasetMap
             if not result["changed_folders"]:
                 st.info("本次频移量为 0，未改动光谱。")
                 return
-            for name in ("cleaning", "affine", "dataset"):
-                invalidate_ui_cache(name)
+            invalidate_ui_cache("cleaning", "affine", "dataset")
             st.session_state["folder_offset_reset"] = True
             destination = "对应 init_test 文件夹" if result.get("test_updated") else "对应 init 文件夹及审核图"
             st.session_state["folder_offset_message"] = f"{selected} 已同步平移活动谱及归档谱，并更新{destination}。"
@@ -487,52 +479,37 @@ def _list_test_sources(context: PageContext, date_names: list[str]) -> list[str]
 
 
 # 默认选择逻辑版本号，修改逻辑时递增以强制重新初始化
-_TEST_SELECTION_LOGIC_VERSION = 9
+_TEST_SELECTION_LOGIC_VERSION = 11
 
 
-def _supplement_counted_candidates(plan: SupplementPlan | None) -> list[str]:
-    """补充文件夹按日期/名称参与测试选择计数，但不能被选为测试来源。"""
-    if plan is None or plan.errors:
+def _load_configured_default_sources() -> list[str] | None:
+    """读取 SQLite 中的推荐默认名单。"""
+    db_path = database_path(PROJECT_ROOT / "dataset" / ".raman_pipeline")
+    if not db_path.is_file():
+        return None
+    try:
+        folders = load_test_defaults(db_path)
+    except (OSError, ValueError, RuntimeError):
+        return None
+    return folders or None
+
+
+def _default_test_sources(candidates: list[str]) -> list[str]:
+    """按 SQLite 默认名单过滤当前候选文件夹。"""
+    configured = _load_configured_default_sources()
+    if configured is None:
         return []
-    counted: list[str] = []
-    for group in plan.groups:
-        suffix = group.folder_name[len(group.prefix):]
-        counted.append(f"{suffix}/{group.folder_name}" if len(suffix) == 8 and suffix.isdigit() else group.folder_name)
-    return counted
-
-
-def _default_test_sources(
-    candidates: list[str],
-    *,
-    counted_candidates: list[str] | None = None,
-) -> list[str]:
-    """默认选择每个种的倒数第三个文件夹；少于 5 个则不选择。
-
-    ``counted_candidates`` 中的补充文件夹只参与计数与排序，不会被选入测试集。
-    """
-    from collections import defaultdict
-    species_folders: dict[str, list[str]] = defaultdict(list)
-    selectable = set(candidates)
-    for candidate in [*candidates, *(counted_candidates or [])]:
-        folder_name = candidate.rsplit("/", 1)[-1]
-        prefix = parse_folder_prefix(folder_name, uppercase_enable=True)
-        species_folders[prefix].append(candidate)
-    selected: list[str] = []
-    for folders in species_folders.values():
-        if len(folders) < 5:
-            continue
-        pick = sorted(folders, key=build_natural_key)[-3]
-        if pick in selectable:
-            selected.append(pick)
-    return sorted(selected, key=build_natural_key)
+    available = set(candidates)
+    return sorted(
+        [candidate for candidate in configured if candidate in available],
+        key=build_natural_key,
+    )
 
 
 def _sync_test_selection(
     candidates: list[str],
     selection_key: str,
     initialized_key: str,
-    *,
-    counted_candidates: list[str] | None = None,
 ) -> None:
     """按当前候选集补齐默认选择，同时保留用户显式移除的默认项。"""
     version_key = f"{selection_key}_version"
@@ -542,7 +519,7 @@ def _sync_test_selection(
     initialized = st.session_state.get(initialized_key, False)
     previous_defaults = set(st.session_state.get(defaults_key, []))
     current_candidates = set(candidates)
-    default_sources = _default_test_sources(candidates, counted_candidates=counted_candidates)
+    default_sources = _default_test_sources(candidates)
 
     # 首次初始化或默认规则升级时直接采用当前规则的默认选择。
     if not initialized or version_changed:
@@ -577,17 +554,15 @@ def _sync_test_selection(
 def _render_default_test_selection_button(
     candidates: list[str],
     selection_key: str,
-    *,
-    counted_candidates: list[str] | None = None,
 ) -> None:
     """提供显式的默认选择恢复入口，避免误用多选框的全选操作。"""
     if not st.button(
         "恢复默认选择",
         key=f"{selection_key}_reset_defaults",
-        help="按当前候选文件夹重新应用默认规则：每个前缀至少 5 个才选，取倒数第三个。",
+        help="按 SQLite 中保存的推荐默认名单重新选择。",
     ):
         return
-    defaults = _default_test_sources(candidates, counted_candidates=counted_candidates)
+    defaults = _default_test_sources(candidates)
     st.session_state[selection_key] = defaults
     st.session_state[f"{selection_key}_defaults"] = defaults
     st.session_state[f"{selection_key}_suppressed_defaults"] = []
@@ -632,7 +607,6 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         else None
     )
     supplement_ready = supplement_plan is not None and not supplement_plan.errors
-    supplement_counted = _supplement_counted_candidates(supplement_plan)
     test_candidates = _list_test_sources(context, eligible_dates)
     test_selection_key = "full_init_test_selection"
     initialized_key = "full_init_test_selection_initialized"
@@ -646,12 +620,10 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         test_candidates,
         test_selection_key,
         initialized_key,
-        counted_candidates=supplement_counted,
     )
     _render_default_test_selection_button(
         test_candidates,
         test_selection_key,
-        counted_candidates=supplement_counted,
     )
     selected_test = st.multiselect(
         "选择进入 init_test 的来源文件夹",
@@ -698,10 +670,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                     progress.progress(1.0, text="全量 init 与补充数据写入完成")
                     status.update(label="全量 init 重建完成", state="complete", expanded=False)
                 state.dataset_builds["full_init"] = report
-                invalidate_ui_cache("dataset")
-                invalidate_ui_cache("training")
-                invalidate_ui_cache("inference")
-                invalidate_ui_cache("analysis")
+                invalidate_ui_cache("dataset", "training", "inference", "analysis")
                 write_page_state(context, state)
                 st.session_state.pop("full_init_supplement_confirm", None)
                 supplement = report["supplement"]
@@ -725,17 +694,21 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         st.info("请先修复本地病原菌分类 Excel 文件。")
         return
 
-    _render_prefix_plot_section(context, context.init_root, context.init_root.parent / "fig_init", "full_init", state)
+    _render_prefix_plot_section(context.init_root, context.init_root.parent / "fig_init", "full_init")
     _render_affine_compensation(context, state, catalog)
 
     st.subheader("Profile 数据集")
     profile_name = st.selectbox("选择 Profile", PIPELINE_PROFILE_IDS, key="dataset_profile_name")
     profile = resolve_profile(profile_name)
-    profile_root = resolve_dataset_dir(profile, context.init_root.parent.parent) / profile.root_init
+    profile_dir = resolve_dataset_dir(profile, context.init_root.parent.parent)
+    profile_root = profile_dir / profile.root_init
     profile_summary = cached_dataset_summary(
         str(profile_root.resolve()), ui_cache_version("dataset")
     )
-    _render_count_metrics(profile_summary)
+    profile_test_summary = cached_dataset_summary(
+        str((profile_dir / profile.root_test).resolve()), ui_cache_version("dataset")
+    )
+    _render_count_metrics(profile_summary, profile_test_summary)
     profile_reports = state.dataset_builds.get("profiles", {})
     if not isinstance(profile_reports, dict):
         profile_reports = {}
@@ -753,10 +726,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                 status.update(label=f"{profile_name} 数据集生成完成", state="complete", expanded=False)
             profile_reports[profile_name] = report
             state.dataset_builds["profiles"] = profile_reports
-            invalidate_ui_cache("dataset")
-            invalidate_ui_cache("training")
-            invalidate_ui_cache("inference")
-            invalidate_ui_cache("analysis")
+            invalidate_ui_cache("dataset", "training", "inference", "analysis")
             write_page_state(context, state)
             st.success(f"{profile_name} 数据集生成完成。")
             st.rerun()

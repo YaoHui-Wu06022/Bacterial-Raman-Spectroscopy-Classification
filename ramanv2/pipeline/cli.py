@@ -47,8 +47,22 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     records = commands.add_parser("rebuild-records", help="按当前磁盘重建走向树与页面状态")
     records.set_defaults(run_command=run_command)
 
+    db_check = commands.add_parser("db-check", help="检查 SQLite 元数据与磁盘指纹差异")
+    db_check.add_argument("--refresh", action="store_true", dest="refresh_fingerprints")
+    db_check.set_defaults(run_command=run_command)
+
 
 def run_command(args: argparse.Namespace) -> int:
+    if args.command == "db-check":
+        from ramanv2.pipeline.db import check_database, refresh_fingerprints
+
+        metadata_dir = pipeline_metadata_dir(PROJECT_ROOT)
+        cosmic_root = PROJECT_ROOT / "dataset" / "cosmic_data"
+        if args.refresh_fingerprints:
+            refresh_fingerprints(metadata_dir, cosmic_root)
+        print(json.dumps(check_database(metadata_dir, cosmic_root), ensure_ascii=False, indent=2))
+        return 0
+
     from ramanv2.pipeline.state import load_pipeline_state, write_pipeline_state
     from ramanv2.records.lineage import initialize_folder_lineage, sync_pipeline_state_from_lineage
 
@@ -128,6 +142,7 @@ def run_command(args: argparse.Namespace) -> int:
         return 0
     if args.command == "rebuild-records":
         from ramanv2.data.dataset_mapping import ensure_dataset_mapping
+        from ramanv2.pipeline.db import refresh_fingerprints
         from ramanv2.pipeline.reconcile import rebuild_pipeline_records
 
         workbook = PROJECT_ROOT / "dataset" / "病原菌分类与规范简称.xlsx"
@@ -138,6 +153,10 @@ def run_command(args: argparse.Namespace) -> int:
             PROJECT_ROOT / "dataset" / "shift_data",
             catalog,
             state_path,
+        )
+        summary["fingerprints"] = refresh_fingerprints(
+            pipeline_metadata_dir(PROJECT_ROOT),
+            cosmic_root,
         )
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return 0

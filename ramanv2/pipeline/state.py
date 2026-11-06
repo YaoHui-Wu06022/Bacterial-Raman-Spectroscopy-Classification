@@ -1,7 +1,4 @@
-"""前置流水线的持久化状态。
-
-状态文件只描述页面流程进度和可恢复的业务记录，不保存 Streamlit 控件对象。
-"""
+"""前置流水线的持久化状态（SQLite 元数据）。"""
 
 from __future__ import annotations
 
@@ -9,12 +6,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ramanv2.common.file_ops import read_json, write_json
+from ramanv2.pipeline.db import (
+    DATABASE_FILE_NAME,
+    load_state_payload,
+    save_state_payload,
+)
 
 
 PIPELINE_STATE_VERSION = 1
 STATE_DIR_NAME = ".raman_pipeline"
-STATE_FILE_NAME = "state.json"
 COMMIT_LOG_NAME = "commit_log.jsonl"
 
 
@@ -143,7 +143,7 @@ class PipelineState:
 
 
 def pipeline_state_path(project_root: Path | str) -> Path:
-    return Path(project_root).resolve() / "dataset" / STATE_DIR_NAME / STATE_FILE_NAME
+    return Path(project_root).resolve() / "dataset" / STATE_DIR_NAME / DATABASE_FILE_NAME
 
 
 def pipeline_metadata_dir(project_root: Path | str) -> Path:
@@ -152,15 +152,15 @@ def pipeline_metadata_dir(project_root: Path | str) -> Path:
 
 def load_pipeline_state(path: Path | str) -> PipelineState:
     target = Path(path)
-    if not target.is_file():
+    payload = load_state_payload(target) if target.is_file() else None
+    if payload is None:
         return PipelineState()
-    payload = read_json(target)
     return PipelineState.from_payload(payload)
 
 
 def write_pipeline_state(path: Path | str, state: PipelineState) -> None:
     state.updated_at = datetime.now(timezone.utc).isoformat()
-    write_json(path, state.to_payload())
+    save_state_payload(path, state.to_payload())
 
 
 def _optional_string(value: object) -> str | None:
