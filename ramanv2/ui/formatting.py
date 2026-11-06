@@ -13,4 +13,11 @@ def format_ratio(value: object, fallback: str) -> str:
         return fallback
 
 
-__all__ = ["format_ratio"]
+def progress_ratio(done: int, total: int) -> float:
+    """把处理进度换算为 0–1 比例；总量未知时视为完成。"""
+    if total <= 0:
+        return 1.0
+    return min(max(done / total, 0.0), 1.0)
+
+
+__all__ = ["format_ratio", "progress_ratio"]

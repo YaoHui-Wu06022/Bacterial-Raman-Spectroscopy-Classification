@@ -21,7 +21,7 @@ from ramanv2.audit.heterogeneity import (
 from ramanv2.common.arc_data import read_arc_data
 from ramanv2.common.naming import NON_TRAINING_FOLDER_NAMES, build_natural_key
 from ramanv2.common.plotting import configure_matplotlib_fonts
-from ramanv2.data.dataset_mapping import ensure_dataset_mapping
+from ramanv2.data.dataset_mapping import DatasetMapping, ensure_dataset_mapping
 from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.pipeline.anomaly_removal import (
     check_analysis_gate,
@@ -56,6 +56,7 @@ from ramanv2.pipeline.deleted_data import (
 )
 from ramanv2.pipeline.state import PipelineState
 from ramanv2.ui.components.spectrum_grid import render_spectrum_grid
+from ramanv2.ui.formatting import progress_ratio
 from ramanv2.ui.read_cache import cached_directory_names
 from ramanv2.ui.page_context import PageContext
 from ramanv2.ui.page_state import (
@@ -74,11 +75,7 @@ DATE_CACHE_KEY = "cleaning_current_date_cache"
 DATE_CACHE_NAME_KEY = "cleaning_current_date_name"
 
 
-def _deleted_records(
-    data_root: Path | str,
-    workbook_path: Path | str,
-    mapping_path: Path | str,
-) -> list[DeletedSpectrum]:
+def _deleted_records(data_root: Path | str, mapping: DatasetMapping) -> list[DeletedSpectrum]:
     """扫描人工删除区，**不缓存**。
 
     清单曾用 ``@st.cache_data`` 缓存、键里放会话内版本号，但 ``st.cache_data`` 是跨会话
@@ -87,7 +84,6 @@ def _deleted_records(
     mtime 的更新存在非确定性延迟（同一条测试重复运行会时对时错）。``os.scandir`` 重写后
     整树扫描约 65ms，直接每次扫描，换取「列表永远与磁盘一致」。
     """
-    mapping = ensure_dataset_mapping(workbook_path, mapping_path)
     return scan_deleted_spectra(Path(data_root), mapping, include_bead=True)
 
 
@@ -292,11 +288,15 @@ def _render_reopen_section(
 def _render_restore_section(context: PageContext) -> None:
     """显示人工删除普通光谱恢复入口；小球目录不进入该流程。"""
     try:
-        records = _deleted_records(
-            context.data_root,
+        mapping = ensure_dataset_mapping(
             context.classification_workbook,
             context.dataset_mapping_file,
         )
+    except (OSError, ValueError, RuntimeError) as error:
+        st.error(f"Profile 配置加载失败：{error}")
+        return
+    try:
+        records = _deleted_records(context.data_root, mapping)
     except (OSError, ValueError, RuntimeError) as error:
         st.error(f"删除数据扫描失败：{error}")
         return
@@ -322,11 +322,6 @@ def _render_restore_section(context: PageContext) -> None:
     with st.expander("删除数据恢复", expanded=expand_restore):
         if not records:
             st.info("人工删除目录中没有可恢复的普通光谱。")
-            return
-        try:
-            mapping = ensure_dataset_mapping(context.classification_workbook, context.dataset_mapping_file)
-        except (OSError, ValueError, RuntimeError) as error:
-            st.error(f"Profile 配置加载失败：{error}")
             return
 
         species_map = {
@@ -448,9 +443,7 @@ def _render_restore_section(context: PageContext) -> None:
                 st.session_state.pop("restore_selected_paths", None)
                 st.session_state["restore_expand"] = True
                 _clear_date_cache()
-                invalidate_ui_cache("cleaning")
-                invalidate_ui_cache("dataset")
-                invalidate_ui_cache("affine")
+                invalidate_ui_cache("cleaning", "dataset", "affine")
                 if result.get("status") == "bead_restored":
                     st.session_state["cleaning_flash"] = (
                         f"已恢复 {result['restored_file_count']} 条小球光谱；"
@@ -488,8 +481,7 @@ def _render_restore_section(context: PageContext) -> None:
                 st.session_state.pop("restore_selected_paths", None)
                 st.session_state.pop("restore_purge_confirm", None)
                 st.session_state["restore_expand"] = True
-                invalidate_ui_cache("cleaning")
-                invalidate_ui_cache("dataset")
+                invalidate_ui_cache("cleaning", "dataset")
                 st.session_state["cleaning_flash"] = (
                     f"已彻底删除 {result['purged_file_count']} 条光谱，"
                     "删除区空文件夹已同步清理。"
@@ -530,8 +522,7 @@ def _render_folder_removal_section(context: PageContext, state: PipelineState) -
                 ReviewFolder(source_id, date_name, folder_name, ()),
             )
             _clear_date_cache()
-            invalidate_ui_cache("cleaning")
-            invalidate_ui_cache("dataset")
+            invalidate_ui_cache("cleaning", "dataset")
             st.session_state.pop("cleaning_remove_source_folder", None)
             st.session_state["folder_remove_expand"] = True
             st.session_state["cleaning_flash"] = f"已整夹删除 {source_id}，init 待重建。"
@@ -575,11 +566,7 @@ def _render_folder_restore_section(context: PageContext) -> None:
             st.session_state.pop("folder_restore_source", None)
             st.session_state["folder_restore_expand"] = True
             _clear_date_cache()
-            invalidate_ui_cache("cleaning")
-            invalidate_ui_cache("dataset")
-            invalidate_ui_cache("affine")
-            invalidate_ui_cache("training")
-            invalidate_ui_cache("inference")
+            invalidate_ui_cache("cleaning", "dataset", "affine", "training", "inference")
             st.session_state["cleaning_flash"] = (
                 f"已恢复整夹 {selected.relative_path}（{result['restored_file_count']} 条），"
                 "该文件夹已回到待清洗队列，只改 cosmic_data；"
@@ -617,8 +604,7 @@ def _analysis_report() -> HeterogeneityReport | None:
 
 def _run_analysis_removal_analysis(context: PageContext, mapping, gate) -> None:
     def update(message: str, done: int, total: int) -> None:
-        ratio = 1.0 if total <= 0 else min(max(done / total, 0.0), 1.0)
-        progress.progress(ratio, text=f"{message}（{done}/{total}）")
+        progress.progress(progress_ratio(done, total), text=f"{message}（{done}/{total}）")
 
     try:
         with st.status("正在分析全库光谱…", expanded=True) as status:
@@ -830,8 +816,7 @@ def _render_analysis_removal_section(context: PageContext, state: PipelineState)
             width="stretch",
         ):
             def update_removal(message: str, done: int, total: int) -> None:
-                ratio = 1.0 if total <= 0 else min(max(done / total, 0.0), 1.0)
-                removal_progress.progress(ratio, text=f"{message}（{done}/{total}）")
+                removal_progress.progress(progress_ratio(done, total), text=f"{message}（{done}/{total}）")
 
             try:
                 with st.status("正在归档并更新派生记录…", expanded=True) as status:
@@ -857,12 +842,7 @@ def _render_analysis_removal_section(context: PageContext, state: PipelineState)
                 st.session_state.pop(ANALYSIS_REPORT_KEY, None)
                 st.session_state.pop(editor_key, None)
                 _clear_date_cache()
-                invalidate_ui_cache("cleaning")
-                invalidate_ui_cache("dataset")
-                invalidate_ui_cache("affine")
-                invalidate_ui_cache("training")
-                invalidate_ui_cache("inference")
-                invalidate_ui_cache("analysis")
+                invalidate_ui_cache("cleaning", "dataset", "affine", "training", "inference", "analysis")
                 st.session_state["cleaning_flash"] = (
                     f"已剔除 {result['sample_count']} 条光谱，归档到 dataset/analysis_delete；"
                     f"清单见 {result['report_path']}；init 已标记待重建。"
@@ -1025,12 +1005,10 @@ def render_cleaning_page(context: PageContext) -> None:
             discard_removed_date(state.cleaning, current_date)
             # 整日期移除后，旧的校正和 init 结果不再满足流水线门禁。
             state.affine_completed_dates.discard(current_date)
-            state.dataset_builds.pop("latest", None)
             state.cleaning.current_date_name = _next_pending_date(dates, state)
             state.cleaning.current_folder_key = None
             _clear_date_cache()
-            invalidate_ui_cache("cleaning")
-            invalidate_ui_cache("dataset")
+            invalidate_ui_cache("cleaning", "dataset")
             write_page_state(context, state)
             st.rerun()
         st.metric("当前页", f"{page_index + 1} / {page_count}")

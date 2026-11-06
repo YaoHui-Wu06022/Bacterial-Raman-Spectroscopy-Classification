@@ -256,8 +256,7 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
                         text=f"[{index}/{total}] {date_name} 完成（{count} 条光谱）",
                     )
                 status.update(label=f"已处理 {total} 个日期", state="complete", expanded=False)
-            for name in ("cleaning", "affine", "dataset"):
-                invalidate_ui_cache(name)
+            invalidate_ui_cache("cleaning", "affine", "dataset")
             st.session_state["affine_date_rebuild_message"] = (
                 f"已更新 {len(rebuilt_dates)} 个日期的 shift_data（{spectrum_total} 条光谱）。"
                 "init/init_test 可到「数据集获取」页按日期更新。"
@@ -271,8 +270,7 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
         try:
             with st.spinner(f"正在更新 {selected} 的 shift_data……"):
                 result = run_date_rebuild(context.data_root, context.shift_root, state, context.state_file, selected)
-            for name in ("cleaning", "affine", "dataset"):
-                invalidate_ui_cache(name)
+            invalidate_ui_cache("cleaning", "affine", "dataset")
             st.session_state["affine_date_rebuild_message"] = f"{selected} 的 shift_data 已更新（{result['spectrum_count']} 条光谱）。init/init_test 可到「数据集获取」页按日期更新。"
             st.rerun()
         except (OSError, ValueError, RuntimeError, TypeError) as error:
@@ -354,10 +352,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
         changed_dates = rebuilt_dates | {str(report["date"]) for report in reports["calibration"] if report.get("status") == "manual_approved" and not report.get("skipped")}
         if changed_dates:
             invalidate_downstream(state, changed_dates)
-        state.dataset_builds.pop("latest", None)
-        invalidate_ui_cache("dataset")
-        invalidate_ui_cache("cleaning")
-        invalidate_ui_cache("affine")
+        invalidate_ui_cache("dataset", "cleaning", "affine")
         write_page_state(context, state)
         st.session_state["affine_analyze_reports"] = reports
         st.rerun()
@@ -406,9 +401,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
                             tuple(folders),
                         )
                     state.affine_completed_dates.discard(date_name)
-                    state.dataset_builds.pop("latest", None)
-                    invalidate_ui_cache("cleaning")
-                    invalidate_ui_cache("dataset")
+                    invalidate_ui_cache("cleaning", "dataset")
                     write_page_state(context, state)
                     if result.missing_paths:
                         st.warning(f"有 {len(result.missing_paths)} 条光谱已经不存在，其余数据已移除。")

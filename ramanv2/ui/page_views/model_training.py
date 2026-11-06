@@ -57,9 +57,7 @@ def render_hierarchical_training_page() -> None:
                 status.write("训练任务运行中，请等待当前训练任务完成。")
                 run_training(request)
                 status.update(label="训练完成", state="complete", expanded=False)
-            invalidate_ui_cache("training")
-            invalidate_ui_cache("analysis")
-            invalidate_ui_cache("inference")
+            invalidate_ui_cache("training", "analysis", "inference")
             st.success("本地训练完成。")
             st.caption("训练结果和层级元数据已保存到自动生成的实验目录。")
         except (OSError, RuntimeError, ValueError, TypeError, KeyError) as error:
