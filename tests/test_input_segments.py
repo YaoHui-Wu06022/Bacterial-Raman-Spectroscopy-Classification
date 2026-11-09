@@ -23,11 +23,11 @@ def _segment_spec(d1_enable: bool) -> InputSpec:
 
 
 def test_input_spec_segments_isolate_bad_band_seam() -> None:
-    spec = build_input_spec(InputConfig())
+    spec = build_input_spec(InputConfig(bad_bands=((900.0, 940.0),)))
     assert spec.point_count == 866
     assert spec.segment_bounds == ((0, 224), (224, 866))
 
-    whole = build_input_spec(InputConfig(bad_bands=()))
+    whole = build_input_spec(InputConfig())
     assert whole.point_count == 896
     assert whole.segment_bounds == ((0, 896),)
 

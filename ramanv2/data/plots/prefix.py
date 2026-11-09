@@ -17,8 +17,7 @@ matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
 from ramanv2.common.naming import (
-    NON_TRAINING_FOLDER_NAMES,
-    PIPELINE_RESERVED_FOLDER_NAMES,
+    SPECIAL_FOLDER_NAMES,
     build_natural_key,
     parse_folder_prefix,
 )
@@ -33,7 +32,7 @@ from ramanv2.spectra.preprocess import preprocess_single_spectrum
 
 
 PLOT_CACHE_DIR_NAME = ".prefix_plot_cache"
-PLOT_RENDER_VERSION = "2"
+PLOT_RENDER_VERSION = "3"
 TARGET_CM = 1003.0
 PREFIX_PLOT_COLORS = (
     "#d60000",
@@ -70,7 +69,7 @@ PREFIX_PLOT_COLORS = (
     "#5e7b87",
 )
 PLOT_STATE_FIELDS = ("genus", "folder", "prefix", "file_count", "file_signature", "render_version")
-PLOT_EXCLUDED_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
+PLOT_EXCLUDED_NAMES = SPECIAL_FOLDER_NAMES
 
 
 @dataclass(frozen=True)
@@ -79,6 +78,7 @@ class PrefixPlotConfig:
 
     input: InputConfig = InputConfig()
     cleaning: DataBuildConfig = DEFAULT_BUILD_CONFIG
+    flat: bool = False
 
 
 DEFAULT_PREFIX_PLOT_CONFIG = PrefixPlotConfig()
@@ -483,7 +483,7 @@ def plot_prefix_init(
                 curves,
                 axis,
                 output_path,
-                f"{genus} {prefix} median spectra",
+                f"{prefix} median spectra" if plot_config.flat else f"{genus} {prefix} median spectra",
                 plot_config.input.bad_bands,
                 plot_config.input.norm_method,
             )
@@ -549,7 +549,7 @@ def build_prefix_plots_for_groups(
             curves,
             axis,
             output_path,
-            f"{genus} {prefix} median spectra",
+            f"{prefix} median spectra" if plot_config.flat else f"{genus} {prefix} median spectra",
             plot_config.input.bad_bands,
             plot_config.input.norm_method,
         )

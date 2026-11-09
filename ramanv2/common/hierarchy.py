@@ -15,6 +15,9 @@ from ramanv2.common.file_ops import read_json, write_json
 
 ROOT_TAG = "__root__"
 LABEL_SCHEMA = "genus_species_prefix_v1"
+FLAT_LABEL_SCHEMA = "flat_label_v1"
+HIERARCHY_LABEL_SCHEMA = "hierarchy_v1"
+SUPPORTED_LABEL_SCHEMAS = frozenset({LABEL_SCHEMA, FLAT_LABEL_SCHEMA, HIERARCHY_LABEL_SCHEMA})
 
 
 def parts_to_key(parts: Sequence[str]) -> str:
@@ -86,11 +89,13 @@ def select_parent_indices(
 
 
 def validate_label_schema(values: Mapping[str, Any]) -> None:
-    """只接受统一种标签实验；旧产物保留，但不按新语义解释。"""
-    if values.get("label_schema") != LABEL_SCHEMA:
+    """只接受已注册的标签方案；旧产物保留，但不按新语义解释。"""
+    schema = values.get("label_schema")
+    if schema not in SUPPORTED_LABEL_SCHEMAS:
+        supported = "、".join(sorted(SUPPORTED_LABEL_SCHEMAS))
         raise ValueError(
-            f"label_schema 不兼容：{values.get('label_schema')!r}；"
-            f"当前仅支持 {LABEL_SCHEMA}，请使用新实验目录重新训练。"
+            f"label_schema 不兼容：{schema!r}；"
+            f"当前仅支持 {supported}，请使用新实验目录重新训练。"
         )
 
 
@@ -183,10 +188,21 @@ def build_hierarchy_meta(
     level_models: dict[str, dict[str, Any]],
     parent_models: dict[str, dict[str, dict[str, Any]]],
     runs: dict[str, list[dict[str, Any]]],
+    *,
+    dataset_id: str | None = None,
+    label_schema: str = LABEL_SCHEMA,
+    hierarchy: Mapping[str, Any] | None = None,
+    hierarchy_signature: str | None = None,
 ) -> dict[str, Any]:
-    """构建 ``hierarchy_meta.json`` 的完整可读取内容。"""
+    """构建 ``hierarchy_meta.json`` 的完整可读取内容。
+
+    显式层级配置随实验保存，推理与评估无需再依赖运行时数据集目录。
+    """
     return {
-        "label_schema": LABEL_SCHEMA,
+        "label_schema": label_schema,
+        "dataset_id": dataset_id,
+        "hierarchy": dict(hierarchy) if hierarchy is not None else None,
+        "hierarchy_signature": hierarchy_signature,
         "head_names": list(head_names),
         "level_names": list(head_names),
         "class_names_by_level": class_names_by_level,

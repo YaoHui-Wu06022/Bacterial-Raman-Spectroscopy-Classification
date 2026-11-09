@@ -14,22 +14,24 @@ from ramanv2.common.arc_data import (
     list_arc_data_paths,
     read_arc_data,
 )
-from ramanv2.common.naming import build_natural_key, parse_folder_prefix
+from ramanv2.common.naming import (
+    BEAD_FOLDER_NAME,
+    FOLDER_DELETE_RELATIVE,
+    MANUAL_DELETE_RELATIVE,
+    build_natural_key,
+    parse_folder_prefix,
+)
 from ramanv2.data.calibration.affine import invalidate_calibration_report
 from ramanv2.data.dataset_mapping import DatasetMapping, build_prefix_to_genus
 from ramanv2.pipeline.cleaning import discard_removed_date
 from ramanv2.records.lineage import (
-    FOLDER_DELETE_RELATIVE,
     record_purge,
     record_restore,
 )
 from ramanv2.pipeline.state import invalidate_downstream, load_pipeline_state, write_pipeline_state
 
 
-MANUAL_DELETE_DIR = "delete/manual"
-FOLDER_DELETE_DIR = FOLDER_DELETE_RELATIVE.as_posix()
 RESTORE_LOG_NAME = "restore_log.jsonl"
-BEAD_DIR_NAME = "小球"
 
 
 @dataclass(frozen=True)
@@ -75,7 +77,7 @@ def scan_deleted_spectra(
 ) -> list[DeletedSpectrum]:
     """只扫描 ``cosmic_data/delete/manual``，并忽略小球删除目录。"""
     root = Path(data_root).resolve()
-    manual_root = root / MANUAL_DELETE_DIR
+    manual_root = root / MANUAL_DELETE_RELATIVE.as_posix()
     if not manual_root.is_dir():
         return []
     prefix_genus = build_prefix_to_genus(profile_catalog)
@@ -90,7 +92,7 @@ def scan_deleted_spectra(
             key=lambda entry: build_natural_key(entry.name),
         ):
             folder_name = folder_entry.name
-            if folder_name == BEAD_DIR_NAME and not include_bead:
+            if folder_name == BEAD_FOLDER_NAME and not include_bead:
                 continue
             prefix = parse_folder_prefix(folder_name, uppercase_enable=True)
             genus = prefix_genus.get(prefix, "")
@@ -104,7 +106,7 @@ def scan_deleted_spectra(
                 records.append(
                     DeletedSpectrum(
                         relative_path=relative,
-                        source_relative_path=f"{MANUAL_DELETE_DIR}/{relative}",
+                        source_relative_path=f"{MANUAL_DELETE_RELATIVE.as_posix()}/{relative}",
                         date_name=date_entry.name,
                         folder_name=folder_name,
                         file_name=source.name,
@@ -136,7 +138,7 @@ def scan_deleted_folders(data_root: Path | str) -> list[DeletedFolder]:
             records.append(
                 DeletedFolder(
                     relative_path=relative,
-                    source_relative_path=f"{FOLDER_DELETE_DIR}/{relative}",
+                    source_relative_path=f"{FOLDER_DELETE_RELATIVE.as_posix()}/{relative}",
                     date_name=date_entry.name,
                     folder_name=folder_entry.name,
                     file_count=file_count,
@@ -172,7 +174,7 @@ def _restore_bead_spectra(
     小球谱变化意味着日期级仿射参数必须重算，因此这里把 ``affine.json`` 置为 pending；
     普通谱的恢复不做这一步。
     """
-    sources = {record.relative_path: data_root / MANUAL_DELETE_DIR / record.relative_path for record in records}
+    sources = {record.relative_path: data_root / MANUAL_DELETE_RELATIVE.as_posix() / record.relative_path for record in records}
     targets = {record.relative_path: data_root / record.relative_path for record in records}
     created: list[Path] = []
     try:
@@ -195,8 +197,8 @@ def _restore_bead_spectra(
             state.cleaning.committed_paths.discard(record.relative_path)
             state.cleaning.marked_paths.discard(record.relative_path)
             state.cleaning.mark_reasons.pop(record.relative_path, None)
-            state.cleaning.folder_catalog.setdefault(record.date_name, set()).add(BEAD_DIR_NAME)
-            state.cleaning.completed_folder_keys.add(f"{record.date_name}/{BEAD_DIR_NAME}")
+            state.cleaning.folder_catalog.setdefault(record.date_name, set()).add(BEAD_FOLDER_NAME)
+            state.cleaning.completed_folder_keys.add(f"{record.date_name}/{BEAD_FOLDER_NAME}")
         # 小球谱变化后旧仿射参数不再适用，日期回到待校准队列。
         for date_name in dates:
             invalidate_calibration_report(shift_root, date_name)
@@ -217,7 +219,7 @@ def _restore_bead_spectra(
                         "source_manual": str(sources[record.relative_path]),
                         "cosmic": str(targets[record.relative_path]),
                         "date": record.date_name,
-                        "folder": BEAD_DIR_NAME,
+                        "folder": BEAD_FOLDER_NAME,
                         "file": record.file_name,
                     }
                     for record in records
@@ -230,7 +232,7 @@ def _restore_bead_spectra(
             "dates": sorted(dates, key=build_natural_key),
             "paths": sorted(sources, key=build_natural_key),
             "targets": sorted(
-                {f"{record.date_name}/{BEAD_DIR_NAME}" for record in records},
+                {f"{record.date_name}/{BEAD_FOLDER_NAME}" for record in records},
                 key=build_natural_key,
             ),
         }
@@ -259,7 +261,7 @@ def restore_deleted_spectra(
     normalized = set()
     for item in selected_relative_paths:
         path = str(item).replace("\\", "/")
-        prefix = f"{MANUAL_DELETE_DIR}/"
+        prefix = f"{MANUAL_DELETE_RELATIVE.as_posix()}/"
         normalized.add(path[len(prefix):] if path.startswith(prefix) else path)
     selected = sorted(normalized, key=build_natural_key)
     if not selected:
@@ -273,7 +275,7 @@ def restore_deleted_spectra(
     if missing:
         raise FileNotFoundError(f"人工删除光谱不存在：{missing}")
     chosen = [records[path] for path in selected]
-    bead_records = [record for record in chosen if record.folder_name == BEAD_DIR_NAME]
+    bead_records = [record for record in chosen if record.folder_name == BEAD_FOLDER_NAME]
     if bead_records:
         if len(bead_records) != len(chosen):
             raise ValueError("小球光谱不能与普通采集光谱混合恢复")
@@ -285,7 +287,7 @@ def restore_deleted_spectra(
     for record in chosen:
         if not record.genus or prefix_genus.get(record.prefix) != record.genus:
             raise ValueError(f"删除文件夹前缀未映射：{record.folder_name}")
-        raw_source = root / MANUAL_DELETE_DIR / record.relative_path
+        raw_source = root / MANUAL_DELETE_RELATIVE.as_posix() / record.relative_path
         raw_target = root / record.relative_path
         if not raw_source.is_file():
             raise FileNotFoundError(f"人工删除光谱不存在：{raw_source}")
@@ -376,11 +378,11 @@ def purge_deleted_spectra(
     移除。空文件夹会自下而上删除，直到 data_root 为止；活动区不受影响。
     """
     root = Path(data_root).resolve()
-    manual_root = root / MANUAL_DELETE_DIR
+    manual_root = root / MANUAL_DELETE_RELATIVE.as_posix()
     normalized = set()
     for item in selected_relative_paths:
         path = str(item).replace("\\", "/")
-        prefix = f"{MANUAL_DELETE_DIR}/"
+        prefix = f"{MANUAL_DELETE_RELATIVE.as_posix()}/"
         normalized.add(path[len(prefix):] if path.startswith(prefix) else path)
     selected = sorted(normalized, key=build_natural_key)
     if not selected:

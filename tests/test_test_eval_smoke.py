@@ -9,8 +9,39 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from ramanv2.core.config import build_config
+from ramanv2.data.datasets import DatasetSpec
+from ramanv2.data.hierarchy_config import HierarchyLevel, HierarchySpec
+from ramanv2.data.profiles import DatasetProfile, DatasetSelection
 from ramanv2.evaluation.test_set import evaluate_test_set
 from ramanv2.training.workflow import TrainRequest, run_training
+
+
+def _selection_for(dataset_dir: Path) -> DatasetSelection:
+    """构造指向临时数据目录的两级层级数据集选择。"""
+    spec = DatasetSpec(
+        dataset_id="TEST",
+        display_name="TEST",
+        base_dir=dataset_dir,
+        directory=dataset_dir,
+        bad_bands=(),
+        hierarchy=HierarchySpec(
+            levels=(
+                HierarchyLevel("level_1", "属", directory=True),
+                HierarchyLevel("level_2", "种", directory=False),
+            ),
+            mappings={"level_2": {"AB": "AB", "AJO": "AJO"}},
+            explicit=True,
+        ),
+        profiles=("GN",),
+    )
+    profile = DatasetProfile(
+        profile_id="GN",
+        dataset_name="GN",
+        dataset_id="TEST",
+        dataset_dir_name=dataset_dir.name,
+        subdir="GN",
+    )
+    return DatasetSelection(spec=spec, profile=profile, dataset_dir=dataset_dir)
 
 
 class SmokeModel(torch.nn.Module):
@@ -82,9 +113,15 @@ def test_evaluate_test_set_writes_summary_for_trained_experiment(
     build_model = lambda num_classes, model_spec: SmokeModel(num_classes)
     monkeypatch.setattr("ramanv2.training.workflow.build_model", build_model)
     monkeypatch.setattr("ramanv2.modeling.predictor.build_model", build_model)
-    resolve_train_dir = lambda profile_key, project_root=None: train_dir
-    monkeypatch.setattr("ramanv2.training.workflow.resolve_training_dir", resolve_train_dir)
-    monkeypatch.setattr("ramanv2.evaluation.context.resolve_training_dir", resolve_train_dir)
+    selection = _selection_for(train_dir.parent)
+    monkeypatch.setattr(
+        "ramanv2.training.workflow.resolve_selection",
+        lambda *args, **kwargs: selection,
+    )
+    monkeypatch.setattr(
+        "ramanv2.evaluation.context.resolve_selection",
+        lambda *args, **kwargs: selection,
+    )
 
     experiment_dir = tmp_path / "output"
     run_training(

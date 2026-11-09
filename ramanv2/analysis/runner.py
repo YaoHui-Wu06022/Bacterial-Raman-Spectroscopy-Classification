@@ -19,6 +19,11 @@ from ramanv2.analysis.layer_attribution import (
 )
 from ramanv2.analysis.attribution_report import save_task_reports, write_aggregate_reports
 from ramanv2.analysis.task import build_parent_tasks, build_run_task
+from ramanv2.core.run_context import (
+    ANALYSIS_LOG_FILE_NAME,
+    ANALYSIS_RESULT_DIR_NAME,
+    UMAP_FIGURE_NAME,
+)
 from ramanv2.evaluation.context import load_evaluation_context, resolve_level_name
 from ramanv2.modeling.run_manifest import write_run_manifest
 from ramanv2.modeling.predictor import load_predictor
@@ -57,7 +62,7 @@ def run_umap_run(
     target_device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     predictor = load_predictor(task.run_dir, target_device, task.level_name)
     model = predictor.load_model(task.level_name, task.entry, task.parent_id)
-    output_path = Path(task.run_dir) / "analysis_result" / "figures" / "umap_hier_train_val.png"
+    output_path = Path(task.run_dir) / ANALYSIS_RESULT_DIR_NAME / "figures" / UMAP_FIGURE_NAME
     output_path.parent.mkdir(parents=True, exist_ok=True)
     _save_task_umap(context, task, model, target_device, output_path)
     return output_path
@@ -132,7 +137,7 @@ def _run_tasks(
     se_lines = write_se_summary(tasks, log_dir / "se_summary.txt")
     _write_analysis_log(
         summaries,
-        log_dir / "analysis_log.txt",
+        log_dir / ANALYSIS_LOG_FILE_NAME,
         tasks,
         mode,
         tasks[0].level_name,
@@ -157,8 +162,13 @@ def _run_tasks(
 def _resolve_output_dir(context, task, mode: str) -> Path:
     """保持单 run 与 parent-routed 的既有分析结果目录规则。"""
     if mode == "run":
-        return Path(task.run_dir) / "analysis_result"
-    return context.experiment_dir / task.level_name / "level_only_result" / "analysis_result"
+        return Path(task.run_dir) / ANALYSIS_RESULT_DIR_NAME
+    return (
+        context.experiment_dir
+        / task.level_name
+        / "level_only_result"
+        / ANALYSIS_RESULT_DIR_NAME
+    )
 
 
 def _analyze_task(
@@ -224,7 +234,7 @@ def _analyze_task(
             config.separate_class_plots_use,
         )
     if collect_embedding:
-        _save_task_umap(context, task, model, device, figure_dir / "umap_hier_train_val.png")
+        _save_task_umap(context, task, model, device, figure_dir / UMAP_FIGURE_NAME)
     return {
         "class_ids": task.class_ids,
         "class_names": task.class_names,

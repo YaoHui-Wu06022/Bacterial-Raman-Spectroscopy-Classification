@@ -24,7 +24,7 @@ from ramanv2.audit.heterogeneity import (
     SampleReport,
 )
 from ramanv2.common.arc_data import count_arc_data, iter_arc_data_paths
-from ramanv2.common.naming import NON_TRAINING_FOLDER_NAMES, build_natural_key
+from ramanv2.common.naming import BEAD_FOLDER_NAME, NON_TRAINING_FOLDER_NAMES, build_natural_key
 from ramanv2.common.file_ops import (
     move_files,
     preserve_paths,
@@ -114,7 +114,7 @@ def check_analysis_gate(
         date_dir = root / date_name
         active_folders: list[tuple[Path, set[str]]] = []
         for folder in date_dir.iterdir():
-            if not folder.is_dir() or folder.name == "小球" or folder.name.startswith("."):
+            if not folder.is_dir() or folder.name == BEAD_FOLDER_NAME or folder.name.startswith("."):
                 continue
             cosmic_names = _arc_data_names(folder)
             if cosmic_names:

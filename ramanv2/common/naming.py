@@ -3,12 +3,28 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 
+PIPELINE_DIR_NAME = ".raman_pipeline"
 # 流水线自身维护、不是光谱来源的目录。
-PIPELINE_RESERVED_FOLDER_NAMES = frozenset({"shift", "delete", ".raman_pipeline"})
-# 参与清洗与归档、但不进入训练集的校准球目录。
-NON_TRAINING_FOLDER_NAMES = frozenset({"小球"})
+PIPELINE_RESERVED_FOLDER_NAMES = frozenset({"shift", "delete", PIPELINE_DIR_NAME})
+# 校准球目录名；参与清洗与归档，但不进入训练集。
+BEAD_FOLDER_NAME = "小球"
+NON_TRAINING_FOLDER_NAMES = frozenset({BEAD_FOLDER_NAME})
+SPECIAL_FOLDER_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
+
+MANUAL_DELETE_RELATIVE = Path("delete") / "manual"
+FOLDER_DELETE_RELATIVE = Path("delete") / "folder_delete"
+ANALYSIS_DELETE_RELATIVE = Path("analysis_delete")
+
+CANONICAL_FOLDER_PATTERN = re.compile(r"^([A-Za-z]+)(\d{8})_(\d+)$")
+DATE_PATTERN = re.compile(r"^\d{8}$")
+
+
+def is_date_name(name: str) -> bool:
+    """判断目录名是否为八位日期。"""
+    return bool(DATE_PATTERN.fullmatch(str(name)))
 
 
 def parse_folder_prefix(name: str, uppercase_enable: bool = False) -> str:

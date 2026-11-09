@@ -7,6 +7,17 @@ from typing import Any, Mapping
 
 from ramanv2.common.naming import parse_folder_prefix
 from ramanv2.common.hierarchy import normalize_level_name
+from ramanv2.data.hierarchy_config import HierarchySpec
+
+
+def _resolve_hierarchy(meta: Mapping[str, Any]) -> HierarchySpec | None:
+    payload = meta.get("hierarchy")
+    if not isinstance(payload, Mapping):
+        return None
+    try:
+        return HierarchySpec.from_payload(payload)
+    except ValueError:
+        return None
 
 
 def build_expected_label_lookup(
@@ -41,12 +52,19 @@ def build_test_input_selection(
 ) -> tuple[set[str], list[dict[str, str | bool]]]:
     """按目标层标签空间筛选可推理的测试文件夹。"""
     expected_lookup = build_expected_label_lookup(meta, level_name)
+    hierarchy = _resolve_hierarchy(meta)
     model_labels = set(class_names)
     selected_names = set()
     rows = []
     for folder_name in folder_names:
         species_prefix = parse_folder_prefix(folder_name, uppercase_enable=True)
-        expected_label = expected_lookup.get(species_prefix)
+        if hierarchy is not None:
+            try:
+                expected_label = hierarchy.expected_label(folder_name, level_name)
+            except ValueError:
+                expected_label = None
+        else:
+            expected_label = expected_lookup.get(species_prefix)
         expected_in_model = expected_label in model_labels
         if expected_label is None:
             reason = "unmapped_species_prefix"

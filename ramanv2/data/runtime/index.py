@@ -10,13 +10,20 @@ import numpy as np
 from ramanv2.common.hierarchy import parts_to_key
 from ramanv2.common.naming import parse_folder_prefix
 from ramanv2.data.dataset_io import iter_arc_dirs, load_arc_intensity
+from ramanv2.data.hierarchy_config import HierarchySpec
 
 
 class DatasetIndex:
     """一次扫描训练目录，保存层级标签和只读原始强度缓存。"""
 
-    def __init__(self, train_dir: Path | str, load_intensity_enable: bool = True) -> None:
+    def __init__(
+        self,
+        train_dir: Path | str,
+        load_intensity_enable: bool = True,
+        hierarchy: HierarchySpec | None = None,
+    ) -> None:
         self.root_dir = Path(train_dir).resolve()
+        self.hierarchy = hierarchy
         if not self.root_dir.is_dir():
             raise FileNotFoundError(f"训练目录不存在：{self.root_dir}")
 
@@ -138,6 +145,9 @@ class DatasetIndex:
 
     def _scan_samples(self) -> None:
         """扫描叶子目录，构建稳定的多层类别索引和父子映射。"""
+        if self.hierarchy is not None:
+            self._scan_samples_with_hierarchy()
+            return
         records: list[tuple[Path, tuple[str, ...]]] = []
         max_depth = 0
         for leaf_dir, filenames in iter_arc_dirs(self.root_dir):
@@ -192,6 +202,85 @@ class DatasetIndex:
         self.samples = np.asarray(samples, dtype=object)
         self.level_labels = np.asarray(labels, dtype=np.int64)
         self.hier_names = np.asarray(hierarchies, dtype=object)
+
+    def _scan_samples_with_hierarchy(self) -> None:
+        """按显式层级配置解析训练目录；目录层级之外的分类值由前缀映射得到。"""
+        spec = self.hierarchy
+        assert spec is not None
+        depth = spec.directory_depth
+        records: list[tuple[Path, tuple[str, ...]]] = []
+        for leaf_dir, filenames in iter_arc_dirs(self.root_dir):
+            parts = leaf_dir.relative_to(self.root_dir).parts
+            if len(parts) < max(depth, 1):
+                raise ValueError(f"训练目录层级不足：{leaf_dir}")
+            records.extend((leaf_dir / filename, parts) for filename in filenames)
+        if not records:
+            raise RuntimeError(f"训练目录中没有 .arc_data 光谱：{self.root_dir}")
+
+        level_names = list(spec.level_names)
+        self.head_names = [*level_names, "leaf"]
+        self.head_name_to_idx = {
+            name: index for index, name in enumerate(self.head_names)
+        }
+        learned_mappings = {
+            level_name: dict(mapping)
+            for level_name, mapping in spec.mappings.items()
+        }
+        for level in spec.levels:
+            learned_mappings.setdefault(level.name, {})
+        level_maps = [dict() for _ in level_names]
+        leaf_map: dict[str, int] = {}
+        label_records: list[tuple[Path, tuple[str, ...]]] = []
+        resolved_records: list[tuple[Path, tuple[str, ...], tuple[str, ...]]] = []
+        for path, parts in records:
+            group_name = parts[-1]
+            raw_prefix = parse_folder_prefix(group_name).upper()
+            values_list: list[str] = []
+            for level_index, level in enumerate(spec.levels):
+                if level.directory and level_index < len(parts):
+                    value = parts[level_index]
+                    learned_mappings[level.name][raw_prefix] = value
+                else:
+                    value = learned_mappings[level.name].get(raw_prefix)
+                    if value is None:
+                        value = parse_folder_prefix(group_name)
+                values_list.append(value)
+            values = tuple(values_list)
+            leaf_key = parts_to_key(parts)
+            leaf_map.setdefault(leaf_key, len(leaf_map))
+            for level_index in range(len(values)):
+                level_key = parts_to_key(values[: level_index + 1])
+                level_maps[level_index].setdefault(level_key, len(level_maps[level_index]))
+            resolved_records.append((path, parts, values))
+            label_records.append((path, values))
+
+        self.label_maps_by_level = level_maps + [leaf_map]
+        self.parent_to_children = _build_parent_to_children(
+            label_records,
+            level_maps,
+            level_names,
+        )
+        samples: list[Path] = []
+        labels: list[list[int]] = []
+        hierarchies: list[dict[str, str | None]] = []
+        for path, parts, values in resolved_records:
+            row = [-1] * len(self.head_names)
+            hierarchy = {name: None for name in level_names}
+            for level_index, value in enumerate(values):
+                level_key = parts_to_key(values[: level_index + 1])
+                row[level_index] = level_maps[level_index][level_key]
+                hierarchy[level_names[level_index]] = level_key
+            row[-1] = leaf_map[parts_to_key(parts)]
+            samples.append(path)
+            labels.append(row)
+            hierarchies.append(hierarchy)
+        self.samples = np.asarray(samples, dtype=object)
+        self.level_labels = np.asarray(labels, dtype=np.int64)
+        self.hier_names = np.asarray(hierarchies, dtype=object)
+        self.hierarchy = HierarchySpec(
+            levels=spec.levels,
+            mappings=learned_mappings,
+        )
 
     def _load_all_raw_intensities(self) -> dict[Path, np.ndarray]:
         """一次性读取全部样本强度，并冻结数组以避免增强原地修改。"""

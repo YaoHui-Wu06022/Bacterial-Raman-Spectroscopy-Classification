@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ramanv2.pipeline.db import (
     DATABASE_FILE_NAME,
@@ -12,9 +13,11 @@ from ramanv2.pipeline.db import (
     save_state_payload,
 )
 
+if TYPE_CHECKING:
+    from ramanv2.data.datasets import DatasetSpec
+
 
 PIPELINE_STATE_VERSION = 1
-STATE_DIR_NAME = ".raman_pipeline"
 COMMIT_LOG_NAME = "commit_log.jsonl"
 
 
@@ -142,12 +145,9 @@ class PipelineState:
         )
 
 
-def pipeline_state_path(project_root: Path | str) -> Path:
-    return Path(project_root).resolve() / "dataset" / STATE_DIR_NAME / DATABASE_FILE_NAME
-
-
-def pipeline_metadata_dir(project_root: Path | str) -> Path:
-    return pipeline_state_path(project_root).parent
+def pipeline_state_path_for_spec(spec: "DatasetSpec") -> Path:
+    """按已解析的数据集规格返回流水线数据库路径，避免重复扫描注册表。"""
+    return Path(spec.metadata_dir) / DATABASE_FILE_NAME
 
 
 def load_pipeline_state(path: Path | str) -> PipelineState:
@@ -207,7 +207,5 @@ __all__ = [
     "PipelineState",
     "invalidate_downstream",
     "load_pipeline_state",
-    "pipeline_metadata_dir",
-    "pipeline_state_path",
     "write_pipeline_state",
 ]

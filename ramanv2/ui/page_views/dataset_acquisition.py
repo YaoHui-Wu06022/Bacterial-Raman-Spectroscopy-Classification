@@ -6,19 +6,19 @@ import json
 from pathlib import Path
 import streamlit as st
 
-from ramanv2.common.arc_data import has_arc_data
-from ramanv2.data.builders.init import build_profile_dataset
-from ramanv2.data.plots.prefix import build_prefix_plots
-from ramanv2.pipeline.calibration import run_folder_offset
-from ramanv2.data.dataset_mapping import DatasetMapping, ensure_dataset_mapping
+from ramanv2.common.arc_data import count_arc_data, has_arc_data
+from ramanv2.core.config import InputConfig
 from ramanv2.common.naming import (
-    NON_TRAINING_FOLDER_NAMES,
-    PIPELINE_RESERVED_FOLDER_NAMES,
+    CANONICAL_FOLDER_PATTERN,
+    SPECIAL_FOLDER_NAMES,
     build_natural_key,
     parse_folder_prefix,
 )
-from ramanv2.common.paths import PROJECT_ROOT
-from ramanv2.data.profiles import PIPELINE_PROFILE_IDS, TEST_ROOT_NAME, resolve_dataset_dir, resolve_profile
+from ramanv2.data.builders.init import build_full_init, build_profile_dataset
+from ramanv2.data.plots.prefix import PrefixPlotConfig, build_prefix_plots
+from ramanv2.pipeline.calibration import run_folder_offset
+from ramanv2.data.datasets import annotate_dataset_build
+from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.pipeline.dataset_sync import (
     collect_date_update_candidates,
     collect_init_export_sources,
@@ -36,31 +36,26 @@ from ramanv2.pipeline.supplement import (
 )
 from ramanv2.pipeline.state import PipelineState
 from ramanv2.pipeline.db import database_path, load_test_defaults
+from ramanv2.ui.components.pickers import render_profile_picker
 from ramanv2.ui.formatting import progress_ratio
 from ramanv2.ui.page_context import PageContext
 from ramanv2.ui.read_cache import cached_dataset_summary, cached_dataset_taxon_counts
 from ramanv2.ui.page_state import (
+    INVALIDATE_DATASET,
+    INVALIDATE_SPECTRA,
+    UI_ACTION_ERRORS,
     invalidate_ui_cache,
     load_page_state,
+    render_action_error,
+    render_flash,
+    set_flash,
     write_page_state,
     ui_cache_version,
 )
 
 
 # 候选源文件夹：流水线保留目录与校准球都不作为普通来源。
-SOURCE_RESERVED_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
-
-
-def _load_catalog(context: PageContext) -> DatasetMapping:
-    cached = st.session_state.get("dataset_mapping")
-    if isinstance(cached, DatasetMapping):
-        return cached
-    catalog = ensure_dataset_mapping(
-        context.classification_workbook,
-        context.dataset_mapping_file,
-    )
-    st.session_state["dataset_mapping"] = catalog
-    return catalog
+SOURCE_RESERVED_NAMES = SPECIAL_FOLDER_NAMES
 
 
 def _render_count_metrics(summary: dict[str, int | bool], test_summary: dict[str, int | bool]) -> None:
@@ -101,6 +96,8 @@ def _render_prefix_plot_section(
     init_root: Path,
     figure_root: Path,
     key: str,
+    input_config=None,
+    flat: bool = False,
 ) -> None:
     """将已有图片查看和增量更新分开，默认不展开图像区域。"""
     if not init_root.is_dir():
@@ -127,13 +124,14 @@ def _render_prefix_plot_section(
                         init_root,
                         figure_root,
                         force_enable=False,
+                        config=PrefixPlotConfig(input=input_config, flat=flat) if input_config is not None else PrefixPlotConfig(flat=flat),
                         progress_callback=report_plot_progress,
                     )
                     progress.progress(1.0, text=f"已更新 {len(outputs)} 张 prefix-plot")
                     status.update(label="prefix-plot 更新完成", state="complete", expanded=False)
                 st.success(f"已更新 {len(outputs)} 张 prefix-plot。")
-            except (OSError, ValueError, RuntimeError) as error:
-                st.error(f"prefix-plot 更新失败：{error}")
+            except UI_ACTION_ERRORS as error:
+                render_action_error("prefix-plot 更新", error)
         if not st.session_state.get(f"{key}_show", False):
             return
         if not figure_root.is_dir():
@@ -147,12 +145,22 @@ def _render_prefix_plot_section(
         if not genus_paths:
             st.info("当前没有可查看的 prefix-plot。")
             return
-        genus_name = st.selectbox("选择查看的属", sorted(genus_paths, key=build_natural_key), key=f"{key}_genus")
+        genus_name = st.selectbox(
+            "选择查看的类别" if flat else "选择查看的属",
+            sorted(genus_paths, key=build_natural_key),
+            key=f"{key}_genus",
+        )
         plot_paths = genus_paths[genus_name]
-        prefix_name = st.selectbox("选择查看的种前缀", [path.stem for path in plot_paths], key=f"{key}_prefix")
+        if flat:
+            stems = [path.stem for path in plot_paths]
+            prefix_name = genus_name if genus_name in stems else stems[0]
+            caption = genus_name
+        else:
+            prefix_name = st.selectbox("选择查看的种前缀", [path.stem for path in plot_paths], key=f"{key}_prefix")
+            caption = f"{genus_name} / {prefix_name}"
         selected = figure_root / genus_name / f"{prefix_name}.png"
         if selected.is_file():
-            st.image(str(selected), caption=f"{genus_name} / {prefix_name}", width="stretch")
+            st.image(str(selected), caption=caption, width="stretch")
 
 
 def _render_supplement_plan(plan: SupplementPlan | None, supplement_root: Path) -> None:
@@ -181,15 +189,6 @@ def _render_supplement_plan(plan: SupplementPlan | None, supplement_root: Path) 
         )
 
 
-def _build_scan_state(affine_dates: tuple[str, ...], report_json: str) -> PipelineState:
-    """用缓存键里的原始值重建扫描所需的最小状态，避免把整份 state 放进缓存键。"""
-    report = json.loads(report_json) if report_json else None
-    return PipelineState(
-        affine_completed_dates=set(affine_dates),
-        dataset_builds={"full_init": report} if isinstance(report, dict) else {},
-    )
-
-
 def _report_cache_key(state) -> str:
     report = state.dataset_builds.get("full_init")
     return json.dumps(report, ensure_ascii=False, sort_keys=True, default=str) if isinstance(report, dict) else ""
@@ -205,11 +204,11 @@ def _cached_init_export_sources(
 ) -> dict[str, str]:
     """缓存 init 移入 init_test 的候选；走向文件或数据集版本变化时失效。"""
     del lineage_modified_ns, version
-    return collect_init_export_sources(
-        Path(data_root),
-        Path(init_root),
-        _build_scan_state((), report_json),
+    report = json.loads(report_json) if report_json else None
+    state = PipelineState(
+        dataset_builds={"full_init": report} if isinstance(report, dict) else {},
     )
+    return collect_init_export_sources(Path(data_root), Path(init_root), state)
 
 
 _DATE_UPDATE_STATUS_LABELS = {
@@ -237,7 +236,7 @@ def _cached_date_update_candidates(
 
 def _load_stale_test_routes(context: PageContext) -> list[tuple[str, str]]:
     """找出仍登记为 test、但测试目录已缺失且不在默认名单的文件夹。"""
-    configured = set(_load_configured_default_sources() or [])
+    configured = set(_load_configured_default_sources(context) or [])
     if not configured:
         return []
     folders = load_folder_lineage(context.data_root).get("folders", {})
@@ -285,10 +284,8 @@ def _render_stale_test_routes(context: PageContext) -> None:
                 context.data_root,
                 [source_id for source_id, _target in stale],
             )
-            invalidate_ui_cache("dataset", "training", "inference", "analysis")
-            st.success(
-                f"已清除 {result['count']} 个 test 分流；init 数据未改动。"
-            )
+            invalidate_ui_cache(*INVALIDATE_DATASET)
+            set_flash("dataset", f"已清除 {result['count']} 个 test 分流；init 数据未改动。")
             st.rerun()
 
 
@@ -298,9 +295,7 @@ def _render_date_dataset_update(context: PageContext, state, catalog: DatasetMap
     if not isinstance(report, dict) or not context.init_root.is_dir():
         return
     with st.expander("按日期更新", expanded=False):
-        message = st.session_state.pop("date_update_message", None)
-        if message:
-            st.success(message)
+        render_flash("date_update")
         lineage_file = lineage_path(context.data_root)
         candidates = _cached_date_update_candidates(
             str(context.data_root.resolve()),
@@ -361,11 +356,16 @@ def _render_date_dataset_update(context: PageContext, state, catalog: DatasetMap
         if selected_new_dates:
             test_candidates = _list_test_sources(context, selected_new_dates)
             _sync_test_selection(
+                context,
                 test_candidates,
                 "date_update_test_selection",
                 "date_update_test_selection_initialized",
             )
-            _render_default_test_selection_button(test_candidates, "date_update_test_selection")
+            _render_default_test_selection_button(
+                context,
+                test_candidates,
+                "date_update_test_selection",
+            )
             selected_test = st.multiselect(
                 "新增日期中选择进入 init_test 的文件夹",
                 test_candidates,
@@ -398,11 +398,12 @@ def _render_date_dataset_update(context: PageContext, state, catalog: DatasetMap
                     context.state_file,
                     selected_dates,
                     selected_test,
+                    hierarchy=context.hierarchy,
                     progress_callback=report_progress,
                 )
                 progress.progress(1.0, text="init 与 init_test 写入完成")
                 status.update(label="按日期更新完成", state="complete", expanded=False)
-            invalidate_ui_cache("dataset", "training", "inference", "analysis")
+            invalidate_ui_cache(*INVALIDATE_DATASET)
             message = (
                 f"已更新 {len(result['updated_dates'])} 个日期"
                 f"（新增 {len(result['new_dates'])}，同步 {len(result['changed_dates'])}），"
@@ -410,10 +411,10 @@ def _render_date_dataset_update(context: PageContext, state, catalog: DatasetMap
             )
             if result["plot_error"]:
                 message += f" prefix-plot 更新失败：{result['plot_error']}"
-            st.session_state["date_update_message"] = message
+            set_flash("date_update", message)
             st.rerun()
-        except (OSError, ValueError, RuntimeError, TypeError) as error:
-            st.error(f"按日期更新失败：{error}")
+        except UI_ACTION_ERRORS as error:
+            render_action_error("按日期更新", error)
 
 
 def _render_dataset_transfer(context: PageContext, state, catalog: DatasetMapping | None, to_test_enable: bool) -> None:
@@ -422,9 +423,7 @@ def _render_dataset_transfer(context: PageContext, state, catalog: DatasetMappin
     title = "init 快速移入 init_test" if to_test_enable else "init_test 快速移回 init"
     destination = "init_test" if to_test_enable else "init"
     with st.expander(title, expanded=False):
-        message = st.session_state.pop(f"{key}_message", None)
-        if message:
-            st.success(message)
+        render_flash(key)
         if to_test_enable:
             lineage_file = lineage_path(context.data_root)
             sources = _cached_init_export_sources(
@@ -455,12 +454,16 @@ def _render_dataset_transfer(context: PageContext, state, catalog: DatasetMappin
             with st.spinner("正在迁移所选文件夹并更新分流记录……"):
                 run_transfer = run_init_to_test if to_test_enable else run_test_to_init
                 result = run_transfer(context.data_root, context.init_root, catalog, state, context.state_file, selected)
-            invalidate_ui_cache("dataset", "training", "inference", "analysis")
+            invalidate_ui_cache(*INVALIDATE_DATASET)
             st.session_state["test_export_added_source" if to_test_enable else "test_return_removed_source"] = selected
-            st.session_state[f"{key}_message"] = f"{selected} 已直接{'移入' if to_test_enable else '移回'} {destination}（{result['spectrum_count']} 条）：{Path(result['target_dir']).name}。"
+            set_flash(
+                key,
+                f"{selected} 已直接{'移入' if to_test_enable else '移回'} {destination}"
+                f"（{result['spectrum_count']} 条）：{Path(result['target_dir']).name}。",
+            )
             st.rerun()
-        except (OSError, ValueError, RuntimeError, TypeError) as error:
-            st.error(f"迁移到 {destination} 失败：{error}")
+        except UI_ACTION_ERRORS as error:
+            render_action_error(f"迁移到 {destination}", error)
 
 
 def _render_affine_compensation(context: PageContext, state, catalog: DatasetMapping) -> None:
@@ -468,9 +471,7 @@ def _render_affine_compensation(context: PageContext, state, catalog: DatasetMap
     st.subheader("补充频移")
     if st.session_state.pop("folder_offset_reset", False):
         st.session_state["folder_offset_delta"] = 0.0
-    message = st.session_state.pop("folder_offset_message", None)
-    if message:
-        st.success(message)
+    render_flash("folder_offset")
     folders = list(
         _cached_date_source_folders(
             str(context.data_root.resolve()),
@@ -492,17 +493,27 @@ def _render_affine_compensation(context: PageContext, state, catalog: DatasetMap
     delta = st.number_input("本次频移量（cm⁻¹）", step=0.1, format="%.1f", key="folder_offset_delta")
     if st.button("应用本次频移并同步数据", key="apply_affine_compensation", width="stretch"):
         try:
-            result = run_folder_offset(context.data_root, context.shift_root, context.init_root, catalog, state, context.state_file, selected, float(delta), context.init_root.parent / "fig_init")
+            result = run_folder_offset(
+                context.data_root,
+                context.shift_root,
+                context.init_root,
+                catalog,
+                state,
+                context.state_file,
+                selected,
+                float(delta),
+                context.fig_root,
+            )
             if not result["changed_folders"]:
                 st.info("本次频移量为 0，未改动光谱。")
                 return
-            invalidate_ui_cache("cleaning", "affine", "dataset")
+            invalidate_ui_cache(*INVALIDATE_SPECTRA)
             st.session_state["folder_offset_reset"] = True
             destination = "对应 init_test 文件夹" if result.get("test_updated") else "对应 init 文件夹及审核图"
-            st.session_state["folder_offset_message"] = f"{selected} 已同步平移活动谱及归档谱，并更新{destination}。"
+            set_flash("folder_offset", f"{selected} 已同步平移活动谱及归档谱，并更新{destination}。")
             st.rerun()
-        except (OSError, ValueError, RuntimeError, TypeError) as error:
-            st.error(f"频移补偿失败：{error}")
+        except UI_ACTION_ERRORS as error:
+            render_action_error("频移补偿", error)
 
 
 @st.cache_data(show_spinner=False)
@@ -540,21 +551,21 @@ def _list_test_sources(context: PageContext, date_names: list[str]) -> list[str]
 _TEST_SELECTION_LOGIC_VERSION = 15
 
 
-def _load_configured_default_sources() -> list[str] | None:
-    """读取 SQLite 中的推荐默认名单。"""
-    db_path = database_path(PROJECT_ROOT / "dataset" / ".raman_pipeline")
+def _load_configured_default_sources(context: PageContext) -> list[str] | None:
+    """读取当前数据集的推荐默认名单。"""
+    db_path = database_path(context.metadata_dir)
     if not db_path.is_file():
         return None
     try:
         folders = load_test_defaults(db_path)
-    except (OSError, ValueError, RuntimeError):
+    except UI_ACTION_ERRORS:
         return None
     return folders or None
 
 
-def _default_test_sources(candidates: list[str]) -> list[str]:
-    """按 SQLite 默认名单过滤当前候选文件夹。"""
-    configured = _load_configured_default_sources()
+def _default_test_sources(context: PageContext, candidates: list[str]) -> list[str]:
+    """按当前数据集的默认名单过滤候选文件夹。"""
+    configured = _load_configured_default_sources(context)
     if configured is None:
         return []
     available = set(candidates)
@@ -565,6 +576,7 @@ def _default_test_sources(candidates: list[str]) -> list[str]:
 
 
 def _sync_test_selection(
+    context: PageContext,
     candidates: list[str],
     selection_key: str,
     initialized_key: str,
@@ -577,7 +589,7 @@ def _sync_test_selection(
     initialized = st.session_state.get(initialized_key, False)
     previous_defaults = set(st.session_state.get(defaults_key, []))
     current_candidates = set(candidates)
-    default_sources = _default_test_sources(candidates)
+    default_sources = _default_test_sources(context, candidates)
 
     # 首次初始化或默认规则升级时直接采用当前规则的默认选择。
     if not initialized or version_changed:
@@ -610,6 +622,7 @@ def _sync_test_selection(
 
 
 def _render_default_test_selection_button(
+    context: PageContext,
     candidates: list[str],
     selection_key: str,
 ) -> None:
@@ -620,27 +633,54 @@ def _render_default_test_selection_button(
         help="按 SQLite 中保存的推荐默认名单重新选择。",
     ):
         return
-    defaults = _default_test_sources(candidates)
+    defaults = _default_test_sources(context, candidates)
     st.session_state[selection_key] = defaults
     st.session_state[f"{selection_key}_defaults"] = defaults
     st.session_state[f"{selection_key}_suppressed_defaults"] = []
     st.rerun()
 
 
+def _build_report_stale(context: PageContext, report: object) -> bool:
+    """构建报告中的层级与当前数据集配置不一致时视为待重建。"""
+    if not isinstance(report, dict):
+        return False
+    signature = report.get("hierarchy_signature")
+    return signature is not None and signature != context.dataset_spec.hierarchy_signature()
+
+
+def _render_flat_label_counts(context: PageContext) -> None:
+    """按层级一级类别汇总 init 的组数与光谱数。"""
+    if not context.init_root.is_dir():
+        return
+    counts: dict[str, list[int]] = {}
+    for folder in sorted(context.init_root.rglob("*"), key=lambda path: build_natural_key(path.as_posix())):
+        if not folder.is_dir() or not CANONICAL_FOLDER_PATTERN.fullmatch(folder.name):
+            continue
+        try:
+            label = context.hierarchy.resolve_values(folder.name)["level_1"]
+        except (KeyError, ValueError):
+            label = folder.parent.name if folder.parent != context.init_root else folder.name
+        entry = counts.setdefault(label, [0, 0])
+        entry[0] += 1
+        entry[1] += count_arc_data(folder)
+    rows = [
+        {"类别": label, "来源组数": values[0], "光谱数": values[1]}
+        for label, values in sorted(counts.items(), key=lambda item: build_natural_key(item[0]))
+    ]
+    with st.expander("类别数量统计", expanded=False):
+        st.dataframe(rows, hide_index=True, width="stretch")
+
+
 def render_dataset_acquisition_page(context: PageContext) -> None:
     state = load_page_state(context)
-
     st.title("数据集获取")
-    st.caption("先生成全量 dataset/init，再选择固定 Profile 生成对应数据集。")
-    flash = st.session_state.pop("dataset_flash", None)
-    if flash:
-        st.success(flash)
+    render_flash("dataset")
 
     try:
-        catalog = _load_catalog(context)
-    except (OSError, ValueError, RuntimeError) as error:
+        catalog = context.dataset_mapping()
+    except UI_ACTION_ERRORS as error:
         catalog = None
-        st.error(f"Profile 配置加载失败：{error}")
+        render_action_error("Profile 配置加载", error)
 
     st.subheader("全量 init")
     full_summary = cached_dataset_summary(
@@ -651,20 +691,39 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         bool(full_summary["exists"])
         and isinstance(full_report, dict)
         and full_report.get("status") == "ready"
+        and not _build_report_stale(context, full_report)
     )
-    st.metric("状态", "待重建" if full_summary["exists"] and not full_init_ready else ("已生成" if full_summary["exists"] else "未生成"))
     test_summary = cached_dataset_summary(
-        str((context.init_root.parent / TEST_ROOT_NAME).resolve()), ui_cache_version("dataset")
+        str(context.init_test_root.resolve()), ui_cache_version("dataset")
     )
-    _render_count_metrics(full_summary, test_summary)
-    _render_taxon_counts(context.init_root)
+    class_count = (
+        len([path for path in context.init_root.iterdir() if path.is_dir()])
+        if context.init_root.is_dir() else 0
+    )
+    metrics = st.columns(5)
+    metrics[0].metric(
+        "状态",
+        "待重建" if full_summary["exists"] and not full_init_ready else (
+            "已生成" if full_summary["exists"] else "未生成"
+        ),
+    )
+    metrics[1].metric("类别数", f"{class_count} 个")
+    metrics[2].metric("来源组数", f"{full_summary['folder_count']} 个")
+    metrics[3].metric("init 光谱", f"{full_summary['file_count']} 条")
+    metrics[4].metric("init_test 光谱", f"{test_summary['file_count']} 条")
+    if context.hierarchy.is_flat:
+        _render_flat_label_counts(context)
+    else:
+        _render_taxon_counts(context.init_root)
     eligible_dates = sorted(state.affine_completed_dates, key=build_natural_key)
     supplement_plan = (
         scan_supplement_plan(context.supplement_root, context.init_root, catalog)
-        if catalog is not None
+        if not context.hierarchy.is_flat and catalog is not None
         else None
     )
-    supplement_ready = supplement_plan is not None and not supplement_plan.errors
+    supplement_ready = context.hierarchy.is_flat or (
+        supplement_plan is not None and not supplement_plan.errors
+    )
     test_candidates = _list_test_sources(context, eligible_dates)
     test_selection_key = "full_init_test_selection"
     initialized_key = "full_init_test_selection_initialized"
@@ -675,11 +734,13 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     if exported_source is not None:
         st.session_state[test_selection_key] = sorted(set(st.session_state.get(test_selection_key, [])) | {exported_source}, key=build_natural_key)
     _sync_test_selection(
+        context,
         test_candidates,
         test_selection_key,
         initialized_key,
     )
     _render_default_test_selection_button(
+        context,
         test_candidates,
         test_selection_key,
     )
@@ -689,76 +750,115 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         format_func=lambda value: value.replace("/", " / "),
         key=test_selection_key,
     )
-    _render_supplement_plan(supplement_plan, context.supplement_root)
-    confirm_supplement = st.checkbox(
-        "我确认按上述补充数据重建全量 init",
-        key="full_init_supplement_confirm",
-        disabled=not supplement_ready,
-    )
+    confirm_supplement = True
+    if not context.hierarchy.is_flat:
+        _render_supplement_plan(supplement_plan, context.supplement_root)
+        confirm_supplement = st.checkbox(
+            "我确认按上述补充数据重建全量 init",
+            key="full_init_supplement_confirm",
+            disabled=not supplement_ready,
+        )
     if st.button(
         "从 shift_data 重建全量 init",
         disabled=not supplement_ready or not confirm_supplement,
         width="stretch",
     ):
-        validation_errors = validate_supplement_plan(supplement_plan)
-        if validation_errors:
-            st.error("补充数据校验失败：" + "；".join(validation_errors))
-        else:
-            try:
-                with st.status("正在重建全量 init…", expanded=True) as status:
-                    progress = st.progress(0.0, text="正在校验日期门禁并收集来源文件夹…")
+        if not context.hierarchy.is_flat:
+            validation_errors = validate_supplement_plan(supplement_plan)
+            if validation_errors:
+                st.error("补充数据校验失败：" + "；".join(validation_errors))
+                return
+        try:
+            with st.status("正在重建全量 init…", expanded=True) as status:
+                progress = st.progress(0.0, text="正在校验日期门禁并收集来源文件夹…")
 
-                    def report_copy_progress(date_name: str, processed: int, total: int) -> None:
-                        """按已复制光谱数刷新全量 init 构建进度。"""
-                        progress.progress(
-                            processed / total if total else 1.0,
-                            text=f"[{processed}/{total} 条光谱] 正在处理 {date_name}…",
-                        )
+                def report_copy_progress(date_name: str, processed: int, total: int) -> None:
+                    """按已复制光谱数刷新全量 init 构建进度。"""
+                    progress.progress(
+                        progress_ratio(processed, total),
+                        text=f"[{processed}/{total} 条光谱] 正在处理 {date_name}…",
+                    )
 
+                if context.hierarchy.is_flat:
+                    report = build_full_init(
+                        context.shift_root,
+                        context.init_root,
+                        catalog,
+                        eligible_dates,
+                        test_root=context.init_test_root,
+                        selected_test_folders=selected_test,
+                        hierarchy=context.hierarchy,
+                        progress_callback=report_copy_progress,
+                    )
+                else:
                     report = build_full_init_with_supplements(
                         context.shift_root,
                         context.init_root,
                         catalog,
                         eligible_dates,
                         supplement_plan,
-                        test_root=context.init_root.parent / TEST_ROOT_NAME,
+                        test_root=context.init_test_root,
                         selected_test_folders=selected_test,
+                        hierarchy=context.hierarchy,
                         progress_callback=report_copy_progress,
                     )
-                    progress.progress(1.0, text="全量 init 与补充数据写入完成")
-                    status.update(label="全量 init 重建完成", state="complete", expanded=False)
-                state.dataset_builds["full_init"] = report
-                invalidate_ui_cache("dataset", "training", "inference", "analysis")
-                write_page_state(context, state)
-                st.session_state.pop("full_init_supplement_confirm", None)
+                progress.progress(1.0, text="全量 init 写入完成")
+                status.update(label="全量 init 重建完成", state="complete", expanded=False)
+            state.dataset_builds["full_init"] = annotate_dataset_build(report, context.dataset_spec)
+            invalidate_ui_cache(*INVALIDATE_DATASET)
+            write_page_state(context, state)
+            st.session_state.pop("full_init_supplement_confirm", None)
+            if context.hierarchy.is_flat:
+                set_flash(
+                    "dataset",
+                    f"全量 init 生成完成：{report['count']['file_count']} 条光谱，"
+                    f"{report['test_folder_count']} 个测试组。",
+                )
+            else:
                 supplement = report["supplement"]
                 supplement_note = (
                     f"已写入 {supplement['folder_count']} 个补充文件夹（{supplement['file_count']} 条光谱）"
                     if supplement["folder_count"]
                     else "未写入补充数据"
                 )
-                st.session_state["dataset_flash"] = (
-                    f"全量 init 生成完成，{supplement_note}；已有 Profile 保留，可按需重新生成。"
+                set_flash(
+                    "dataset",
+                    f"全量 init 生成完成，{supplement_note}；已有 Profile 保留，可按需重新生成。",
                 )
-                st.rerun()
-            except (OSError, ValueError, RuntimeError) as error:
-                st.error(f"全量 init 生成失败：{error}")
+            st.rerun()
+        except UI_ACTION_ERRORS as error:
+            render_action_error("全量 init 生成", error)
 
     _render_date_dataset_update(context, state, catalog)
     _render_dataset_transfer(context, state, catalog, False)
     _render_dataset_transfer(context, state, catalog, True)
 
     if catalog is None:
-        st.info("请先修复本地病原菌分类 Excel 文件。")
+        st.info("请先修复本地分类 Excel 文件。")
         return
 
-    _render_prefix_plot_section(context.init_root, context.init_root.parent / "fig_init", "full_init")
+    _render_prefix_plot_section(
+        context.init_root,
+        context.fig_root,
+        "full_init",
+        InputConfig(bad_bands=context.bad_bands),
+        flat=context.hierarchy.is_flat,
+    )
     _render_affine_compensation(context, state, catalog)
 
     st.subheader("Profile 数据集")
-    profile_name = st.selectbox("选择 Profile", PIPELINE_PROFILE_IDS, key="dataset_profile_name")
-    profile = resolve_profile(profile_name)
-    profile_dir = resolve_dataset_dir(profile, context.init_root.parent.parent)
+    profile = render_profile_picker(
+        context,
+        label="选择 Profile",
+        key="dataset_profile_name",
+        profile_ids=list(context.dataset_spec.profiles),
+        empty_message="当前数据集没有 Profile 子目录。",
+        empty_kind="info",
+    )
+    if profile is None:
+        return
+    profile_name = profile.profile_id
+    profile_dir = context.profile_dir(profile)
     profile_root = profile_dir / profile.root_init
     profile_summary = cached_dataset_summary(
         str(profile_root.resolve()), ui_cache_version("dataset")
@@ -833,13 +933,9 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                 status.update(label=f"{profile_name} 数据集生成完成", state="complete", expanded=False)
             profile_reports[profile_name] = report
             state.dataset_builds["profiles"] = profile_reports
-            invalidate_ui_cache("dataset", "training", "inference", "analysis")
+            invalidate_ui_cache(*INVALIDATE_DATASET)
             write_page_state(context, state)
-            st.success(f"{profile_name} 数据集生成完成。")
+            set_flash("dataset", f"{profile_name} 数据集生成完成。")
             st.rerun()
-        except (OSError, ValueError, RuntimeError) as error:
-            st.error(f"{profile_name} 数据集生成失败：{error}")
-
-
-
-__all__ = ["render_dataset_acquisition_page"]
+        except UI_ACTION_ERRORS as error:
+            render_action_error(f"{profile_name} 数据集生成", error)

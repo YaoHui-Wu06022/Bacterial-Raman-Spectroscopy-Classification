@@ -25,6 +25,12 @@ VALIDATION_SPLIT_FILE_NAME = "val_split.json"
 HIERARCHY_META_FILE_NAME = "hierarchy_meta.json"
 RUN_LOG_FILE_NAME = "run.log"
 CONFIG_LOG_FILE_NAME = "config.txt"
+VAL_RESULT_DIR_NAME = "val_result"
+ANALYSIS_RESULT_DIR_NAME = "analysis_result"
+METRICS_FILE_NAME = "metrics.json"
+CONFUSION_MATRIX_FILE_NAME = "confusion_matrix.png"
+UMAP_FIGURE_NAME = "umap_hier_train_val.png"
+ANALYSIS_LOG_FILE_NAME = "analysis_log.txt"
 
 
 @dataclass(frozen=True)

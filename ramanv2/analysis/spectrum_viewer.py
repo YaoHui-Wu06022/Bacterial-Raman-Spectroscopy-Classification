@@ -15,7 +15,7 @@ from ramanv2.common.paths import PROJECT_ROOT
 from ramanv2.core.config import InputConfig
 from ramanv2.core.input_spec import build_input_spec
 from ramanv2.data.config import DataBuildConfig, build_cosmic_ray_options, resolve_build_config
-from ramanv2.data.profiles import resolve_dataset_dir, resolve_profile
+from ramanv2.data.profiles import resolve_selection
 from ramanv2.data.runtime.input import InputPreprocessor
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.bad_bands import build_valid_mask
@@ -56,8 +56,9 @@ def find_sample_path(
         path = Path(sample_path)
         return path.resolve() if path.is_absolute() else (root / path).resolve()
 
-    profile = resolve_profile(profile_id)
-    dataset_dir = resolve_dataset_dir(profile, root)
+    selection = resolve_selection(profile_id=profile_id, project_root=root)
+    profile = selection.profile
+    dataset_dir = selection.dataset_dir
     folder = Path(sample_folder) if sample_folder is not None else Path(profile.root_init)
     sample_root = folder if folder.is_absolute() else (root / folder)
     if not sample_root.exists() and not folder.is_absolute():

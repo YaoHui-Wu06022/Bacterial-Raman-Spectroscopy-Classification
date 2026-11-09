@@ -161,8 +161,9 @@ def build_train(
     config: DataBuildConfig | None = None,
     input_config: InputConfig = InputConfig(),
     reference_wavenumbers: np.ndarray | None = None,
+    hierarchy=None,
 ):
-    """从 init 构建 train。"""
+    """从 init 构建 train；hierarchy 存在时按显式层级合并类别。"""
     config = resolve_build_config(config)
     base_dir = Path(base_dir)
     input_path = resolve_path(profile.root_init, base_dir)
@@ -188,7 +189,11 @@ def build_train(
             if len(physical_samples) < config.min_samples_per_class:
                 skipped_sources += 1
                 continue
-            target_relative = _target_group_name(relative_dir, leaf_name)
+            target_relative = (
+                hierarchy.init_class_relative(relative_dir, leaf_name)
+                if hierarchy is not None
+                else _target_group_name(relative_dir, leaf_name)
+            )
             renamed_samples = [
                 (_ensure_name_prefix(leaf_name, filename), wavenumbers, intensities)
                 for filename, wavenumbers, intensities in physical_samples

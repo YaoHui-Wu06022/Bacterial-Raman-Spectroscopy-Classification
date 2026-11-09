@@ -7,6 +7,7 @@ import argparse
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
     """注册训练请求的范围与输出位置参数。"""
+    parser.add_argument("--dataset", default=None, help="数据集标识；默认按 profile 归属解析")
     parser.add_argument("--profile", required=True, help="常规数据集 profile 标识")
     parser.add_argument("--level", required=True, help="训练层级，如 level_1")
     parser.add_argument("--parent", default=None, help="仅训练指定父类的子模型，可为名称或索引")
@@ -27,10 +28,20 @@ def _resolve_parent(value: str | None) -> tuple[int | None, str | None]:
 def run_command(args: argparse.Namespace) -> int:
     """构建训练请求并调用 workflow。"""
     from ramanv2.core.config import build_config
+    from ramanv2.data.profiles import resolve_selection
     from ramanv2.training.workflow import TrainRequest, run_training
 
     only_parent, only_parent_name = _resolve_parent(args.parent)
-    config = build_config({"profile_id": args.profile})
+    selection = resolve_selection(args.dataset, args.profile)
+    spec = selection.spec
+    config = build_config(
+        {
+            "dataset_id": spec.dataset_id,
+            "profile_id": selection.profile.profile_id,
+            "label_schema": spec.hierarchy.label_schema,
+            "bad_bands": spec.bad_bands,
+        }
+    )
     request = TrainRequest(
         config=config,
         level_name=args.level,

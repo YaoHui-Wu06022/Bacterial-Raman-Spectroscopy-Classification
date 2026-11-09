@@ -3,18 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from openpyxl import load_workbook
 
 from ramanv2.common.file_ops import create_temporary_path, publish_file, read_json, write_json
-from ramanv2.data.profiles import PIPELINE_PROFILE_IDS
-
-# 阴性菌统一归入 GN，阳性菌与真菌分别归入 GP、FUNG。
-GRAM_PROFILE_NAMES = {"阳性": "GP", "真菌": "FUNG"}
-PROFILE_NAMES = tuple(name for name in PIPELINE_PROFILE_IDS if name != "MICRO")
-REQUIRED_COLUMNS = ("革兰氏", "科", "属英文", "规范种简称")
 
 
 @dataclass(frozen=True)
@@ -73,42 +68,53 @@ class DatasetMapping:
         return cls.from_payload(read_json(path))
 
     @classmethod
-    def from_workbook(cls, workbook_path: Path | str) -> "DatasetMapping":
+    def from_workbook(
+        cls,
+        workbook_path: Path | str,
+        columns: tuple[str, ...] | list[str],
+        profile_rules: Mapping[str, object],
+    ) -> "DatasetMapping":
         path = Path(workbook_path).resolve()
         if not path.is_file():
-            raise FileNotFoundError(f"病原菌分类表不存在：{path}")
+            raise FileNotFoundError(f"分类表不存在：{path}")
+        if len(columns) != 4:
+            raise ValueError("分类表列配置必须依次为：革兰氏、科、属英文、规范种简称")
+        gram_column, family_column, genus_column, prefix_column = columns
+        gram_map = {
+            str(key).strip(): str(value).strip()
+            for key, value in dict(profile_rules.get("gram_map", {})).items()
+        }
+        profiles = tuple(str(name) for name in profile_rules.get("profiles", ()))
+        micro_profile = str(profile_rules.get("micro_profile", "")).strip()
+        if not gram_map or not profiles:
+            raise ValueError("数据集未配置完整的 profile_rules")
         workbook = load_workbook(path, read_only=True, data_only=True)
         try:
             rows = workbook.active.iter_rows(values_only=True)
             headers = next(rows, None)
             if headers is None:
-                raise ValueError("病原菌分类表为空")
+                raise ValueError("分类表为空")
             positions = {str(value).strip(): index for index, value in enumerate(headers) if value is not None}
-            missing = [name for name in REQUIRED_COLUMNS if name not in positions]
+            missing = [name for name in columns if name not in positions]
             if missing:
-                raise ValueError(f"病原菌分类表缺少列：{missing}")
+                raise ValueError(f"分类表缺少列：{missing}")
 
             genera_lists: dict[str, list[str]] = {}
             genus_profiles: dict[str, str] = {}
             prefix_owner: dict[str, str] = {}
-            profile_genera: dict[str, set[str]] = {name: set() for name in PROFILE_NAMES}
+            profile_genera: dict[str, set[str]] = {name: set() for name in profiles}
             for row in rows:
-                gram = str(row[positions["革兰氏"]] or "").strip()
-                family = str(row[positions["科"]] or "").strip()
-                genus = str(row[positions["属英文"]] or "").strip()
-                prefix = str(row[positions["规范种简称"]] or "").strip().upper()
+                gram = str(row[positions[gram_column]] or "").strip()
+                family = str(row[positions[family_column]] or "").strip()
+                genus = str(row[positions[genus_column]] or "").strip()
+                prefix = str(row[positions[prefix_column]] or "").strip().upper()
                 if not gram and not family and not genus and not prefix:
                     continue
-                if gram == "阴性":
-                    if not family:
-                        raise ValueError(f"阴性菌缺少科：{row}")
-                    profile_name = "GN"
-                elif gram in GRAM_PROFILE_NAMES:
-                    profile_name = GRAM_PROFILE_NAMES[gram]
-                else:
-                    raise ValueError(f"病原菌分类表存在无效记录：{row}")
+                profile_name = gram_map.get(gram)
+                if profile_name is None or profile_name not in profile_genera:
+                    raise ValueError(f"分类表存在未配置的革兰氏分类：{gram!r}")
                 if not genus or not prefix:
-                    raise ValueError(f"病原菌分类表存在无效记录：{row}")
+                    raise ValueError(f"分类表存在无效记录：{row}")
                 previous_profile = genus_profiles.setdefault(genus, profile_name)
                 if previous_profile != profile_name:
                     raise ValueError(f"属 {genus} 同时出现在多个分类：{previous_profile}、{profile_name}")
@@ -124,11 +130,11 @@ class DatasetMapping:
 
         genera = {name: tuple(prefixes) for name, prefixes in sorted(genera_lists.items())}
         datasets = {
-            "GN": tuple(sorted(profile_genera["GN"])),
-            "GP": tuple(sorted(profile_genera["GP"])),
-            "FUNG": tuple(sorted(profile_genera["FUNG"])),
-            "MICRO": tuple(sorted(genera)),
+            profile_name: tuple(sorted(profile_genera[profile_name]))
+            for profile_name in profiles
         }
+        if micro_profile:
+            datasets[micro_profile] = tuple(sorted(genera))
         return cls(genera=genera, datasets=datasets)
 
     def subset(self, profile_name: str) -> "DatasetMapping":
@@ -159,7 +165,12 @@ def load_dataset_mapping(path: Path | str) -> DatasetMapping:
     return DatasetMapping.from_json(path)
 
 
-def ensure_dataset_mapping(workbook_path: Path | str, mapping_path: Path | str) -> DatasetMapping:
+def ensure_dataset_mapping(
+    workbook_path: Path | str,
+    mapping_path: Path | str,
+    columns: tuple[str, ...] | list[str],
+    profile_rules: Mapping[str, object],
+) -> DatasetMapping:
     """按 Excel 修改时间生成或复用唯一的本地 JSON 映射。"""
     workbook = Path(workbook_path).resolve()
     target = Path(mapping_path).resolve()
@@ -171,7 +182,7 @@ def ensure_dataset_mapping(workbook_path: Path | str, mapping_path: Path | str) 
             if not workbook.is_file():
                 raise
 
-    mapping = DatasetMapping.from_workbook(workbook)
+    mapping = DatasetMapping.from_workbook(workbook, columns, profile_rules)
     temporary = create_temporary_path(target)
     try:
         write_json(temporary, mapping.to_payload())
@@ -181,8 +192,22 @@ def ensure_dataset_mapping(workbook_path: Path | str, mapping_path: Path | str) 
     return mapping
 
 
+def build_hierarchy_mapping(hierarchy: object) -> DatasetMapping:
+    """用层级配置的一级前缀映射构造 lineage/删除扫描映射。"""
+    mappings = getattr(hierarchy, "mappings", {}) or {}
+    level_one = mappings.get("level_1", {}) if isinstance(mappings, dict) else {}
+    genera: dict[str, list[str]] = {}
+    for prefix, value in level_one.items():
+        genera.setdefault(str(value), []).append(str(prefix).upper())
+    return DatasetMapping(
+        genera={name: tuple(prefixes) for name, prefixes in genera.items()},
+        datasets={},
+    )
+
+
 __all__ = [
     "DatasetMapping",
+    "build_hierarchy_mapping",
     "build_prefix_to_genus",
     "ensure_dataset_mapping",
     "load_dataset_mapping",

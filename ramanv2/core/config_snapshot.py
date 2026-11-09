@@ -75,13 +75,19 @@ def write_resolved_config(
 
 
 def assert_shared_compatible(config: Config, shared_values: Mapping[str, Any]) -> None:
-    """确认当前输入快照与实验根已有快照一致。"""
+    """确认当前输入快照与实验根已有快照一致。
+
+    迁移前的共享快照没有 ``dataset_id``；此时留空，由数据集默认项解析，
+    保证旧 run 仍可评估与补训练。
+    """
     validate_label_schema(shared_values)
+    shared = dict(shared_values)
+    shared.setdefault("dataset_id", "")
     current = config.to_shared_dict()
     mismatches = [
         key
         for key, value in current.items()
-        if value != shared_values.get(key)
+        if value != shared.get(key)
     ]
     if mismatches:
         raise ValueError(f"实验根共享配置不一致：{', '.join(mismatches)}")

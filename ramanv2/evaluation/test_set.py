@@ -12,8 +12,9 @@ from ramanv2.common.device import resolve_device
 from ramanv2.common.file_ops import read_json, write_json
 from ramanv2.common.naming import build_natural_key
 from ramanv2.data.dataset_io import load_arc_intensity
-from ramanv2.data.profiles import resolve_dataset_dir, resolve_profile
+from ramanv2.data.profiles import resolve_selection
 from ramanv2.data.runtime.input import InputPreprocessor
+from ramanv2.core.run_context import METRICS_FILE_NAME
 from ramanv2.evaluation.context import (
     EvaluationContext,
     load_evaluation_context,
@@ -38,10 +39,11 @@ DEFAULT_TEST_LEVEL = "level_1"
 def resolve_preprocessed_test_dir(
     profile_id: str,
     project_root: Path | str | None = None,
+    dataset_id: str | None = None,
 ) -> Path:
     """返回 profile 预处理后的独立测试集目录 ``dataset/<profile>/test``。"""
-    profile = resolve_profile(profile_id)
-    return resolve_dataset_dir(profile, project_root) / profile.root_test
+    selection = resolve_selection(dataset_id, profile_id, project_root)
+    return selection.dataset_dir / selection.profile.root_test
 
 
 def evaluate_test_set(
@@ -51,22 +53,15 @@ def evaluate_test_set(
     *,
     level_name: str = DEFAULT_TEST_LEVEL,
 ) -> dict[str, Any]:
-    """在独立测试集上评估实验内指定层级的模型，并写出汇总。
 
-    缺省只评估 ``level_1``；需要检查其他层级时显式传 ``level_name``。
-    测试目录应是 ``build_test`` 预处理后的 ``dataset/<profile>/test``；缺省
-    时按实验配置的 profile 解析。只评估 ``level_name`` 指定的层级：该层有
-    全局模型时用 ``model``，只有父类子模型时用 ``parent-routed``，若该层是
-    最深层再追加端到端 ``cascade``。每个测试文件夹按 cell 分组随机抽取最多
-    ``INFERENCE_SAMPLES_PER_FOLDER`` 条光谱（同一 cell 至多一条），与样本推理
-    口径一致。测试样本按文件夹前缀对齐实验类别空间，对不上的整组计入忽略
-    清单，不参与指标计算。
-    """
     context = load_evaluation_context(experiment_dir)
     target_device = resolve_device(device)
     target_level = context.dataset_index.resolve_level_name(level_name)
     test_path = (
-        resolve_preprocessed_test_dir(context.config.dataset.profile_id)
+        resolve_preprocessed_test_dir(
+            context.config.dataset.profile_id,
+            dataset_id=context.config.dataset.dataset_id,
+        )
         if test_dir is None
         else Path(test_dir).resolve()
     )
@@ -455,7 +450,7 @@ def _build_record(
     folder_metrics: dict[str, Any],
 ) -> dict[str, Any]:
     """从结果目录的 metrics.json 提取一条汇总记录。"""
-    metrics = read_json(result_dir / "metrics.json")
+    metrics = read_json(result_dir / METRICS_FILE_NAME)
     summary = metrics["summary"]
     scored_classes = sorted(
         (item for item in metrics["classes"] if int(item["support"]) > 0),

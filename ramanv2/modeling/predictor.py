@@ -10,6 +10,7 @@ import torch
 
 from ramanv2.core.run_snapshot import RunSnapshot, load_run_snapshot
 from ramanv2.core.config import InputConfig
+from ramanv2.core.run_context import HIERARCHY_META_FILE_NAME
 from ramanv2.common.hierarchy import load_hierarchy_meta, normalize_level_name, resolve_allowed_indices
 from ramanv2.core.input_spec import InputSpec, build_input_spec
 from ramanv2.common.paths import find_ancestor_dir
@@ -34,6 +35,7 @@ class Predictor:
     run_dir: Path | None
     meta: dict[str, Any]
     profile_id: str
+    dataset_id: str
     input_config: InputConfig
     input_spec: InputSpec
     device: torch.device
@@ -216,8 +218,8 @@ def load_predictor(
 ) -> Predictor:
     """从实验目录和可选历史 run 构建独立推理预测器。"""
     source_path = Path(source_dir).resolve()
-    experiment_dir = find_ancestor_dir(source_path, "hierarchy_meta.json")
-    meta = load_hierarchy_meta(experiment_dir / "hierarchy_meta.json")
+    experiment_dir = find_ancestor_dir(source_path, HIERARCHY_META_FILE_NAME)
+    meta = load_hierarchy_meta(experiment_dir / HIERARCHY_META_FILE_NAME)
     if meta is None:
         raise FileNotFoundError(f"缺少 hierarchy_meta.json：{experiment_dir}")
     level_name = normalize_level_name(predict_level)
@@ -244,6 +246,7 @@ def load_predictor(
         run_dir=run_dir,
         meta=meta,
         profile_id=snapshot.config.dataset.profile_id,
+        dataset_id=snapshot.config.dataset.dataset_id,
         input_config=snapshot.config.input,
         input_spec=input_spec,
         device=torch.device(device),
@@ -329,7 +332,7 @@ def _find_run_entry(
     global_entry = (meta.get("level_models") or {}).get(level_name)
     if global_entry is None:
         raise FileNotFoundError(
-            f"hierarchy_meta.json 未记录 run，且 {level_name} 没有全局模型：{run_dir}"
+            f"{HIERARCHY_META_FILE_NAME} 未记录 run，且 {level_name} 没有全局模型：{run_dir}"
         )
     try:
         relative_run_dir = run_dir.relative_to(experiment_dir).as_posix()

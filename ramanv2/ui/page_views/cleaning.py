@@ -19,9 +19,9 @@ from ramanv2.audit.heterogeneity import (
     analyze_library,
 )
 from ramanv2.common.arc_data import read_arc_data
-from ramanv2.common.naming import NON_TRAINING_FOLDER_NAMES, build_natural_key
+from ramanv2.common.naming import BEAD_FOLDER_NAME, NON_TRAINING_FOLDER_NAMES, build_natural_key
 from ramanv2.common.plotting import configure_matplotlib_fonts
-from ramanv2.data.dataset_mapping import DatasetMapping, ensure_dataset_mapping
+from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.pipeline.anomaly_removal import (
     check_analysis_gate,
@@ -60,8 +60,17 @@ from ramanv2.ui.formatting import progress_ratio
 from ramanv2.ui.read_cache import cached_directory_names
 from ramanv2.ui.page_context import PageContext
 from ramanv2.ui.page_state import (
+    INVALIDATE_ALL,
+    INVALIDATE_CLEANING,
+    INVALIDATE_CLEANING_AFFINE_DATASET,
+    INVALIDATE_CLEANING_DATASET,
+    INVALIDATE_SPECTRA,
+    UI_ACTION_ERRORS,
     invalidate_ui_cache,
     load_page_state,
+    render_action_error,
+    render_flash,
+    set_flash,
     write_page_state,
     ui_cache_version,
 )
@@ -73,6 +82,44 @@ configure_matplotlib_fonts()
 PAGE_SIZE = 9
 DATE_CACHE_KEY = "cleaning_current_date_cache"
 DATE_CACHE_NAME_KEY = "cleaning_current_date_name"
+
+
+def _page_bounds(total: int, index: int) -> tuple[int, int]:
+    """返回总页数与钳制后的页码。"""
+    page_count = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+    return page_count, min(max(index, 0), page_count - 1)
+
+
+def _render_page_controls(page_index: int, page_count: int, *, key_prefix: str, on_change) -> None:
+    """渲染统一的上一页/下一页/页码控件。"""
+    previous, following, page = st.columns(3)
+    if previous.button("上一页", disabled=page_index == 0, key=f"{key_prefix}_previous", width="stretch"):
+        on_change(page_index - 1)
+    if following.button("下一页", disabled=page_index >= page_count - 1, key=f"{key_prefix}_next", width="stretch"):
+        on_change(page_index + 1)
+    page.metric("当前页", f"{page_index + 1} / {page_count}")
+
+
+def _store_session_page(key: str, index: int) -> None:
+    """保存会话级页码并刷新页面。"""
+    st.session_state[key] = index
+    st.rerun()
+
+
+def _normalize_relative_path(path: object) -> str:
+    """把组件回传的路径统一为正斜杠形式。"""
+    return str(path).replace("\\", "/")
+
+
+def _apply_page_selection(page_paths: set[str], marked: set[str], chosen: set[str], *, remove, add) -> bool:
+    """把页内选中差集应用到当前选择；无变化时返回 False。"""
+    current = marked.intersection(page_paths)
+    target = chosen.intersection(page_paths)
+    if target == current:
+        return False
+    remove(current - target)
+    add(target - current)
+    return True
 
 
 def _deleted_records(data_root: Path | str, mapping: DatasetMapping) -> list[DeletedSpectrum]:
@@ -240,7 +287,7 @@ def _commit_current_folder(
         catalog[folder.key] = ReviewFolder(folder.key, folder.date_name, folder.folder_name, ())
     _set_next_folder_or_date(state, dates, catalog)
     write_page_state(context, state)
-    invalidate_ui_cache("cleaning")
+    invalidate_ui_cache(*INVALIDATE_CLEANING)
     return True
 
 
@@ -252,13 +299,6 @@ def _restore_card_data(root: Path, record: DeletedSpectrum) -> dict[str, object]
         f"{record.date_name} / {record.folder_name} / {record.file_name}",
         "待恢复",
     )
-
-
-def _render_flash() -> None:
-    """显示上一次按钮操作的结果，避免 rerun 吞掉提示。"""
-    message = st.session_state.pop("cleaning_flash", None)
-    if message:
-        st.success(message)
 
 
 def _render_reopen_section(
@@ -279,30 +319,27 @@ def _render_reopen_section(
             folders = scan_review_folders(context.data_root, [selected], None, set())
             reopen_date_review(state.cleaning, selected, folders)
             _clear_date_cache()
-            invalidate_ui_cache("cleaning")
+            invalidate_ui_cache(*INVALIDATE_CLEANING)
             write_page_state(context, state)
-            st.session_state["cleaning_flash"] = f"{selected} 已重新进入审核队列。"
+            set_flash("cleaning", f"{selected} 已重新进入审核队列。")
             st.rerun()
 
 
 def _render_restore_section(context: PageContext) -> None:
     """显示人工删除普通光谱恢复入口；小球目录不进入该流程。"""
     try:
-        mapping = ensure_dataset_mapping(
-            context.classification_workbook,
-            context.dataset_mapping_file,
-        )
-    except (OSError, ValueError, RuntimeError) as error:
-        st.error(f"Profile 配置加载失败：{error}")
+        mapping = context.dataset_mapping()
+    except UI_ACTION_ERRORS as error:
+        render_action_error("Profile 配置加载", error)
         return
     try:
         records = _deleted_records(context.data_root, mapping)
-    except (OSError, ValueError, RuntimeError) as error:
-        st.error(f"删除数据扫描失败：{error}")
+    except UI_ACTION_ERRORS as error:
+        render_action_error("删除数据扫描", error)
         return
     
     # 过滤小球已批准日期的记录
-    bead_dates = {item.date_name for item in records if item.folder_name == "小球"}
+    bead_dates = {item.date_name for item in records if item.folder_name == BEAD_FOLDER_NAME}
     approved_bead_dates = {
         date_name
         for date_name in bead_dates
@@ -312,7 +349,7 @@ def _render_restore_section(context: PageContext) -> None:
     records = tuple(
         item
         for item in records
-        if item.folder_name != "小球" or item.date_name not in approved_bead_dates
+        if item.folder_name != BEAD_FOLDER_NAME or item.date_name not in approved_bead_dates
     )
     
     # 有可恢复记录时保持展开，无记录时折叠
@@ -327,7 +364,7 @@ def _render_restore_section(context: PageContext) -> None:
         species_map = {
             (
                 f"小球 / 小球 / {item.folder_name}"
-                if item.folder_name == "小球"
+                if item.folder_name == BEAD_FOLDER_NAME
                 else f"{item.genus} / {item.prefix} / {item.folder_name}"
             ): (item.genus, item.prefix, item.folder_name)
             for item in records
@@ -364,7 +401,6 @@ def _render_restore_section(context: PageContext) -> None:
             for item in records
             if item.date_name == selected_date and item.prefix == selected_prefix and item.folder_name == selected_folder
         ]
-        page_count = max((len(visible) + PAGE_SIZE - 1) // PAGE_SIZE, 1)
         page_key = "restore_page_index"
         scope_key = "restore_scope"
         scope = f"{selected_date}/{selected_folder}"
@@ -374,39 +410,31 @@ def _render_restore_section(context: PageContext) -> None:
             st.session_state["restore_selected_paths"] = set()
             # 切换文件夹后必须重新确认，避免沿用上一批的彻底删除确认。
             st.session_state["restore_purge_confirm"] = False
-        page_index = min(int(st.session_state.get(page_key, 0)), page_count - 1)
+        page_count, page_index = _page_bounds(
+            len(visible),
+            int(st.session_state.get(page_key, 0)),
+        )
         selected_paths = set(st.session_state.get("restore_selected_paths", set()))
         selected_paths.intersection_update(item.relative_path for item in visible)
         st.session_state["restore_selected_paths"] = selected_paths
         st.caption(f"删除文件夹：{selected_folder} · 共 {len(visible)} 条 · 已选择 {len(selected_paths)} 条")
-
-        toolbar = st.columns(3)
-        if toolbar[0].button("上一页", disabled=page_index == 0, key="restore_previous_page", width="stretch"):
-            st.session_state[page_key] = page_index - 1
-            st.rerun()
-        if toolbar[1].button("下一页", disabled=page_index >= page_count - 1, key="restore_next_page", width="stretch"):
-            st.session_state[page_key] = page_index + 1
-            st.rerun()
-        toolbar[2].metric("当前页", f"{page_index + 1} / {page_count}")
+        _render_page_controls(
+            page_index,
+            page_count,
+            key_prefix="restore",
+            on_change=lambda index: _store_session_page(page_key, index),
+        )
 
         items = visible[page_index * PAGE_SIZE:(page_index + 1) * PAGE_SIZE]
         page_paths = {item.relative_path for item in items}
-        event = render_spectrum_grid(
+        grid_key = f"restore-grid-{scope}-{page_index}"
+        render_spectrum_grid(
             [_restore_card_data(context.data_root, item) for item in items],
             selected_paths=selected_paths.intersection(page_paths),
             marked_paths=selected_paths.intersection(page_paths),
-            key=f"restore-grid-{scope}-{page_index}",
+            key=grid_key,
+            on_change=lambda: _save_restore_selection(grid_key, page_paths),
         )
-        if isinstance(event, dict):
-            event_id = str(event.get("event_id", ""))
-            if event_id and event_id != st.session_state.get("restore_grid_event"):
-                st.session_state["restore_grid_event"] = event_id
-                if event.get("event") == "selection":
-                    chosen = {str(path).replace("\\", "/") for path in event.get("selected_paths", [])}
-                    selected_paths.difference_update(page_paths)
-                    selected_paths.update(chosen)
-                    st.session_state["restore_selected_paths"] = selected_paths
-                    st.rerun()
 
         confirm_purge = st.checkbox(
             "我确认彻底删除（不可恢复）",
@@ -443,21 +471,23 @@ def _render_restore_section(context: PageContext) -> None:
                 st.session_state.pop("restore_selected_paths", None)
                 st.session_state["restore_expand"] = True
                 _clear_date_cache()
-                invalidate_ui_cache("cleaning", "dataset", "affine")
+                invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
                 if result.get("status") == "bead_restored":
-                    st.session_state["cleaning_flash"] = (
+                    set_flash(
+                        "cleaning",
                         f"已恢复 {result['restored_file_count']} 条小球光谱；"
-                        "小球谱已变，日期级仿射参数需到「仿射校准」页重新分析。"
+                        "小球谱已变，日期级仿射参数需到「仿射校准」页重新分析。",
                     )
                 else:
-                    st.session_state["cleaning_flash"] = (
+                    set_flash(
+                        "cleaning",
                         f"已恢复 {result['restored_file_count']} 条光谱；只改 cosmic_data，"
                         "shift 和 init 由重建入口更新。"
-                        "shift 请在「仿射校准」页重建，init 由「数据集获取」页重建。"
+                        "shift 请在「仿射校准」页重建，init 由「数据集获取」页重建。",
                     )
                 st.rerun()
-            except (OSError, ValueError, RuntimeError) as error:
-                st.error(f"恢复失败：{error}")
+            except UI_ACTION_ERRORS as error:
+                render_action_error("恢复", error)
         if actions[2].button(
             "彻底删除",
             key="restore_purge_confirm_button",
@@ -481,19 +511,19 @@ def _render_restore_section(context: PageContext) -> None:
                 st.session_state.pop("restore_selected_paths", None)
                 st.session_state.pop("restore_purge_confirm", None)
                 st.session_state["restore_expand"] = True
-                invalidate_ui_cache("cleaning", "dataset")
-                st.session_state["cleaning_flash"] = (
+                invalidate_ui_cache(*INVALIDATE_CLEANING_DATASET)
+                set_flash(
+                    "cleaning",
                     f"已彻底删除 {result['purged_file_count']} 条光谱，"
-                    "删除区空文件夹已同步清理。"
+                    "删除区空文件夹已同步清理。",
                 )
                 st.rerun()
-            except (OSError, ValueError, RuntimeError) as error:
-                st.error(f"彻底删除失败：{error}")
+            except UI_ACTION_ERRORS as error:
+                render_action_error("彻底删除", error)
 
 
 def _render_folder_removal_section(context: PageContext, state: PipelineState) -> None:
     """选择任意活动源文件夹，整夹归档并标记 init 待重建。"""
-    st.caption("整夹移入 cosmic_data/delete/folder_delete；shift、init 和 Profile 等你显式重建。")
     # 下拉框只需要目录名，不能为每次选谱扫描全库并重写走向记录。
     dates = cached_directory_names(str(context.data_root.resolve()), ui_cache_version("cleaning"))
     source_ids = [
@@ -522,21 +552,21 @@ def _render_folder_removal_section(context: PageContext, state: PipelineState) -
                 ReviewFolder(source_id, date_name, folder_name, ()),
             )
             _clear_date_cache()
-            invalidate_ui_cache("cleaning", "dataset")
+            invalidate_ui_cache(*INVALIDATE_CLEANING_DATASET)
             st.session_state.pop("cleaning_remove_source_folder", None)
             st.session_state["folder_remove_expand"] = True
-            st.session_state["cleaning_flash"] = f"已整夹删除 {source_id}，init 待重建。"
+            set_flash("cleaning", f"已整夹删除 {source_id}，init 待重建。")
             st.rerun()
-        except (OSError, ValueError, RuntimeError) as error:
-            st.error(f"整夹删除失败：{error}")
+        except UI_ACTION_ERRORS as error:
+            render_action_error("整夹删除", error)
 
 
 def _render_folder_restore_section(context: PageContext) -> None:
     """显示整夹删除恢复入口；只移动 folder_delete 中的完整目录。"""
     try:
         folders = _deleted_folders(context.data_root)
-    except (OSError, ValueError, RuntimeError) as error:
-        st.error(f"整夹删除扫描失败：{error}")
+    except UI_ACTION_ERRORS as error:
+        render_action_error("整夹删除扫描", error)
         return
     # 有可恢复文件夹时保持展开
     has_folders = len(folders) > 0
@@ -566,15 +596,16 @@ def _render_folder_restore_section(context: PageContext) -> None:
             st.session_state.pop("folder_restore_source", None)
             st.session_state["folder_restore_expand"] = True
             _clear_date_cache()
-            invalidate_ui_cache("cleaning", "dataset", "affine", "training", "inference")
-            st.session_state["cleaning_flash"] = (
+            invalidate_ui_cache(*INVALIDATE_SPECTRA)
+            set_flash(
+                "cleaning",
                 f"已恢复整夹 {selected.relative_path}（{result['restored_file_count']} 条），"
                 "该文件夹已回到待清洗队列，只改 cosmic_data；"
-                "shift 请在「仿射校准」页重建（重建会作废该日期审核结论）。"
+                "shift 请在「仿射校准」页重建（重建会作废该日期审核结论）。",
             )
             st.rerun()
-        except (OSError, ValueError, RuntimeError) as error:
-            st.error(f"整夹恢复失败：{error}")
+        except UI_ACTION_ERRORS as error:
+            render_action_error("整夹恢复", error)
 
 
 def _save_grid_selection(context: PageContext, grid_key: str, page_paths: set[str]) -> None:
@@ -583,14 +614,39 @@ def _save_grid_selection(context: PageContext, grid_key: str, page_paths: set[st
     if not isinstance(event, dict) or event.get("event") != "selection":
         return
     state = load_page_state(context)
-    marked = state.cleaning.marked_paths.intersection(page_paths)
-    chosen = {str(path).replace("\\", "/") for path in event.get("selected_paths", [])}.intersection(page_paths)
-    if chosen == marked:
+    chosen = {_normalize_relative_path(path) for path in event.get("selected_paths", [])}
+
+    def remove(paths: set[str]) -> None:
+        unmark_paths(state.cleaning, paths)
+
+    def add(paths: set[str]) -> None:
+        for path in paths:
+            toggle_mark_path(state.cleaning, path)
+
+    if not _apply_page_selection(page_paths, state.cleaning.marked_paths, chosen, remove=remove, add=add):
         return
-    unmark_paths(state.cleaning, marked - chosen)
-    for path in chosen - marked:
-        toggle_mark_path(state.cleaning, path)
     write_page_state(context, state)
+
+
+def _store_folder_page(context: PageContext, state: PipelineState, folder_key: str, index: int) -> None:
+    """保存主审核网格的文件夹页码并刷新页面。"""
+    state.cleaning.folder_page_indices[folder_key] = index
+    write_page_state(context, state)
+    st.rerun()
+
+
+def _save_restore_selection(grid_key: str, page_paths: set[str]) -> None:
+    """删除恢复区与主网格共用同一套页内选中差集逻辑。"""
+    event = st.session_state.get(grid_key)
+    if not isinstance(event, dict) or event.get("event") != "selection":
+        return
+    selected = set(st.session_state.get("restore_selected_paths", set()))
+    chosen = {_normalize_relative_path(path) for path in event.get("selected_paths", [])}
+    if not _apply_page_selection(
+        page_paths, selected, chosen, remove=selected.difference_update, add=selected.update
+    ):
+        return
+    st.session_state["restore_selected_paths"] = selected
 
 
 ANALYSIS_EDITOR_KEY = "analysis_removal_editor"
@@ -624,8 +680,8 @@ def _run_analysis_removal_analysis(context: PageContext, mapping, gate) -> None:
                 state="complete",
                 expanded=False,
             )
-    except (OSError, ValueError, RuntimeError, TypeError) as error:
-        st.error(f"分析失败：{error}")
+    except UI_ACTION_ERRORS as error:
+        render_action_error("分析", error)
         return
     st.session_state[ANALYSIS_REPORT_KEY] = report
     st.session_state.pop(ANALYSIS_EDITOR_KEY, None)
@@ -642,12 +698,9 @@ def _render_analysis_removal_section(context: PageContext, state: PipelineState)
         "init 不直接删除，只标记待重建。"
     )
     try:
-        mapping = ensure_dataset_mapping(
-            context.classification_workbook,
-            context.dataset_mapping_file,
-        )
-    except (OSError, ValueError, RuntimeError) as error:
-        st.error(f"Profile 配置加载失败：{error}")
+        mapping = context.dataset_mapping()
+    except UI_ACTION_ERRORS as error:
+        render_action_error("Profile 配置加载", error)
         return
     gate = check_analysis_gate(
         context.data_root,
@@ -842,14 +895,24 @@ def _render_analysis_removal_section(context: PageContext, state: PipelineState)
                 st.session_state.pop(ANALYSIS_REPORT_KEY, None)
                 st.session_state.pop(editor_key, None)
                 _clear_date_cache()
-                invalidate_ui_cache("cleaning", "dataset", "affine", "training", "inference", "analysis")
-                st.session_state["cleaning_flash"] = (
+                invalidate_ui_cache(*INVALIDATE_ALL)
+                set_flash(
+                    "cleaning",
                     f"已剔除 {result['sample_count']} 条光谱，归档到 dataset/analysis_delete；"
-                    f"清单见 {result['report_path']}；init 已标记待重建。"
+                    f"清单见 {result['report_path']}；init 已标记待重建。",
                 )
                 st.rerun()
-            except (OSError, ValueError, RuntimeError, TypeError) as error:
-                st.error(f"剔除失败：{error}")
+            except UI_ACTION_ERRORS as error:
+                render_action_error("剔除", error)
+
+
+def _render_auxiliary_sections(context: PageContext, state: PipelineState, *, include_analysis: bool = False) -> None:
+    """渲染整夹恢复、文件夹移除、删除恢复与可选的全库异常剔除。"""
+    _render_folder_restore_section(context)
+    _render_folder_removal_section(context, state)
+    _render_restore_section(context)
+    if include_analysis and not context.hierarchy.is_flat:
+        _render_analysis_removal_section(context, state)
 
 
 def render_cleaning_page(context: PageContext) -> None:
@@ -866,17 +929,14 @@ def render_cleaning_page(context: PageContext) -> None:
     # 空日期目录（无任何普通子文件夹）不产生审核项，剔除后可避免 _next_pending_date 反复选中同一日期。
     dates = [name for name in dates if _is_review_date_available(context.data_root, name)]
 
-    st.sidebar.text(f"数据目录：{context.data_root}")
-    st.sidebar.text(f"状态文件：{context.state_file}")
-    if st.sidebar.button("重新扫描", width="stretch"):
+    st.title("数据清洗")
+    if st.button("重新扫描", key="cleaning_rescan"):
         _clear_date_cache()
-        invalidate_ui_cache()
+        invalidate_ui_cache(*INVALIDATE_ALL)
         st.rerun()
     if not dates:
         st.warning("dataset/cosmic_data 下没有找到日期目录。")
-        _render_folder_restore_section(context)
-        _render_folder_removal_section(context, state)
-        _render_restore_section(context)
+        _render_auxiliary_sections(context, state)
         return
 
     pending_dates = [date_name for date_name in dates if date_name not in state.cleaning.completed_date_names]
@@ -888,15 +948,11 @@ def render_cleaning_page(context: PageContext) -> None:
         if current_date is not None:
             write_page_state(context, state)
 
-    st.title("数据清洗")
-    _render_flash()
+    render_flash("cleaning")
     _render_reopen_section(context, state, dates)
     if current_date is None:
         st.success("区间内所有文件夹已审核")
-        _render_folder_restore_section(context)
-        _render_folder_removal_section(context, state)
-        _render_restore_section(context)
-        _render_analysis_removal_section(context, state)
+        _render_auxiliary_sections(context, state, include_analysis=True)
         return
 
     try:
@@ -920,8 +976,10 @@ def render_cleaning_page(context: PageContext) -> None:
     current_index = next(index for index, folder in enumerate(folders) if folder.key == state.cleaning.current_folder_key)
     current_folder = folders[current_index]
 
-    page_count = max((len(current_folder.relative_paths) + PAGE_SIZE - 1) // PAGE_SIZE, 1)
-    page_index = min(state.cleaning.folder_page_indices.get(current_folder.key, 0), page_count - 1)
+    page_count, page_index = _page_bounds(
+        len(current_folder.relative_paths),
+        state.cleaning.folder_page_indices.get(current_folder.key, 0),
+    )
     state.cleaning.folder_page_indices[current_folder.key] = page_index
     current_pending = state.cleaning.marked_paths.intersection(current_folder.relative_paths)
     date_total = len(catalog)
@@ -938,15 +996,17 @@ def render_cleaning_page(context: PageContext) -> None:
     metrics[4].metric("日期进度", f"{date_done} / {date_total}")
 
     with st.container(border=True):
-        row = st.columns(2)
-        if row[0].button("上一页", disabled=page_index == 0, width="stretch"):
-            state.cleaning.folder_page_indices[current_folder.key] = page_index - 1
-            write_page_state(context, state)
-            st.rerun()
-        if row[1].button("下一页", disabled=page_index >= page_count - 1, width="stretch"):
-            state.cleaning.folder_page_indices[current_folder.key] = page_index + 1
-            write_page_state(context, state)
-            st.rerun()
+        _render_page_controls(
+            page_index,
+            page_count,
+            key_prefix="cleaning_page",
+            on_change=lambda index: _store_folder_page(
+                context,
+                state,
+                current_folder.key,
+                index,
+            ),
+        )
         row = st.columns(2)
         if row[0].button(
             "移除选中光谱",
@@ -956,15 +1016,15 @@ def render_cleaning_page(context: PageContext) -> None:
         ):
             try:
                 result = commit_paths(context.data_root, state, context.state_file, current_pending)
-            except RuntimeError as error:
-                st.error(f"移除失败：{error}")
+            except UI_ACTION_ERRORS as error:
+                render_action_error("移除", error)
             else:
                 if result.missing_paths:
                     st.warning(f"有 {len(result.missing_paths)} 条文件不存在，未移除。")
                 else:
-                    st.session_state["cleaning_flash"] = f"已移除 {len(result.moved_paths)} 条光谱。"
+                    set_flash("cleaning", f"已移除 {len(result.moved_paths)} 条光谱。")
                 _clear_date_cache()
-                invalidate_ui_cache("cleaning")
+                invalidate_ui_cache(*INVALIDATE_CLEANING)
                 write_page_state(context, state)
                 st.rerun()
         if row[1].button(
@@ -984,6 +1044,12 @@ def render_cleaning_page(context: PageContext) -> None:
                 catalog.pop(current_folder.key, None)
                 discard_removed_folder(state.cleaning, current_folder)
                 _set_next_folder_or_date(state, dates, catalog)
+                _clear_date_cache()
+                invalidate_ui_cache(*INVALIDATE_CLEANING_DATASET)
+                set_flash(
+                    "cleaning",
+                    f"已整夹删除 {current_folder.folder_name}，init 待重建。",
+                )
                 write_page_state(context, state)
                 st.rerun()
         if row[1].button("日期移除", width="stretch"):
@@ -1008,10 +1074,9 @@ def render_cleaning_page(context: PageContext) -> None:
             state.cleaning.current_date_name = _next_pending_date(dates, state)
             state.cleaning.current_folder_key = None
             _clear_date_cache()
-            invalidate_ui_cache("cleaning", "dataset")
+            invalidate_ui_cache(*INVALIDATE_CLEANING_DATASET)
             write_page_state(context, state)
             st.rerun()
-        st.metric("当前页", f"{page_index + 1} / {page_count}")
 
     items = _folder_items(current_folder)[page_index * PAGE_SIZE:(page_index + 1) * PAGE_SIZE]
     page_paths = {item.relative_path for item in items}
@@ -1025,10 +1090,5 @@ def render_cleaning_page(context: PageContext) -> None:
         on_change=lambda: _save_grid_selection(context, grid_key, page_paths),
     )
 
-    _render_folder_restore_section(context)
-    _render_folder_removal_section(context, state)
-    _render_restore_section(context)
+    _render_auxiliary_sections(context, state)
     st.caption("完成所有文件夹审核后，可在本页进行全库高异常剔除。")
-
-
-__all__ = ["render_cleaning_page"]

@@ -2,10 +2,7 @@
 /output/
 /__pycache__/
 **/__pycache__/
-/.ua
-/raman
 *.pyc
 *.pyo
 ramanv2.zip
-/补充数据
-/.workbuddy-ai/
+/pipeline.db

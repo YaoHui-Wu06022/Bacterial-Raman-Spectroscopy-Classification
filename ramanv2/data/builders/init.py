@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import os
-import re
 import json
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable, Literal, Mapping
 from uuid import uuid4
 
 import numpy as np
@@ -21,21 +20,20 @@ from ramanv2.common.arc_data import (
     read_arc_data,
 )
 from ramanv2.common.naming import (
-    NON_TRAINING_FOLDER_NAMES,
-    PIPELINE_RESERVED_FOLDER_NAMES,
+    CANONICAL_FOLDER_PATTERN,
+    DATE_PATTERN,
+    SPECIAL_FOLDER_NAMES,
     build_natural_key,
     parse_folder_prefix,
 )
 from ramanv2.common.file_ops import create_temporary_path, publish_directory, read_json, rename_directory, _remove_path
 from ramanv2.data.count import summarize_dataset
+from ramanv2.data.hierarchy_config import HierarchyLevel, HierarchySpec
 from ramanv2.data.profiles import TEST_ROOT_NAME
 from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.records.lineage import apply_output_path, initialize_folder_lineage, load_folder_lineage, write_folder_lineage
 
 
-SPECIAL_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
-CANONICAL_FOLDER_PATTERN = re.compile(r"^([A-Za-z]+)(\d{8})_(\d+)$")
-DATE_PATTERN = re.compile(r"^\d{8}$")
 BuildMode = Literal["full", "incremental", "replace_dates"]
 
 
@@ -43,11 +41,15 @@ BuildMode = Literal["full", "incremental", "replace_dates"]
 class _SourceGroup:
     date_name: str
     source_dir: Path
-    genus: str
+    level_values: Mapping[str, str]
     target_name: str
     files: tuple[Path, ...]
     is_test: bool = False
     source_name: str = ""
+
+    @property
+    def genus(self) -> str:
+        return str(self.level_values.get("level_1", ""))
 
 
 class InitBuildConflictError(FileExistsError):
@@ -61,31 +63,34 @@ class InitBuildConflictError(FileExistsError):
 def build_full_init(
     shift_root: Path | str,
     init_root: Path | str,
-    mapping: DatasetMapping,
+    mapping: DatasetMapping | None,
     completed_dates: list[str] | set[str] | tuple[str, ...],
     test_root: Path | str | None = None,
     selected_test_folders: list[str] | set[str] | tuple[str, ...] | None = None,
     *,
+    hierarchy: HierarchySpec | None = None,
     rebuild_test_enable: bool = True,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, object]:
     """从通过门禁的 shift 日期构建普通 init 与选定的独立 init_test。
 
+    ``hierarchy`` 决定 init 的父目录层级；缺失时按来源前缀平展。
     ``progress_callback(日期, 已复制光谱数, 总光谱数)`` 在每个来源文件夹复制完成后调用，
     供界面显示构建进度。
     """
+    hierarchy = hierarchy or _hierarchy_from_mapping(mapping)
     cosmic_root = Path(shift_root).resolve().parent / "cosmic_data"
     if cosmic_root.is_dir():
         initialize_folder_lineage(cosmic_root, mapping)
     # 既有 init 日期若仍有活动源谱，必须继续通过门禁，不能重建时静默丢失。
     required_dates = {
         match.group(2)
-        for folder in Path(init_root).glob("*/*")
+        for folder in Path(init_root).rglob("*")
         if folder.is_dir() and (match := CANONICAL_FOLDER_PATTERN.fullmatch(folder.name))
     }
     allowed_dates = set(completed_dates)
     blocked = [date for date in required_dates if (date not in allowed_dates or not _is_manual_approved(Path(shift_root) / date / "shift" / "affine.json")) and any(
-        path.is_dir() and path.name not in SPECIAL_NAMES and has_arc_data(path, recursive=True)
+        path.is_dir() and path.name not in SPECIAL_FOLDER_NAMES and has_arc_data(path, recursive=True)
         for path in (cosmic_root / date).glob("*")
     )]
     if blocked:
@@ -103,6 +108,7 @@ def build_full_init(
         completed_dates,
         test_root=resolved_test_root,
         selected_test_folders=selected_test_folders,
+        hierarchy=hierarchy,
         publish_test_enable=rebuild_test_enable,
         progress_callback=progress_callback,
     )
@@ -345,19 +351,21 @@ def build_init_datasets(
     shift_root: Path | str,
     init_root: Path | str,
     profile_roots: dict[str, Path | str],
-    mapping: DatasetMapping,
+    mapping: DatasetMapping | None,
     affine_completed_dates: list[str] | set[str] | tuple[str, ...],
     mode: BuildMode = "full",
     date_names: list[str] | set[str] | tuple[str, ...] | None = None,
     test_root: Path | str | None = None,
     selected_test_folders: list[str] | set[str] | tuple[str, ...] | None = None,
     *,
+    hierarchy: HierarchySpec | None = None,
     publish_test_enable: bool = True,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, object]:
     """按批准日期构建 init；replace_dates 仅替换已生成日期及已导出的测试组。"""
     if mode not in {"full", "incremental", "replace_dates"}:
         raise ValueError("mode 必须是 full、incremental 或 replace_dates")
+    hierarchy = hierarchy or _hierarchy_from_mapping(mapping)
     if mode == "replace_dates" and (date_names is None or profile_roots):
         raise ValueError("按日期替换必须指定日期，且不能更新 Profile")
     source_root = Path(shift_root).resolve()
@@ -365,17 +373,14 @@ def build_init_datasets(
     roots = {name: Path(path).resolve() for name, path in profile_roots.items()}
     resolved_test_root = Path(test_root).resolve() if test_root is not None and publish_test_enable else None
     _validate_output_roots(full_root, roots, resolved_test_root)
-    unknown_profiles = set(roots) - set(mapping.datasets)
+    unknown_profiles = set(roots) - set(mapping.datasets if mapping is not None else {})
     if unknown_profiles:
         raise ValueError(f"profile 没有对应名单：{sorted(unknown_profiles)}")
+    if hierarchy.is_flat and roots:
+        raise ValueError("平展数据集不能生成 profile 数据集")
     if not source_root.is_dir():
         raise FileNotFoundError(f"shift_data 不存在：{source_root}")
 
-    prefix_to_genus = {
-        prefix: genus
-        for genus, prefixes in mapping.genera.items()
-        for prefix in prefixes
-    }
     selected_names = _select_date_names(source_root, date_names)
     affine_dates = {str(name) for name in affine_completed_dates}
     eligible_dates: list[str] = []
@@ -411,7 +416,7 @@ def build_init_datasets(
         groups.extend(
             _collect_source_groups(
                 source_root / date_name,
-                prefix_to_genus,
+                hierarchy,
                 selected_keys,
             )
         )
@@ -425,6 +430,8 @@ def build_init_datasets(
         groups = active_groups
     if not publish_test_enable:
         groups = [group for group in groups if not group.is_test]
+    if not groups:
+        raise ValueError("没有可发布的来源组：请检查 shift、affine 与测试集选择")
     destination_roots = {"__all__": full_root, **roots}
     if resolved_test_root is not None:
         destination_roots["__test__"] = resolved_test_root
@@ -457,7 +464,7 @@ def build_init_datasets(
         ]
     _validate_test_group_targets(groups)
     if mode == "incremental":
-        conflicts = _find_incremental_conflicts(eligible_dates, groups, destination_roots)
+        conflicts = _find_incremental_conflicts(eligible_dates, groups, destination_roots, hierarchy)
         if conflicts:
             raise InitBuildConflictError(conflicts)
 
@@ -479,7 +486,7 @@ def build_init_datasets(
                 _remove_path(temporary_roots["__all__"] / relative)
             for name in replaced_test_names:
                 _remove_path(temporary_roots["__test__"] / name)
-        plans = [(group, _resolve_destinations(group, mapping, temporary_roots)) for group in groups]
+        plans = [(group, _resolve_destinations(group, mapping, temporary_roots, hierarchy)) for group in groups]
         with ThreadPoolExecutor(max_workers=_copy_worker_count()) as executor:
             futures = {
                 executor.submit(_copy_group_files, group, destinations): group
@@ -550,7 +557,7 @@ def build_init_datasets(
         if cosmic_root.is_dir():
             payload = load_folder_lineage(cosmic_root)
             for group in groups:
-                relative = _target_relative(group)
+                relative = _target_relative(group, hierarchy)
                 if group.is_test:
                     apply_output_path(
                         payload,
@@ -562,7 +569,7 @@ def build_init_datasets(
                 profile_paths = {
                     name: str(root / relative)
                     for name, root in roots.items()
-                    if group.genus in mapping.datasets.get(name, ())
+                    if mapping is not None and group.genus in mapping.datasets.get(name, ())
                 }
                 apply_output_path(
                     payload,
@@ -592,17 +599,16 @@ def _select_date_names(source_root: Path, date_names: object) -> list[str]:
 
 def _collect_source_groups(
     date_dir: Path,
-    prefix_to_genus: dict[str, str],
+    hierarchy: HierarchySpec,
     selected_test_folders: set[str],
     *,
     source_folder_names: set[str] | None = None,
 ) -> list[_SourceGroup]:
-    # 统一计数器：按前缀在日期内递增，先编号再分流到 init 或 init_test。
-    # 编号只由计数器决定，不沿用旧测试组名，避免历史名与新编号撞号（如两个 _01）。
+    # 统一计数器：按来源前缀在日期内递增，先编号再分流到 init 或 init_test。
     prefix_counts: dict[str, int] = {}
     groups: list[_SourceGroup] = []
     for source_dir in sorted(date_dir.iterdir(), key=lambda path: build_natural_key(path.name)):
-        if not source_dir.is_dir() or source_dir.name in SPECIAL_NAMES or source_dir.name.startswith("."):
+        if not source_dir.is_dir() or source_dir.name in SPECIAL_FOLDER_NAMES or source_dir.name.startswith("."):
             continue
         if source_folder_names is not None and source_dir.name not in source_folder_names:
             continue
@@ -612,34 +618,45 @@ def _collect_source_groups(
         if not files:
             continue
         source_key = f"{date_dir.name}/{source_dir.name}"
-        prefix = _source_prefix(source_dir.name)
-        genus = prefix_to_genus.get(prefix)
-        if genus is None:
-            raise ValueError(f"名单未映射来源前缀：{date_dir.name}/{source_dir.name} ({prefix})")
+        prefix = parse_folder_prefix(source_dir.name, uppercase_enable=True)
+        try:
+            level_values = hierarchy.resolve_values(source_dir.name)
+        except ValueError as error:
+            raise ValueError(f"{error}（{source_key}）") from error
+        if not level_values.get("level_1"):
+            raise ValueError(f"层级未解析来源：{source_key}")
         prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
-        target_name = f"{prefix}{date_dir.name}_{prefix_counts[prefix]:02d}"
+        target_prefix = level_values.get("level_1", prefix) if hierarchy.is_flat else prefix
+        target_name = f"{target_prefix}{date_dir.name}_{prefix_counts[prefix]:02d}"
         groups.append(_SourceGroup(
-            date_name=date_dir.name, source_dir=source_dir, genus=genus,
-            target_name=target_name, files=files,
-            is_test=source_key in selected_test_folders, source_name=source_dir.name,
+            date_name=date_dir.name,
+            source_dir=source_dir,
+            level_values=level_values,
+            target_name=target_name,
+            files=files,
+            is_test=source_key in selected_test_folders,
+            source_name=source_dir.name,
         ))
     return groups
 
 
 def _resolve_destinations(
     group: _SourceGroup,
-    mapping: DatasetMapping,
+    mapping: DatasetMapping | None,
     temporary_roots: dict[str, Path],
+    hierarchy: HierarchySpec,
 ) -> list[tuple[str, Path]]:
     if group.is_test:
+        target_relative = Path(group.target_name)
         if "__test__" not in temporary_roots:
             raise ValueError("测试目录需要配置 test_root")
-        return [("__test__", temporary_roots["__test__"] / group.target_name)]
-    target_relative = Path(group.genus) / group.target_name
+        return [("__test__", temporary_roots["__test__"] / target_relative)]
+    target_relative = hierarchy.init_relative_dir(group.source_name) / group.target_name
     destinations = [("__all__", temporary_roots["__all__"] / target_relative)]
-    for profile_name, genera in mapping.datasets.items():
-        if profile_name in temporary_roots and group.genus in genera:
-            destinations.append((profile_name, temporary_roots[profile_name] / target_relative))
+    if mapping is not None:
+        for profile_name, genera in mapping.datasets.items():
+            if profile_name in temporary_roots and group.genus in genera:
+                destinations.append((profile_name, temporary_roots[profile_name] / target_relative))
     return destinations
 
 
@@ -666,6 +683,7 @@ def _find_incremental_conflicts(
     eligible_dates: list[str],
     groups: list[_SourceGroup],
     destination_roots: dict[str, Path],
+    hierarchy: HierarchySpec,
 ) -> list[str]:
     conflicts: set[str] = set()
     eligible = set(eligible_dates)
@@ -674,17 +692,14 @@ def _find_incremental_conflicts(
             continue
         if not root.is_dir():
             continue
-        for genus_dir in root.iterdir():
-            if not genus_dir.is_dir():
+        for target_dir in root.rglob("*"):
+            if not target_dir.is_dir():
                 continue
-            for target_dir in genus_dir.iterdir():
-                if not target_dir.is_dir():
-                    continue
-                match = CANONICAL_FOLDER_PATTERN.fullmatch(target_dir.name)
-                if match is not None and match.group(2) in eligible:
-                    conflicts.add(f"{name}:{target_dir.relative_to(root).as_posix()}")
+            match = CANONICAL_FOLDER_PATTERN.fullmatch(target_dir.name)
+            if match is not None and match.group(2) in eligible:
+                conflicts.add(f"{name}:{target_dir.relative_to(root).as_posix()}")
     for group in groups:
-        relative = _target_relative(group)
+        relative = _target_relative(group, hierarchy)
         for name, root in destination_roots.items():
             if group.is_test != (name == "__test__"):
                 continue
@@ -693,11 +708,11 @@ def _find_incremental_conflicts(
     return sorted(conflicts)
 
 
-def _target_relative(group: _SourceGroup) -> Path:
+def _target_relative(group: _SourceGroup, hierarchy: HierarchySpec) -> Path:
     """返回组在对应输出根下的相对目录。"""
     if group.is_test:
         return Path(group.target_name)
-    return Path(group.genus) / group.target_name
+    return hierarchy.init_relative_dir(group.source_name) / group.target_name
 
 
 def _validate_test_group_targets(groups: list[_SourceGroup]) -> None:
@@ -706,7 +721,7 @@ def _validate_test_group_targets(groups: list[_SourceGroup]) -> None:
     for group in groups:
         if not group.is_test:
             continue
-        target = _target_relative(group)
+        target = Path(group.target_name)
         previous = targets.get(target)
         if previous is not None and previous.date_name != group.date_name:
             raise InitBuildConflictError(
@@ -715,6 +730,22 @@ def _validate_test_group_targets(groups: list[_SourceGroup]) -> None:
                 ]
             )
         targets[target] = group
+
+
+def _hierarchy_from_mapping(mapping: DatasetMapping | None) -> HierarchySpec:
+    """旧调用未提供 hierarchy 时，用 Excel 前缀映射构造单层属级层级。"""
+    if mapping is None:
+        return HierarchySpec.flat()
+    mappings = {
+        str(prefix).upper(): str(genus)
+        for genus, prefixes in mapping.genera.items()
+        for prefix in prefixes
+    }
+    return HierarchySpec(
+        levels=(HierarchyLevel("level_1", "属", directory=True),),
+        mappings={"level_1": mappings},
+        explicit=True,
+    )
 
 
 def _create_temporary_roots(destination_roots: dict[str, Path], mode: BuildMode) -> dict[str, Path]:
@@ -815,18 +846,6 @@ def _publish_all(
             if backup.exists() and not target.exists():
                 rename_directory(backup, target)
         raise
-
-
-def _source_prefix(name: str) -> str:
-    match = CANONICAL_FOLDER_PATTERN.fullmatch(name)
-    if match is not None:
-        return match.group(1).upper()
-    match = re.match(r"([A-Za-z]+)", name)
-    if match is None:
-        raise ValueError(f"无法解析来源文件夹前缀：{name}")
-    return match.group(1).upper()
-
-
 
 
 __all__ = [

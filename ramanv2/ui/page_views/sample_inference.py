@@ -7,46 +7,45 @@ from typing import Any
 
 import streamlit as st
 
-from ramanv2.common.naming import build_natural_key, parse_folder_prefix
-from ramanv2.common.paths import PROJECT_ROOT
+from ramanv2.common.naming import build_natural_key
 from ramanv2.common.device import resolve_device
-from ramanv2.data.profiles import resolve_dataset_dir, list_profiles, resolve_test_root
+from ramanv2.evaluation.test_set import TEST_RESULT_DIR_NAME
 from ramanv2.inference.input_cache import build_test_cache
-from ramanv2.inference.test_labels import build_expected_label_lookup
 from ramanv2.modeling.predictor import load_predictor
-from ramanv2.inference.folder_inference import run_independent_inference
+from ramanv2.inference.folder_inference import (
+    SPECTRA_FIGURE_NAME,
+    SUMMARY_JSON_NAME,
+    SUMMARY_TEXT_NAME,
+    run_independent_inference,
+)
 from ramanv2.ui.read_cache import (
     cached_test_folder_names,
     cached_experiment_dirs,
     cached_json_file,
     cached_text_file,
 )
-from ramanv2.ui.formatting import format_ratio
-from ramanv2.ui.page_state import invalidate_ui_cache, ui_cache_version
+from ramanv2.ui.components.pickers import render_profile_picker
+from ramanv2.ui.formatting import format_ratio, relative_label
+from ramanv2.ui.page_state import (
+    INVALIDATE_INFERENCE,
+    UI_ACTION_ERRORS,
+    invalidate_ui_cache,
+    render_action_error,
+    ui_cache_version,
+)
 
 
-TEST_ROOT = resolve_test_root(PROJECT_ROOT)
-
-
-def render_sample_inference_page() -> None:
+def render_sample_inference_page(context) -> None:
     """渲染实验选择、测试缓存、样本推理和结果查看区域。"""
     st.title("样本推理")
-    profiles = list_profiles()
-    if not profiles:
-        st.warning("当前没有可用 Profile。")
+    profile = render_profile_picker(context, label="选择 Profile", key="inference_profile")
+    if profile is None:
         return
-    profile_ids = [profile.profile_id for profile in profiles]
-    profile_id = st.selectbox(
-        "选择 Profile",
-        profile_ids,
-        index=profile_ids.index("GN") if "GN" in profile_ids else 0,
-        key="inference_profile",
-    )
-    experiment_dirs = _list_experiment_dirs(profile_id)
+    experiment_dirs = _list_experiment_dirs(context, profile)
     if not experiment_dirs:
-        st.info(f"没有找到 {profile_id} 的有效实验目录。")
+        st.info(f"没有找到 {profile.dataset_name} 的有效实验目录。")
         return
-    experiment_labels = [str(path.relative_to(PROJECT_ROOT)) for path in experiment_dirs]
+    experiment_labels = [relative_label(path, context.project_root) for path in experiment_dirs]
     selected_label = st.selectbox("选择实验目录", experiment_labels, key="inference_experiment")
     experiment_dir = experiment_dirs[experiment_labels.index(selected_label)]
     meta_path = experiment_dir / "hierarchy_meta.json"
@@ -63,17 +62,21 @@ def render_sample_inference_page() -> None:
     target_labels = _target_class_names(meta, level_name)
     st.caption(f"实验目录：{experiment_dir}")
     metrics = st.columns(3)
-    metrics[0].metric("Profile", profile_id)
+    metrics[0].metric("数据集", context.dataset_id)
     metrics[1].metric("预测层级", level_name)
     metrics[2].metric("模型类别数", len(target_labels))
 
-    folders = _list_test_folders()
+    folders = list(
+        cached_test_folder_names(
+            str(context.init_test_root.resolve()),
+            ui_cache_version("inference"),
+        )
+    )
     if not folders:
-        st.info("dataset/init_test 下没有可推理的测试文件夹。")
+        st.info(f"{context.init_test_root} 下没有可推理的测试文件夹。")
         _render_existing_result(experiment_dir, level_name)
         return
-    expected_lookup = build_expected_label_lookup(meta, level_name)
-    folder_info = _build_folder_info(folders, expected_lookup, set(target_labels))
+    folder_info = _build_folder_info(folders, set(target_labels), context.hierarchy)
     category_options = sorted(
         {str(item["category"]) for item in folder_info},
         key=build_natural_key,
@@ -107,28 +110,39 @@ def render_sample_inference_page() -> None:
 
     st.caption("样本推理会从每个文件夹随机抽取最多 10 条光谱，同一 cell 只取 1 条。")
 
-    profile = next(profile for profile in profiles if profile.profile_id == profile_id)
-    cache_root = resolve_dataset_dir(profile, PROJECT_ROOT) / profile.root_test
+    cache_root = context.profile_dir(profile) / profile.root_test
     st.caption(f"测试数据缓存：{cache_root}")
     actions = st.columns(2)
     if actions[0].button("构建/更新测试数据", width="stretch"):
-        _build_cache(experiment_dir, level_name, selected_folders, cache_root)
+        _prepare_test_inputs(
+            experiment_dir,
+            level_name,
+            selected_folders,
+            cache_root,
+            context.init_test_root,
+            infer_enable=False,
+        )
     if actions[1].button("开始样本推理", type="primary", width="stretch"):
-        _run_inference(experiment_dir, level_name, selected_folders, cache_root)
+        _prepare_test_inputs(
+            experiment_dir,
+            level_name,
+            selected_folders,
+            cache_root,
+            context.init_test_root,
+            infer_enable=True,
+        )
     _render_existing_result(experiment_dir, level_name)
 
 
-def _list_experiment_dirs(profile_id: str) -> list[Path]:
+def _list_experiment_dirs(context, profile) -> list[Path]:
     return [
         Path(path)
         for path in cached_experiment_dirs(
-            str(PROJECT_ROOT.resolve()), profile_id, ui_cache_version("inference")
+            str(context.experiment_root(profile).resolve()),
+            False,
+            ui_cache_version("inference"),
         )
     ]
-
-
-def _list_test_folders() -> list[str]:
-    return list(cached_test_folder_names(str(TEST_ROOT.resolve()), ui_cache_version("inference")))
 
 
 @st.cache_resource(show_spinner=False)
@@ -156,12 +170,15 @@ def _target_class_names(meta: dict[str, Any], level_name: str) -> list[str]:
 
 def _build_folder_info(
     folders: list[str],
-    expected_lookup: dict[str, str],
     target_labels: set[str],
+    hierarchy,
 ) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     for folder in folders:
-        expected = expected_lookup.get(parse_folder_prefix(folder, uppercase_enable=True))
+        try:
+            expected = hierarchy.expected_label(folder, "level_1")
+        except ValueError:
+            expected = None
         known = expected is not None and expected in target_labels
         result.append(
             {
@@ -174,66 +191,60 @@ def _build_folder_info(
     return result
 
 
-def _build_cache(
+def _prepare_test_inputs(
     experiment_dir: Path,
     level_name: str,
     folder_names: list[str],
     cache_root: Path,
+    test_root: Path,
+    *,
+    infer_enable: bool,
 ) -> None:
+    """构建/更新测试缓存；infer_enable 时继续执行样本推理。"""
+    label = "样本推理" if infer_enable else "测试数据缓存"
     try:
-        with st.status("正在更新测试缓存…", expanded=True) as status:
+        with st.status(
+            "正在执行样本推理…" if infer_enable else "正在更新测试缓存…",
+            expanded=True,
+        ) as status:
             status.write("正在复用或加载实验模型。")
             predictor = _get_cached_predictor(experiment_dir, level_name)
             status.write("正在检查新增和已修改的测试光谱。")
-            report = build_test_cache(TEST_ROOT, cache_root, folder_names, predictor)
-            status.update(label="测试缓存更新完成", state="complete", expanded=False)
-        invalidate_ui_cache("inference")
-        st.success(
-            f"测试数据缓存完成：共 {report['file_count']} 条，"
-            f"复用 {report['reused_count']} 条，"
-            f"重新处理 {report['rebuilt_count']} 条，"
-            f"失败 {report['failed_count']} 条。"
-        )
-    except (OSError, RuntimeError, ValueError, TypeError) as error:
-        st.error(f"测试数据缓存失败：{error}")
-
-
-def _run_inference(
-    experiment_dir: Path,
-    level_name: str,
-    folder_names: list[str],
-    cache_root: Path,
-) -> None:
-    try:
-        with st.status("正在执行样本推理…", expanded=True) as status:
-            status.write("正在加载或复用实验模型。")
-            predictor = _get_cached_predictor(experiment_dir, level_name)
-            status.write("正在检查测试数据缓存。")
-            build_report = build_test_cache(TEST_ROOT, cache_root, folder_names, predictor)
-            status.write("正在从每个文件夹随机抽取光谱（每个 cell 至多 1 条）。")
-            result_dir = run_independent_inference(
-                experiment_dir,
-                level_name,
-                predictor=predictor,
-                cached_test_root=cache_root,
-                folder_names=folder_names,
-                evaluate_enable=True,
+            report = build_test_cache(test_root, cache_root, folder_names, predictor)
+            result_dir = None
+            if infer_enable:
+                status.write("正在从每个文件夹随机抽取光谱（每个 cell 至多 1 条）。")
+                result_dir = run_independent_inference(
+                    experiment_dir,
+                    level_name,
+                    predictor=predictor,
+                    cached_test_root=cache_root,
+                    folder_names=folder_names,
+                    evaluate_enable=True,
+                )
+            status.update(
+                label="样本推理完成" if infer_enable else "测试缓存更新完成",
+                state="complete",
+                expanded=False,
             )
-            status.update(label="样本推理完成", state="complete", expanded=False)
-        invalidate_ui_cache("inference")
-        st.success(
-            f"推理完成：缓存共 {build_report['file_count']} 条，"
-            f"复用 {build_report['reused_count']} 条，"
-            f"重新处理 {build_report['rebuilt_count']} 条，"
+        invalidate_ui_cache(*INVALIDATE_INFERENCE)
+        tail = (
             f"结果已保存到 {result_dir}。"
+            if infer_enable
+            else f"失败 {report['failed_count']} 条。"
         )
-    except (OSError, RuntimeError, ValueError, TypeError, KeyError) as error:
-        st.error(f"样本推理失败：{error}")
+        st.success(
+            f"{'推理完成：缓存共' if infer_enable else '测试数据缓存完成：共'} "
+            f"{report['file_count']} 条，复用 {report['reused_count']} 条，"
+            f"重新处理 {report['rebuilt_count']} 条，{tail}"
+        )
+    except UI_ACTION_ERRORS as error:
+        render_action_error(label, error)
 
 
 def _render_existing_result(experiment_dir: Path, level_name: str) -> None:
-    result_dir = experiment_dir / level_name / "test_result"
-    summary_path = result_dir / "summary.json"
+    result_dir = experiment_dir / level_name / TEST_RESULT_DIR_NAME
+    summary_path = result_dir / SUMMARY_JSON_NAME
     if not summary_path.is_file():
         return
     try:
@@ -272,7 +283,7 @@ def _render_existing_result(experiment_dir: Path, level_name: str) -> None:
             if not folder_name:
                 continue
             with st.expander(f"查看 {folder_name} 的逐谱结果", expanded=False):
-                image_path = result_dir / folder_name / "spectra.png"
+                image_path = result_dir / folder_name / SPECTRA_FIGURE_NAME
                 if image_path.is_file():
                     st.image(str(image_path), width="stretch")
                 file_predictions = row.get("file_predictions")
@@ -296,10 +307,7 @@ def _render_existing_result(experiment_dir: Path, level_name: str) -> None:
                     )
     with st.expander("查看结果目录", expanded=False):
         st.write(str(result_dir))
-        summary_text = result_dir / "summary.txt"
+        summary_text = result_dir / SUMMARY_TEXT_NAME
         if summary_text.is_file():
             stat = summary_text.stat()
             st.code(cached_text_file(str(summary_text.resolve()), stat.st_mtime_ns, stat.st_size), language="text")
-
-
-__all__ = ["render_sample_inference_page"]

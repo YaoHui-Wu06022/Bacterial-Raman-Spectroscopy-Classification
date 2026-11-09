@@ -14,8 +14,8 @@ from ramanv2.common.arc_data import (
     list_arc_data_paths,
     read_arc_data,
 )
-from ramanv2.common.naming import build_natural_key, parse_folder_prefix
-from ramanv2.data.builders.init import CANONICAL_FOLDER_PATTERN, build_full_init, build_spectrum_folder
+from ramanv2.common.naming import CANONICAL_FOLDER_PATTERN, build_natural_key, parse_folder_prefix
+from ramanv2.data.builders.init import build_full_init, build_spectrum_folder
 from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.data.count import summarize_dataset
 
@@ -152,12 +152,13 @@ def apply_supplement_plan(init_root: Path | str, plan: SupplementPlan) -> dict[s
 def build_full_init_with_supplements(
     shift_root: Path | str,
     init_root: Path | str,
-    mapping: DatasetMapping,
+    mapping: DatasetMapping | None,
     completed_dates: list[str] | set[str] | tuple[str, ...],
     plan: SupplementPlan,
     *,
     test_root: Path | str | None = None,
     selected_test_folders: list[str] | set[str] | tuple[str, ...] | None = None,
+    hierarchy=None,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, object]:
     """按页面流程生成全量 init：先构建 shift 数据，再写入补充文件夹。
@@ -173,6 +174,7 @@ def build_full_init_with_supplements(
         completed_dates,
         test_root=test_root,
         selected_test_folders=selected_test_folders,
+        hierarchy=hierarchy,
         progress_callback=progress_callback,
     )
     supplement = apply_supplement_plan(init_root, plan)

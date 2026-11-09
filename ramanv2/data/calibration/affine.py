@@ -17,14 +17,22 @@ matplotlib.use("Agg", force=True)
 from matplotlib import pyplot as plt
 
 from ramanv2.common.arc_data import is_arc_data_name, list_arc_data_paths, read_arc_data, write_arc_data
-from ramanv2.common.file_ops import create_temporary_path, publish_file, publish_files, read_json, rename_directory, write_json
+from ramanv2.common.file_ops import (
+    create_temporary_path,
+    publish_file,
+    publish_files,
+    read_json,
+    rename_directory,
+    write_json,
+    write_text_atomic,
+)
 from ramanv2.common.naming import (
-    NON_TRAINING_FOLDER_NAMES,
-    PIPELINE_RESERVED_FOLDER_NAMES,
+    BEAD_FOLDER_NAME,
+    MANUAL_DELETE_RELATIVE,
+    SPECIAL_FOLDER_NAMES,
     build_natural_key,
 )
 from ramanv2.common.plotting import configure_matplotlib_fonts
-from ramanv2.common.paths import PROJECT_ROOT
 
 
 configure_matplotlib_fonts()
@@ -44,10 +52,7 @@ AUXILIARY_RADIUS = 10.0
 OVERLAP_RADIUS = 17.0
 DISPLAY_MIN = 400.0
 DISPLAY_MAX = 1800.0
-BEAD_DIR_NAME = "小球"
 SHIFT_DIR_NAME = "shift"
-EXCLUDED_FOLDER_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
-OUTPUT_ROOT = PROJECT_ROOT / "dataset" / "shift_data"
 
 
 @dataclass(frozen=True)
@@ -496,7 +501,29 @@ def _failure_payload(date_name: str, error: str) -> dict[str, object]:
     }
 
 
-def analyze_date(date_dir: Path | str, output_root: Path | str = OUTPUT_ROOT) -> dict[str, object]:
+def _normalize_bead_files(paths: list[Path]) -> None:
+    """首次读取小球谱时删除非数值头，只保留 ``波数 强度`` 两列。"""
+    for path in paths:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        rows = []
+        removed = 0
+        for line in text.splitlines():
+            parts = line.split()
+            if len(parts) < 2:
+                removed += 1
+                continue
+            try:
+                float(parts[0])
+                float(parts[1])
+            except ValueError:
+                removed += 1
+                continue
+            rows.append(f"{parts[0]}\t{parts[1]}")
+        if removed:
+            write_text_atomic(path, "\n".join(rows) + "\n")
+
+
+def analyze_date(date_dir: Path | str, output_root: Path | str) -> dict[str, object]:
     """分析一个日期并原子发布该日期的 shift 诊断目录。"""
     date_path = Path(date_dir).resolve()
     output_root_path = Path(output_root).resolve()
@@ -507,8 +534,10 @@ def analyze_date(date_dir: Path | str, output_root: Path | str = OUTPUT_ROOT) ->
     temporary = output_date / f".shift_building_{uuid4().hex}"
     try:
         temporary.mkdir(parents=True, exist_ok=False)
-        bead_dir = date_path / BEAD_DIR_NAME
+        bead_dir = date_path / BEAD_FOLDER_NAME
         bead_paths = list_arc_data_paths(bead_dir, key=lambda path: build_natural_key(path.name))
+        if bead_paths:
+            _normalize_bead_files(bead_paths)
         if not bead_paths:
             payload = _failure_payload(date_path.name, f"未找到小球谱：{bead_dir}")
             _write_json(temporary / "affine.json", payload)
@@ -642,7 +671,7 @@ def build_corrected_folder(
 ) -> int:
     """将指定来源目录应用日期仿射，写入临时目录；日期与单夹重建共用此内核。"""
     count = 0
-    excluded = EXCLUDED_FOLDER_NAMES
+    excluded = SPECIAL_FOLDER_NAMES
     for source in sorted(source_folder.rglob("*"), key=lambda path: build_natural_key(str(path.relative_to(source_folder)))):
         relative = source.relative_to(source_folder)
         if any(part in excluded or part.startswith(".") for part in relative.parts):
@@ -695,13 +724,13 @@ def apply_folder_affine_compensation(
             delta = float(requested)
             if not math.isfinite(delta):
                 raise ValueError("频移量必须是有限数值")
-            if not name or name in EXCLUDED_FOLDER_NAMES or Path(name).name != name or "/" in name or "\\" in name or name in {".", ".."}:
+            if not name or name in SPECIAL_FOLDER_NAMES or Path(name).name != name or "/" in name or "\\" in name or name in {".", ".."}:
                 raise ValueError("无效的补偿文件夹")
             if delta == 0:
                 continue
             folders = [
                 root / date_name / name,
-                root / "delete" / "manual" / date_name / name,
+                root / MANUAL_DELETE_RELATIVE / date_name / name,
                 root / "delete" / "folder_delete" / date_name / name,
             ]
             sources = []
@@ -730,7 +759,7 @@ def apply_folder_affine_compensation(
 
 def approve_and_apply_date(
     date_dir: Path | str,
-    output_root: Path | str = OUTPUT_ROOT,
+    output_root: Path | str,
 ) -> dict[str, object]:
     """确认一个日期并原子发布只包含日期级仿射的 shift 光谱。"""
     source_date = Path(date_dir).resolve()
@@ -784,7 +813,6 @@ def approve_and_apply_date(
 
 __all__ = [
     "AUXILIARY_PEAKS",
-    "OUTPUT_ROOT",
     "PRIMARY_PEAKS",
     "analyze_date",
     "apply_folder_affine_compensation",

@@ -36,7 +36,7 @@ from ramanv2.core.run_context import (
 from ramanv2.data.runtime.augmentation import build_augmentation_spec
 from ramanv2.data.runtime.dataset import RamanDataset
 from ramanv2.data.runtime.index import DatasetIndex
-from ramanv2.data.profiles import resolve_profile, resolve_training_dir
+from ramanv2.data.profiles import DatasetSelection, resolve_selection
 from ramanv2.modeling.factory import build_model, validate_model_input
 from ramanv2.modeling.model_spec import ModelSpec, build_model_spec
 from ramanv2.training.loop import TrainArtifacts, TrainResult, run_train_loop
@@ -87,11 +87,16 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
     validate_model_input(model_spec, input_spec)
     _set_random_seed(train_spec.seed, runtime_spec.deterministic_enable)
 
-    experiment_dir = _resolve_experiment_dir(request, config)
+    selection = resolve_selection(config.dataset.dataset_id, config.dataset.profile_id)
+    experiment_dir = _resolve_experiment_dir(request, selection)
     existing_meta = load_hierarchy_meta(experiment_dir / "hierarchy_meta.json")
     if request.resume_run_dir is not None:
         load_run_snapshot(request.resume_run_dir)
-    dataset_index = DatasetIndex(_resolve_train_dir(request, config))
+    dataset_spec = selection.spec
+    dataset_index = DatasetIndex(
+        _resolve_train_dir(request, selection),
+        hierarchy=dataset_spec.hierarchy,
+    )
     level_name = dataset_index.resolve_level_name(request.level_name)
     level_models: dict[str, dict[str, Any]] = {}
     parent_models: dict[str, dict[str, dict[str, Any]]] = {}
@@ -102,6 +107,10 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
         level_models=level_models,
         parent_models=parent_models,
         runs=runs,
+        dataset_id=dataset_spec.dataset_id,
+        label_schema=dataset_spec.hierarchy.label_schema,
+        hierarchy=dataset_index.hierarchy.to_payload(),
+        hierarchy_signature=dataset_spec.hierarchy_signature(),
     )
     # 先检查历史标签空间，避免创建 run、改写快照后才发现分类头不兼容。
     if existing_meta is not None:
@@ -204,23 +213,22 @@ def build_train_artifacts(run_context: RunContext) -> TrainArtifacts:
     )
 
 
-def _resolve_experiment_dir(request: TrainRequest, config: Config) -> Path:
+def _resolve_experiment_dir(request: TrainRequest, selection: DatasetSelection) -> Path:
     """解析当前训练使用的实验根目录，不写回配置。"""
     if request.experiment_dir is not None:
         return resolve_path(request.experiment_dir)
-    profile = resolve_profile(config.dataset.profile_id)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return PROJECT_ROOT / "output" / profile.dataset_name / timestamp
+    return PROJECT_ROOT / "output" / selection.profile.dataset_name / timestamp
 
 
-def _resolve_train_dir(request: TrainRequest, config: Config) -> Path:
+def _resolve_train_dir(request: TrainRequest, selection: DatasetSelection) -> Path:
     """解析配置数据根目录下的训练目录，也支持直接指定训练目录。"""
     if request.train_dir is not None:
         train_dir = resolve_path(request.train_dir)
         if not train_dir.is_dir():
             raise FileNotFoundError(f"缺少显式训练目录：{train_dir}")
         return train_dir
-    return resolve_training_dir(config.dataset.profile_id, PROJECT_ROOT)
+    return selection.train_dir
 
 
 def _set_random_seed(seed: int, deterministic_enable: bool) -> None:

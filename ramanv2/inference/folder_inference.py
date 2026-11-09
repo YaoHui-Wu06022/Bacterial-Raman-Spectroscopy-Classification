@@ -15,8 +15,7 @@ import torch
 from ramanv2.common.arc_data import list_arc_data_paths
 from ramanv2.common.device import resolve_device
 from ramanv2.common.naming import build_natural_key, parse_folder_prefix
-from ramanv2.common.paths import DATASET_ROOT
-from ramanv2.data.profiles import resolve_test_root, resolve_training_dir
+from ramanv2.data.profiles import resolve_selection
 from ramanv2.modeling.run_manifest import write_run_manifest
 from ramanv2.inference.folder_report import (
     plot_folder_spectra,
@@ -40,11 +39,9 @@ from ramanv2.inference.test_labels import (
 )
 
 
-
-
-
-
-
+SUMMARY_TEXT_NAME = "summary.txt"
+SUMMARY_JSON_NAME = "summary.json"
+SPECTRA_FIGURE_NAME = "spectra.png"
 
 def run_independent_inference(
     source_dir: Path | str,
@@ -125,8 +122,8 @@ def run_independent_inference(
             expected_lookup,
             cached_folders,
         )
-        summary = write_summary_report(temp_dir / "summary.txt", rows, evaluate_enable)
-        write_summary_json(temp_dir / "summary.json", summary)
+        summary = write_summary_report(temp_dir / SUMMARY_TEXT_NAME, rows, evaluate_enable)
+        write_summary_json(temp_dir / SUMMARY_JSON_NAME, summary)
         write_run_manifest(
             temp_dir / "used_runs.json",
             "single_run" if predictor.run_dir is not None else "cascade",
@@ -274,7 +271,7 @@ def _run_single_folder(
         dtype=np.float32,
     )
     plot_folder_spectra(
-        folder_output_dir / "spectra.png",
+        folder_output_dir / SPECTRA_FIGURE_NAME,
         folder_name,
         values,
         wavenumbers,
@@ -287,10 +284,10 @@ def _run_single_folder(
 
 
 def _resolve_test_dir(predictor: Predictor, input_dir: Path | str | None) -> Path:
-    """解析显式输入目录；缺省时始终使用全局 ``dataset/init_test``。"""
+    """解析显式输入目录；缺省时使用实验所属数据集的 init_test。"""
     if input_dir is not None:
         return Path(input_dir).resolve()
-    return resolve_test_root()
+    return resolve_selection(predictor.dataset_id, predictor.profile_id).test_root
 
 
 def _resolve_result_dir(predictor: Predictor) -> Path:
@@ -302,11 +299,8 @@ def _resolve_result_dir(predictor: Predictor) -> Path:
 
 def _build_train_mean_bank(predictor: Predictor, preprocessor) -> dict[str, np.ndarray]:
     """按目标层级汇总训练集每个类别的均值输入谱。"""
-    train_dir = resolve_training_dir(
-        predictor.profile_id,
-        DATASET_ROOT.parent,
-        fallback_to_init_enable=False,
-    )
+    selection = resolve_selection(predictor.dataset_id, predictor.profile_id)
+    train_dir = selection.dataset_dir / selection.profile.root_train_clean
     if not train_dir.is_dir():
         raise FileNotFoundError(f"训练目录不存在：{train_dir}")
     values_by_label: dict[str, list[np.ndarray]] = defaultdict(list)

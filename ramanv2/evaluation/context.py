@@ -10,11 +10,13 @@ import numpy as np
 
 from ramanv2.core.config import Config, build_config
 from ramanv2.core.config_snapshot import SHARED_CONFIG_NAME, read_yaml_dict
+from ramanv2.core.run_context import HIERARCHY_META_FILE_NAME, VAL_RESULT_DIR_NAME
 from ramanv2.common.hierarchy import assert_hierarchy_compatible, load_hierarchy_meta, validate_label_schema
 from ramanv2.core.input_spec import InputSpec, build_input_spec
 from ramanv2.common.paths import find_ancestor_dir
 from ramanv2.data.runtime.index import DatasetIndex
-from ramanv2.data.profiles import resolve_training_dir
+from ramanv2.data.hierarchy_config import HierarchySpec
+from ramanv2.data.profiles import resolve_selection
 from ramanv2.training.split import load_split_files
 
 
@@ -48,11 +50,22 @@ def load_evaluation_context(source_dir: Path | str) -> EvaluationContext:
     experiment_dir = resolve_experiment_dir(source_path)
     shared_values = read_yaml_dict(experiment_dir / SHARED_CONFIG_NAME)
     validate_label_schema(shared_values)
-    meta = load_hierarchy_meta(experiment_dir / "hierarchy_meta.json")
+    meta = load_hierarchy_meta(experiment_dir / HIERARCHY_META_FILE_NAME)
     if meta is None:
-        raise FileNotFoundError(f"缺少 hierarchy_meta.json：{experiment_dir}")
+        raise FileNotFoundError(f"缺少 {HIERARCHY_META_FILE_NAME}：{experiment_dir}")
     config = build_config(shared_values)
-    dataset_index = DatasetIndex(resolve_training_dir(config.dataset.profile_id))
+    selection = resolve_selection(
+        config.dataset.dataset_id,
+        config.dataset.profile_id,
+    )
+    dataset_index = DatasetIndex(
+        selection.train_dir,
+        hierarchy=(
+            HierarchySpec.from_payload(meta["hierarchy"])
+            if isinstance(meta.get("hierarchy"), dict)
+            else None
+        ),
+    )
     assert_hierarchy_compatible(meta, dataset_index.hierarchy_metadata)
     split = load_split_files(dataset_index, experiment_dir)
     if split is None:
@@ -122,7 +135,10 @@ def resolve_result_dir(
     run_entry: RunEntry | None = None,
 ) -> Path:
     """解析模型或 baseline 的既有结果目录槽位。"""
-    names = {"model": "val_result", "baseline": "baseline_val_result"}
+    names = {
+        "model": VAL_RESULT_DIR_NAME,
+        "baseline": f"baseline_{VAL_RESULT_DIR_NAME}",
+    }
     if kind not in names:
         raise ValueError(f"未知评估类型：{kind}")
     if mode == "run":

@@ -8,9 +8,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ramanv2.common.arc_data import count_arc_data, iter_arc_data_paths
-from ramanv2.common.naming import build_natural_key
+from ramanv2.common.naming import MANUAL_DELETE_RELATIVE, build_natural_key
 from ramanv2.data.calibration.affine import load_calibration_report
-from ramanv2.data.profiles import resolve_test_root
+from ramanv2.data.datasets import resolve_project_root_for_dataset_dir
+from ramanv2.data.profiles import resolve_selection
 from ramanv2.records.lineage import (
     initialize_folder_lineage,
     lineage_path,
@@ -19,12 +20,11 @@ from ramanv2.records.lineage import (
 )
 from ramanv2.pipeline.state import (
     load_pipeline_state,
-    pipeline_state_path,
+    pipeline_state_path_for_spec,
     write_pipeline_state,
 )
 
 
-MANUAL_DELETE_DIR = "delete/manual"
 FOLDER_DELETED_STATUS = "folder_deleted"
 INIT_DIR_NAME = "init"
 
@@ -106,7 +106,7 @@ def _reset_stale_affine(
 
 def _manual_deleted_paths(data_root: Path) -> set[str]:
     """人工删除区当前的全部相对路径，等价于清洗提交记录。"""
-    base = data_root / MANUAL_DELETE_DIR
+    base = data_root / MANUAL_DELETE_RELATIVE
     if not base.is_dir():
         return set()
     return {
@@ -288,14 +288,20 @@ def rebuild_pipeline_records(
     *,
     init_root: Path | str | None = None,
     test_root: Path | str | None = None,
+    dataset_id: str = "",
 ) -> dict[str, object]:
     """按当前磁盘重写 ``folder_lineage.json`` 与 ``state.json``，返回统计摘要。"""
     root = Path(data_root).resolve()
     shift = Path(shift_root).resolve()
-    init_target = Path(init_root).resolve() if init_root is not None else root.parent / INIT_DIR_NAME
-    test_target = Path(test_root).resolve() if test_root is not None else resolve_test_root(root.parent.parent)
+    dataset_root = root.parent
+    project_root = resolve_project_root_for_dataset_dir(dataset_root)
+    selection = resolve_selection(dataset_id=dataset_id, project_root=project_root)
+    init_target = Path(init_root).resolve() if init_root is not None else dataset_root / INIT_DIR_NAME
+    test_target = Path(test_root).resolve() if test_root is not None else selection.test_root
     target_state = (
-        Path(state_path) if state_path is not None else pipeline_state_path(root.parent.parent)
+        Path(state_path)
+        if state_path is not None
+        else pipeline_state_path_for_spec(selection.spec)
     )
     recorded_at = datetime.now(timezone.utc).isoformat()
 

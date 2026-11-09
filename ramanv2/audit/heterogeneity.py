@@ -27,8 +27,7 @@ from scipy.stats import spearmanr
 
 from ramanv2.common.arc_data import iter_arc_data_paths, read_arc_data
 from ramanv2.common.naming import (
-    NON_TRAINING_FOLDER_NAMES,
-    PIPELINE_RESERVED_FOLDER_NAMES,
+    SPECIAL_FOLDER_NAMES,
     build_natural_key,
     parse_folder_prefix,
 )
@@ -43,7 +42,7 @@ from ramanv2.spectra.preprocess import preprocess_single_spectrum
 
 INPUT_CONFIG = InputConfig()
 BUILD_CONFIG = DataBuildConfig()
-COSMIC_RAY_OPTIONS = BUILD_CONFIG.build_cosmic_ray_options("GN")
+COSMIC_RAY_OPTIONS = BUILD_CONFIG.build_cosmic_ray_options("")
 REFERENCE_AXIS = build_wn_ref(
     INPUT_CONFIG.cut_min,
     INPUT_CONFIG.cut_max,
@@ -73,7 +72,6 @@ BAND_MERGE_GAP = 2
 # 自动勾选还需子簇质心确实分开，避免随机二分被当成可剔除子簇。
 AUTO_MIN_SEPARATION = 0.05
 
-SPECIAL_FOLDER_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
 EXTRA_SOURCE_PREFIX = "extra"
 COSMIC_SOURCE = "cosmic"
 EXTRA_SOURCE = "extra"

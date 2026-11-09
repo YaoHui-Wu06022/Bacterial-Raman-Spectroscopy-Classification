@@ -9,10 +9,25 @@ import streamlit as st
 from ramanv2.common.arc_data import has_arc_data
 from ramanv2.common.file_ops import read_json
 from ramanv2.common.naming import build_natural_key
+from ramanv2.core.config_snapshot import SHARED_CONFIG_NAME
+from ramanv2.core.run_context import (
+    HIERARCHY_META_FILE_NAME,
+    TRAIN_SPLIT_FILE_NAME,
+    VALIDATION_SPLIT_FILE_NAME,
+)
 from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.data.count import collect_taxon_counts, summarize_dataset
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.pipeline.cleaning import scan_date_names
+
+
+_EXPERIMENT_MARKERS = (
+    SHARED_CONFIG_NAME,
+    TRAIN_SPLIT_FILE_NAME,
+    VALIDATION_SPLIT_FILE_NAME,
+    HIERARCHY_META_FILE_NAME,
+)
+_EXPERIMENT_MIN_MARKERS = (HIERARCHY_META_FILE_NAME,)
 
 
 @st.cache_data(show_spinner=False)
@@ -111,33 +126,26 @@ def cached_run_dirs(level_dir: str, version: int) -> tuple[str, ...]:
 
 
 @st.cache_data(show_spinner=False)
-def cached_experiment_dirs(project_root: str, profile_id: str, version: int) -> tuple[str, ...]:
-    """缓存样本推理和结果分析共用的实验目录扫描。"""
+def cached_experiment_dirs(
+    experiment_parent: str,
+    require_complete: bool,
+    version: int,
+) -> tuple[str, ...]:
+    """缓存一个输出命名空间下的实验目录；完整模式要求切分与配置快照齐全。"""
     del version
-    root = Path(project_root) / "output" / profile_id
-    result: set[Path] = set()
-    if root.is_dir():
-        for path in root.iterdir():
-            if path.is_dir() and (path / "hierarchy_meta.json").is_file():
-                result.add(path.resolve())
-    return tuple(str(path) for path in sorted(result, key=lambda path: build_natural_key(path.name), reverse=True))
-
-
-@st.cache_data(show_spinner=False)
-def cached_result_experiment_dirs(output_root: str, version: int) -> tuple[str, ...]:
-    """缓存结果分析页的完整实验目录扫描。"""
-    del version
-    root = Path(output_root)
-    result: set[Path] = set()
-    markers = ("shared_config.yaml", "hierarchy_meta.json", "train_split.json", "val_split.json")
-    if root.is_dir():
-        for profile_dir in root.iterdir():
-            if not profile_dir.is_dir():
-                continue
-            for path in profile_dir.iterdir():
-                if path.is_dir() and all((path / marker).is_file() for marker in markers):
-                    result.add(path.resolve())
-    return tuple(str(path) for path in sorted(result, key=lambda path: str(path).lower(), reverse=True))
+    root = Path(experiment_parent)
+    if not root.is_dir():
+        return ()
+    markers = _EXPERIMENT_MARKERS if require_complete else _EXPERIMENT_MIN_MARKERS
+    result = [
+        path.resolve()
+        for path in root.iterdir()
+        if path.is_dir() and all((path / marker).is_file() for marker in markers)
+    ]
+    return tuple(
+        str(path)
+        for path in sorted(result, key=lambda item: build_natural_key(item.name), reverse=True)
+    )
 
 
 @st.cache_data(show_spinner=False)
@@ -152,19 +160,3 @@ def cached_test_folder_names(root_dir: str, version: int) -> tuple[str, ...]:
         for path in sorted(root.iterdir(), key=lambda item: build_natural_key(item.name))
         if path.is_dir() and has_arc_data(path)
     )
-
-
-__all__ = [
-    "cached_calibration_reports",
-    "cached_dataset_index",
-    "cached_dataset_summary",
-    "cached_dataset_taxon_counts",
-    "cached_directory_names",
-    "cached_test_folder_names",
-    "cached_experiment_dirs",
-    "cached_file_bytes",
-    "cached_json_file",
-    "cached_run_dirs",
-    "cached_result_experiment_dirs",
-    "cached_text_file",
-]

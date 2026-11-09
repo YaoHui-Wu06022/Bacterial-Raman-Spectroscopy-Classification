@@ -9,7 +9,10 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from ramanv2.core.config import build_config
-from ramanv2.common.hierarchy import LABEL_SCHEMA
+from ramanv2.common.hierarchy import HIERARCHY_LABEL_SCHEMA
+from ramanv2.data.datasets import DatasetSpec
+from ramanv2.data.hierarchy_config import HierarchyLevel, HierarchySpec
+from ramanv2.data.profiles import DatasetProfile, DatasetSelection
 from ramanv2.evaluation.context import load_evaluation_context, resolve_run_entry
 from ramanv2.evaluation.model_eval import _predict_run
 from ramanv2.modeling.predictor import load_predictor
@@ -30,6 +33,34 @@ class WorkflowModel(torch.nn.Module):
         return (logits, embeddings) if return_embedding_enable else logits
 
 
+def _selection_for(dataset_dir: Path) -> DatasetSelection:
+    """构造指向临时 train 目录的两级层级数据集选择。"""
+    spec = DatasetSpec(
+        dataset_id="TEST",
+        display_name="TEST",
+        base_dir=dataset_dir,
+        directory=dataset_dir,
+        bad_bands=(),
+        hierarchy=HierarchySpec(
+            levels=(
+                HierarchyLevel("level_1", "属", directory=True),
+                HierarchyLevel("level_2", "种", directory=False),
+            ),
+            mappings={"level_2": {"AB": "AB", "AJO": "AJO"}},
+            explicit=True,
+        ),
+        profiles=("GN",),
+    )
+    profile = DatasetProfile(
+        profile_id="GN",
+        dataset_name="GN",
+        dataset_id="TEST",
+        dataset_dir_name=dataset_dir.name,
+        subdir="GN",
+    )
+    return DatasetSelection(spec=spec, profile=profile, dataset_dir=dataset_dir)
+
+
 def test_workflow_writes_global_run_and_reloads_across_levels(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -42,9 +73,14 @@ def test_workflow_writes_global_run_and_reloads_across_levels(
         "ramanv2.training.workflow.build_model",
         lambda num_classes, model_spec: WorkflowModel(num_classes),
     )
+    selection = _selection_for(train_dir.parent)
     monkeypatch.setattr(
-        "ramanv2.training.workflow.resolve_training_dir",
-        lambda profile_key, project_root: tmp_path / "dataset" / "train",
+        "ramanv2.training.workflow.resolve_selection",
+        lambda *args, **kwargs: selection,
+    )
+    monkeypatch.setattr(
+        "ramanv2.evaluation.context.resolve_selection",
+        lambda *args, **kwargs: selection,
     )
     initialized_tasks: list[str] = []
     mode_calls: list[bool] = []
@@ -82,13 +118,17 @@ def test_workflow_writes_global_run_and_reloads_across_levels(
     for folder in ("GenusA/AB20231212_01", "GenusA/ab20231214_01", "GenusA/AJO20231214_01"):
         _write_spectra(species_train_dir / folder, "cell", 1.0)
     monkeypatch.setattr("ramanv2.modeling.predictor.build_model", lambda n, spec: WorkflowModel(n))
-    monkeypatch.setattr("ramanv2.evaluation.context.resolve_training_dir", lambda profile: species_train_dir)
+    species_selection = _selection_for(species_train_dir.parent)
+    monkeypatch.setattr(
+        "ramanv2.evaluation.context.resolve_selection",
+        lambda *args, **kwargs: species_selection,
+    )
     output = tmp_path / "experiment"
     meta = run_training(TrainRequest(
         config, "level_2", train_per_parent_enable=False,
         train_dir=species_train_dir, experiment_dir=output,
     ))
-    assert meta["label_schema"] == LABEL_SCHEMA
+    assert meta["label_schema"] == HIERARCHY_LABEL_SCHEMA
     assert meta["class_names_by_level"]["level_2"] == ["GenusA/AB", "GenusA/AJO"]
     assert len(meta["class_names_by_level"]["leaf"]) == 3
     entry = meta["level_models"]["level_2"]

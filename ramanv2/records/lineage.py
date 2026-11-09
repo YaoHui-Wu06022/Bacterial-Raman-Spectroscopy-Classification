@@ -10,8 +10,11 @@ from pathlib import Path
 from ramanv2.common.arc_data import has_arc_data, list_arc_data_paths
 from ramanv2.common.file_ops import preserve_paths
 from ramanv2.common.naming import (
-    NON_TRAINING_FOLDER_NAMES,
-    PIPELINE_RESERVED_FOLDER_NAMES,
+    ANALYSIS_DELETE_RELATIVE,
+    FOLDER_DELETE_RELATIVE,
+    MANUAL_DELETE_RELATIVE,
+    PIPELINE_DIR_NAME,
+    SPECIAL_FOLDER_NAMES,
     build_natural_key,
     parse_folder_prefix,
 )
@@ -21,15 +24,11 @@ from ramanv2.pipeline.db import (
     save_lineage_payload,
 )
 LINEAGE_VERSION = 1
-MANUAL_DELETE_RELATIVE = Path("delete") / "manual"
-FOLDER_DELETE_RELATIVE = Path("delete") / "folder_delete"
-ANALYSIS_DELETE_RELATIVE = Path("analysis_delete")
-SPECIAL_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
 
 
 def lineage_path(data_root: Path | str) -> Path:
     root = Path(data_root).resolve()
-    return root.parent / ".raman_pipeline" / DATABASE_FILE_NAME
+    return root.parent / PIPELINE_DIR_NAME / DATABASE_FILE_NAME
 
 
 def load_folder_lineage(data_root: Path | str) -> dict[str, object]:
@@ -127,7 +126,7 @@ def initialize_folder_lineage(
             return
         for date_dir in sorted((item for item in base.iterdir() if item.is_dir() and item.name.isdigit() and (date_names is None or item.name in date_names)), key=lambda item: build_natural_key(item.name)):
             for folder_dir in sorted((item for item in date_dir.iterdir() if item.is_dir()), key=lambda item: build_natural_key(item.name)):
-                if folder_dir.name in SPECIAL_NAMES or folder_dir.name.startswith("."):
+                if folder_dir.name in SPECIAL_FOLDER_NAMES or folder_dir.name.startswith("."):
                     continue
                 files = list_arc_data_paths(
                     folder_dir,
@@ -189,7 +188,7 @@ def initialize_folder_lineage(
             record["deleted_file_count"] = deleted_count
         if key not in discovered:
             # 小球与派生目录本就不参与扫描，不能被"未发现即整夹删除"误判。
-            if record.get("folder_status") == "active" and str(record.get("folder", "")) not in SPECIAL_NAMES:
+            if record.get("folder_status") == "active" and str(record.get("folder", "")) not in SPECIAL_FOLDER_NAMES:
                 record["folder_status"] = "folder_deleted"
         if _record_without_timestamp(record) != previous_records.get(key):
             record["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -223,7 +222,7 @@ def record_manual_move(
         files[relative] = {
             "status": "manual_deleted",
             "source_path": normalized,
-            "deleted_path": f"delete/manual/{normalized}",
+            "deleted_path": f"{MANUAL_DELETE_RELATIVE.as_posix()}/{normalized}",
             "reason": reason,
             "recorded_at": now,
         }
@@ -594,7 +593,7 @@ def sync_pipeline_state_from_lineage(data_root: Path | str, state: object) -> ob
 def has_active_source_folders(data_root: Path | str, date_name: str) -> bool:
     """判断日期下是否仍有普通源文件夹，排除小球和派生目录。"""
     date_dir = Path(data_root).resolve() / str(date_name)
-    excluded = SPECIAL_NAMES
+    excluded = SPECIAL_FOLDER_NAMES
     if not date_dir.is_dir():
         return False
     return any(
@@ -617,7 +616,7 @@ def remove_source_folder(
     if len(parts) != 2:
         raise ValueError("source_id 必须是 日期/文件夹")
     date_name, folder_name = parts
-    if len(date_name) != 8 or not date_name.isascii() or not date_name.isdigit() or not folder_name or folder_name in SPECIAL_NAMES or folder_name in {".", ".."}:
+    if len(date_name) != 8 or not date_name.isascii() or not date_name.isdigit() or not folder_name or folder_name in SPECIAL_FOLDER_NAMES or folder_name in {".", ".."}:
         raise ValueError("source_id 必须是 日期/文件夹")
     source = root / date_name / folder_name
     manual = root / MANUAL_DELETE_RELATIVE / date_name / folder_name

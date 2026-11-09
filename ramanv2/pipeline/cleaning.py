@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from ramanv2.common.arc_data import iter_arc_data_paths
-from ramanv2.common.naming import PIPELINE_RESERVED_FOLDER_NAMES, build_natural_key
+from ramanv2.common.naming import (
+    BEAD_FOLDER_NAME,
+    DATE_PATTERN,
+    MANUAL_DELETE_RELATIVE,
+    PIPELINE_RESERVED_FOLDER_NAMES,
+    build_natural_key,
+)
 from ramanv2.common.file_ops import (
     move_files,
     preserve_paths,
@@ -24,9 +29,8 @@ from ramanv2.records.lineage import (
 from ramanv2.pipeline.state import COMMIT_LOG_NAME, CleaningState, PipelineState, invalidate_downstream, write_pipeline_state
 
 
-DATE_PATTERN = re.compile(r"^\d{8}$")
+# 清洗扫描只跳过流水线目录，保留小球供日期级审核。
 SPECIAL_FOLDER_NAMES = PIPELINE_RESERVED_FOLDER_NAMES
-BEAD_FOLDER_NAME = "小球"
 
 
 @dataclass(frozen=True)
@@ -293,7 +297,7 @@ def commit_paths(
 ) -> CommitResult:
     """把指定光谱移入可恢复目录，并立刻保存状态和提交日志。"""
     root = Path(root_dir).resolve()
-    target_root = root / "delete" / "manual"
+    target_root = root / MANUAL_DELETE_RELATIVE
     normalized = sorted({str(path).replace("\\\\", "/") for path in paths})
     moved, missing, moves = [], [], {}
     purged: list[str] = []
@@ -368,7 +372,7 @@ def commit_folder_items(
     root = Path(root_dir).resolve()
     working = PipelineState.from_payload(state.to_payload())
     source = root / folder.date_name / folder.folder_name
-    manual = root / "delete" / "manual" / folder.date_name / folder.folder_name
+    manual = root / MANUAL_DELETE_RELATIVE / folder.date_name / folder.folder_name
     archive = root / "delete" / "folder_delete" / folder.date_name / folder.folder_name
     if any(not path.resolve().is_relative_to(root) for path in (source, manual, archive)):
         raise ValueError("删除路径超出 cosmic 目录")

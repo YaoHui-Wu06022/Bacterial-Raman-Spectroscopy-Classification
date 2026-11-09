@@ -13,6 +13,7 @@ from sklearn.metrics import classification_report, confusion_matrix
 
 from ramanv2.common.file_ops import write_json
 from ramanv2.common.metrics import compute_classification_metrics
+from ramanv2.core.run_context import CONFUSION_MATRIX_FILE_NAME, METRICS_FILE_NAME
 from ramanv2.common.plotting import (
     configure_matplotlib_fonts,
     resolve_confusion_matrix_figsize,
@@ -127,7 +128,7 @@ def _write_classification_outputs(
     )
     matrix = confusion_matrix(label_values, prediction_values, labels=class_ids)
     pd.DataFrame(matrix, index=class_names, columns=class_names).to_csv(result_dir / matrix_name)
-    _write_confusion_matrix(result_dir / "confusion_matrix.png", matrix, class_names)
+    _write_confusion_matrix(result_dir / CONFUSION_MATRIX_FILE_NAME, matrix, class_names)
     if sample_name is not None:
         pd.DataFrame(
             {"path": list(paths), "label_true": label_values, "label_pred": prediction_values}
@@ -164,7 +165,7 @@ def _write_metrics_json(
         "classes": classes,
         "matrix": matrix.astype(int).tolist(),
     }
-    write_json(result_dir / "metrics.json", values)
+    write_json(result_dir / METRICS_FILE_NAME, values)
 
 
 def _format_report(report: dict, class_names: Sequence[str], metrics: dict[str, float]) -> str:

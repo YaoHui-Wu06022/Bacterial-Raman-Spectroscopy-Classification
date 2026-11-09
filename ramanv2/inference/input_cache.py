@@ -132,6 +132,7 @@ def build_test_cache(
             }
         manifest = {
             "version": CACHE_VERSION,
+            "dataset_id": predictor.dataset_id,
             "profile_id": predictor.profile_id,
             "input_config": _json_ready(asdict(predictor.input_config)),
             "wavenumber_range": [
@@ -154,6 +155,7 @@ def build_test_cache(
     return {
         "status": "ready",
         "cache_root": str(cache),
+        "dataset_id": predictor.dataset_id,
         "profile_id": predictor.profile_id,
         "folder_names": selected,
         "file_count": file_count,
@@ -173,6 +175,8 @@ def load_test_cache(
     cache = Path(cache_root).resolve()
     manifest = _read_manifest(cache / MANIFEST_NAME)
     expected_signature = _input_signature(predictor)
+    if manifest.get("dataset_id") != predictor.dataset_id:
+        raise ValueError("测试缓存数据集与实验不一致")
     if manifest.get("profile_id") != predictor.profile_id:
         raise ValueError("测试缓存 Profile 与实验不一致")
     folders = manifest.get("folders", {})

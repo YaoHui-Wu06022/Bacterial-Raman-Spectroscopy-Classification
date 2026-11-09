@@ -1,6 +1,10 @@
-"""UI 页面共用的数值展示格式。"""
+"""UI 页面共用的数值与路径展示格式。"""
 
 from __future__ import annotations
+
+from pathlib import Path
+
+from ramanv2.common.paths import safe_relative_to
 
 
 def format_ratio(value: object, fallback: str) -> str:
@@ -20,4 +24,9 @@ def progress_ratio(done: int, total: int) -> float:
     return min(max(done / total, 0.0), 1.0)
 
 
-__all__ = ["format_ratio", "progress_ratio"]
+def relative_label(path: Path | str, base: Path | str) -> str:
+    """优先显示相对路径；跨盘或越界时回退为绝对路径。"""
+    relative = safe_relative_to(path, base)
+    if relative is None:
+        return str(Path(path).resolve())
+    return str(relative)

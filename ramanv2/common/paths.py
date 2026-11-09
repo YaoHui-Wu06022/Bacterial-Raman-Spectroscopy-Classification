@@ -38,11 +38,6 @@ def safe_relative_to(path: Path | str, parent: Path | str) -> Path | None:
         return None
 
 
-def is_relative_to(path: Path | str, parent: Path | str) -> bool:
-    """以布尔形式判断路径是否位于父目录内。"""
-    return safe_relative_to(path, parent) is not None
-
-
 def find_ancestor_dir(start_path: Path | str, marker_name: str) -> Path:
     """从路径自身向上查找包含指定标记文件或目录的祖先目录。"""
     start = Path(start_path).resolve()

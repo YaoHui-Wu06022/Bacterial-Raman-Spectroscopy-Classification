@@ -12,14 +12,16 @@ from typing import Any, Mapping
 from ramanv2.common.hierarchy import LABEL_SCHEMA
 
 
-DEFAULT_BAD_BANDS = ((900.0, 940.0),)
+DEFAULT_BAD_BANDS: tuple[tuple[float, float], ...] = ()
 
 
 @dataclass(frozen=True)
 class DatasetConfig:
-    """常规数据集的 profile 标识。实际目录由 data.profiles 解析。"""
+    """数据集标识与 profile；空 dataset_id 表示使用数据集目录的默认项。"""
 
-    profile_id: str = "GN"
+    dataset_id: str = ""
+    profile_id: str = ""
+    label_schema: str = LABEL_SCHEMA
 
 
 @dataclass(frozen=True)
@@ -163,10 +165,10 @@ class Config:
     analysis: AnalysisConfig = AnalysisConfig()
 
     def to_shared_dict(self) -> dict[str, Any]:
-        """导出实验根共享的 profile 与输入快照。"""
+        """导出实验根共享的数据集、profile 与输入快照。"""
         data = _yaml_ready(asdict(self.dataset) | asdict(self.input))
         data["dataset_name"] = data.pop("profile_id")
-        data["label_schema"] = LABEL_SCHEMA
+        data["label_schema"] = self.dataset.label_schema
         return data
 
     def to_model_dict(self) -> dict[str, Any]:
@@ -187,6 +189,9 @@ def build_config(values: Mapping[str, Any] | None = None) -> Config:
     source = dict(values or {})
     if "profile_id" not in source and "dataset_name" in source:
         source["profile_id"] = source["dataset_name"]
+    # 旧快照没有 dataset_id；留空后由 dataset 配置的默认数据集解析。
+    if "dataset_id" not in source:
+        source["dataset_id"] = ""
     if "scheduler_t_max" not in source and "scheduler_Tmax" in source:
         source["scheduler_t_max"] = source["scheduler_Tmax"]
     return Config(

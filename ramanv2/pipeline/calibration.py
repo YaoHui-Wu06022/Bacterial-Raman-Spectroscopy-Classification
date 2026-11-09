@@ -5,12 +5,20 @@ from __future__ import annotations
 import math
 import shutil
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ramanv2.common import file_ops
 from ramanv2.common.arc_data import count_arc_data, has_arc_data
-from ramanv2.common.file_ops import create_temporary_path, preserve_paths, publish_directory
-from ramanv2.common.naming import NON_TRAINING_FOLDER_NAMES, PIPELINE_RESERVED_FOLDER_NAMES, build_natural_key
+from ramanv2.common.file_ops import create_temporary_path, preserve_paths, publish_directory, write_json
+from ramanv2.common.naming import (
+    BEAD_FOLDER_NAME,
+    CANONICAL_FOLDER_PATTERN,
+    FOLDER_DELETE_RELATIVE,
+    MANUAL_DELETE_RELATIVE,
+    SPECIAL_FOLDER_NAMES,
+    build_natural_key,
+)
 from ramanv2.data.calibration.affine import (
     analyze_date,
     apply_folder_affine_compensation,
@@ -20,14 +28,11 @@ from ramanv2.data.calibration.affine import (
     load_calibration_report,
 )
 from ramanv2.records.lineage import lineage_path, load_folder_lineage, write_folder_lineage, record_affine_approval, record_output_path
-from ramanv2.data.builders.init import CANONICAL_FOLDER_PATTERN, build_test_folder, build_spectrum_folder
+from ramanv2.data.builders.init import build_test_folder, build_spectrum_folder
 from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.data.plots.prefix import build_prefix_plots_for_groups
 from ramanv2.data.profiles import TEST_ROOT_NAME
 from ramanv2.pipeline.state import PipelineState, invalidate_downstream, write_pipeline_state
-
-
-EXCLUDED_FOLDER_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
 
 
 def run_affine_calibration(
@@ -53,7 +58,7 @@ def run_affine_calibration(
                 reports.append({**report, **rebuilt, "status": "manual_approved", "reused": True})
                 continue
             date_dir = source / date_name
-            if not ready and not has_arc_data(date_dir / "小球"):
+            if not ready and not has_arc_data(date_dir / BEAD_FOLDER_NAME):
                 reports.append({"date": date_name, "status": "skipped", "error": "缺少小球光谱"})
                 continue
             with preserve_paths([output / date_name, lineage_path(source)]):
@@ -119,7 +124,7 @@ def run_folder_offset(
     if len(date_name) != 8 or not date_name.isascii() or not date_name.isdigit() or not folder_name or folder_name in {".", ".."} or "\\" in folder_name:
         raise ValueError("无效的源文件夹")
     root = data_root.resolve()
-    folders = [root / date_name / folder_name, root / "delete" / "manual" / date_name / folder_name, root / "delete" / "folder_delete" / date_name / folder_name]
+    folders = [root / date_name / folder_name, root / MANUAL_DELETE_RELATIVE / date_name / folder_name, root / FOLDER_DELETE_RELATIVE / date_name / folder_name]
     if any(not path.resolve().is_relative_to(root) for path in folders):
         raise ValueError("平移目标超出 cosmic 目录")
     completed = state.affine_completed_dates
@@ -222,6 +227,100 @@ def load_date_affine_parameters(shift_root: Path | str, date_name: str) -> tuple
     return scale, offset
 
 
+def run_identity_affine(
+    source_root: Path | str,
+    date_names: list[str] | tuple[str, ...] | set[str],
+    output_root: Path | str,
+) -> list[dict[str, object]]:
+    """无小球数据集：发布 scale=1/offset=0 的已确认报告，并按字节复制 shift。"""
+    source = Path(source_root).resolve()
+    output = Path(output_root).resolve()
+    reports = []
+    for date_name in sorted(set(str(name) for name in date_names), key=build_natural_key):
+        temporary = None
+        try:
+            if len(date_name) != 8 or not date_name.isascii() or not date_name.isdigit():
+                raise ValueError("日期必须是八位数字")
+            source_date = (source / date_name).resolve()
+            target = (output / date_name).resolve()
+            if source_date.parent != source or target.parent != output:
+                raise ValueError("日期目录超出数据根目录")
+            if not source_date.is_dir() or not has_arc_data(source_date, recursive=True):
+                raise FileNotFoundError(f"cosmic 日期不存在或没有光谱：{date_name}")
+            temporary = create_temporary_path(target)
+            temporary.mkdir()
+            count = _copy_identity_date(source_date, temporary)
+            shift_dir = temporary / "shift"
+            shift_dir.mkdir()
+            approved_at = datetime.now(timezone.utc).isoformat()
+            write_json(
+                shift_dir / "affine.json",
+                {
+                    "status": "manual_approved",
+                    "mode": "identity",
+                    "manual_approval_enable": True,
+                    "date": date_name,
+                    "formula": "corrected_wavenumber = raw_wavenumber",
+                    "scale": 1.0,
+                    "offset": 0.0,
+                    "spectrum_count": count,
+                    "note": "该数据集没有小球，使用 identity 校准",
+                    "approved_at": approved_at,
+                    "errors": [],
+                },
+            )
+            folders = sorted(
+                path.name for path in temporary.iterdir() if path.is_dir() and path.name != "shift"
+            )
+            with file_ops.preserve_paths([target, lineage_path(source)]):
+                publish_directory(temporary, target)
+                record_affine_approval(
+                    source,
+                    date_name,
+                    approved_at,
+                    1.0,
+                    0.0,
+                    shift_dir=target,
+                )
+            reports.append(
+                {
+                    "date": date_name,
+                    "status": "manual_approved",
+                    "mode": "identity",
+                    "scale": 1.0,
+                    "offset": 0.0,
+                    "spectrum_count": count,
+                    "folders": folders,
+                }
+            )
+        except (OSError, RuntimeError, ValueError, TypeError) as error:
+            reports.append({"date": date_name, "status": "error", "error": str(error)})
+        finally:
+            if temporary is not None and temporary.exists():
+                shutil.rmtree(temporary)
+    return reports
+
+
+def _copy_identity_date(source_date: Path, temporary_date: Path) -> int:
+    """按原字节复制日期内所有普通文件，跳过校准球与流水线保留目录。"""
+    count = 0
+    for source in sorted(
+        source_date.rglob("*"),
+        key=lambda path: build_natural_key(str(path.relative_to(source_date))),
+    ):
+        relative = source.relative_to(source_date)
+        if any(part in SPECIAL_FOLDER_NAMES or part.startswith(".") for part in relative.parts):
+            continue
+        target = temporary_date / relative
+        if source.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        count += 1
+    return count
+
+
 def rebuild_shift_data(
     data_root: Path | str,
     shift_root: Path | str,
@@ -267,7 +366,7 @@ def rebuild_shift_folder(data_root: Path, shift_root: Path, date_name: str, fold
     parameters = load_date_affine_parameters(shift_root, date_name)
     if parameters is None:
         raise ValueError("缺少已确认的仿射参数")
-    if not folder_name or folder_name in EXCLUDED_FOLDER_NAMES or folder_name in {".", ".."} or Path(folder_name).name != folder_name or "/" in folder_name or "\\" in folder_name:
+    if not folder_name or folder_name in SPECIAL_FOLDER_NAMES or folder_name in {".", ".."} or Path(folder_name).name != folder_name or "/" in folder_name or "\\" in folder_name:
         raise ValueError("无效的源文件夹")
     cosmic = data_root.resolve()
     output = shift_root.resolve()
@@ -293,7 +392,6 @@ def rebuild_shift_folder(data_root: Path, shift_root: Path, date_name: str, fold
 
 
 __all__ = [
-    "EXCLUDED_FOLDER_NAMES",
     "load_date_affine_parameters",
     "rebuild_shift_data",
     "rebuild_shift_folder",

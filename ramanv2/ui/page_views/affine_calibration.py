@@ -8,15 +8,28 @@ from pathlib import Path
 import streamlit as st
 
 from ramanv2.common.arc_data import count_arc_data, has_arc_data
-from ramanv2.pipeline.calibration import rebuild_shift_data, run_affine_calibration, run_date_rebuild
+from ramanv2.common.naming import BEAD_FOLDER_NAME, MANUAL_DELETE_RELATIVE
+from ramanv2.pipeline.calibration import (
+    rebuild_shift_data,
+    run_affine_calibration,
+    run_date_rebuild,
+    run_identity_affine,
+)
 from ramanv2.pipeline.cleaning import commit_date_items, reconcile_cleaning_records, scan_review_folders
 from ramanv2.pipeline.state import invalidate_downstream
 from ramanv2.records.lineage import has_active_source_folders, lineage_path, load_folder_lineage
+from ramanv2.ui.formatting import progress_ratio
 from ramanv2.ui.read_cache import cached_calibration_reports
 from ramanv2.ui.page_context import PageContext
 from ramanv2.ui.page_state import (
+    INVALIDATE_CLEANING_AFFINE_DATASET,
+    INVALIDATE_CLEANING_DATASET,
+    UI_ACTION_ERRORS,
     invalidate_ui_cache,
     load_page_state,
+    render_action_error,
+    render_flash,
+    set_flash,
     write_page_state,
 )
 
@@ -101,7 +114,7 @@ def _collect_source_date_names(data_root: Path) -> set[str]:
     names: set[str] = set()
     for base in (
         data_root,
-        data_root / "delete" / "manual",
+        data_root / MANUAL_DELETE_RELATIVE,
         data_root / "delete" / "folder_delete",
     ):
         if not base.is_dir():
@@ -174,12 +187,7 @@ def _collect_folder_changes(data_root: str, lineage_modified_ns: int) -> list[di
 def _render_date_rebuild_section(context: PageContext, state) -> None:
     """按日期复用已有参数，只更新对应 shift 数据。"""
     with st.expander("按日期更新", expanded=False):
-        message = st.session_state.pop("affine_date_rebuild_message", None)
-        if message:
-            st.success(message)
-        failure_message = st.session_state.pop("affine_date_rebuild_failure", None)
-        if failure_message:
-            st.error(failure_message)
+        render_flash("affine_date_rebuild")
         lineage_file = lineage_path(context.data_root)
         changes = _collect_folder_changes(
             str(context.data_root.resolve()),
@@ -236,33 +244,41 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
                 progress = st.progress(0.0, text=f"0/{total}")
                 for index, date_name in enumerate(update_targets, start=1):
                     progress.progress(
-                        (index - 1) / total,
+                        progress_ratio(index - 1, total),
                         text=f"[{index}/{total}] 正在更新 {date_name}…",
                     )
                     try:
                         result = run_date_rebuild(
                             context.data_root, context.shift_root, state, context.state_file, date_name
                         )
-                    except (OSError, ValueError, RuntimeError, TypeError) as error:
+                    except UI_ACTION_ERRORS as error:
                         failures.append(f"{date_name}：{error}")
                         status.write(f"{date_name} 更新失败：{error}")
-                        progress.progress(index / total, text=f"[{index}/{total}] {date_name} 失败")
+                        progress.progress(
+                            progress_ratio(index, total),
+                            text=f"[{index}/{total}] {date_name} 失败",
+                        )
                         continue
                     count = int(result.get("spectrum_count", 0) or 0)
                     rebuilt_dates.append(date_name)
                     spectrum_total += count
                     progress.progress(
-                        index / total,
+                        progress_ratio(index, total),
                         text=f"[{index}/{total}] {date_name} 完成（{count} 条光谱）",
                     )
                 status.update(label=f"已处理 {total} 个日期", state="complete", expanded=False)
-            invalidate_ui_cache("cleaning", "affine", "dataset")
-            st.session_state["affine_date_rebuild_message"] = (
+            invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
+            set_flash(
+                "affine_date_rebuild",
                 f"已更新 {len(rebuilt_dates)} 个日期的 shift_data（{spectrum_total} 条光谱）。"
-                "init/init_test 可到「数据集获取」页按日期更新。"
+                "init/init_test 可到「数据集获取」页按日期更新。",
             )
             if failures:
-                st.session_state["affine_date_rebuild_failure"] = "以下日期更新失败：" + "；".join(failures)
+                set_flash(
+                    "affine_date_rebuild",
+                    "以下日期更新失败：" + "；".join(failures),
+                    kind="error",
+                )
             st.rerun()
         selected = st.selectbox("选择更新日期", dates, key="affine_rebuild_date")
         if not st.button("更新所选日期", key="affine_rebuild_date_confirm", width="stretch"):
@@ -270,15 +286,105 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
         try:
             with st.spinner(f"正在更新 {selected} 的 shift_data……"):
                 result = run_date_rebuild(context.data_root, context.shift_root, state, context.state_file, selected)
-            invalidate_ui_cache("cleaning", "affine", "dataset")
-            st.session_state["affine_date_rebuild_message"] = f"{selected} 的 shift_data 已更新（{result['spectrum_count']} 条光谱）。init/init_test 可到「数据集获取」页按日期更新。"
+            invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
+            set_flash(
+                "affine_date_rebuild",
+                f"{selected} 的 shift_data 已更新（{result['spectrum_count']} 条光谱）。"
+                "init/init_test 可到「数据集获取」页按日期更新。",
+            )
             st.rerun()
-        except (OSError, ValueError, RuntimeError, TypeError) as error:
-            st.error(f"日期更新失败：{error}")
+        except UI_ACTION_ERRORS as error:
+            render_action_error("日期更新", error)
+
+
+def _render_identity_affine_page(context: PageContext, state) -> None:
+    """无小球数据集的 identity 校准页：直接按字节复制并发布 scale=1/offset=0。"""
+    st.title("仿射校准")
+    if reconcile_cleaning_records(context.data_root, state.cleaning):
+        write_page_state(context, state)
+    cleaned_dates = sorted(state.cleaning.completed_date_names)
+    if not cleaned_dates and context.data_root.is_dir():
+        cleaned_dates = sorted(
+            path.name for path in context.data_root.iterdir() if path.is_dir()
+        )
+    eligible_dates = [
+        date_name for date_name in cleaned_dates
+        if has_active_source_folders(context.data_root, date_name)
+    ]
+    reports = cached_calibration_reports(
+        str(context.shift_root.resolve()),
+        _report_fingerprint(context.shift_root, eligible_dates),
+    )
+    approved = {
+        date_name
+        for date_name, report in reports.items()
+        if report is not None and report.get("status") == "manual_approved"
+    }
+    pending = [date_name for date_name in eligible_dates if date_name not in approved]
+
+    metrics = st.columns(3)
+    metrics[0].metric("可选日期", f"{len(eligible_dates)} 个")
+    metrics[1].metric("已发布", f"{len(approved)} 个")
+    metrics[2].metric("待发布", f"{len(pending)} 个")
+
+    render_flash("affine_identity")
+    if st.button(
+        "发布 identity 校准并重建 shift",
+        type="primary",
+        disabled=not eligible_dates,
+        width="stretch",
+    ):
+        with st.spinner("正在复制 cosmic 光谱并发布 identity 校准……"):
+            results = run_identity_affine(context.data_root, eligible_dates, context.shift_root)
+        changed = [
+            str(result["date"])
+            for result in results
+            if result.get("status") == "manual_approved"
+        ]
+        failed = [
+            f"{result['date']}: {result.get('error')}"
+            for result in results
+            if result.get("status") == "error"
+        ]
+        for date_name in changed:
+            state.affine_completed_dates.add(date_name)
+        if changed:
+            invalidate_downstream(state, changed)
+        invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
+        write_page_state(context, state)
+        set_flash(
+            "affine_identity",
+            f"已发布 {len(changed)} 个日期的 identity 校准"
+            + (f"；失败 {len(failed)} 个：{'; '.join(failed)}" if failed else ""),
+        )
+        st.rerun()
+
+    if not eligible_dates:
+        st.info("当前没有可校准的日期。")
+        return
+    rows = [
+        {
+            "日期": date_name,
+            "状态": (reports[date_name] or {}).get("status", "待发布"),
+            "scale": (reports[date_name] or {}).get("scale", 1.0),
+            "offset": (reports[date_name] or {}).get("offset", 0.0),
+            "光谱数": (reports[date_name] or {}).get("spectrum_count", "-"),
+        }
+        for date_name in eligible_dates
+    ]
+    st.dataframe(rows, hide_index=True, width="stretch")
 
 
 def render_affine_calibration_page(context: PageContext) -> None:
     state = load_page_state(context)
+    has_bead = any(
+        has_arc_data(date_dir / BEAD_FOLDER_NAME, recursive=True)
+        for date_dir in context.data_root.iterdir()
+        if date_dir.is_dir()
+    ) if context.data_root.is_dir() else False
+    if not has_bead:
+        _render_identity_affine_page(context, state)
+        return
     if reconcile_cleaning_records(context.data_root, state.cleaning):
         write_page_state(context, state)
     cleaned_dates = sorted(state.cleaning.completed_date_names)
@@ -289,7 +395,10 @@ def render_affine_calibration_page(context: PageContext) -> None:
     eligible_dates = [
         date_name for date_name in cleaned_dates
         if has_active_source_folders(context.data_root, date_name)
-        and (all_reports.get(date_name) is not None or has_arc_data(context.data_root / date_name / "小球"))
+        and (
+            all_reports.get(date_name) is not None
+            or has_arc_data(context.data_root / date_name / BEAD_FOLDER_NAME)
+        )
     ]
     reports = {date_name: all_reports.get(date_name) for date_name in eligible_dates}
     report_affine_dates = {
@@ -316,14 +425,6 @@ def render_affine_calibration_page(context: PageContext) -> None:
     pending_dates = sorted((set(eligible_dates) - set(affine_dates)) | set(failed_dates))
 
     st.title("仿射校准")
-    st.caption("校准处理清洗完成的日期；缺少参数时计算小球，已有合格参数直接复用；完成后直接建立 init。")
-    st.caption(
-        "一键分析并校准 = 从 cosmic_data 重建 shift_data：没有仿射参数的日期先分析小球算参数，"
-        "已有参数的日期直接复用、不重算；两者都会重建该日期的 shift 派生谱，随后可直接建立 init。"
-    )
-    st.caption(
-        f"本次将复用参数重建 {len(affine_dates)} 个已校准日期，分析 {len(pending_affine)} 个待校准日期。"
-    )
     metrics = st.columns(3)
     metrics[0].metric("清洗完成日期", f"{len(cleaned_dates)} 个")
     metrics[1].metric("可校准日期", f"{len(eligible_dates)} 个")
@@ -352,7 +453,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
         changed_dates = rebuilt_dates | {str(report["date"]) for report in reports["calibration"] if report.get("status") == "manual_approved" and not report.get("skipped")}
         if changed_dates:
             invalidate_downstream(state, changed_dates)
-        invalidate_ui_cache("dataset", "cleaning", "affine")
+        invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
         write_page_state(context, state)
         st.session_state["affine_analyze_reports"] = reports
         st.rerun()
@@ -370,7 +471,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
     for date_name in pending_dates:
         report = reports.get(date_name)
         status = "待分析" if report is None else str(report.get("status", "unknown"))
-        bead_count = count_arc_data(context.data_root / date_name / "小球")
+        bead_count = count_arc_data(context.data_root / date_name / BEAD_FOLDER_NAME)
         with st.container(border=True):
             columns = st.columns((1.2, 1.0, 1.2, 2.0))
             columns[0].markdown(f"**{date_name}**")
@@ -401,14 +502,19 @@ def render_affine_calibration_page(context: PageContext) -> None:
                             tuple(folders),
                         )
                     state.affine_completed_dates.discard(date_name)
-                    invalidate_ui_cache("cleaning", "dataset")
+                    invalidate_ui_cache(*INVALIDATE_CLEANING_DATASET)
                     write_page_state(context, state)
                     if result.missing_paths:
-                        st.warning(f"有 {len(result.missing_paths)} 条光谱已经不存在，其余数据已移除。")
+                        set_flash(
+                            "affine_date_rebuild",
+                            f"有 {len(result.missing_paths)} 条光谱已经不存在，其余数据已移除。",
+                            kind="warning",
+                        )
                     else:
-                        st.success(f"已移除 {date_name} 的 {len(result.moved_paths)} 条原始光谱（小球谱直接删除，其余进入人工删除目录）。")
+                        set_flash(
+                            "affine_date_rebuild",
+                            f"已移除 {date_name} 的 {len(result.moved_paths)} 条原始光谱"
+                            "（小球谱直接删除，其余进入人工删除目录）。",
+                        )
                     st.rerun()
             _render_images(report)
-
-
-__all__ = ["render_affine_calibration_page"]

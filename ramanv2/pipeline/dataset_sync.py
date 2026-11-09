@@ -16,13 +16,15 @@ from ramanv2.common.arc_data import (
     iter_arc_data_paths,
 )
 from ramanv2.common.naming import (
-    NON_TRAINING_FOLDER_NAMES,
-    PIPELINE_RESERVED_FOLDER_NAMES,
+    CANONICAL_FOLDER_PATTERN,
+    SPECIAL_FOLDER_NAMES,
     build_natural_key,
+    is_date_name,
     parse_folder_prefix,
 )
 from ramanv2.common.file_ops import preserve_paths, publish_file, rename_directory, _remove_path
-from ramanv2.data.builders.init import CANONICAL_FOLDER_PATTERN, build_init_datasets
+from ramanv2.data.builders.init import build_init_datasets
+from ramanv2.data.hierarchy_config import HierarchySpec
 from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.data.count import summarize_dataset
@@ -31,9 +33,6 @@ from ramanv2.data.profiles import TEST_ROOT_NAME
 from ramanv2.records.lineage import lineage_path, load_folder_lineage, write_folder_lineage
 from ramanv2.pipeline.calibration import load_date_affine_parameters
 from ramanv2.pipeline.state import PipelineState, write_pipeline_state
-
-
-SOURCE_RESERVED_NAMES = PIPELINE_RESERVED_FOLDER_NAMES | NON_TRAINING_FOLDER_NAMES
 
 
 def collect_test_return_sources(init_root: Path, state: PipelineState) -> list[str]:
@@ -275,10 +274,6 @@ def _refresh_dataset_counts(
         }
 
 
-def _is_date_name(name: str) -> bool:
-    return len(name) == 8 and name.isascii() and name.isdigit()
-
-
 def _arc_entries(folder: Path, allowed_names: set[str] | None = None) -> tuple[tuple[str, int, int], ...]:
     """按名称、大小和修改时间汇总光谱；用于比较 shift 与已有产物的内容摘要。"""
     if not folder.is_dir():
@@ -301,7 +296,7 @@ def _active_cosmic_folders(data_root: Path, date_name: str) -> dict[str, set[str
     if not date_dir.is_dir():
         return active
     for folder in date_dir.iterdir():
-        if not folder.is_dir() or folder.name in SOURCE_RESERVED_NAMES or folder.name.startswith("."):
+        if not folder.is_dir() or folder.name in SPECIAL_FOLDER_NAMES or folder.name.startswith("."):
             continue
         names = {path.name for path in iter_arc_data_paths(folder)}
         if names:
@@ -365,11 +360,11 @@ def collect_date_update_candidates(
     if shift_root.is_dir():
         date_names |= {
             path.name for path in shift_root.iterdir()
-            if path.is_dir() and _is_date_name(path.name)
+            if path.is_dir() and is_date_name(path.name)
         }
     candidates = []
     for date_name in sorted(date_names, key=build_natural_key):
-        if not _is_date_name(date_name):
+        if not is_date_name(date_name):
             continue
         if (load_calibration_report(shift_root, date_name) or {}).get("status") != "manual_approved":
             continue
@@ -514,6 +509,7 @@ def run_date_dataset_update(
     date_names: list[str] | tuple[str, ...] | set[str],
     selected_test_folders: list[str] | tuple[str, ...] | set[str] = (),
     *,
+    hierarchy: HierarchySpec,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, object]:
     """按日期重建 init/init_test：已有日期沿用原分流，新增日期使用本次选择。"""
@@ -528,7 +524,7 @@ def run_date_dataset_update(
     if not isinstance(report, dict) or not init_root.is_dir():
         raise ValueError("请先生成全量 init")
     for date_name in dates:
-        if not _is_date_name(date_name):
+        if not is_date_name(date_name):
             raise ValueError("日期必须是八位数字")
         if not (shift_root / date_name).is_dir():
             raise FileNotFoundError(f"shift 日期不存在：{date_name}")
@@ -575,6 +571,7 @@ def run_date_dataset_update(
                 date_names=existing_dates,
                 test_root=test_root,
                 selected_test_folders=existing_test_sources,
+                hierarchy=hierarchy,
                 progress_callback=progress_callback,
             )
         )
@@ -590,6 +587,7 @@ def run_date_dataset_update(
                 date_names=new_dates,
                 test_root=test_root,
                 selected_test_folders=sorted(new_selected, key=build_natural_key),
+                hierarchy=hierarchy,
                 progress_callback=progress_callback,
             )
         )
