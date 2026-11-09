@@ -59,6 +59,15 @@ class LossSpec:
 
 
 @dataclass(frozen=True)
+class MixupSpec:
+    """同标签 batch mixup 的开关、触发概率与 Beta 分布参数。"""
+
+    enable: bool
+    probability: float
+    alpha: float
+
+
+@dataclass(frozen=True)
 class TrainingSpec:
     """训练循环与数据划分共用的不可变训练规格。"""
 
@@ -70,6 +79,7 @@ class TrainingSpec:
     validation_loader: LoaderSpec
     optimizer: OptimizerSpec
     loss: LossSpec
+    mixup: MixupSpec
 
 
 @dataclass(frozen=True)
@@ -121,6 +131,11 @@ def build_training_spec(
             ema_difficulty_weight=float(training_config.ema_difficulty_weight),
             early_stop_f1_weight=float(training_config.early_stop_w_f1),
             early_stop_accuracy_weight=float(training_config.early_stop_w_acc),
+        ),
+        mixup=MixupSpec(
+            enable=bool(training_config.use_mixup),
+            probability=float(training_config.p_mixup),
+            alpha=float(training_config.mixup_alpha),
         ),
     )
 

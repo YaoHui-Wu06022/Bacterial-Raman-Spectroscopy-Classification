@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -78,6 +79,13 @@ def _ensure_folder(payload: dict[str, object], date_name: str, folder_name: str)
     return record
 
 
+def _record_without_timestamp(record: dict[str, object]) -> dict[str, object]:
+    """复制记录并去掉 updated_at，供扫描前后比较是否真有内容变化。"""
+    snapshot = copy.deepcopy(record)
+    snapshot.pop("updated_at", None)
+    return snapshot
+
+
 def initialize_folder_lineage(
     data_root: Path | str,
     mapping: object | None = None,
@@ -92,11 +100,17 @@ def initialize_folder_lineage(
     if not root.is_dir():
         raise FileNotFoundError(f"cosmic 数据目录不存在：{root}")
     payload = load_folder_lineage(root)
+    version_changed = payload.get("version") != LINEAGE_VERSION or payload.get("source_root") != str(root)
     payload["version"] = LINEAGE_VERSION
     payload["source_root"] = str(root)
     folders = payload.setdefault("folders", {})
     if not isinstance(folders, dict):
         raise ValueError("folder_lineage.json.folders 必须是对象")
+    previous_records = {
+        key: _record_without_timestamp(record)
+        for key, record in folders.items()
+        if isinstance(record, dict)
+    }
 
     prefix_to_genus: dict[str, str] = {}
     if mapping is not None and hasattr(mapping, "genera"):
@@ -161,6 +175,7 @@ def initialize_folder_lineage(
     scan_base(root / MANUAL_DELETE_RELATIVE, "manual_deleted", imported=True)
     scan_base(root / FOLDER_DELETE_RELATIVE, "folder_deleted", imported=True)
 
+    changed = version_changed
     for key, record in folders.items():
         if not isinstance(record, dict):
             continue
@@ -174,13 +189,15 @@ def initialize_folder_lineage(
             record["deleted_file_count"] = deleted_count
         if key not in discovered:
             # 小球与派生目录本就不参与扫描，不能被"未发现即整夹删除"误判。
-            # 小球与派生目录本就不参与扫描，不能被"未发现即整夹删除"误判。
             if record.get("folder_status") == "active" and str(record.get("folder", "")) not in SPECIAL_NAMES:
                 record["folder_status"] = "folder_deleted"
-        record["updated_at"] = datetime.now(timezone.utc).isoformat()
+        if _record_without_timestamp(record) != previous_records.get(key):
+            record["updated_at"] = datetime.now(timezone.utc).isoformat()
+            changed = True
 
-    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-    write_folder_lineage(root, payload)
+    if changed:
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        write_folder_lineage(root, payload)
     return payload
 
 
@@ -509,6 +526,36 @@ def _record_has_data(root: Path, record: dict[str, object]) -> bool:
     return (root / date_name / folder_name).is_dir()
 
 
+def clear_test_routes(
+    data_root: Path | str,
+    source_ids: list[str] | tuple[str, ...] | set[str],
+) -> dict[str, object]:
+    """清除指定文件夹的 test 分流，保留已有 init 产物。"""
+    payload = load_folder_lineage(data_root)
+    folders = payload.get("folders", {})
+    if not isinstance(folders, dict):
+        return {"cleared": [], "count": 0}
+    now = datetime.now(timezone.utc).isoformat()
+    cleared = []
+    for source_id in sorted(set(str(value) for value in source_ids)):
+        record = folders.get(source_id)
+        if not isinstance(record, dict):
+            continue
+        outputs = record.get("outputs")
+        if not isinstance(outputs, dict) or not outputs.get("test"):
+            continue
+        outputs["test"] = None
+        record.setdefault("history", []).append(
+            {"operation": "test_route_cleared", "recorded_at": now}
+        )
+        record["updated_at"] = now
+        cleared.append(source_id)
+    if cleared:
+        payload["updated_at"] = now
+        write_folder_lineage(data_root, payload)
+    return {"cleared": cleared, "count": len(cleared)}
+
+
 def sync_pipeline_state_from_lineage(data_root: Path | str, state: object) -> object:
     """只从已有走向文件刷新日期摘要，并按磁盘排除已彻底消失的来源。"""
     root = Path(data_root).resolve()
@@ -649,6 +696,7 @@ __all__ = [
     "ANALYSIS_DELETE_RELATIVE",
     "FOLDER_DELETE_RELATIVE",
     "apply_output_path",
+    "clear_test_routes",
     "has_active_source_folders",
     "initialize_folder_lineage",
     "lineage_path",

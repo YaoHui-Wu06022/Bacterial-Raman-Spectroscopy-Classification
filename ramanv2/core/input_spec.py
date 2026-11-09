@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ramanv2.core.config import InputConfig
-from ramanv2.spectra.axis import build_wn_ref, expected_wavenumbers
+from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.bad_bands import build_valid_mask
 
 
@@ -26,8 +26,6 @@ class InputSpec:
     d1_window: int = 15
     step_cm: float = 1.0
     segment_bounds: tuple[tuple[int, int], ...] = ()
-    # 紧凑输入对应的真实波数轴，供增强按 cm^-1 定位区域。
-    axis_cm: tuple[float, ...] = ()
 
 
 def build_input_spec(input_config: InputConfig) -> InputSpec:
@@ -48,7 +46,6 @@ def build_input_spec(input_config: InputConfig) -> InputSpec:
         step_cm=(float(input_config.cut_max) - float(input_config.cut_min))
         / (raw_point_count - 1),
         segment_bounds=_resolve_segment_bounds(input_config, point_count),
-        axis_cm=tuple(float(value) for value in expected_wavenumbers(input_config)),
     )
 
 

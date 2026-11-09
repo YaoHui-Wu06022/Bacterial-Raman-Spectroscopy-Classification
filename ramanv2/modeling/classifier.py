@@ -128,7 +128,11 @@ class RamanClassifier1D(nn.Module):
                 activation="gelu",
                 norm_first=True,
             )
-            self.transformer = nn.TransformerEncoder(layer, num_layers=self._encoder_spec.transformer_layers)
+            self.transformer = nn.TransformerEncoder(
+                layer,
+                num_layers=self._encoder_spec.transformer_layers,
+                enable_nested_tensor=False,
+            )
             self.lstm = None
         else:
             self.pos_encoder = None

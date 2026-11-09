@@ -147,6 +147,8 @@ def build_profile_dataset(
     profile_root: Path | str,
     profile_name: str,
     catalog: DatasetMapping,
+    *,
+    allowed_test_targets: set[str] | None = None,
 ) -> dict[str, object]:
     """从全量 init 原子构建一个固定 Profile，并从全局 init_test 派生其测试集。"""
     if profile_name not in catalog.datasets:
@@ -156,6 +158,7 @@ def build_profile_dataset(
         init_root,
         {profile_name: profile_root},
         mapping,
+        allowed_test_targets=allowed_test_targets,
     )
     report["profile"] = profile_name
     report["count"] = summarize_dataset(Path(profile_root).resolve())
@@ -166,6 +169,8 @@ def build_profile_datasets(
     init_root: Path | str,
     profile_roots: dict[str, Path | str],
     mapping: DatasetMapping,
+    *,
+    allowed_test_targets: set[str] | None = None,
 ) -> dict[str, object]:
     """从全量 init 构建各 profile init，并从全局 init_test 派生 profile 测试集。"""
     source_root = Path(init_root).resolve()
@@ -239,6 +244,7 @@ def build_profile_datasets(
                     test_targets[profile_name],
                     profile_name,
                     mapping,
+                    allowed_test_targets=allowed_test_targets,
                 )
                 profiles[profile_name]["test_folder_count"] = test_folder_count
                 profiles[profile_name]["test_files"] = test_files
@@ -289,6 +295,8 @@ def _stage_profile_test_set(
     target_root: Path,
     profile_name: str,
     mapping: DatasetMapping,
+    *,
+    allowed_test_targets: set[str] | None = None,
 ) -> tuple[int, int]:
     """把全局 init_test 中属于该 profile 的文件夹复制到临时测试集目录。"""
     genera = set(mapping.datasets[profile_name])
@@ -306,6 +314,8 @@ def _stage_profile_test_set(
         (path for path in master_test_root.iterdir() if path.is_dir()),
         key=lambda path: build_natural_key(path.name),
     ):
+        if allowed_test_targets is not None and folder.name not in allowed_test_targets:
+            continue
         prefix = parse_folder_prefix(folder.name, uppercase_enable=True)
         if prefix_to_genus.get(prefix) not in genera:
             continue

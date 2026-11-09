@@ -9,9 +9,12 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from ramanv2.common.file_ops import create_temporary_path, publish_file, read_json, write_json
+from ramanv2.data.profiles import PIPELINE_PROFILE_IDS
 
-GRAM_PROFILE_NAMES = {"阴性": "GN", "阳性": "GP", "真菌": "FUNG"}
-REQUIRED_COLUMNS = ("革兰氏", "属英文", "规范种简称")
+# 阴性菌统一归入 GN，阳性菌与真菌分别归入 GP、FUNG。
+GRAM_PROFILE_NAMES = {"阳性": "GP", "真菌": "FUNG"}
+PROFILE_NAMES = tuple(name for name in PIPELINE_PROFILE_IDS if name != "MICRO")
+REQUIRED_COLUMNS = ("革兰氏", "科", "属英文", "规范种简称")
 
 
 @dataclass(frozen=True)
@@ -86,27 +89,36 @@ class DatasetMapping:
                 raise ValueError(f"病原菌分类表缺少列：{missing}")
 
             genera_lists: dict[str, list[str]] = {}
-            genus_grams: dict[str, str] = {}
+            genus_profiles: dict[str, str] = {}
             prefix_owner: dict[str, str] = {}
-            profile_genera: dict[str, set[str]] = {name: set() for name in ("GN", "GP", "FUNG")}
+            profile_genera: dict[str, set[str]] = {name: set() for name in PROFILE_NAMES}
             for row in rows:
                 gram = str(row[positions["革兰氏"]] or "").strip()
+                family = str(row[positions["科"]] or "").strip()
                 genus = str(row[positions["属英文"]] or "").strip()
                 prefix = str(row[positions["规范种简称"]] or "").strip().upper()
-                if not gram and not genus and not prefix:
+                if not gram and not family and not genus and not prefix:
                     continue
-                if gram not in GRAM_PROFILE_NAMES or not genus or not prefix:
+                if gram == "阴性":
+                    if not family:
+                        raise ValueError(f"阴性菌缺少科：{row}")
+                    profile_name = "GN"
+                elif gram in GRAM_PROFILE_NAMES:
+                    profile_name = GRAM_PROFILE_NAMES[gram]
+                else:
                     raise ValueError(f"病原菌分类表存在无效记录：{row}")
-                previous_gram = genus_grams.setdefault(genus, gram)
-                if previous_gram != gram:
-                    raise ValueError(f"属 {genus} 同时出现在多个分类：{previous_gram}、{gram}")
+                if not genus or not prefix:
+                    raise ValueError(f"病原菌分类表存在无效记录：{row}")
+                previous_profile = genus_profiles.setdefault(genus, profile_name)
+                if previous_profile != profile_name:
+                    raise ValueError(f"属 {genus} 同时出现在多个分类：{previous_profile}、{profile_name}")
                 owner = prefix_owner.get(prefix)
                 if owner is not None and owner != genus:
                     raise ValueError(f"规范种简称 {prefix} 同时属于 {owner} 和 {genus}")
                 prefix_owner[prefix] = genus
                 if prefix not in genera_lists.setdefault(genus, []):
                     genera_lists[genus].append(prefix)
-                profile_genera[GRAM_PROFILE_NAMES[gram]].add(genus)
+                profile_genera[profile_name].add(genus)
         finally:
             workbook.close()
 

@@ -30,7 +30,6 @@ class InputConfig:
     cut_min: float = 600.0
     cut_max: float = 1800.0
     target_points: int = 896
-    input_grid_mode: str = "standard"
     bad_bands: tuple[tuple[float, float], ...] = DEFAULT_BAD_BANDS
     # 模型输入通道：原谱始终保留，平滑谱和一阶导由开关额外叠加。
     norm_method: str = "snv"
@@ -112,11 +111,16 @@ class TrainingConfig:
     early_stop_w_f1: float = 0.6
     early_stop_w_acc: float = 0.4
     # 训练集随机增强的触发概率与单样本叠加上限。
-    p_piecewise_gain: float = 0.60
-    p_axis: float = 0.35
-    p_baseline_broad: float = 0.35
-    p_baseline_region: float = 0.20
+    p_piecewise_gain: float = 0.40
+    p_noise: float = 0.55
+    p_axis: float = 0.30
+    p_baseline_weak: float = 0.30
+    p_baseline_strong: float = 0.20
     max_pre_augs: int = 4
+    # 同标签 mixup：每个样本的触发概率与 Beta 分布参数。
+    use_mixup: bool = True
+    p_mixup: float = 0.05
+    mixup_alpha: float = 0.2
 
 
 @dataclass(frozen=True)

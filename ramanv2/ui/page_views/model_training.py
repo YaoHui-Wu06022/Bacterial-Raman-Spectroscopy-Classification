@@ -168,6 +168,22 @@ def _render_config_controls(profile_id: str) -> dict[str, Any]:
         value=training.use_ema,
         key="training_ema",
     )
+    mixup_columns = st.columns([1, 2])
+    mixup_enable = mixup_columns[0].checkbox(
+        "同标签 Mixup",
+        value=training.use_mixup,
+        key="training_mixup",
+    )
+    values["use_mixup"] = mixup_enable
+    values["p_mixup"] = mixup_columns[1].slider(
+        "Mixup 样本概率",
+        0.0,
+        0.30,
+        float(training.p_mixup),
+        0.05,
+        key="training_mixup_p",
+        disabled=not mixup_enable,
+    )
     values["norm_method"] = "snv" if values["norm_method"] == "SNV 标准化" else "none"
     values["backbone_type"] = "cnn" if values["backbone_type"] == "卷积网络" else "direct"
     values["cnn_block_type"] = "resnext" if values["cnn_block_type"] == "ResNeXt" else "resnet"

@@ -26,5 +26,5 @@ def test_difficulty_weights_recompute_from_base_without_compounding() -> None:
     _update_ema_class_weights(criterion, state, spec, epoch=6)
 
     assert torch.allclose(first, expected)
-    # 难度不变时重复更新应保持同一结果；旧实现会在上一轮权重上继续累乘。
+    # 难度不变时重复更新应保持同一结果；累乘实现会在上一轮权重上继续放大。
     assert torch.allclose(criterion.weight, first)

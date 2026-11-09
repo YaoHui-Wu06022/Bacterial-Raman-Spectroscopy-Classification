@@ -23,11 +23,16 @@ BASELINE_INPUT_SMOOTH_WINDOW = 5
 @lru_cache(maxsize=32)
 def _build_baseline_penalty(length: int, lam: float):
     """缓存相同谱长和惩罚系数对应的二阶差分稀疏矩阵。"""
-    difference = sparse.diags([1, -2, 1], [0, 1, 2], shape=(length - 2, length))
+    difference = sparse.diags(
+        [1.0, -2.0, 1.0],
+        [0, 1, 2],
+        shape=(length - 2, length),
+        dtype=np.float64,
+    )
     return (float(lam) * (difference.T @ difference)).tocsc()
 
 
-def asls_baseline(spectrum, lam: float = 8e4, p: float = 0.01, niter: int = 10, valid_mask=None):
+def asls_baseline(spectrum, lam: float = 1e5, p: float = 0.01, niter: int = 10, valid_mask=None):
     """使用 AsLS 估计基线；坏波段可通过掩码完全排除。"""
     length = len(spectrum)
     penalty = _build_baseline_penalty(length, float(lam))
@@ -50,7 +55,7 @@ def asls_baseline(spectrum, lam: float = 8e4, p: float = 0.01, niter: int = 10, 
     return baseline
 
 
-def airpls_baseline(spectrum, lam: float = 8e4, niter: int = 15, valid_mask=None):
+def airpls_baseline(spectrum, lam: float = 1e5, niter: int = 15, valid_mask=None):
     """使用 airPLS 估计基线，迭代提高负残差位置的拟合权重。"""
     values = np.asarray(spectrum, dtype=np.float64)
     length = len(values)
@@ -95,7 +100,7 @@ def airpls_baseline(spectrum, lam: float = 8e4, niter: int = 15, valid_mask=None
 def estimate_baseline(
     spectrum,
     method: str = "asls",
-    lam: float = 8e4,
+    lam: float = 1e5,
     p: float = 0.01,
     niter: int = 15,
     valid_mask=None,

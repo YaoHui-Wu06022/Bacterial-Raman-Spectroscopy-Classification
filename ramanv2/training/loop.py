@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from ramanv2.common.file_ops import write_json
-from ramanv2.training.train_spec import ExecutionSpec, TrainingSpec
+from ramanv2.training.train_spec import ExecutionSpec, MixupSpec, TrainingSpec
 from ramanv2.common.device import resolve_device
 from ramanv2.training.checkpoint import (
     TrainingState,
@@ -318,6 +318,51 @@ def _compute_auxiliary_weights(train_spec: TrainingSpec, epoch: int) -> tuple[fl
     return align_weight * decay, supcon_weight * decay
 
 
+def _apply_same_class_mixup(
+    inputs: torch.Tensor,
+    labels: torch.Tensor,
+    train_task: TrainTask,
+    mixup: MixupSpec,
+) -> torch.Tensor:
+    """在当前 batch 内按当前层标签做同类别 mixup，标签保持不变。"""
+    if (
+        not mixup.enable
+        or mixup.probability <= 0
+        or mixup.alpha <= 0
+        or inputs.size(0) < 2
+    ):
+        return inputs
+    level_labels = _select_training_labels(labels, train_task)
+    if level_labels.ndim != 1:
+        return inputs
+
+    mixed = inputs.clone()
+    any_mixed = False
+    for class_id in torch.unique(level_labels):
+        if int(class_id) < 0:
+            continue
+        group = torch.nonzero(level_labels == class_id, as_tuple=False).flatten()
+        if group.numel() < 2:
+            continue
+        selected = group[torch.rand(group.numel(), device=inputs.device) < mixup.probability]
+        if selected.numel() == 0:
+            continue
+        group_list = group.tolist()
+        group_positions = {index: position for position, index in enumerate(group_list)}
+        partner_indices = []
+        for index in selected.tolist():
+            offset = int(torch.randint(1, len(group_list), (1,)).item())
+            partner_indices.append(group_list[(group_positions[index] + offset) % len(group_list)])
+        partners = torch.tensor(partner_indices, dtype=torch.long, device=inputs.device)
+        lam = torch.distributions.Beta(mixup.alpha, mixup.alpha).sample(
+            (selected.numel(),)
+        ).to(inputs.device)
+        lam = lam.view((selected.numel(),) + (1,) * (inputs.dim() - 1))
+        mixed[selected] = lam * inputs[selected] + (1.0 - lam) * inputs[partners]
+        any_mixed = True
+    return mixed if any_mixed else inputs
+
+
 def _run_train_epoch(
     model: torch.nn.Module,
     train_loader: DataLoader,
@@ -350,6 +395,7 @@ def _run_train_epoch(
     for batch_index, (inputs, labels, sample_paths) in enumerate(loader_iter):
         inputs = inputs.to(device, non_blocking=amp_enable)
         labels = labels.to(device)
+        inputs = _apply_same_class_mixup(inputs, labels, train_task, train_spec.mixup)
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device_type=device.type, enabled=amp_enable):
             logits, embeddings = model(inputs, return_embedding_enable=True)

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import warnings
+
+# 部分镜像的 TBB 版本过旧，numba 会提示 TBB 线程层被禁用；改用内置 workqueue。
+os.environ.setdefault("NUMBA_THREADING_LAYER", "workqueue")
 
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
@@ -48,11 +53,20 @@ def write_train_val_umap(
         ]
     )
     splits = np.asarray([0] * len(arrays[0]) + [1] * len(arrays[1]))
-    points = umap.UMAP(
-        n_neighbors=min(neighbors, max(2, len(splits) - 1)),
-        min_dist=min_dist,
-        random_state=seed,
-    ).fit_transform(np.vstack(arrays))
+    # UMAP 设置 random_state 时会强制单线程并发出提示；这里显式收敛到 1 线程，
+    # 只屏蔽这一条已知提示，不隐藏其它 UMAP 警告。
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"n_jobs value .* overridden to 1 by setting random_state.*",
+            category=UserWarning,
+        )
+        points = umap.UMAP(
+            n_neighbors=min(neighbors, max(2, len(splits) - 1)),
+            min_dist=min_dist,
+            n_jobs=1,
+            random_state=seed,
+        ).fit_transform(np.vstack(arrays))
     _save_split_umap(points, labels, splits, class_names, output_path)
 
 

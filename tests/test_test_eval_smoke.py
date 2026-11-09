@@ -59,9 +59,10 @@ def _build_config():
             "train_loader_num_workers": 0,
             "val_loader_num_workers": 0,
             "p_piecewise_gain": 0.0,
+            "p_noise": 0.0,
             "p_axis": 0.0,
-            "p_baseline_broad": 0.0,
-            "p_baseline_region": 0.0,
+            "p_baseline_weak": 0.0,
+            "p_baseline_strong": 0.0,
         }
     )
 

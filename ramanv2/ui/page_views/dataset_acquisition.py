@@ -27,7 +27,7 @@ from ramanv2.pipeline.dataset_sync import (
     run_init_to_test,
     run_test_to_init,
 )
-from ramanv2.records.lineage import lineage_path
+from ramanv2.records.lineage import clear_test_routes, lineage_path, load_folder_lineage
 from ramanv2.pipeline.supplement import (
     SupplementPlan,
     build_full_init_with_supplements,
@@ -235,6 +235,63 @@ def _cached_date_update_candidates(
     return tuple(collect_date_update_candidates(Path(data_root), Path(shift_root), Path(init_root), report))
 
 
+def _load_stale_test_routes(context: PageContext) -> list[tuple[str, str]]:
+    """找出仍登记为 test、但测试目录已缺失且不在默认名单的文件夹。"""
+    configured = set(_load_configured_default_sources() or [])
+    if not configured:
+        return []
+    folders = load_folder_lineage(context.data_root).get("folders", {})
+    if not isinstance(folders, dict):
+        return []
+    stale: list[tuple[str, str]] = []
+    for source_id, record in folders.items():
+        if not isinstance(record, dict) or source_id in configured:
+            continue
+        outputs = record.get("outputs")
+        test_path = outputs.get("test") if isinstance(outputs, dict) else None
+        if not test_path:
+            continue
+        target = Path(str(test_path))
+        if not target.is_dir() or not has_arc_data(target):
+            stale.append((str(source_id), str(test_path)))
+    return sorted(stale, key=lambda item: build_natural_key(item[0]))
+
+
+def _render_stale_test_routes(context: PageContext) -> None:
+    """清理指向缺失目录的历史 test 分流，避免日期更新永远停在待更新。"""
+    stale = _load_stale_test_routes(context)
+    if not stale:
+        return
+    with st.expander(f"发现 {len(stale)} 个陈旧 test 分流（目录不存在）", expanded=False):
+        st.caption(
+            "这些文件夹仍登记为 init_test，但测试目录已不存在，导致日期检测一直显示待更新。"
+            "清理只改分流记录，不删除 init 数据。"
+        )
+        for source_id, target in stale[:20]:
+            st.write(f"- {source_id} → `{target}`")
+        if len(stale) > 20:
+            st.caption(f"另有 {len(stale) - 20} 个未显示。")
+        confirmed = st.checkbox(
+            "我确认清除这些 test 分流",
+            key="stale_test_route_confirm",
+        )
+        if st.button(
+            "清除陈旧 test 分流",
+            disabled=not confirmed,
+            width="stretch",
+            key="stale_test_route_clear",
+        ):
+            result = clear_test_routes(
+                context.data_root,
+                [source_id for source_id, _target in stale],
+            )
+            invalidate_ui_cache("dataset", "training", "inference", "analysis")
+            st.success(
+                f"已清除 {result['count']} 个 test 分流；init 数据未改动。"
+            )
+            st.rerun()
+
+
 def _render_date_dataset_update(context: PageContext, state, catalog: DatasetMapping | None) -> None:
     """自动检测新增与变化日期，也可手动勾选；只重建所选日期的组。"""
     report = state.dataset_builds.get("full_init")
@@ -281,6 +338,7 @@ def _render_date_dataset_update(context: PageContext, state, catalog: DatasetMap
             hide_index=True,
             width="stretch",
         )
+        _render_stale_test_routes(context)
         detected = [str(item["date"]) for item in candidates if item["status"] in {"new", "changed"}]
         signature = tuple(
             (
@@ -479,7 +537,7 @@ def _list_test_sources(context: PageContext, date_names: list[str]) -> list[str]
 
 
 # 默认选择逻辑版本号，修改逻辑时递增以强制重新初始化
-_TEST_SELECTION_LOGIC_VERSION = 11
+_TEST_SELECTION_LOGIC_VERSION = 15
 
 
 def _load_configured_default_sources() -> list[str] | None:
@@ -713,6 +771,47 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     if not isinstance(profile_reports, dict):
         profile_reports = {}
 
+    full_init_report = state.dataset_builds.get("full_init")
+    full_init_report = full_init_report if isinstance(full_init_report, dict) else {}
+    test_exports = {
+        str(entry["target"]): str(entry["source"])
+        for entry in full_init_report.get("test_exports", [])
+        if isinstance(entry, dict) and entry.get("target") and entry.get("source")
+    }
+    configured_defaults = set(_load_configured_default_sources() or [])
+    prefix_to_genus = {
+        prefix: genus
+        for genus, prefixes in catalog.genera.items()
+        for prefix in prefixes
+    }
+    profile_genera = set(catalog.datasets.get(profile_name, ()))
+    profile_default_sources = {
+        source
+        for source in configured_defaults
+        if prefix_to_genus.get(
+            parse_folder_prefix(source.split("/", 1)[1], uppercase_enable=True)
+        ) in profile_genera
+    }
+    allowed_test_targets = {
+        target
+        for target, source in test_exports.items()
+        if source in profile_default_sources
+    }
+    strict_default_enable = st.checkbox(
+        "测试集严格按默认名单",
+        value=bool(profile_default_sources) and bool(test_exports),
+        disabled=not profile_default_sources or not test_exports,
+        key=f"profile_strict_test_defaults_{profile_name}",
+        help="只复制默认名单中属于当前 Profile 的测试夹，忽略全局 init_test 的历史遗留夹。",
+    )
+    if profile_default_sources and test_exports:
+        st.caption(
+            f"默认名单中属于 {profile_name} 的测试源 {len(profile_default_sources)} 个；"
+            f"严格模式候选 {len(allowed_test_targets)} 个测试夹，忽略历史遗留测试夹。"
+        )
+    elif not profile_default_sources:
+        st.warning(f"默认名单中没有 {profile_name} 的测试源；将保留现有 init_test。")
+
     if st.button(
         "从 init 生成数据集",
         type="primary",
@@ -722,7 +821,15 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         try:
             with st.status(f"正在生成 {profile_name} 数据集…", expanded=True) as status:
                 status.write("正在读取全量 init 并生成 Profile 子集，同时从全局 init_test 派生 Profile 测试集。")
-                report = build_profile_dataset(context.init_root, profile_root, profile_name, catalog)
+                report = build_profile_dataset(
+                    context.init_root,
+                    profile_root,
+                    profile_name,
+                    catalog,
+                    allowed_test_targets=(
+                        allowed_test_targets if strict_default_enable else None
+                    ),
+                )
                 status.update(label=f"{profile_name} 数据集生成完成", state="complete", expanded=False)
             profile_reports[profile_name] = report
             state.dataset_builds["profiles"] = profile_reports

@@ -111,71 +111,96 @@ def _now() -> str:
 
 
 def save_lineage_payload(path: Path | str, payload: dict[str, object]) -> None:
-    """保存完整 lineage 载荷，并同步可查询的文件夹/文件/产物索引。"""
-    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    """保存完整 lineage 载荷，只重建内容有变化的文件夹及其文件/产物索引。"""
+    text = json.dumps(payload, ensure_ascii=False) + "\n"
     with connect(path) as connection:
+        row = connection.execute("SELECT payload_json FROM lineage WHERE id = 1").fetchone()
+        previous_text = str(row["payload_json"]) if row is not None else None
+        if previous_text == text:
+            return
+        previous_folders = _previous_folders(previous_text)
         connection.execute(
             "INSERT INTO lineage(id, payload_json, updated_at) VALUES (1, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json, updated_at=excluded.updated_at",
             (text, _now()),
         )
-        connection.execute("DELETE FROM files")
-        connection.execute("DELETE FROM outputs")
-        connection.execute("DELETE FROM folders")
         folders = payload.get("folders", {})
         if not isinstance(folders, dict):
             return
+        for source_id in set(previous_folders) - set(folders):
+            connection.execute("DELETE FROM folders WHERE source_id = ?", (str(source_id),))
         for source_id, record in folders.items():
-            if not isinstance(record, dict):
+            if not isinstance(record, dict) or previous_folders.get(source_id) == record:
                 continue
-            date_name = str(record.get("date", ""))
-            folder_name = str(record.get("folder", ""))
+            _write_folder_index(connection, str(source_id), record)
+
+
+def _previous_folders(payload_text: str | None) -> dict[str, object]:
+    if payload_text is None:
+        return {}
+    payload = json.loads(payload_text)
+    folders = payload.get("folders", {}) if isinstance(payload, dict) else {}
+    return folders if isinstance(folders, dict) else {}
+
+
+def _write_folder_index(
+    connection: sqlite3.Connection,
+    source_id: str,
+    record: dict[str, object],
+) -> None:
+    """写入单个文件夹的行；保留已存的输入指纹，由 db-check 判断是否过期。"""
+    connection.execute(
+        "INSERT INTO folders(source_id, date, folder, prefix, genus, folder_status, "
+        "active_file_count, deleted_file_count, init_pending, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(source_id) DO UPDATE SET date=excluded.date, folder=excluded.folder, "
+        "prefix=excluded.prefix, genus=excluded.genus, folder_status=excluded.folder_status, "
+        "active_file_count=excluded.active_file_count, deleted_file_count=excluded.deleted_file_count, "
+        "init_pending=excluded.init_pending, updated_at=excluded.updated_at",
+        (
+            source_id,
+            str(record.get("date", "")),
+            str(record.get("folder", "")),
+            str(record.get("prefix", "")),
+            str(record.get("genus", "")),
+            str(record.get("folder_status", "")),
+            int(record.get("active_file_count") or 0),
+            int(record.get("deleted_file_count") or 0),
+            int(bool(record.get("init_pending"))),
+            str(record.get("updated_at") or _now()),
+        ),
+    )
+    connection.execute("DELETE FROM files WHERE source_id = ?", (source_id,))
+    connection.execute("DELETE FROM outputs WHERE source_id = ?", (source_id,))
+    files = record.get("files", {})
+    if isinstance(files, dict):
+        for file_name, entry in files.items():
+            if not isinstance(entry, dict):
+                continue
             connection.execute(
-                "INSERT INTO folders(source_id, date, folder, prefix, genus, folder_status, "
-                "active_file_count, deleted_file_count, init_pending, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO files(source_id, file_name, status, source_path, "
+                "deleted_path, reason, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
-                    str(source_id),
-                    date_name,
-                    folder_name,
-                    str(record.get("prefix", "")),
-                    str(record.get("genus", "")),
-                    str(record.get("folder_status", "")),
-                    int(record.get("active_file_count") or 0),
-                    int(record.get("deleted_file_count") or 0),
-                    int(bool(record.get("init_pending"))),
-                    str(record.get("updated_at") or _now()),
+                    source_id,
+                    str(file_name),
+                    str(entry.get("status", "")),
+                    _none_string(entry.get("source_path")),
+                    _none_string(entry.get("deleted_path")),
+                    _none_string(entry.get("reason")),
+                    _none_string(entry.get("recorded_at")),
                 ),
             )
-            files = record.get("files", {})
-            if isinstance(files, dict):
-                for file_name, entry in files.items():
-                    if not isinstance(entry, dict):
-                        continue
-                    connection.execute(
-                        "INSERT OR REPLACE INTO files(source_id, file_name, status, source_path, "
-                        "deleted_path, reason, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            str(source_id),
-                            str(file_name),
-                            str(entry.get("status", "")),
-                            _none_string(entry.get("source_path")),
-                            _none_string(entry.get("deleted_path")),
-                            _none_string(entry.get("reason")),
-                            _none_string(entry.get("recorded_at")),
-                        ),
-                    )
-            outputs = record.get("outputs", {})
-            if isinstance(outputs, dict):
-                for kind, output_path in outputs.items():
-                    if kind in {"profiles", "prefix_groups"} or output_path is None:
-                        continue
-                    if not isinstance(output_path, (str, Path)):
-                        continue
-                    connection.execute(
-                        "INSERT OR REPLACE INTO outputs(source_id, kind, path) VALUES (?, ?, ?)",
-                        (str(source_id), str(kind), str(output_path)),
-                    )
+    outputs = record.get("outputs", {})
+    if isinstance(outputs, dict):
+        for kind, output_path in outputs.items():
+            if kind in {"profiles", "prefix_groups"} or kind.endswith("_updated_at") or output_path is None:
+                continue
+            if not isinstance(output_path, (str, Path)):
+                continue
+            connection.execute(
+                "INSERT OR REPLACE INTO outputs(source_id, kind, path) VALUES (?, ?, ?)",
+                (source_id, str(kind), str(output_path)),
+            )
 
 
 def load_lineage_payload(path: Path | str) -> dict[str, object] | None:
