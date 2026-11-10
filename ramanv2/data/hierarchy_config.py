@@ -170,10 +170,12 @@ class HierarchySpec:
         return Path(*parts) if parts else Path(".")
 
     def expected_label(self, group_name: str, level_name: str) -> str:
-        """返回测试文件夹在指定层级的预期标签。"""
+        """返回测试文件夹在指定层级的完整类别键。"""
         if level_name not in self.level_names:
             raise ValueError(f"未知层级：{level_name}")
-        return self.resolve_values(group_name)[level_name]
+        values = self.resolve_values(group_name)
+        level_index = self.level_names.index(level_name)
+        return "/".join(values[self.level_names[index]] for index in range(level_index + 1))
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -197,6 +199,14 @@ class HierarchySpec:
             if prefix.startswith(key):
                 return mapping[key]
         return None
+
+
+def resolve_hierarchy_from_meta(meta: Mapping[str, Any]) -> HierarchySpec:
+    """读取实验显式层级；缺失说明实验产物过旧，需要重新训练。"""
+    payload = meta.get("hierarchy")
+    if not isinstance(payload, Mapping):
+        raise ValueError("实验缺少 hierarchy，请用当前版本重新训练")
+    return HierarchySpec.from_payload(payload)
 
 
 def write_hierarchy(path: Path | str, spec: HierarchySpec) -> None:

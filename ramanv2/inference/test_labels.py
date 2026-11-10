@@ -6,42 +6,7 @@ from collections import Counter
 from typing import Any, Mapping
 
 from ramanv2.common.naming import parse_folder_prefix
-from ramanv2.common.hierarchy import normalize_level_name
-from ramanv2.data.hierarchy_config import HierarchySpec
-
-
-def _resolve_hierarchy(meta: Mapping[str, Any]) -> HierarchySpec | None:
-    payload = meta.get("hierarchy")
-    if not isinstance(payload, Mapping):
-        return None
-    try:
-        return HierarchySpec.from_payload(payload)
-    except ValueError:
-        return None
-
-
-def build_expected_label_lookup(
-    meta: Mapping[str, Any],
-    level_name: str,
-) -> dict[str, str]:
-    """从层级类别名构建测试菌前缀到目标层标签的唯一映射。"""
-    prefixes: dict[str, set[str]] = {}
-    target_depth = int(normalize_level_name(level_name).removeprefix("level_"))
-    for source_level, labels in (meta.get("class_names_by_level") or {}).items():
-        if source_level == "leaf":
-            continue
-        for source_label in labels:
-            parts = [part for part in str(source_label).split("/") if part]
-            if len(parts) < target_depth:
-                continue
-            prefix = parse_folder_prefix(parts[-1], uppercase_enable=True)
-            target_label = "/".join(parts[:target_depth])
-            prefixes.setdefault(prefix, set()).add(target_label)
-    return {
-        prefix: next(iter(labels))
-        for prefix, labels in prefixes.items()
-        if len(labels) == 1
-    }
+from ramanv2.data.hierarchy_config import resolve_hierarchy_from_meta
 
 
 def build_test_input_selection(
@@ -51,20 +16,16 @@ def build_test_input_selection(
     class_names: list[str],
 ) -> tuple[set[str], list[dict[str, str | bool]]]:
     """按目标层标签空间筛选可推理的测试文件夹。"""
-    expected_lookup = build_expected_label_lookup(meta, level_name)
-    hierarchy = _resolve_hierarchy(meta)
+    hierarchy = resolve_hierarchy_from_meta(meta)
     model_labels = set(class_names)
     selected_names = set()
     rows = []
     for folder_name in folder_names:
         species_prefix = parse_folder_prefix(folder_name, uppercase_enable=True)
-        if hierarchy is not None:
-            try:
-                expected_label = hierarchy.expected_label(folder_name, level_name)
-            except ValueError:
-                expected_label = None
-        else:
-            expected_label = expected_lookup.get(species_prefix)
+        try:
+            expected_label = hierarchy.expected_label(folder_name, level_name)
+        except ValueError:
+            expected_label = None
         expected_in_model = expected_label in model_labels
         if expected_label is None:
             reason = "unmapped_species_prefix"
@@ -113,24 +74,35 @@ def build_folder_summary(
     class_names: list[str],
     predictions: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """汇总文件夹多数预测、逐谱正确数和文件夹正确性。"""
+    """汇总文件夹多数投票；票数不足 70% 时视为没有高置信输出。
+
+    10 条样本时至少 7 条支持同一标签才算文件夹输出，否则 ``predicted_label``
+    记为 ``unknown``，文件夹按判断失败计入准确率。
+    """
     counter = Counter(item["top1_label"] for item in predictions)
-    predicted_label, majority_count = counter.most_common(1)[0] if counter else ("unknown", 0)
+    majority_label, majority_count = counter.most_common(1)[0] if counter else ("unknown", 0)
+    total_count = len(predictions)
+    required_count = (total_count * 7 + 9) // 10
+    high_confidence = bool(total_count and majority_count >= required_count)
+    predicted_label = majority_label if high_confidence else "unknown"
     expected_in_model = expected_label in set(class_names)
     correct_count = (
         sum(item["top1_label"] == expected_label for item in predictions)
         if expected_in_model
         else 0
     )
-    total_count = len(predictions)
     return {
         "folder": folder_name,
         "expected_label": expected_label or "unknown",
         "expected_in_model": bool(expected_in_model),
         "predicted_label": predicted_label,
+        "high_confidence": high_confidence,
+        "required_majority_count": int(required_count),
         "majority_count": int(majority_count),
         "total_count": total_count,
         "correct_count": int(correct_count),
         "correct_ratio": correct_count / total_count if total_count else 0.0,
-        "folder_correct": bool(expected_in_model and predicted_label == expected_label),
+        "folder_correct": bool(
+            expected_in_model and high_confidence and majority_label == expected_label
+        ),
     }

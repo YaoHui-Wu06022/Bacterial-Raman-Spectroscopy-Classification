@@ -12,9 +12,7 @@ from ramanv2.data.runtime.input import InputPreprocessor
 from ramanv2.evaluation.context import (
     EvaluationContext,
     RunEntry,
-    build_used_runs,
     load_evaluation_context,
-    resolve_entry_path,
     resolve_level_name,
     resolve_result_dir,
     resolve_run_class_ids,
@@ -22,6 +20,11 @@ from ramanv2.evaluation.context import (
 )
 from ramanv2.evaluation.metrics_report import write_model_report
 from ramanv2.modeling.predictor import Predictor, load_predictor
+from ramanv2.modeling.run_manifest import (
+    build_used_run_values,
+    has_model_path,
+    resolve_entry_path,
+)
 from ramanv2.modeling.routing import predict_routed_labels
 from ramanv2.modeling.run_manifest import write_run_manifest
 
@@ -57,12 +60,12 @@ def evaluate_model_parent_routed(
     target_device = resolve_device(device)
     result_dir = resolve_result_dir(context, level_name, "model", "parent-routed")
     global_entry = (context.meta.get("level_models") or {}).get(level_name)
-    if isinstance(global_entry, dict) and global_entry.get("model_path"):
+    if has_model_path(global_entry):
         run_dir = resolve_entry_path(context.experiment_dir, global_entry, "run_dir")
         predictor = load_predictor(run_dir, target_device, level_name)
         run_entry = RunEntry(level_name, None, global_entry, run_dir)
         class_names, paths, labels, predictions = _predict_run(context, predictor, run_entry)
-        used_runs = {level_name: build_used_runs(global_entry)}
+        used_runs = {level_name: build_used_run_values(global_entry)}
     else:
         class_names, paths, labels, predictions, used_runs = _predict_parent_routed(
             context,
@@ -161,14 +164,14 @@ def _predict_parent_routed(
 
     def load_parent_predictor(parent_id: int) -> Predictor:
         entry = entries.get(str(parent_id))
-        if not isinstance(entry, dict) or not entry.get("model_path"):
+        if not has_model_path(entry):
             raise FileNotFoundError(f"{level_name} 缺少 parent={parent_id} 的子模型")
         predictor = load_predictor(
             resolve_entry_path(context.experiment_dir, entry, "run_dir"),
             device,
             level_name,
         )
-        used_runs[str(parent_id)] = build_used_runs(entry)
+        used_runs[str(parent_id)] = build_used_run_values(entry)
         return predictor
 
     def predict_for_parent(predictor: Predictor, sample_index: int) -> int:

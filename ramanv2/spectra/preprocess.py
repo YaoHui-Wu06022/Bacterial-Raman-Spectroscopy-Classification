@@ -211,25 +211,23 @@ def interpolate_valid_bands(wavenumbers, spectrum, target_axis, bad_bands):
     return result
 
 
-def preprocess_single_spectrum(
+def fit_baseline_spectrum(
     wavenumbers,
     spectrum,
-    cut_min,
-    cut_max,
-    reference_wavenumbers,
+    *,
+    baseline_fit_min: float,
+    baseline_fit_max: float,
     bad_bands,
-    baseline_lam,
-    baseline_asls_p,
-    baseline_max_iter,
-    baseline_fit_min=None,
-    baseline_fit_max=None,
+    baseline_lam: float,
+    baseline_asls_p: float,
+    baseline_max_iter: int,
     baseline_method: str = "asls",
     cosmic_ray_enable: bool = False,
     cosmic_ray_window_points: int = 7,
     cosmic_ray_threshold: float = 7.0,
     cosmic_ray_max_iter: int = 2,
 ):
-    """完成单谱尖峰修复、基线校正、裁剪、坏段删除和插值。"""
+    """完成校验、尖峰修复与基线估计，返回拟合区间上的校正谱。"""
     wavenumbers = np.asarray(wavenumbers, dtype=np.float64)
     spectrum = np.asarray(spectrum, dtype=np.float32)
     if wavenumbers.ndim != 1 or spectrum.ndim != 1:
@@ -252,16 +250,18 @@ def preprocess_single_spectrum(
             threshold=cosmic_ray_threshold,
             max_iter=cosmic_ray_max_iter,
         )
-
-    fit_min = cut_min if baseline_fit_min is None else float(baseline_fit_min)
-    fit_max = cut_max if baseline_fit_max is None else float(baseline_fit_max)
-    fit_mask = (wavenumbers >= fit_min) & (wavenumbers <= fit_max)
+    fit_mask = (wavenumbers >= baseline_fit_min) & (wavenumbers <= baseline_fit_max)
     fitted_wavenumbers = wavenumbers[fit_mask]
     fitted_spectrum = cleaned[fit_mask]
     valid_fit_mask = build_valid_mask(fitted_wavenumbers, normalized_bands)
     if fitted_wavenumbers.size < 10:
-        return None, None, cosmic_stats
-
+        return (
+            fitted_wavenumbers,
+            np.asarray([], dtype=np.float64),
+            cleaned,
+            np.asarray([], dtype=np.float64),
+            cosmic_stats,
+        )
     baseline = estimate_baseline(
         smooth_baseline_input(fitted_spectrum),
         method=baseline_method,
@@ -270,7 +270,48 @@ def preprocess_single_spectrum(
         niter=baseline_max_iter,
         valid_mask=valid_fit_mask,
     )
-    corrected = fitted_spectrum - baseline
+    return fitted_wavenumbers, fitted_spectrum - baseline, cleaned, baseline, cosmic_stats
+
+
+def preprocess_single_spectrum(
+    wavenumbers,
+    spectrum,
+    cut_min,
+    cut_max,
+    reference_wavenumbers,
+    bad_bands,
+    baseline_lam,
+    baseline_asls_p,
+    baseline_max_iter,
+    baseline_fit_min=None,
+    baseline_fit_max=None,
+    baseline_method: str = "asls",
+    cosmic_ray_enable: bool = False,
+    cosmic_ray_window_points: int = 7,
+    cosmic_ray_threshold: float = 7.0,
+    cosmic_ray_max_iter: int = 2,
+):
+    """完成单谱尖峰修复、基线校正、裁剪、坏段删除和插值。"""
+    normalized_bands = normalize_bad_bands(bad_bands)
+    fit_min = cut_min if baseline_fit_min is None else float(baseline_fit_min)
+    fit_max = cut_max if baseline_fit_max is None else float(baseline_fit_max)
+    fitted_wavenumbers, corrected, _cleaned, _baseline, cosmic_stats = fit_baseline_spectrum(
+        wavenumbers,
+        spectrum,
+        baseline_fit_min=fit_min,
+        baseline_fit_max=fit_max,
+        bad_bands=normalized_bands,
+        baseline_lam=baseline_lam,
+        baseline_asls_p=baseline_asls_p,
+        baseline_max_iter=baseline_max_iter,
+        baseline_method=baseline_method,
+        cosmic_ray_enable=cosmic_ray_enable,
+        cosmic_ray_window_points=cosmic_ray_window_points,
+        cosmic_ray_threshold=cosmic_ray_threshold,
+        cosmic_ray_max_iter=cosmic_ray_max_iter,
+    )
+    if fitted_wavenumbers.size < 10:
+        return None, None, cosmic_stats
     crop_mask = (fitted_wavenumbers >= cut_min) & (fitted_wavenumbers <= cut_max)
     cropped_wavenumbers = fitted_wavenumbers[crop_mask]
     cropped_spectrum = corrected[crop_mask]

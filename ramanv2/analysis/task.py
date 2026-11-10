@@ -7,7 +7,8 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from ramanv2.evaluation.context import EvaluationContext, resolve_entry_path, resolve_run_entry
+from ramanv2.evaluation.context import EvaluationContext, resolve_run_entry
+from ramanv2.modeling.run_manifest import resolve_entry_path
 
 
 @dataclass(frozen=True)

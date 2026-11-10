@@ -18,11 +18,11 @@ from ramanv2.core.run_context import METRICS_FILE_NAME
 from ramanv2.evaluation.context import (
     EvaluationContext,
     load_evaluation_context,
-    resolve_entry_path,
 )
 from ramanv2.evaluation.metrics_report import write_model_report
 from ramanv2.inference.spectrum_input import sample_folder_spectra
 from ramanv2.modeling.predictor import Predictor, load_predictor
+from ramanv2.modeling.run_manifest import has_model_path, resolve_entry_path
 from ramanv2.modeling.routing import predict_routed_labels
 from ramanv2.inference.spectrum_input import build_inference_preprocessor, list_spectrum_paths
 from ramanv2.inference.test_labels import build_folder_summary, build_test_folder_labels
@@ -205,17 +205,13 @@ def _scan_test_set(test_path: Path) -> tuple[list[str], list[Path], list[str]]:
 
 def _has_global_model(context: EvaluationContext, level_name: str) -> bool:
     """判断层级是否训练了覆盖全类别的全局模型。"""
-    entry = (context.meta.get("level_models") or {}).get(level_name)
-    return isinstance(entry, dict) and bool(entry.get("model_path"))
+    return has_model_path((context.meta.get("level_models") or {}).get(level_name))
 
 
 def _has_parent_models(context: EvaluationContext, level_name: str) -> bool:
     """判断层级是否训练了任一父类子模型。"""
     entries = (context.meta.get("parent_models") or {}).get(level_name) or {}
-    return any(
-        isinstance(entry, dict) and bool(entry.get("model_path"))
-        for entry in entries.values()
-    )
+    return any(has_model_path(entry) for entry in entries.values())
 
 
 def _evaluate_test_level(

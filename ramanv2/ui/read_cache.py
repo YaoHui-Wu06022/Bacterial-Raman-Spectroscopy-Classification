@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import streamlit as st
@@ -17,6 +18,7 @@ from ramanv2.core.run_context import (
 )
 from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.data.count import collect_taxon_counts, summarize_dataset
+from ramanv2.data.hierarchy_config import HierarchySpec
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.pipeline.cleaning import scan_date_names
 
@@ -55,14 +57,18 @@ def cached_directory_names(root_dir: str, version: int) -> tuple[str, ...]:
 
 
 @st.cache_resource(show_spinner=False)
-def cached_dataset_index(train_dir: str, version: int) -> DatasetIndex | None:
+def cached_dataset_index(train_dir: str, version: int, hierarchy_json: str) -> DatasetIndex | None:
     """缓存统一种标签的只读目录索引，不加载全部强度数组。"""
     del version
     path = Path(train_dir)
     if not path.is_dir():
         return None
     try:
-        return DatasetIndex(path, load_intensity_enable=False)
+        return DatasetIndex(
+            path,
+            hierarchy=HierarchySpec.from_payload(json.loads(hierarchy_json)),
+            load_intensity_enable=False,
+        )
     except (OSError, RuntimeError, ValueError):
         return None
 

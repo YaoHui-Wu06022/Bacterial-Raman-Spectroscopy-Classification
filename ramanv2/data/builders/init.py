@@ -28,7 +28,7 @@ from ramanv2.common.naming import (
 )
 from ramanv2.common.file_ops import create_temporary_path, publish_directory, read_json, rename_directory, _remove_path
 from ramanv2.data.count import summarize_dataset
-from ramanv2.data.hierarchy_config import HierarchyLevel, HierarchySpec
+from ramanv2.data.hierarchy_config import HierarchySpec
 from ramanv2.data.profiles import TEST_ROOT_NAME
 from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.records.lineage import apply_output_path, initialize_folder_lineage, load_folder_lineage, write_folder_lineage
@@ -68,17 +68,16 @@ def build_full_init(
     test_root: Path | str | None = None,
     selected_test_folders: list[str] | set[str] | tuple[str, ...] | None = None,
     *,
-    hierarchy: HierarchySpec | None = None,
+    hierarchy: HierarchySpec,
     rebuild_test_enable: bool = True,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, object]:
     """从通过门禁的 shift 日期构建普通 init 与选定的独立 init_test。
 
-    ``hierarchy`` 决定 init 的父目录层级；缺失时按来源前缀平展。
+    ``hierarchy`` 决定 init 的父目录层级与类别值。
     ``progress_callback(日期, 已复制光谱数, 总光谱数)`` 在每个来源文件夹复制完成后调用，
     供界面显示构建进度。
     """
-    hierarchy = hierarchy or _hierarchy_from_mapping(mapping)
     cosmic_root = Path(shift_root).resolve().parent / "cosmic_data"
     if cosmic_root.is_dir():
         initialize_folder_lineage(cosmic_root, mapping)
@@ -112,8 +111,6 @@ def build_full_init(
         publish_test_enable=rebuild_test_enable,
         progress_callback=progress_callback,
     )
-    report["generated_profiles"] = []
-    report["profile_stats"] = {}
     report["count"] = summarize_dataset(Path(init_root).resolve())
     return report
 
@@ -358,14 +355,13 @@ def build_init_datasets(
     test_root: Path | str | None = None,
     selected_test_folders: list[str] | set[str] | tuple[str, ...] | None = None,
     *,
-    hierarchy: HierarchySpec | None = None,
+    hierarchy: HierarchySpec,
     publish_test_enable: bool = True,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, object]:
     """按批准日期构建 init；replace_dates 仅替换已生成日期及已导出的测试组。"""
     if mode not in {"full", "incremental", "replace_dates"}:
         raise ValueError("mode 必须是 full、incremental 或 replace_dates")
-    hierarchy = hierarchy or _hierarchy_from_mapping(mapping)
     if mode == "replace_dates" and (date_names is None or profile_roots):
         raise ValueError("按日期替换必须指定日期，且不能更新 Profile")
     source_root = Path(shift_root).resolve()
@@ -626,7 +622,7 @@ def _collect_source_groups(
         if not level_values.get("level_1"):
             raise ValueError(f"层级未解析来源：{source_key}")
         prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
-        target_prefix = level_values.get("level_1", prefix) if hierarchy.is_flat else prefix
+        target_prefix = level_values[hierarchy.level_names[-1]]
         target_name = f"{target_prefix}{date_dir.name}_{prefix_counts[prefix]:02d}"
         groups.append(_SourceGroup(
             date_name=date_dir.name,
@@ -646,12 +642,11 @@ def _resolve_destinations(
     temporary_roots: dict[str, Path],
     hierarchy: HierarchySpec,
 ) -> list[tuple[str, Path]]:
+    target_relative = _target_relative(group, hierarchy)
     if group.is_test:
-        target_relative = Path(group.target_name)
         if "__test__" not in temporary_roots:
             raise ValueError("测试目录需要配置 test_root")
         return [("__test__", temporary_roots["__test__"] / target_relative)]
-    target_relative = hierarchy.init_relative_dir(group.source_name) / group.target_name
     destinations = [("__all__", temporary_roots["__all__"] / target_relative)]
     if mapping is not None:
         for profile_name, genera in mapping.datasets.items():
@@ -730,22 +725,6 @@ def _validate_test_group_targets(groups: list[_SourceGroup]) -> None:
                 ]
             )
         targets[target] = group
-
-
-def _hierarchy_from_mapping(mapping: DatasetMapping | None) -> HierarchySpec:
-    """旧调用未提供 hierarchy 时，用 Excel 前缀映射构造单层属级层级。"""
-    if mapping is None:
-        return HierarchySpec.flat()
-    mappings = {
-        str(prefix).upper(): str(genus)
-        for genus, prefixes in mapping.genera.items()
-        for prefix in prefixes
-    }
-    return HierarchySpec(
-        levels=(HierarchyLevel("level_1", "属", directory=True),),
-        mappings={"level_1": mappings},
-        explicit=True,
-    )
 
 
 def _create_temporary_roots(destination_roots: dict[str, Path], mode: BuildMode) -> dict[str, Path]:

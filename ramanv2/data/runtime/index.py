@@ -19,8 +19,8 @@ class DatasetIndex:
     def __init__(
         self,
         train_dir: Path | str,
+        hierarchy: HierarchySpec,
         load_intensity_enable: bool = True,
-        hierarchy: HierarchySpec | None = None,
     ) -> None:
         self.root_dir = Path(train_dir).resolve()
         self.hierarchy = hierarchy
@@ -144,69 +144,8 @@ class DatasetIndex:
         return level_name
 
     def _scan_samples(self) -> None:
-        """扫描叶子目录，构建稳定的多层类别索引和父子映射。"""
-        if self.hierarchy is not None:
-            self._scan_samples_with_hierarchy()
-            return
-        records: list[tuple[Path, tuple[str, ...]]] = []
-        max_depth = 0
-        for leaf_dir, filenames in iter_arc_dirs(self.root_dir):
-            parts = leaf_dir.relative_to(self.root_dir).parts
-            max_depth = max(max_depth, len(parts))
-            records.extend((leaf_dir / filename, parts) for filename in filenames)
-        if not records:
-            raise RuntimeError(f"训练目录中没有 .arc_data 光谱：{self.root_dir}")
-
-        self.head_names = [f"level_{index + 1}" for index in range(max_depth)] + [
-            "leaf"
-        ]
-        self.head_name_to_idx = {
-            name: index for index, name in enumerate(self.head_names)
-        }
-        # 业务种标签去掉日期和批次；leaf 始终从原始目录生成，用于切分和追溯。
-        label_records = [
-            (path, parts[:1] + (parse_folder_prefix(parts[1], uppercase_enable=True),) + parts[2:]
-             if len(parts) >= 2 else parts)
-            for path, parts in records
-        ]
-        level_maps = [dict() for _ in range(max_depth)]
-        leaf_map: dict[str, int] = {}
-        for (_, source_parts), (_, parts) in zip(records, label_records):
-            leaf_key = parts_to_key(source_parts)
-            leaf_map.setdefault(leaf_key, len(leaf_map))
-            for level_index in range(len(parts)):
-                level_key = parts_to_key(parts[: level_index + 1])
-                level_maps[level_index].setdefault(level_key, len(level_maps[level_index]))
-
-        self.label_maps_by_level = level_maps + [leaf_map]
-        self.parent_to_children = _build_parent_to_children(
-            label_records,
-            level_maps,
-            self.level_names,
-        )
-
-        samples: list[Path] = []
-        labels: list[list[int]] = []
-        hierarchies: list[dict[str, str | None]] = []
-        for (path, source_parts), (_, parts) in zip(records, label_records):
-            row = [-1] * len(self.head_names)
-            hierarchy = {name: None for name in self.level_names}
-            for level_index in range(len(parts)):
-                level_key = parts_to_key(parts[: level_index + 1])
-                row[level_index] = level_maps[level_index][level_key]
-                hierarchy[self.level_names[level_index]] = level_key
-            row[-1] = leaf_map[parts_to_key(source_parts)]
-            samples.append(path)
-            labels.append(row)
-            hierarchies.append(hierarchy)
-        self.samples = np.asarray(samples, dtype=object)
-        self.level_labels = np.asarray(labels, dtype=np.int64)
-        self.hier_names = np.asarray(hierarchies, dtype=object)
-
-    def _scan_samples_with_hierarchy(self) -> None:
         """按显式层级配置解析训练目录；目录层级之外的分类值由前缀映射得到。"""
         spec = self.hierarchy
-        assert spec is not None
         depth = spec.directory_depth
         records: list[tuple[Path, tuple[str, ...]]] = []
         for leaf_dir, filenames in iter_arc_dirs(self.root_dir):
@@ -280,6 +219,7 @@ class DatasetIndex:
         self.hierarchy = HierarchySpec(
             levels=spec.levels,
             mappings=learned_mappings,
+            explicit=spec.explicit,
         )
 
     def _load_all_raw_intensities(self) -> dict[Path, np.ndarray]:

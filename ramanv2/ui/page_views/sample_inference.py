@@ -269,6 +269,7 @@ def _render_existing_result(experiment_dir: Path, level_name: str) -> None:
                 "文件夹": row.get("folder", ""),
                 "真实类别": row.get("expected_label", "未评估"),
                 "预测类别": row.get("predicted_label", ""),
+                "高置信输出": "是" if row.get("high_confidence") else "否",
                 "光谱正确率": format_ratio(row.get("correct_ratio"), "未评估"),
                 "文件夹正确": "是" if row.get("folder_correct") else "否",
             }

@@ -16,6 +16,11 @@ from ramanv2.core.input_spec import InputSpec, build_input_spec
 from ramanv2.common.paths import find_ancestor_dir
 from ramanv2.modeling.factory import build_model, validate_model_input
 from ramanv2.modeling.model_spec import build_model_spec
+from ramanv2.modeling.run_manifest import (
+    build_used_run_values,
+    has_model_path,
+    resolve_entry_path,
+)
 
 
 @dataclass(frozen=True)
@@ -130,10 +135,10 @@ class Predictor:
 
     def load_model(self, level_name: str, entry: Mapping[str, Any], parent_id: int | None):
         """按元数据条目严格加载模型，并缓存已加载权重。"""
-        model_path = _resolve_entry_path(self.experiment_dir, entry, "model_path")
+        model_path = resolve_entry_path(self.experiment_dir, entry, "model_path")
         if model_path in self._models:
             return self._models[model_path]
-        run_path = _resolve_entry_path(self.experiment_dir, entry, "run_dir")
+        run_path = resolve_entry_path(self.experiment_dir, entry, "run_dir")
         snapshot = self._snapshots.get(run_path)
         if snapshot is None:
             snapshot = load_run_snapshot(run_path, self.experiment_dir)
@@ -193,17 +198,17 @@ class Predictor:
                 self.predict_level,
             )
             if parent_id is None:
-                return {self.predict_level: _entry_run_values(entry)}
-            return {self.predict_level: {str(parent_id): _entry_run_values(entry)}}
+                return {self.predict_level: build_used_run_values(entry)}
+            return {self.predict_level: {str(parent_id): build_used_run_values(entry)}}
         used: dict[str, Any] = {}
         for level_name in self.level_order:
             global_entry = (self.meta.get("level_models") or {}).get(level_name)
-            if global_entry and global_entry.get("model_path"):
-                used[level_name] = _entry_run_values(global_entry)
+            if global_entry and has_model_path(global_entry):
+                used[level_name] = build_used_run_values(global_entry)
                 continue
             parent_entries = (self.meta.get("parent_models") or {}).get(level_name) or {}
             used[level_name] = {
-                str(parent_id): _entry_run_values(entry)
+                str(parent_id): build_used_run_values(entry)
                 for parent_id, entry in parent_entries.items()
                 if entry.get("model_path")
             }
@@ -233,7 +238,7 @@ def load_predictor(
     )
     entry = _resolve_input_entry(meta, experiment_dir, run_dir, level_name)
     snapshot = load_run_snapshot(
-        _resolve_entry_path(experiment_dir, entry, "run_dir"),
+        resolve_entry_path(experiment_dir, entry, "run_dir"),
         experiment_dir,
     )
     input_spec = build_input_spec(snapshot.config.input)
@@ -267,12 +272,12 @@ def _resolve_input_entry(
         return entry
     for current_level in meta.get("head_names") or []:
         global_entry = (meta.get("level_models") or {}).get(current_level)
-        if global_entry and global_entry.get("model_path"):
+        if global_entry and has_model_path(global_entry):
             return global_entry
         parent_entries = (meta.get("parent_models") or {}).get(current_level) or {}
         for parent_id in sorted(parent_entries, key=int):
             entry = parent_entries[parent_id]
-            if entry.get("model_path"):
+            if has_model_path(entry):
                 return entry
     raise RuntimeError(f"未找到可读取输入规格的模型：{level_name}")
 
@@ -284,12 +289,12 @@ def _resolve_level_entry(
 ) -> tuple[Mapping[str, Any], int | None]:
     """按上一级预测结果选择全局模型或对应父类子模型。"""
     global_entry = (meta.get("level_models") or {}).get(level_name)
-    if global_entry and global_entry.get("model_path"):
+    if global_entry and has_model_path(global_entry):
         return global_entry, None
     if parent_id is None:
         raise FileNotFoundError(f"{level_name} 缺少全局模型，无法开始层级预测")
     entry = ((meta.get("parent_models") or {}).get(level_name) or {}).get(str(parent_id))
-    if not entry or not entry.get("model_path"):
+    if not has_model_path(entry):
         raise FileNotFoundError(f"{level_name} 缺少 parent={parent_id} 的子模型")
     return entry, int(parent_id)
 
@@ -301,14 +306,14 @@ def _resolve_single_child_class_id(
 ) -> int | None:
     """解析无下层模型的唯一子类直通结果。"""
     global_entry = (meta.get("level_models") or {}).get(level_name)
-    if global_entry and global_entry.get("model_path"):
+    if global_entry and has_model_path(global_entry):
         return None
     if parent_id is None:
         return None
     entry = (
         ((meta.get("parent_models") or {}).get(level_name) or {}).get(str(parent_id))
     )
-    if not entry or entry.get("model_path"):
+    if not entry or has_model_path(entry):
         return None
     child_ids = [int(item) for item in entry.get("child_ids") or []]
     return child_ids[0] if len(child_ids) == 1 else None
@@ -323,11 +328,11 @@ def _find_run_entry(
     """定位元数据中的 run，或构建指定的历史全局模型条目。"""
     target = run_dir.resolve()
     for level_name, entry in (meta.get("level_models") or {}).items():
-        if _resolve_entry_path(experiment_dir, entry, "run_dir") == target:
+        if resolve_entry_path(experiment_dir, entry, "run_dir") == target:
             return entry, None
     for level_name, entries in (meta.get("parent_models") or {}).items():
         for parent_text, entry in entries.items():
-            if _resolve_entry_path(experiment_dir, entry, "run_dir") == target:
+            if resolve_entry_path(experiment_dir, entry, "run_dir") == target:
                 return entry, int(parent_text)
     global_entry = (meta.get("level_models") or {}).get(level_name)
     if global_entry is None:
@@ -357,18 +362,6 @@ def _find_run_entry(
     }, None
 
 
-def _resolve_entry_path(
-    experiment_dir: Path,
-    entry: Mapping[str, Any],
-    key: str,
-) -> Path:
-    """将层级元数据中的相对文件路径解析为绝对路径。"""
-    value = entry.get(key)
-    if not value:
-        raise FileNotFoundError(f"模型条目缺少 {key}")
-    return (experiment_dir / value).resolve()
-
-
 def _resolve_class_count(
     meta: Mapping[str, Any],
     level_name: str,
@@ -395,10 +388,3 @@ def _resolve_entry_classes(
     return child_ids, [names[index] for index in child_ids]
 
 
-def _entry_run_values(entry: Mapping[str, Any]) -> dict[str, Any]:
-    """提取写入推理产物的稳定 run 定位字段。"""
-    return {
-        key: entry.get(key)
-        for key in ("run_dir", "model_path", "config_path", "trained_at")
-        if entry.get(key) is not None
-    }

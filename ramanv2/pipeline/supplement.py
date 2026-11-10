@@ -17,6 +17,7 @@ from ramanv2.common.arc_data import (
 from ramanv2.common.naming import CANONICAL_FOLDER_PATTERN, build_natural_key, parse_folder_prefix
 from ramanv2.data.builders.init import build_full_init, build_spectrum_folder
 from ramanv2.data.dataset_mapping import DatasetMapping
+from ramanv2.data.hierarchy_config import HierarchySpec
 from ramanv2.data.count import summarize_dataset
 
 
@@ -158,7 +159,7 @@ def build_full_init_with_supplements(
     *,
     test_root: Path | str | None = None,
     selected_test_folders: list[str] | set[str] | tuple[str, ...] | None = None,
-    hierarchy=None,
+    hierarchy: HierarchySpec,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, object]:
     """按页面流程生成全量 init：先构建 shift 数据，再写入补充文件夹。

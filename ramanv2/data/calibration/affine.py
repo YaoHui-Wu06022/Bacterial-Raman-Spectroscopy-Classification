@@ -19,10 +19,10 @@ from matplotlib import pyplot as plt
 from ramanv2.common.arc_data import is_arc_data_name, list_arc_data_paths, read_arc_data, write_arc_data
 from ramanv2.common.file_ops import (
     create_temporary_path,
+    publish_directory,
     publish_file,
     publish_files,
     read_json,
-    rename_directory,
     write_json,
     write_text_atomic,
 )
@@ -450,26 +450,6 @@ def _save_calibration_figure(
     plt.close(figure)
 
 
-def _publish_shift(temp_shift: Path, output_date: Path) -> Path:
-    had_output_date = output_date.exists()
-    output_date.mkdir(parents=True, exist_ok=True)
-    shift_path = output_date / SHIFT_DIR_NAME
-    backup = output_date / f"shift_previous_{uuid4().hex[:8]}"
-    if shift_path.exists():
-        rename_directory(shift_path, backup)
-    try:
-        rename_directory(temp_shift, shift_path)
-    except Exception:
-        if backup.exists() and not shift_path.exists():
-            rename_directory(backup, shift_path)
-        if not had_output_date and output_date.exists() and not any(output_date.iterdir()):
-            output_date.rmdir()
-        raise
-    if backup.exists():
-        shutil.rmtree(backup)
-    return shift_path
-
-
 def _write_json(path: Path, payload: dict[str, object]) -> None:
     payload = {key: value for key, value in payload.items() if key not in {"folder_compensations", "effective_offsets", "operator_input", "compensation_history", "compensated_at", "compensation_record_only", "changed_folders"}}
     write_json(path, payload)
@@ -541,7 +521,7 @@ def analyze_date(date_dir: Path | str, output_root: Path | str) -> dict[str, obj
         if not bead_paths:
             payload = _failure_payload(date_path.name, f"未找到小球谱：{bead_dir}")
             _write_json(temporary / "affine.json", payload)
-            published = _publish_shift(temporary, output_date)
+            published = publish_directory(temporary, output_date / SHIFT_DIR_NAME)
             return {**payload, "shift_dir": str(published)}
 
         results = _build_results(bead_paths)
@@ -553,7 +533,7 @@ def analyze_date(date_dir: Path | str, output_root: Path | str) -> dict[str, obj
             for result in results:
                 _save_calibration_figure(result, None, None, "needs_review", temporary / f"{result.path.stem}_calibration.png")
             _write_json(temporary / "affine.json", payload)
-            published = _publish_shift(temporary, output_date)
+            published = publish_directory(temporary, output_date / SHIFT_DIR_NAME)
             return {**payload, "shift_dir": str(published)}
 
         diagnostic_scale, diagnostic_offset, primary_residuals = affine
@@ -614,7 +594,7 @@ def analyze_date(date_dir: Path | str, output_root: Path | str) -> dict[str, obj
         for result in results:
             _save_calibration_figure(result, plot_scale, plot_offset, status, temporary / f"{result.path.stem}_calibration.png")
         _write_json(temporary / "affine.json", payload)
-        published = _publish_shift(temporary, output_date)
+        published = publish_directory(temporary, output_date / SHIFT_DIR_NAME)
         return {**payload, "shift_dir": str(published)}
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -794,17 +774,7 @@ def approve_and_apply_date(
         report["base_offset"] = float(offset)
         report.pop("shift_dir", None)
         _write_json(temporary_date / SHIFT_DIR_NAME / "affine.json", report)
-        backup = output_root_path / f"{source_date.name}_previous_{uuid4().hex[:8]}"
-        if output_date.exists():
-            rename_directory(output_date, backup)
-        try:
-            rename_directory(temporary_date, output_date)
-        except Exception:
-            if backup.exists() and not output_date.exists():
-                rename_directory(backup, output_date)
-            raise
-        if backup.exists():
-            shutil.rmtree(backup)
+        publish_directory(temporary_date, output_date)
     except Exception:
         shutil.rmtree(temporary_date, ignore_errors=True)
         raise

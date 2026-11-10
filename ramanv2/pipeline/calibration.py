@@ -220,8 +220,8 @@ def load_date_affine_parameters(shift_root: Path | str, date_name: str) -> tuple
         return None
     if report.get("status") != "manual_approved":
         raise ValueError(f"日期仿射参数尚未通过校验：{date_name}")
-    scale = float(report.get("base_scale", report.get("scale", float("nan"))))
-    offset = float(report.get("base_offset", report.get("offset", float("nan"))))
+    scale = float(report.get("scale", float("nan")))
+    offset = float(report.get("offset", float("nan")))
     if not math.isfinite(scale) or scale <= 0 or not math.isfinite(offset):
         raise ValueError(f"日期仿射参数无效：{date_name}")
     return scale, offset

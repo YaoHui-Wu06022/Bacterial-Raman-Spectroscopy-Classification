@@ -58,6 +58,7 @@ def _record_template(date_name: str, folder_name: str) -> dict[str, object]:
         "genus": "",
         "files": {},
         "folder_status": "active",
+        "reviewed": False,
         "cleaning": {"status": "pending", "history": []},
         "affine": {"status": "pending", "version": None, "scale": None, "offset": None},
         "outputs": {"shift": None, "init": None, "profiles": {}, "test": None, "prefix_groups": []},
@@ -555,6 +556,52 @@ def clear_test_routes(
     return {"cleared": cleared, "count": len(cleared)}
 
 
+def _record_reviewed(record: dict[str, object]) -> bool:
+    """文件夹是否已完成清洗审核；旧记录没有 reviewed 时沿用原状态推断。"""
+    if record.get("folder_status") == "folder_deleted":
+        return True
+    value = record.get("reviewed")
+    if value is not None:
+        return bool(value)
+    return record.get("folder_status") in {"active", "manual_deleted"}
+
+
+def mark_folders_reviewed(
+    data_root: Path | str,
+    source_ids: list[str] | tuple[str, ...] | set[str],
+    *,
+    reviewed: bool = True,
+) -> int:
+    """批量设置文件夹审核状态；整夹归档记录保持已审核。"""
+    payload = load_folder_lineage(data_root)
+    folders = payload.get("folders", {})
+    if not isinstance(folders, dict):
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    changed = 0
+    for source_id in sorted({str(value) for value in source_ids}):
+        record = folders.get(source_id)
+        if not isinstance(record, dict) or record.get("folder_status") == "folder_deleted":
+            continue
+        current = record.get("reviewed")
+        if current is None:
+            current = record.get("folder_status") in {"active", "manual_deleted"}
+        if bool(current) == bool(reviewed):
+            continue
+        record["reviewed"] = bool(reviewed)
+        record["updated_at"] = now
+        record.setdefault("history", []).append(
+            {
+                "operation": "review_completed" if reviewed else "review_reset",
+                "recorded_at": now,
+            }
+        )
+        changed += 1
+    if changed:
+        write_folder_lineage(data_root, payload)
+    return changed
+
+
 def sync_pipeline_state_from_lineage(data_root: Path | str, state: object) -> object:
     """只从已有走向文件刷新日期摘要，并按磁盘排除已彻底消失的来源。"""
     root = Path(data_root).resolve()
@@ -570,7 +617,7 @@ def sync_pipeline_state_from_lineage(data_root: Path | str, state: object) -> ob
     init_dates: set[str] = set()
     cleaning_dates: set[str] = set()
     for date_name, records in by_date.items():
-        if records and all(item.get("folder_status") in {"active", "manual_deleted", "folder_deleted"} for item in records):
+        if records and all(_record_reviewed(item) for item in records):
             cleaning_dates.add(date_name)
         if records and all(isinstance(item.get("affine"), dict) and item["affine"].get("status") == "approved" for item in records):
             affine_dates.add(date_name)
@@ -700,6 +747,7 @@ __all__ = [
     "initialize_folder_lineage",
     "lineage_path",
     "load_folder_lineage",
+    "mark_folders_reviewed",
     "record_affine_approval",
     "record_analysis_removal",
     "record_manual_move",

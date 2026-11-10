@@ -60,8 +60,8 @@ def _backfill_affine(
         report = reports.get(str(record.get("date", "")))
         if report is None:
             continue
-        scale = report.get("scale", report.get("base_scale"))
-        offset = report.get("offset", report.get("base_offset"))
+        scale = report.get("scale")
+        offset = report.get("offset")
         if scale is None or offset is None:
             continue
         approved_at = str(report.get("approved_at") or recorded_at)

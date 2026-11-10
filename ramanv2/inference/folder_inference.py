@@ -12,9 +12,10 @@ from uuid import uuid4
 import numpy as np
 import torch
 
-from ramanv2.common.arc_data import list_arc_data_paths
 from ramanv2.common.device import resolve_device
-from ramanv2.common.naming import build_natural_key, parse_folder_prefix
+from ramanv2.common.file_ops import publish_directory
+from ramanv2.data.hierarchy_config import HierarchySpec, resolve_hierarchy_from_meta
+from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.data.profiles import resolve_selection
 from ramanv2.modeling.run_manifest import write_run_manifest
 from ramanv2.inference.folder_report import (
@@ -25,6 +26,8 @@ from ramanv2.inference.folder_report import (
 )
 from ramanv2.inference.input_cache import CachedFolder, load_test_cache
 from ramanv2.modeling.predictor import Predictor, load_predictor
+from ramanv2.spectra.axis import build_wn_ref
+from ramanv2.spectra.bad_bands import build_valid_mask
 from ramanv2.inference.spectrum_input import (
     build_inference_preprocessor,
     list_spectrum_paths,
@@ -33,7 +36,6 @@ from ramanv2.inference.spectrum_input import (
     sample_folder_spectra,
 )
 from ramanv2.inference.test_labels import (
-    build_expected_label_lookup,
     build_folder_summary,
     build_test_input_selection,
 )
@@ -82,7 +84,7 @@ def run_independent_inference(
         input_dirs: list[Path] = []
     else:
         input_dirs = resolve_input_dirs(test_dir, one_dir)
-    expected_lookup = build_expected_label_lookup(predictor.meta, predictor.predict_level)
+    expected_hierarchy = resolve_hierarchy_from_meta(predictor.meta)
     available_names = (
         [folder.folder_name for folder in cached_folders]
         if cached_folders is not None
@@ -119,7 +121,7 @@ def run_independent_inference(
             top_k,
             evaluate_enable,
             plot_train_mean_enable,
-            expected_lookup,
+            expected_hierarchy,
             cached_folders,
         )
         summary = write_summary_report(temp_dir / SUMMARY_TEXT_NAME, rows, evaluate_enable)
@@ -130,7 +132,7 @@ def run_independent_inference(
             predictor.predict_level,
             predictor.build_used_runs(),
         )
-        _publish_result_dir(temp_dir, target_dir)
+        publish_directory(temp_dir, target_dir)
     except Exception:
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise
@@ -146,7 +148,7 @@ def _run_folder_predictions(
     top_k: int,
     evaluate_enable: bool,
     plot_train_mean_enable: bool,
-    expected_lookup: dict[str, str],
+    expected_hierarchy: HierarchySpec,
     cached_folders: list[CachedFolder] | None = None,
 ) -> list[dict[str, Any]]:
     """遍历所有输入文件夹，写入逐谱结果并返回有效汇总行。"""
@@ -175,7 +177,7 @@ def _run_folder_predictions(
             predictor,
             preprocessor,
             class_names,
-            expected_lookup if evaluate_enable else {},
+            expected_hierarchy if evaluate_enable else None,
             evaluate_enable,
             top_k,
             train_mean_bank,
@@ -209,7 +211,7 @@ def _run_single_folder(
     predictor: Predictor,
     preprocessor,
     class_names: list[str],
-    expected_lookup: dict[str, str],
+    expected_hierarchy: HierarchySpec | None,
     evaluate_enable: bool,
     top_k: int,
     train_mean_bank: dict[str, np.ndarray],
@@ -247,11 +249,12 @@ def _run_single_folder(
         signals.append(inputs[0, 0].detach().cpu().numpy().astype(np.float32, copy=False))
     if not predictions:
         return None
-    expected_label = (
-        expected_lookup.get(parse_folder_prefix(folder_name, uppercase_enable=True))
-        if evaluate_enable
-        else None
-    )
+    expected_label = None
+    if evaluate_enable and expected_hierarchy is not None:
+        try:
+            expected_label = expected_hierarchy.expected_label(folder_name, predictor.predict_level)
+        except ValueError:
+            expected_label = None
     row = build_folder_summary(folder_name, expected_label, class_names, predictions)
     row["file_predictions"] = predictions
     folder_output_dir = output_dir / folder_name
@@ -264,12 +267,16 @@ def _run_single_folder(
         evaluation_row,
     )
     values = np.stack(signals, axis=0)
-    wavenumbers = np.linspace(
+    wavenumbers = build_wn_ref(
         predictor.input_config.cut_min,
         predictor.input_config.cut_max,
-        values.shape[1],
-        dtype=np.float32,
-    )
+        predictor.input_config.target_points,
+    ).astype(np.float32)
+    valid_mask = build_valid_mask(wavenumbers, predictor.input_config.bad_bands)
+    if valid_mask is not None:
+        wavenumbers = wavenumbers[valid_mask]
+    if wavenumbers.size != values.shape[1]:
+        raise ValueError("推理绘图轴长度与模型输入不一致")
     plot_folder_spectra(
         folder_output_dir / SPECTRA_FIGURE_NAME,
         folder_name,
@@ -304,14 +311,17 @@ def _build_train_mean_bank(predictor: Predictor, preprocessor) -> dict[str, np.n
     if not train_dir.is_dir():
         raise FileNotFoundError(f"训练目录不存在：{train_dir}")
     values_by_label: dict[str, list[np.ndarray]] = defaultdict(list)
-    target_depth = int(predictor.predict_level.removeprefix("level_"))
-    for spectrum_path in list_arc_data_paths(train_dir, recursive=True):
-        relative_parts = spectrum_path.relative_to(train_dir).parts[:-1]
-        if len(relative_parts) < target_depth:
+    index = DatasetIndex(
+        train_dir,
+        hierarchy=resolve_hierarchy_from_meta(predictor.meta),
+        load_intensity_enable=False,
+    )
+    for sample_index, spectrum_path in enumerate(index.samples):
+        label = index.get_level_key(sample_index, predictor.predict_level)
+        if label is None:
             continue
-        label = "/".join(relative_parts[:target_depth])
         inputs = preprocess_spectrum_path(
-            spectrum_path,
+            Path(spectrum_path),
             preprocessor,
             predictor.input_config.bad_bands,
         )
@@ -323,20 +333,6 @@ def _build_train_mean_bank(predictor: Predictor, preprocessor) -> dict[str, np.n
         for label, values in values_by_label.items()
         if values
     }
-
-
-def _publish_result_dir(temp_dir: Path, target_dir: Path) -> None:
-    """将完整推理产物发布到目标目录，并保留此前结果副本。"""
-    backup_dir = None
-    if target_dir.exists():
-        backup_dir = target_dir.parent / f"{target_dir.name}_previous_{uuid4().hex[:8]}"
-        target_dir.replace(backup_dir)
-    try:
-        temp_dir.replace(target_dir)
-    except Exception:
-        if backup_dir is not None and backup_dir.exists() and not target_dir.exists():
-            backup_dir.replace(target_dir)
-        raise
 
 
 __all__ = ["run_independent_inference"]

@@ -15,8 +15,9 @@ from ramanv2.common.hierarchy import assert_hierarchy_compatible, load_hierarchy
 from ramanv2.core.input_spec import InputSpec, build_input_spec
 from ramanv2.common.paths import find_ancestor_dir
 from ramanv2.data.runtime.index import DatasetIndex
-from ramanv2.data.hierarchy_config import HierarchySpec
+from ramanv2.data.hierarchy_config import resolve_hierarchy_from_meta
 from ramanv2.data.profiles import resolve_selection
+from ramanv2.modeling.run_manifest import resolve_entry_path
 from ramanv2.training.split import load_split_files
 
 
@@ -60,11 +61,7 @@ def load_evaluation_context(source_dir: Path | str) -> EvaluationContext:
     )
     dataset_index = DatasetIndex(
         selection.train_dir,
-        hierarchy=(
-            HierarchySpec.from_payload(meta["hierarchy"])
-            if isinstance(meta.get("hierarchy"), dict)
-            else None
-        ),
+        hierarchy=resolve_hierarchy_from_meta(meta),
     )
     assert_hierarchy_compatible(meta, dataset_index.hierarchy_metadata)
     split = load_split_files(dataset_index, experiment_dir)
@@ -114,19 +111,6 @@ def resolve_run_entry(context: EvaluationContext) -> RunEntry:
     raise FileNotFoundError(f"hierarchy_meta.json 未记录 run：{context.source_dir}")
 
 
-def resolve_entry_path(
-    experiment_dir: Path,
-    values: Mapping[str, Any],
-    key: str,
-) -> Path:
-    """将元数据中的相对或绝对路径解析为绝对路径。"""
-    value = values.get(key)
-    if not value:
-        raise FileNotFoundError(f"模型条目缺少 {key}")
-    path = Path(value)
-    return path.resolve() if path.is_absolute() else (experiment_dir / path).resolve()
-
-
 def resolve_result_dir(
     context: EvaluationContext,
     level_name: str,
@@ -152,15 +136,6 @@ def resolve_result_dir(
     if mode not in roots:
         raise ValueError(f"未知评估模式：{mode}")
     return context.experiment_dir / level_name / roots[mode] / names[kind]
-
-
-def build_used_runs(values: Mapping[str, Any]) -> dict[str, Any]:
-    """提取用于模型评估报告的稳定 run 定位字段。"""
-    return {
-        key: values[key]
-        for key in ("run_dir", "model_path", "config_path", "trained_at")
-        if values.get(key) is not None
-    }
 
 
 def resolve_run_class_ids(dataset_index: Any, run_entry: Any) -> list[int]:

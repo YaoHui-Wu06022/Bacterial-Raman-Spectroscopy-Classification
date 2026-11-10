@@ -58,3 +58,19 @@ def test_flat_hierarchy_resolves_prefix_case() -> None:
     spec = HierarchySpec.flat()
     assert spec.resolve_values("Ecoli01")["level_1"] == "Ecoli"
     assert spec.init_relative_dir("Ecoli01").as_posix() == "Ecoli"
+
+
+def test_expected_label_returns_full_class_key() -> None:
+    spec = HierarchySpec(
+        levels=(
+            HierarchyLevel("level_1", "属", directory=True),
+            HierarchyLevel("level_2", "种", directory=False),
+        ),
+        mappings={
+            "level_1": {"AB": "GenusA"},
+            "level_2": {"AB": "AB"},
+        },
+        explicit=True,
+    )
+    assert spec.expected_label("AB20240101_01", "level_1") == "GenusA"
+    assert spec.expected_label("AB20240101_01", "level_2") == "GenusA/AB"

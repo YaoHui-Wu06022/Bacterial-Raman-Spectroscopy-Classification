@@ -8,16 +8,17 @@ from concurrent.futures import ProcessPoolExecutor
 import os
 import shutil
 from pathlib import Path
-import re
 
 import numpy as np
 
 from ramanv2.common.paths import resolve_path
 from ramanv2.core.config import InputConfig
+from ramanv2.data.hierarchy_config import HierarchySpec
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.preprocess import preprocess_single_spectrum
 
-from ramanv2.data.config import DataBuildConfig, build_cosmic_ray_options, resolve_build_config
+from ramanv2.data.config import DataBuildConfig, resolve_build_config
+from ramanv2.data.preprocess import build_preprocess_kwargs
 from ramanv2.common.arc_data import write_arc_data
 from ramanv2.common.file_ops import create_temporary_path, publish_directory
 
@@ -44,7 +45,12 @@ def _physical_clean_group(
         if reference_wavenumbers is None
         else _validate_reference_wavenumbers(reference_wavenumbers, input_config)
     )
-    options = build_cosmic_ray_options(profile.profile_id, build_config)
+    options = build_preprocess_kwargs(
+        profile.profile_id,
+        input_config,
+        build_config,
+        reference_axis,
+    )
     cleaned = []
     for filename, wavenumbers, intensities in samples:
         if not wavenumbers.size or not intensities.size:
@@ -53,16 +59,6 @@ def _physical_clean_group(
             output_axis, output_spectrum, _ = preprocess_single_spectrum(
                 wavenumbers,
                 intensities,
-                cut_min=input_config.cut_min,
-                cut_max=input_config.cut_max,
-                reference_wavenumbers=reference_axis,
-                bad_bands=input_config.bad_bands,
-                baseline_lam=build_config.baseline_lam,
-                baseline_asls_p=build_config.baseline_asls_p,
-                baseline_max_iter=build_config.baseline_max_iter,
-                baseline_fit_min=build_config.baseline_fit_min,
-                baseline_fit_max=build_config.baseline_fit_max,
-                baseline_method=build_config.baseline_method,
                 **options,
             )
         except ValueError as error:
@@ -130,13 +126,6 @@ def _validate_reference_wavenumbers(
     return axis
 
 
-def _target_group_name(relative_dir: Path, leaf_name: str) -> Path:
-    """按物种简称合并来源文件夹。"""
-    matched = re.match(r"([A-Za-z]+)([+-])?", str(leaf_name))
-    target = matched.group(1) + (matched.group(2) or "") if matched else leaf_name
-    return relative_dir.parent / target if relative_dir != Path(".") else Path(target)
-
-
 def _ensure_name_prefix(prefix: str, filename: str) -> str:
     """为合并来源补齐目录名前缀，避免同名光谱覆盖。"""
     marker = f"{prefix}_"
@@ -161,7 +150,8 @@ def build_train(
     config: DataBuildConfig | None = None,
     input_config: InputConfig = InputConfig(),
     reference_wavenumbers: np.ndarray | None = None,
-    hierarchy=None,
+    *,
+    hierarchy: HierarchySpec,
 ):
     """从 init 构建 train；hierarchy 存在时按显式层级合并类别。"""
     config = resolve_build_config(config)
@@ -189,11 +179,7 @@ def build_train(
             if len(physical_samples) < config.min_samples_per_class:
                 skipped_sources += 1
                 continue
-            target_relative = (
-                hierarchy.init_class_relative(relative_dir, leaf_name)
-                if hierarchy is not None
-                else _target_group_name(relative_dir, leaf_name)
-            )
+            target_relative = hierarchy.init_class_relative(relative_dir, leaf_name)
             renamed_samples = [
                 (_ensure_name_prefix(leaf_name, filename), wavenumbers, intensities)
                 for filename, wavenumbers, intensities in physical_samples

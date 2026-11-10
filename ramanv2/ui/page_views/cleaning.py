@@ -55,6 +55,7 @@ from ramanv2.pipeline.deleted_data import (
     scan_deleted_spectra,
 )
 from ramanv2.pipeline.state import PipelineState
+from ramanv2.records.lineage import mark_folders_reviewed
 from ramanv2.ui.components.spectrum_grid import render_spectrum_grid
 from ramanv2.ui.formatting import progress_ratio
 from ramanv2.ui.read_cache import cached_directory_names
@@ -280,6 +281,7 @@ def _commit_current_folder(
         st.warning(f"有 {len(result.missing_paths)} 条文件不存在，当前夹暂未完成。")
         return False
     complete_folder(state.cleaning, folder)
+    mark_folders_reviewed(context.data_root, [folder.key], reviewed=True)
     if not (context.data_root / folder.date_name / folder.folder_name).exists():
         catalog.pop(folder.key, None)
         discard_removed_folder(state.cleaning, folder)
@@ -318,6 +320,11 @@ def _render_reopen_section(
         if st.button("重新审核该日期", key="cleaning_reopen_confirm", width="stretch"):
             folders = scan_review_folders(context.data_root, [selected], None, set())
             reopen_date_review(state.cleaning, selected, folders)
+            mark_folders_reviewed(
+                context.data_root,
+                [folder.key for folder in folders],
+                reviewed=False,
+            )
             _clear_date_cache()
             invalidate_ui_cache(*INVALIDATE_CLEANING)
             write_page_state(context, state)

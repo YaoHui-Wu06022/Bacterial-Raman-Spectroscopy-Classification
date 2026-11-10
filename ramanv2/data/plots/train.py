@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import shutil
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
+from ramanv2.common.file_ops import create_temporary_path, publish_directory
 from ramanv2.common.plotting import add_bad_band_spans, configure_matplotlib_fonts
 from ramanv2.common.arc_data import read_arc_data
 from ramanv2.core.config import InputConfig
@@ -187,25 +187,13 @@ def plot_train(profile, base_dir: Path | str, input_config: InputConfig = InputC
     figure_dir = resolve_path(profile.root_train_fig, base_path)
     if not train_dir.is_dir():
         raise FileNotFoundError(f"缺少训练目录：{train_dir}")
-    temp_dir = Path(tempfile.mkdtemp(prefix=f".{figure_dir.name}_", dir=figure_dir.parent))
+    temp_dir = create_temporary_path(figure_dir)
+    temp_dir.mkdir(parents=True, exist_ok=False)
     try:
         leaf_count, hierarchy_count, summary_count = _generate_plots(
             train_dir, temp_dir, build_train_plot_config(input_config)
         )
-        backup_dir = None
-        if figure_dir.exists():
-            backup_dir = figure_dir.parent / f".{figure_dir.name}_previous"
-            if backup_dir.exists():
-                raise FileExistsError(f"存在待处理的审图备份：{backup_dir}")
-            figure_dir.replace(backup_dir)
-        try:
-            temp_dir.replace(figure_dir)
-        except Exception:
-            if backup_dir is not None and backup_dir.exists() and not figure_dir.exists():
-                backup_dir.replace(figure_dir)
-            raise
-        if backup_dir is not None:
-            shutil.rmtree(backup_dir)
+        publish_directory(temp_dir, figure_dir)
     except Exception:
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise

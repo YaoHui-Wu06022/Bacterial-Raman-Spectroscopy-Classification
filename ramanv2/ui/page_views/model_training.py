@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,11 @@ def render_training_page(context) -> None:
         return
     profile_id = profile.profile_id
     train_dir = context.training_dir(profile)
-    index = cached_dataset_index(str(train_dir.resolve()), ui_cache_version("training"))
+    index = cached_dataset_index(
+        str(train_dir.resolve()),
+        ui_cache_version("training"),
+        json.dumps(context.hierarchy.to_payload(), ensure_ascii=False, sort_keys=True),
+    )
     if index is None:
         st.info(f"未找到可训练数据：{train_dir}")
     else:

@@ -9,7 +9,26 @@ from ramanv2.data.builders.init import (
     build_profile_datasets,
 )
 from ramanv2.data.dataset_mapping import DatasetMapping
+from ramanv2.data.hierarchy_config import HierarchyLevel, HierarchySpec
 from ramanv2.records.lineage import load_folder_lineage, write_folder_lineage
+
+
+def _hierarchy_for(mapping: DatasetMapping) -> HierarchySpec:
+    """把测试映射转换为属目录 + 种前缀的两级层级。"""
+    prefixes = {
+        str(prefix).upper(): str(genus)
+        for genus, names in mapping.genera.items()
+        for prefix in names
+    }
+    species = {prefix: prefix for prefix in prefixes}
+    return HierarchySpec(
+        levels=(
+            HierarchyLevel("level_1", "属", directory=True),
+            HierarchyLevel("level_2", "种", directory=False),
+        ),
+        mappings={"level_1": prefixes, "level_2": species},
+        explicit=True,
+    )
 
 
 def write_spectrum(path: Path, value: int) -> None:
@@ -45,6 +64,7 @@ def test_build_init_copies_only_approved_dates_and_profiles(tmp_path: Path) -> N
         {"GN": tmp_path / "GN" / "init"},
         mapping,
         ["20240101", "20240102"],
+        hierarchy=_hierarchy_for(mapping),
         progress_callback=lambda date_name, processed, total: progress_calls.append(
             (date_name, processed, total)
         ),
@@ -77,7 +97,14 @@ def test_rebuild_ignores_stale_test_names_and_keeps_unified_numbers(tmp_path: Pa
         {"genera": {"Enterobacter": ["EC"]}, "datasets": {"GN": ["Enterobacter"]}}
     )
 
-    build_full_init(shift, init, mapping, [date], selected_test_folders=[f"{date}/EC02"])
+    build_full_init(
+        shift,
+        init,
+        mapping,
+        [date],
+        selected_test_folders=[f"{date}/EC02"],
+        hierarchy=_hierarchy_for(mapping),
+    )
     # 模拟历史数据：EC02 的测试目录曾被命名成会与 init 撞号的 _01。
     payload = load_folder_lineage(cosmic)
     payload["folders"][f"{date}/EC02"]["outputs"]["test"] = str(
@@ -85,7 +112,14 @@ def test_rebuild_ignores_stale_test_names_and_keeps_unified_numbers(tmp_path: Pa
     )
     write_folder_lineage(cosmic, payload)
 
-    build_full_init(shift, init, mapping, [date], selected_test_folders=[f"{date}/EC02"])
+    build_full_init(
+        shift,
+        init,
+        mapping,
+        [date],
+        selected_test_folders=[f"{date}/EC02"],
+        hierarchy=_hierarchy_for(mapping),
+    )
 
     assert (init / "Enterobacter" / f"EC{date}_01").is_dir()
     assert (tmp_path / "init_test" / f"EC{date}_02").is_dir()
@@ -103,7 +137,14 @@ def test_invalid_spectrum_rejects_build_and_keeps_previous_output(tmp_path: Path
     )
 
     with pytest.raises(ValueError, match="无效光谱"):
-        build_init_datasets(shift, tmp_path / "init", {}, mapping, ["20240101"])
+        build_init_datasets(
+            shift,
+            tmp_path / "init",
+            {},
+            mapping,
+            ["20240101"],
+            hierarchy=_hierarchy_for(mapping),
+        )
     assert not (tmp_path / "init").exists()
 
 

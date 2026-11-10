@@ -25,6 +25,7 @@ from ramanv2.common.arc_data import is_arc_data_name, list_arc_data_paths, read_
 from ramanv2.common.plotting import add_bad_band_spans, configure_matplotlib_fonts
 from ramanv2.core.config import InputConfig
 from ramanv2.data.config import DEFAULT_BUILD_CONFIG, DataBuildConfig
+from ramanv2.data.preprocess import build_preprocess_kwargs
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.bad_bands import build_valid_mask
 from ramanv2.spectra.normalize import normalize_spectrum
@@ -79,6 +80,7 @@ class PrefixPlotConfig:
     input: InputConfig = InputConfig()
     cleaning: DataBuildConfig = DEFAULT_BUILD_CONFIG
     flat: bool = False
+    profile_id: str = ""
 
 
 DEFAULT_PREFIX_PLOT_CONFIG = PrefixPlotConfig()
@@ -210,6 +212,12 @@ def build_folder_median_curves(
         int(input_config.target_points),
     )
     valid_mask = build_valid_mask(reference_axis, input_config.bad_bands)
+    options = build_preprocess_kwargs(
+        config.profile_id,
+        input_config,
+        build_config,
+        reference_axis,
+    )
     raw_curves = []
     norm_curves = []
     minmax_curves = []
@@ -222,16 +230,7 @@ def build_folder_median_curves(
         target_axis, corrected, _ = preprocess_single_spectrum(
             wavenumbers,
             intensities,
-            cut_min=input_config.cut_min,
-            cut_max=input_config.cut_max,
-            reference_wavenumbers=reference_axis,
-            bad_bands=input_config.bad_bands,
-            baseline_lam=build_config.baseline_lam,
-            baseline_asls_p=build_config.baseline_asls_p,
-            baseline_max_iter=build_config.baseline_max_iter,
-            baseline_fit_min=build_config.baseline_fit_min,
-            baseline_fit_max=build_config.baseline_fit_max,
-            baseline_method=build_config.baseline_method,
+            **options,
         )
         if target_axis is None:
             continue

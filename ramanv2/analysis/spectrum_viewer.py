@@ -18,12 +18,7 @@ from ramanv2.data.config import DataBuildConfig, build_cosmic_ray_options, resol
 from ramanv2.data.profiles import resolve_selection
 from ramanv2.data.runtime.input import InputPreprocessor
 from ramanv2.spectra.axis import build_wn_ref
-from ramanv2.spectra.bad_bands import build_valid_mask
-from ramanv2.spectra.preprocess import (
-    estimate_baseline,
-    remove_cosmic_rays,
-    smooth_baseline_input,
-)
+from ramanv2.spectra.preprocess import fit_baseline_spectrum
 
 
 @dataclass(frozen=True)
@@ -101,42 +96,27 @@ def prepare_single_spectrum(
 
     build_config_value = resolve_build_config(build_values)
     cosmic_options = build_cosmic_ray_options(profile_id, build_config_value)
-    cleaned_intensity = np.asarray(raw_intensity, dtype=np.float32)
-    cosmic_stats = 0
-    if cosmic_options["cosmic_ray_enable"]:
-        cleaned_intensity, stats = remove_cosmic_rays(
-            cleaned_intensity,
-            window_points=cosmic_options["cosmic_ray_window_points"],
-            threshold=cosmic_options["cosmic_ray_threshold"],
-            max_iter=cosmic_options["cosmic_ray_max_iter"],
-        )
-        cosmic_stats = int(stats)
-
-    fit_mask = (
-        (wavenumbers >= build_config_value.baseline_fit_min)
-        & (wavenumbers <= build_config_value.baseline_fit_max)
+    baseline_wavenumbers, corrected_all, cleaned_intensity, baseline, cosmic_stats = fit_baseline_spectrum(
+        wavenumbers,
+        raw_intensity,
+        baseline_fit_min=build_config_value.baseline_fit_min,
+        baseline_fit_max=build_config_value.baseline_fit_max,
+        bad_bands=input_config.bad_bands,
+        baseline_lam=build_config_value.baseline_lam,
+        baseline_asls_p=build_config_value.baseline_asls_p,
+        baseline_max_iter=build_config_value.baseline_max_iter,
+        baseline_method=build_config_value.baseline_method,
+        **cosmic_options,
     )
-    baseline_wavenumbers = np.asarray(wavenumbers[fit_mask], dtype=np.float32)
-    baseline_input = np.asarray(cleaned_intensity[fit_mask], dtype=np.float32)
     if baseline_wavenumbers.size < 10:
         raise ValueError(f"基线拟合范围内的有效波数点不足：{path}")
 
-    fit_valid_mask = build_valid_mask(baseline_wavenumbers, input_config.bad_bands)
-    baseline = estimate_baseline(
-        smooth_baseline_input(baseline_input),
-        method=build_config_value.baseline_method,
-        lam=build_config_value.baseline_lam,
-        p=build_config_value.baseline_asls_p,
-        niter=build_config_value.baseline_max_iter,
-        valid_mask=fit_valid_mask,
-    )
-    corrected = baseline_input - baseline
     crop_mask = (
         (baseline_wavenumbers >= input_config.cut_min)
         & (baseline_wavenumbers <= input_config.cut_max)
     )
     corrected_wavenumbers = baseline_wavenumbers[crop_mask]
-    corrected_intensity = np.asarray(corrected[crop_mask], dtype=np.float32)
+    corrected_intensity = np.asarray(corrected_all[crop_mask], dtype=np.float32)
     if corrected_wavenumbers.size < 10:
         raise ValueError(f"裁切范围内的有效波数点不足：{path}")
 
@@ -170,7 +150,7 @@ def prepare_single_spectrum(
         corrected_intensity=corrected_intensity,
         input_wavenumbers=input_wavenumbers,
         model_channels=np.asarray(model_channels, dtype=np.float32),
-        cosmic_ray_replaced=cosmic_stats,
+        cosmic_ray_replaced=int(cosmic_stats.cosmic_ray),
     )
 
 

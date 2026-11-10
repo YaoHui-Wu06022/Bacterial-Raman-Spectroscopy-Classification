@@ -70,7 +70,7 @@ def select_profile_id(spec: DatasetSpec, profile_key: str | None = None) -> str:
     """在数据集内选择 profile；空键取 dataset.json 默认项，再取第一个。"""
     key = "" if profile_key is None else str(profile_key).strip()
     if spec.is_flat:
-        if key and key not in (FLAT_PROFILE_ID, spec.dataset_id):
+        if key and key != FLAT_PROFILE_ID:
             raise KeyError(
                 f"扁平数据集 {spec.dataset_id} 只有 profile {FLAT_PROFILE_ID}"
             )

@@ -167,7 +167,6 @@ class Config:
     def to_shared_dict(self) -> dict[str, Any]:
         """导出实验根共享的数据集、profile 与输入快照。"""
         data = _yaml_ready(asdict(self.dataset) | asdict(self.input))
-        data["dataset_name"] = data.pop("profile_id")
         data["label_schema"] = self.dataset.label_schema
         return data
 
@@ -187,13 +186,6 @@ class Config:
 def build_config(values: Mapping[str, Any] | None = None) -> Config:
     """用扁平快照或局部覆盖构建不可变配置对象。"""
     source = dict(values or {})
-    if "profile_id" not in source and "dataset_name" in source:
-        source["profile_id"] = source["dataset_name"]
-    # 旧快照没有 dataset_id；留空后由 dataset 配置的默认数据集解析。
-    if "dataset_id" not in source:
-        source["dataset_id"] = ""
-    if "scheduler_t_max" not in source and "scheduler_Tmax" in source:
-        source["scheduler_t_max"] = source["scheduler_Tmax"]
     return Config(
         dataset=_build_group(DatasetConfig, source),
         input=_build_group(InputConfig, source),
