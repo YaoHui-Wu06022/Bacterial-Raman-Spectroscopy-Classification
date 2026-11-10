@@ -878,7 +878,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         for entry in full_init_report.get("test_exports", [])
         if isinstance(entry, dict) and entry.get("target") and entry.get("source")
     }
-    configured_defaults = set(_load_configured_default_sources() or [])
+    configured_defaults = set(_load_configured_default_sources(context) or [])
     prefix_to_genus = {
         prefix: genus
         for genus, prefixes in catalog.genera.items()

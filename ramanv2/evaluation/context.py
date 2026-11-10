@@ -10,7 +10,7 @@ import numpy as np
 
 from ramanv2.core.config import Config, build_config
 from ramanv2.core.config_snapshot import SHARED_CONFIG_NAME, read_yaml_dict
-from ramanv2.core.run_context import HIERARCHY_META_FILE_NAME, VAL_RESULT_DIR_NAME
+from ramanv2.core.run_context import HIERARCHY_META_FILE_NAME
 from ramanv2.common.hierarchy import assert_hierarchy_compatible, load_hierarchy_meta, validate_label_schema
 from ramanv2.core.input_spec import InputSpec, build_input_spec
 from ramanv2.common.paths import find_ancestor_dir
@@ -46,7 +46,7 @@ class RunEntry:
 
 
 def load_evaluation_context(source_dir: Path | str) -> EvaluationContext:
-    """从实验或 run 目录读取评估所需的不可变输入。"""
+    """从实验或模型槽位目录读取评估所需的不可变输入。"""
     source_path = Path(source_dir).resolve()
     experiment_dir = resolve_experiment_dir(source_path)
     shared_values = read_yaml_dict(experiment_dir / SHARED_CONFIG_NAME)
@@ -109,33 +109,6 @@ def resolve_run_entry(context: EvaluationContext) -> RunEntry:
             if run_dir == context.source_dir:
                 return RunEntry(str(level_name), int(parent_text), values, run_dir)
     raise FileNotFoundError(f"hierarchy_meta.json 未记录 run：{context.source_dir}")
-
-
-def resolve_result_dir(
-    context: EvaluationContext,
-    level_name: str,
-    kind: str,
-    mode: str,
-    run_entry: RunEntry | None = None,
-) -> Path:
-    """解析模型或 baseline 的既有结果目录槽位。"""
-    names = {
-        "model": VAL_RESULT_DIR_NAME,
-        "baseline": f"baseline_{VAL_RESULT_DIR_NAME}",
-    }
-    if kind not in names:
-        raise ValueError(f"未知评估类型：{kind}")
-    if mode == "run":
-        if run_entry is None:
-            raise ValueError("run 模式必须提供 RunEntry")
-        return run_entry.run_dir / names[kind]
-    roots = {
-        "parent-routed": "level_only_result",
-        "cascade": "cascade_result",
-    }
-    if mode not in roots:
-        raise ValueError(f"未知评估模式：{mode}")
-    return context.experiment_dir / level_name / roots[mode] / names[kind]
 
 
 def resolve_run_class_ids(dataset_index: Any, run_entry: Any) -> list[int]:

@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import torch
 
 from ramanv2.common.file_ops import read_json, write_json
+
+if TYPE_CHECKING:
+    import torch
 
 
 ROOT_TAG = "__root__"
@@ -102,7 +103,7 @@ def validate_label_schema(values: Mapping[str, Any]) -> None:
 def assert_hierarchy_compatible(existing_meta: Mapping[str, Any], current_meta: Mapping[str, Any]) -> None:
     """保证补训练、评估和元数据合并不会改变分类头对应的标签顺序。"""
     validate_label_schema(existing_meta)
-    for key in ("head_names", "class_names_by_level", "parent_to_children", "parent_level_name"):
+    for key in ("head_names", "class_names_by_level", "parent_to_children"):
         if existing_meta.get(key) != current_meta.get(key):
             raise ValueError(f"实验标签空间不一致：{key}，请使用新实验目录。")
 
@@ -121,78 +122,33 @@ def build_hierarchy_entry(
     run_dir: Path | str | None,
     model_path: Path | str | None,
     *,
-    config_path: Path | str | None = None,
-    resolved_config_path: Path | str | None = None,
-    train_split_path: Path | str | None = None,
-    val_split_path: Path | str | None = None,
-    split_hash: str | None = None,
     log_path: Path | str | None = None,
     trained_at: str | None = None,
     child_ids: list[int] | None = None,
-    child_names: list[str] | None = None,
-    status: str = "trained",
 ) -> dict[str, Any]:
     """构建一个全局层或父类子模型的层级条目。"""
     entry: dict[str, Any] = {
         "run_dir": None if run_dir is None else str(run_dir),
         "model_path": None if model_path is None else str(model_path),
-        "status": status,
     }
-    optional_paths = {
-        "config_path": config_path,
-        "resolved_config_path": resolved_config_path,
-        "train_split_path": train_split_path,
-        "val_split_path": val_split_path,
-        "log_path": log_path,
-    }
-    entry.update(
-        {
-            key: None if value is None else str(value)
-            for key, value in optional_paths.items()
-        }
-    )
-    if split_hash is not None:
-        entry["split_hash"] = split_hash
+    if log_path is not None:
+        entry["log_path"] = str(log_path)
     if trained_at is not None:
         entry["trained_at"] = trained_at
     if child_ids is not None:
         entry["child_ids"] = list(child_ids)
-    if child_names is not None:
-        entry["child_names"] = list(child_names)
     return entry
-
-
-def compute_split_hash(
-    train_split_path: Path | str,
-    validation_split_path: Path | str,
-) -> str | None:
-    """计算 train/validation 切分文件共同对应的稳定哈希。"""
-    paths = (Path(train_split_path), Path(validation_split_path))
-    if not all(path.is_file() for path in paths):
-        return None
-    digest = hashlib.sha256()
-    for path in paths:
-        digest.update(path.name.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\n")
-    return digest.hexdigest()
 
 
 def build_hierarchy_meta(
     head_names: list[str],
     class_names_by_level: dict[str, list[str]],
     parent_to_children: dict[str, dict[str, list[int]]],
-    parent_level_name: dict[str, str | None],
-    current_train_level: str,
     level_models: dict[str, dict[str, Any]],
     parent_models: dict[str, dict[str, dict[str, Any]]],
-    runs: dict[str, list[dict[str, Any]]],
     *,
-    dataset_id: str | None = None,
     label_schema: str = LABEL_SCHEMA,
     hierarchy: Mapping[str, Any] | None = None,
-    hierarchy_signature: str | None = None,
 ) -> dict[str, Any]:
     """构建 ``hierarchy_meta.json`` 的完整可读取内容。
 
@@ -200,18 +156,12 @@ def build_hierarchy_meta(
     """
     return {
         "label_schema": label_schema,
-        "dataset_id": dataset_id,
         "hierarchy": dict(hierarchy) if hierarchy is not None else None,
-        "hierarchy_signature": hierarchy_signature,
         "head_names": list(head_names),
-        "level_names": list(head_names),
         "class_names_by_level": class_names_by_level,
         "parent_to_children": parent_to_children,
-        "parent_level_name": parent_level_name,
-        "current_train_level": current_train_level,
         "level_models": level_models,
         "parent_models": parent_models,
-        "runs": runs,
     }
 
 
@@ -219,7 +169,7 @@ def merge_hierarchy_meta(
     existing_meta: dict[str, Any] | None,
     current_meta: dict[str, Any],
 ) -> dict[str, Any]:
-    """以当前数据集结构为准，合并已有模型条目与 run 历史。"""
+    """以当前数据集结构为准，合并已有模型条目。"""
     if existing_meta is None:
         return current_meta
     validate_label_schema(current_meta)
@@ -232,10 +182,6 @@ def merge_hierarchy_meta(
     merged_meta["parent_models"] = _merge_parent_entries(
         existing_meta.get("parent_models"),
         current_meta.get("parent_models"),
-    )
-    merged_meta["runs"] = _merge_run_history(
-        existing_meta.get("runs"),
-        current_meta.get("runs"),
     )
     return merged_meta
 
@@ -264,24 +210,6 @@ def _merge_parent_entries(
         entries.setdefault(str(level_name), {})
         entries[str(level_name)].update(parent_entries)
     return entries
-
-
-def _merge_run_history(
-    existing_runs: Any,
-    current_runs: Any,
-) -> dict[str, list[dict[str, Any]]]:
-    """合并每个模型槽位的 run 历史，并避免重复条目。"""
-    history = {
-        str(slot_name): list(entries)
-        for slot_name, entries in (existing_runs or {}).items()
-        if isinstance(entries, list)
-    }
-    for slot_name, entries in (current_runs or {}).items():
-        target = history.setdefault(str(slot_name), [])
-        for entry in entries:
-            if entry not in target:
-                target.append(entry)
-    return history
 
 
 def write_hierarchy_meta(path: Path | str, meta: dict[str, Any]) -> None:

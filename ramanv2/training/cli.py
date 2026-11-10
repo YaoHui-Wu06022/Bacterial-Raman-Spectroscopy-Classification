@@ -10,11 +10,9 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dataset", default=None, help="数据集标识；默认按 profile 归属解析")
     parser.add_argument("--profile", required=True, help="常规数据集 profile 标识")
     parser.add_argument("--level", required=True, help="训练层级，如 level_1")
-    parser.add_argument("--parent", default=None, help="仅训练指定父类的子模型，可为名称或索引")
-    parser.add_argument("--global", action="store_true", dest="global_enable", help="训练该层唯一的全局模型")
+    parser.add_argument("--parent", default=None, help="目标父类名称或索引；除首层外必填")
     parser.add_argument("--experiment-dir", default=None, help="固定实验根目录")
-    parser.add_argument("--run-name", default=None, help="本次训练的 run 目录名")
-    parser.add_argument("--resume-run-dir", default=None, help="从指定 run 目录恢复训练")
+    parser.add_argument("--resume-run-dir", default=None, help="从指定模型槽位目录恢复训练")
     parser.set_defaults(run_command=run_command)
 
 
@@ -31,7 +29,7 @@ def run_command(args: argparse.Namespace) -> int:
     from ramanv2.data.profiles import resolve_selection
     from ramanv2.training.workflow import TrainRequest, run_training
 
-    only_parent, only_parent_name = _resolve_parent(args.parent)
+    parent_id, parent_name = _resolve_parent(args.parent)
     selection = resolve_selection(args.dataset, args.profile)
     spec = selection.spec
     config = build_config(
@@ -45,11 +43,9 @@ def run_command(args: argparse.Namespace) -> int:
     request = TrainRequest(
         config=config,
         level_name=args.level,
-        only_parent=only_parent,
-        only_parent_name=only_parent_name,
-        train_per_parent_enable=not args.global_enable,
+        parent_id=parent_id,
+        parent_name=parent_name,
         experiment_dir=args.experiment_dir,
-        run_name=args.run_name,
         resume_run_dir=args.resume_run_dir,
     )
     run_training(request)

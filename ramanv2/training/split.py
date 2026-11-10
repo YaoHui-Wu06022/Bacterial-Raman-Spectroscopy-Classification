@@ -13,16 +13,8 @@ from ramanv2.common.hierarchy import select_parent_indices
 from ramanv2.common.paths import normalize_relpath
 
 
-DEFAULT_SPLIT_LEVEL = "leaf"
 TRAIN_SPLIT_FILE_NAME = "train_split.json"
 VAL_SPLIT_FILE_NAME = "val_split.json"
-@dataclass(frozen=True)
-class TrainScope:
-    """一次训练使用的父类与样本筛选约束。"""
-
-    only_parent: int | None
-    filter_level: str | None
-    filter_values: tuple[Any, ...] | None
 
 
 @dataclass(frozen=True)
@@ -81,7 +73,7 @@ def build_parent_train_task(
     train_indices: np.ndarray | list[int],
     val_indices: np.ndarray | list[int],
 ) -> TrainTask | None:
-    """构建指定父类内的子模型任务；单子类时返回 ``None``。"""
+    """构建指定父类内的子模型任务；样本从实验级切分中筛选，保证与上层同源。"""
     resolved_level = dataset.resolve_level_name(level_name)
     parent_level = dataset.get_parent_level(resolved_level)
     if parent_level is None:
@@ -217,12 +209,12 @@ def _map_split_paths(
 
 def split_by_lowest_level_ratio(
     dataset: Any,
-    lowest_level: str = DEFAULT_SPLIT_LEVEL,
     train_ratio: float = 0.8,
     seed: int = 42,
     min_train_samples: int = 1,
 ) -> tuple[list[int], list[int]]:
-    """按指定层级分组，执行样本级 train/val 切分。"""
+    """按最后一个真实层级分组，执行样本级 train/val 切分。"""
+    lowest_level = dataset.level_names[-1]
     return _split_indices_by_sample(dataset, lowest_level, train_ratio, seed, min_train_samples)
 
 
@@ -256,14 +248,13 @@ def _split_indices_by_sample(
 
 
 def _resolve_split_group_key(dataset: Any, index: int, lowest_level: str) -> Any:
-    """读取样本在指定 split 层级中的分组键，并在缺失时回退到 leaf。"""
-    if "/" in str(lowest_level):
-        group_key = dataset.get_split_key(index, lowest_level)
-    elif lowest_level == DEFAULT_SPLIT_LEVEL:
-        group_key = dataset.get_leaf_key(index)
-    else:
-        group_key = dataset.get_level_key(index, lowest_level)
-    return dataset.get_leaf_key(index) if group_key is None else group_key
+    """读取样本在最后一个真实层级中的分组键。"""
+    group_key = dataset.get_level_key(index, lowest_level)
+    if group_key is None:
+        raise ValueError(
+            f"样本缺少 {lowest_level} 类别：{dataset.samples[index]}"
+        )
+    return group_key
 
 
 def resolve_train_split(
@@ -273,7 +264,7 @@ def resolve_train_split(
     split_dir: Path | str,
     reuse_existing_enable: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """生成或复用训练切分，返回排序后的索引数组。"""
+    """生成或复用实验级训练切分；同实验内所有模型共用同一份索引。"""
     existing_split = load_split_files(dataset, split_dir) if reuse_existing_enable else None
     if existing_split is not None:
         train_indices, val_indices = existing_split
@@ -296,71 +287,36 @@ def resolve_train_split(
     return np.array(sorted(train_indices)), np.array(sorted(val_indices))
 
 
-def build_train_scope(
+def resolve_parent_target(
     dataset: Any,
-    current_train_level: str,
-    head_name_to_index: dict[str, int],
-    *,
-    only_parent: int | None = None,
-    only_parent_name: str | None = None,
-    filter_level: str | None = None,
-    filter_value: object | None = None,
-) -> TrainScope:
-    """从训练请求解析父类与筛选约束。"""
-    if only_parent_name is not None and only_parent is None:
-        parent_level = dataset.get_parent_level(current_train_level)
-        if parent_level is None:
-            raise ValueError(f"{current_train_level} 没有父层，不能使用 train_only_parent_name")
-        parent_level_index = head_name_to_index[parent_level]
-        only_parent = _resolve_parent_index_by_name(dataset, parent_level_index, only_parent_name)
-        if only_parent is None:
-            raise ValueError(f"{parent_level} 中找不到父类名称：{only_parent_name}")
-        if filter_level is None and filter_value is None:
-            filter_level = parent_level
-            filter_value = only_parent_name
-
-    filter_values = _normalize_filter_values(filter_value)
-    return TrainScope(
-        only_parent=None if only_parent is None else int(only_parent),
-        filter_level=filter_level,
-        filter_values=filter_values,
-    )
-
-
-def apply_train_filter(
-    dataset: Any,
-    train_indices: np.ndarray,
-    val_indices: np.ndarray,
-    train_scope: TrainScope,
-    head_name_to_index: dict[str, int],
-) -> tuple[np.ndarray, np.ndarray]:
-    """根据冻结的训练范围过滤 train/val 样本。"""
-    if not train_scope.filter_level or train_scope.filter_values is None:
-        return train_indices, val_indices
-
-    filter_level = dataset.resolve_level_name(train_scope.filter_level)
-    if filter_level not in head_name_to_index:
-        raise ValueError(f"未知过滤层级：{filter_level}；可选值：{dataset.head_names}")
-    level_index = head_name_to_index[filter_level]
-    desired_ids = _resolve_filter_ids(dataset, level_index, train_scope.filter_values)
-    labels = dataset.level_labels[:, level_index]
-    mask = np.isin(labels, list(desired_ids))
-    filtered_train = train_indices[mask[train_indices]]
-    filtered_val = val_indices[mask[val_indices]]
-    print(
-        f"[Filter] level={filter_level}, values={list(train_scope.filter_values)} -> "
-        f"Train {len(filtered_train)}, Val {len(filtered_val)}"
-    )
-    return filtered_train, filtered_val
-
-
-def _normalize_filter_values(value: Any) -> tuple[Any, ...] | None:
-    """将单个或多个过滤值统一为不可变元组。"""
-    if value is None:
+    level_name: str,
+    parent_id: int | None,
+    parent_name: str | None,
+) -> int | None:
+    """解析本次训练的目标父类；首层返回 None，其余层级必须指定 parent。"""
+    resolved_level = dataset.resolve_level_name(level_name)
+    parent_level = dataset.get_parent_level(resolved_level)
+    if parent_level is None:
+        if parent_id is not None or parent_name is not None:
+            raise ValueError(f"{resolved_level} 没有父层，不能指定 parent")
         return None
-    if isinstance(value, (list, tuple, set)):
-        return tuple(value)
-    return (value,)
+    if parent_id is not None and parent_name is not None:
+        raise ValueError("parent_id 与 parent_name 只能指定一个")
+    if parent_name is not None:
+        parent_level_index = dataset.head_name_to_idx[parent_level]
+        parent_id = _resolve_parent_index_by_name(
+            dataset,
+            parent_level_index,
+            parent_name,
+        )
+        if parent_id is None:
+            raise ValueError(f"{parent_level} 中找不到父类名称：{parent_name}")
+    if parent_id is None:
+        raise ValueError(f"训练 {resolved_level} 必须指定 parent（父类索引或名称）")
+    parent_id = int(parent_id)
+    if parent_id not in dataset.parent_to_children.get(resolved_level, {}):
+        raise ValueError(f"{parent_level} 中不存在父类索引：{parent_id}")
+    return parent_id
 
 
 def _resolve_parent_index_by_name(
@@ -370,27 +326,6 @@ def _resolve_parent_index_by_name(
 ) -> int | None:
     """读取指定父层名称对应的全局类别索引。"""
     return dataset.label_maps_by_level[parent_level_index].get(parent_name)
-
-
-def _resolve_filter_ids(
-    dataset: Any,
-    level_index: int,
-    filter_values: tuple[Any, ...],
-) -> set[int]:
-    """将过滤名称或索引转换为当前层级的全局类别索引集合。"""
-    desired_ids: set[int] = set()
-    for value in filter_values:
-        if isinstance(value, int):
-            desired_ids.add(value)
-            continue
-        label_index = dataset.label_maps_by_level[level_index].get(str(value))
-        if label_index is None:
-            print(f"[Warn] 当前层级中找不到过滤值：{value}")
-            continue
-        desired_ids.add(int(label_index))
-    if not desired_ids:
-        raise ValueError("没有解析出有效的 train_filter_value，请检查配。")
-    return desired_ids
 
 
 def build_label_map_np(

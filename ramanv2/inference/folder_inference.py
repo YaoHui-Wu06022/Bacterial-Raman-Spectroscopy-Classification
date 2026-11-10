@@ -14,10 +14,11 @@ import torch
 
 from ramanv2.common.device import resolve_device
 from ramanv2.common.file_ops import publish_directory
+from ramanv2.common.paths import find_ancestor_dir
+from ramanv2.core.run_context import HIERARCHY_META_FILE_NAME, INFERENCE_RESULT_DIR_NAME
 from ramanv2.data.hierarchy_config import HierarchySpec, resolve_hierarchy_from_meta
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.data.profiles import resolve_selection
-from ramanv2.modeling.run_manifest import write_run_manifest
 from ramanv2.inference.folder_report import (
     plot_folder_spectra,
     write_file_report,
@@ -50,7 +51,6 @@ def run_independent_inference(
     level_name: int | str,
     *,
     predictor: Predictor | None = None,
-    model_run_dir: Path | str | None = None,
     input_dir: Path | str | None = None,
     one_dir: Path | str | None = None,
     top_k: int = 3,
@@ -60,19 +60,17 @@ def run_independent_inference(
     cached_test_root: Path | str | None = None,
     folder_names: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> Path:
-    """运行独立文件夹推理并发布 `test_result/` 产物目录。
+    """运行层级级联样本推理并发布 `inference_result/` 产物目录。
 
     每个文件夹按 cell 分组随机抽取最多 ``INFERENCE_SAMPLES_PER_FOLDER`` 条，
     同一 cell 至多一条。
     """
     target_device = predictor.device if predictor is not None else resolve_device(device)
     if predictor is None:
-        predictor = load_predictor(
-            source_dir,
-            target_device,
-            level_name,
-            model_run_dir=model_run_dir,
-        )
+        experiment_dir = find_ancestor_dir(source_dir, HIERARCHY_META_FILE_NAME)
+        predictor = load_predictor(experiment_dir, target_device, level_name)
+    elif predictor.run_dir is not None:
+        raise ValueError("inference_result 只记录级联预测，请从实验根加载模型")
     preprocessor = build_inference_preprocessor(predictor.input_spec, target_device)
     cached_folders: list[CachedFolder] | None = None
     test_dir = _resolve_test_dir(predictor, input_dir)
@@ -126,17 +124,11 @@ def run_independent_inference(
         )
         summary = write_summary_report(temp_dir / SUMMARY_TEXT_NAME, rows, evaluate_enable)
         write_summary_json(temp_dir / SUMMARY_JSON_NAME, summary)
-        write_run_manifest(
-            temp_dir / "used_runs.json",
-            "single_run" if predictor.run_dir is not None else "cascade",
-            predictor.predict_level,
-            predictor.build_used_runs(),
-        )
         publish_directory(temp_dir, target_dir)
     except Exception:
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise
-    print(f"[Saved] independent test results -> {target_dir}")
+    print(f"[Saved] cascade inference results -> {target_dir}")
     return target_dir
 
 
@@ -298,10 +290,8 @@ def _resolve_test_dir(predictor: Predictor, input_dir: Path | str | None) -> Pat
 
 
 def _resolve_result_dir(predictor: Predictor) -> Path:
-    """按实验或 run 模式解析基准一致的 `test_result/` 目录。"""
-    if predictor.run_dir is not None:
-        return predictor.run_dir / "test_result"
-    return predictor.experiment_dir / predictor.predict_level / "test_result"
+    """返回层级级级联推理结果目录。"""
+    return predictor.experiment_dir / predictor.predict_level / INFERENCE_RESULT_DIR_NAME
 
 
 def _build_train_mean_bank(predictor: Predictor, preprocessor) -> dict[str, np.ndarray]:

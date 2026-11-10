@@ -14,8 +14,6 @@ from ramanv2.common.hierarchy import validate_label_schema
 
 
 SHARED_CONFIG_NAME = "shared_config.yaml"
-MODEL_CONFIG_NAME = "model_config.yaml"
-RESOLVED_CONFIG_NAME = "resolved_config.yaml"
 
 
 def read_yaml_dict(path: Path | str) -> dict[str, Any]:
@@ -50,42 +48,22 @@ def write_yaml_dict(path: Path | str, data: Mapping[str, Any]) -> None:
 
 
 def write_shared_config(path: Path | str, config: Config) -> None:
-    """保存实验根共享的 profile 与输入快照。"""
-    write_yaml_dict(path, config.to_shared_dict())
-
-
-def write_model_config(
-    path: Path | str,
-    config: Config,
-    task_values: Mapping[str, Any] | None = None,
-) -> None:
-    """保存单个模型 run 的模型、训练与任务范围快照。"""
-    write_yaml_dict(path, config.to_model_dict() | dict(task_values or {}))
-
-
-def write_resolved_config(
-    path: Path | str,
-    config: Config,
-    task_values: Mapping[str, Any] | None = None,
-    path_values: Mapping[str, Any] | None = None,
-) -> None:
-    """保存完整配置、任务范围与已解析路径快照。"""
-    data = config.to_dict() | dict(task_values or {}) | dict(path_values or {})
-    write_yaml_dict(path, data)
+    """保存实验根唯一的完整配置快照。"""
+    write_yaml_dict(path, config.to_dict())
 
 
 def assert_shared_compatible(config: Config, shared_values: Mapping[str, Any]) -> None:
-    """确认当前输入快照与实验根已有快照一致。"""
+    """确认当前完整配置与实验根已有快照一致。"""
     validate_label_schema(shared_values)
     shared = dict(shared_values)
-    current = config.to_shared_dict()
+    current = config.to_dict()
     mismatches = [
-        key
+        f"{key}: {shared.get(key)!r} != {value!r}"
         for key, value in current.items()
-        if value != shared.get(key)
+        if shared.get(key) != value
     ]
     if mismatches:
-        raise ValueError(f"实验根共享配置不一致：{', '.join(mismatches)}")
+        raise ValueError("实验根共享配置不一致：\n" + "\n".join(mismatches))
 
 
 def _assert_yaml_ready(data: Mapping[str, Any]) -> None:

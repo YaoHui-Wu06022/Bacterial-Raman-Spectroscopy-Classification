@@ -6,25 +6,28 @@ import argparse
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
-    commands = parser.add_subparsers(dest="command", required=True)
-    interpret = commands.add_parser("interpret", help="运行模型可解释性分析")
-    modes = interpret.add_subparsers(dest="mode", required=True)
-    for name in ("run", "parent-routed"):
-        command = modes.add_parser(name)
-        command.add_argument("--source-dir", required=True)
-        command.add_argument("--level", required=True)
-        command.add_argument("--cpu", action="store_true")
-        if name == "parent-routed":
-            command.add_argument("--parent", default=None)
-        command.set_defaults(run_command=run_command)
+    parser.add_argument(
+        "--source-dir",
+        required=True,
+        help="模型槽位目录；--level-summary 时为实验目录",
+    )
+    parser.add_argument("--level", required=True)
+    parser.add_argument("--cpu", action="store_true")
+    parser.add_argument(
+        "--level-summary",
+        action="store_true",
+        dest="level_summary_enable",
+        help="聚合该层多个模型的归因",
+    )
+    parser.set_defaults(run_command=run_command)
 
 
 def run_command(args: argparse.Namespace) -> int:
-    from ramanv2.analysis.runner import run_interpret_parent_routed, run_interpret_run
+    from ramanv2.analysis.interpret import interpret_level, interpret_slot
 
     device = "cpu" if args.cpu else None
-    if args.mode == "run":
-        print(run_interpret_run(args.source_dir, args.level, device))
+    if args.level_summary_enable:
+        print(interpret_level(args.source_dir, args.level, device))
     else:
-        print(run_interpret_parent_routed(args.source_dir, args.level, args.parent, device))
+        print(interpret_slot(args.source_dir, args.level, device))
     return 0

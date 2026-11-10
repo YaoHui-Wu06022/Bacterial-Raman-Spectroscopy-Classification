@@ -110,6 +110,5 @@ def render_dataset_config_page(context: PageContext) -> None:
             render_action_error("保存", error)
             return
         st.session_state["dataset_id"] = dataset_id
-        st.session_state["dataset_selector"] = dataset_id
         invalidate_ui_cache(*INVALIDATE_ALL)
         st.rerun()

@@ -19,7 +19,6 @@ from ramanv2.common.hierarchy import (
     assert_hierarchy_compatible,
     build_hierarchy_entry,
     build_hierarchy_meta,
-    compute_split_hash,
     load_hierarchy_meta,
     merge_hierarchy_meta,
     write_hierarchy_meta,
@@ -27,6 +26,7 @@ from ramanv2.common.hierarchy import (
 from ramanv2.core.input_spec import build_input_spec
 from ramanv2.common.paths import PROJECT_ROOT, relpath, resolve_path
 from ramanv2.core.run_context import (
+    CHECKPOINT_FILE_NAME,
     ExperimentContext,
     RunContext,
     open_experiment_context,
@@ -41,13 +41,12 @@ from ramanv2.modeling.factory import build_model, validate_model_input
 from ramanv2.modeling.model_spec import ModelSpec, build_model_spec
 from ramanv2.training.loop import TrainArtifacts, TrainResult, run_train_loop
 from ramanv2.training.optimizer import build_loader
-from ramanv2.training.snapshot import save_or_validate_train_snapshot
+from ramanv2.training.snapshot import save_or_validate_train_archive
 from ramanv2.training.split import (
     TrainTask,
-    apply_train_filter,
     build_global_train_task,
     build_parent_train_task,
-    build_train_scope,
+    resolve_parent_target,
     resolve_train_split,
 )
 from ramanv2.training.train_spec import (
@@ -64,21 +63,17 @@ class TrainRequest:
 
     config: Config
     level_name: str
-    only_parent: int | None = None
-    only_parent_name: str | None = None
-    filter_level: str | None = None
-    filter_value: object | None = None
-    train_per_parent_enable: bool = True
+    parent_id: int | None = None
+    parent_name: str | None = None
     experiment_dir: Path | str | None = None
     train_dir: Path | str | None = None
-    run_name: str | None = None
     resume_run_dir: Path | str | None = None
     initialize_model: Callable[[torch.nn.Module, TrainTask], None] | None = None
     apply_training_mode: Callable[[torch.nn.Module], None] | None = None
 
 
 def run_training(request: TrainRequest) -> dict[str, Any]:
-    """按当前配置枚举任务、训练模型并汇总层级元数据。"""
+    """训练一个模型，并把它的条目合并进实验层级元数据。"""
     config = request.config
     input_spec = build_input_spec(config.input)
     train_spec = build_training_spec(config.training, config.execution)
@@ -98,21 +93,22 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
         hierarchy=dataset_spec.hierarchy,
     )
     level_name = dataset_index.resolve_level_name(request.level_name)
+    parent_id = resolve_parent_target(
+        dataset_index,
+        level_name,
+        request.parent_id,
+        request.parent_name,
+    )
     level_models: dict[str, dict[str, Any]] = {}
     parent_models: dict[str, dict[str, dict[str, Any]]] = {}
-    runs: dict[str, list[dict[str, Any]]] = {}
     current_meta = build_hierarchy_meta(
         **dataset_index.hierarchy_metadata,
-        current_train_level=level_name,
         level_models=level_models,
         parent_models=parent_models,
-        runs=runs,
-        dataset_id=dataset_spec.dataset_id,
         label_schema=dataset_spec.hierarchy.label_schema,
         hierarchy=dataset_index.hierarchy.to_payload(),
-        hierarchy_signature=dataset_spec.hierarchy_signature(),
     )
-    # 先检查历史标签空间，避免创建 run、改写快照后才发现分类头不兼容。
+    # 先检查历史标签空间，避免创建槽位、改写快照后才发现分类头不兼容。
     if existing_meta is not None:
         assert_hierarchy_compatible(existing_meta, current_meta)
     experiment_context = open_experiment_context(experiment_dir, config)
@@ -122,34 +118,13 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
         train_spec.seed,
         experiment_context.experiment_dir,
     )
-    train_scope = build_train_scope(
+    save_or_validate_train_archive(experiment_context, dataset_index, train_indices)
+    train_task = _build_train_task(
         dataset_index,
         level_name,
-        dataset_index.head_name_to_idx,
-        only_parent=request.only_parent,
-        only_parent_name=request.only_parent_name,
-        filter_level=request.filter_level,
-        filter_value=request.filter_value,
-    )
-    train_indices, validation_indices = apply_train_filter(
-        dataset_index,
+        parent_id,
         train_indices,
         validation_indices,
-        train_scope,
-        dataset_index.head_name_to_idx,
-    )
-    train_tasks, skipped_entries = _build_train_tasks(
-        dataset_index,
-        level_name,
-        train_indices,
-        validation_indices,
-        train_scope.only_parent,
-        request.train_per_parent_enable,
-    )
-    _validate_resume_scope(
-        request.resume_run_dir,
-        train_scope.only_parent,
-        request.train_per_parent_enable,
     )
 
     train_dataset = RamanDataset(
@@ -159,40 +134,32 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
         augmentation_enable=True,
     )
     validation_dataset = RamanDataset(dataset_index, input_spec, cache_input_enable=True)
-    if skipped_entries:
-        parent_models[level_name] = skipped_entries
-
-    run_name = _build_run_name(request)
-    for train_task in train_tasks:
-        run_context = _open_task_run_context(
-            experiment_context,
-            train_task,
-            run_name,
-            request,
-            runtime_spec.resume_enable,
+    run_context = _open_task_run_context(
+        experiment_context,
+        train_task,
+        request,
+        runtime_spec.resume_enable,
+    )
+    try:
+        run_context.write_log(
+            f"[{train_task.model_tag}] train={len(train_task.train_indices)} "
+            f"validation={len(train_task.val_indices)}"
         )
-        try:
-            run_context.write_log(
-                f"[{train_task.model_tag}] train={len(train_task.train_indices)} "
-                f"validation={len(train_task.val_indices)}"
-            )
-            _validate_task_samples(train_task)
-            save_or_validate_train_snapshot(dataset_index, train_task, run_context)
-            result = _run_train_task(
-                train_task,
-                train_dataset,
-                validation_dataset,
-                model_spec,
-                train_spec,
-                runtime_spec,
-                run_context,
-                request,
-            )
-            entry = _build_run_entry(experiment_context, run_context, result, train_task)
-            _record_train_entry(level_models, parent_models, train_task, entry)
-            runs.setdefault(train_task.model_tag, []).append(entry)
-        finally:
-            run_context.close()
+        _validate_task_samples(train_task)
+        result = _run_train_task(
+            train_task,
+            train_dataset,
+            validation_dataset,
+            model_spec,
+            train_spec,
+            runtime_spec,
+            run_context,
+            request,
+        )
+        entry = _build_run_entry(experiment_context, run_context, result, train_task)
+        _record_train_entry(level_models, parent_models, train_task, entry)
+    finally:
+        run_context.close()
 
     merged_meta = merge_hierarchy_meta(
         load_hierarchy_meta(experiment_context.hierarchy_meta_path),
@@ -246,111 +213,56 @@ def _set_random_seed(seed: int, deterministic_enable: bool) -> None:
         torch.backends.cudnn.benchmark = True
 
 
-def _build_train_tasks(
+def _build_train_task(
     dataset_index: DatasetIndex,
     level_name: str,
+    parent_id: int | None,
     train_indices: np.ndarray,
     validation_indices: np.ndarray,
-    only_parent: int | None,
-    train_per_parent_enable: bool,
-) -> tuple[list[TrainTask], dict[str, dict[str, Any]]]:
-    """构建全局或父类子模型任务，并记录无需训练的单子类父类。"""
-    parent_level = dataset_index.get_parent_level(level_name)
-    if parent_level is None or not train_per_parent_enable:
-        return [
-            build_global_train_task(
-                dataset_index,
-                level_name,
-                train_indices,
-                validation_indices,
-            )
-        ], {}
-
-    tasks: list[TrainTask] = []
-    skipped_entries: dict[str, dict[str, Any]] = {}
-    level_index = dataset_index.head_name_to_idx[level_name]
-    for parent_id, child_ids in dataset_index.parent_to_children[level_name].items():
-        if only_parent is not None and int(parent_id) != only_parent:
-            continue
-        child_names = [
-            dataset_index.class_names_by_level[level_index][child_id]
-            for child_id in child_ids
-        ]
-        train_task = build_parent_train_task(
+) -> TrainTask:
+    """构建本次训练唯一的全局或父类子模型任务。"""
+    if parent_id is None:
+        return build_global_train_task(
             dataset_index,
             level_name,
-            parent_id,
             train_indices,
             validation_indices,
         )
-        if train_task is None:
-            skipped_entries[str(parent_id)] = build_hierarchy_entry(
-                None,
-                None,
-                child_ids=child_ids,
-                child_names=child_names,
-                status="skipped_single_child",
-            )
-        else:
-            tasks.append(train_task)
-    return tasks, skipped_entries
-
-
-def _validate_resume_scope(
-    resume_run_dir: Path | str | None,
-    only_parent: int | None,
-    train_per_parent_enable: bool,
-) -> None:
-    """限制父类子模型恢复训练只能针对一个明确父类。"""
-    if resume_run_dir is not None and train_per_parent_enable and only_parent is None:
-        raise ValueError("恢复父类子模型训练时必须指定 train_only_parent")
-
-
-def _build_run_name(request: TrainRequest) -> str:
-    """为同一次训练生成共享的 run 目录名称。"""
-    if request.run_name is not None:
-        return request.run_name
-    return f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    train_task = build_parent_train_task(
+        dataset_index,
+        level_name,
+        parent_id,
+        train_indices,
+        validation_indices,
+    )
+    if train_task is None:
+        raise ValueError(
+            f"{level_name} 的父类 {parent_id} 只有一个子类，推理会直接继承，无需训练"
+        )
+    return train_task
 
 
 def _open_task_run_context(
     experiment_context: ExperimentContext,
     train_task: TrainTask,
-    run_name: str,
     request: TrainRequest,
-    resume_enable: bool,
+    resume_training_enable: bool,
 ) -> RunContext:
-    """为一个训练任务计算目录并打开对应 run 上下文。"""
+    """为一个训练任务计算槽位目录并打开对应 run 上下文。"""
     run_dir = resolve_run_dir(
         experiment_context,
         train_task.level_name,
         train_task.parent_id,
-        run_name,
         request.resume_run_dir,
+    )
+    resume_enable = request.resume_run_dir is not None or (
+        resume_training_enable and (run_dir / CHECKPOINT_FILE_NAME).is_file()
     )
     return open_run_context(
         experiment_context,
         run_dir,
-        train_task.model_tag,
-        request.config,
         resume_enable=resume_enable,
-        task_values=_build_task_values(request, train_task),
     )
-
-
-def _build_task_values(request: TrainRequest, train_task: TrainTask) -> dict[str, Any]:
-    """导出当前任务范围，写入模型和完整快照。"""
-    values: dict[str, Any] = {
-        "level_name": train_task.level_name,
-        "train_per_parent_enable": request.train_per_parent_enable,
-    }
-    if train_task.parent_id is not None:
-        values["only_parent"] = train_task.parent_id
-    if request.filter_level is not None:
-        values["filter_level"] = request.filter_level
-    if request.filter_value is not None:
-        values["filter_value"] = request.filter_value
-    return values
 
 
 def _validate_task_samples(train_task: TrainTask) -> None:
@@ -416,20 +328,11 @@ def _build_run_entry(
     return build_hierarchy_entry(
         relpath(run_context.run_dir, experiment_dir),
         relpath(train_result.model_path, experiment_dir),
-        config_path=relpath(run_context.model_config_path, experiment_dir),
-        resolved_config_path=relpath(run_context.resolved_config_path, experiment_dir),
-        train_split_path=experiment_context.train_split_path.name,
-        val_split_path=experiment_context.validation_split_path.name,
-        split_hash=compute_split_hash(
-            experiment_context.train_split_path,
-            experiment_context.validation_split_path,
-        ),
         log_path=relpath(run_context.log_path, experiment_dir),
-        trained_at=run_context.run_dir.name.removeprefix("run_"),
+        trained_at=datetime.now().isoformat(timespec="seconds"),
         child_ids=(
             None if train_task.parent_id is None else list(train_task.visible_class_ids)
         ),
-        status="trained",
     )
 
 

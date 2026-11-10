@@ -42,8 +42,8 @@ class DatasetIndex:
 
     @property
     def level_names(self) -> list[str]:
-        """返回不含 leaf 的业务层级名称。"""
-        return list(self.head_names[:-1])
+        """返回业务层级名称。"""
+        return list(self.head_names)
 
     def __len__(self) -> int:
         """返回索引内的光谱样本数。"""
@@ -53,14 +53,6 @@ class DatasetIndex:
     def class_names_by_level(self) -> list[list[str]]:
         """返回每个层级按标签索引排序的类别名称。"""
         return [list(label_map) for label_map in self.label_maps_by_level]
-
-    @property
-    def inv_label_maps_by_level(self) -> list[dict[int, str]]:
-        """返回每个层级的标签索引到类别名称映射。"""
-        return [
-            {index: name for name, index in label_map.items()}
-            for label_map in self.label_maps_by_level
-        ]
 
     @property
     def num_classes_by_level(self) -> dict[str, int]:
@@ -88,7 +80,6 @@ class DatasetIndex:
                 name: {str(parent): children for parent, children in mapping.items()}
                 for name, mapping in self.parent_to_children.items()
             },
-            "parent_level_name": self.parent_level_name,
         }
 
     def get_raw_intensity(self, index: int) -> np.ndarray:
@@ -104,12 +95,6 @@ class DatasetIndex:
         """返回样本的业务层级名称，不构建输入张量。"""
         return dict(self.hier_names[index])
 
-    def get_leaf_key(self, index: int) -> str | None:
-        """返回样本所属 leaf 的稳定类别键。"""
-        leaf_index = self.head_name_to_idx["leaf"]
-        leaf_id = int(self.level_labels[index, leaf_index])
-        return self.inv_label_maps_by_level[leaf_index].get(leaf_id)
-
     def get_level_key(self, index: int, level_name: str) -> str | None:
         """返回样本在指定业务层级的稳定类别键。"""
         return self.hier_names[index].get(self.resolve_level_name(level_name))
@@ -117,21 +102,6 @@ class DatasetIndex:
     def get_parent_level(self, level_name: str) -> str | None:
         """返回指定业务层级的直接父层级。"""
         return self.parent_level_name.get(self.resolve_level_name(level_name))
-
-    def get_split_key(
-        self,
-        index: int,
-        split_mode: str,
-    ) -> str | tuple[str | None, ...] | None:
-        """按一个或多个层级组成用于 train/val 切分的分组键。"""
-        names = split_mode.split("/")
-        keys = [
-            self.get_leaf_key(index)
-            if name == "leaf"
-            else self.get_level_key(index, name)
-            for name in names
-        ]
-        return keys[0] if len(keys) == 1 else tuple(keys)
 
     def resolve_level_name(self, level_name: str) -> str:
         """校验业务层级名称位于当前数据集结构内。"""
@@ -157,7 +127,7 @@ class DatasetIndex:
             raise RuntimeError(f"训练目录中没有 .arc_data 光谱：{self.root_dir}")
 
         level_names = list(spec.level_names)
-        self.head_names = [*level_names, "leaf"]
+        self.head_names = list(level_names)
         self.head_name_to_idx = {
             name: index for index, name in enumerate(self.head_names)
         }
@@ -168,7 +138,6 @@ class DatasetIndex:
         for level in spec.levels:
             learned_mappings.setdefault(level.name, {})
         level_maps = [dict() for _ in level_names]
-        leaf_map: dict[str, int] = {}
         label_records: list[tuple[Path, tuple[str, ...]]] = []
         resolved_records: list[tuple[Path, tuple[str, ...], tuple[str, ...]]] = []
         for path, parts in records:
@@ -185,15 +154,13 @@ class DatasetIndex:
                         value = parse_folder_prefix(group_name)
                 values_list.append(value)
             values = tuple(values_list)
-            leaf_key = parts_to_key(parts)
-            leaf_map.setdefault(leaf_key, len(leaf_map))
             for level_index in range(len(values)):
                 level_key = parts_to_key(values[: level_index + 1])
                 level_maps[level_index].setdefault(level_key, len(level_maps[level_index]))
             resolved_records.append((path, parts, values))
             label_records.append((path, values))
 
-        self.label_maps_by_level = level_maps + [leaf_map]
+        self.label_maps_by_level = level_maps
         self.parent_to_children = _build_parent_to_children(
             label_records,
             level_maps,
@@ -209,7 +176,6 @@ class DatasetIndex:
                 level_key = parts_to_key(values[: level_index + 1])
                 row[level_index] = level_maps[level_index][level_key]
                 hierarchy[level_names[level_index]] = level_key
-            row[-1] = leaf_map[parts_to_key(parts)]
             samples.append(path)
             labels.append(row)
             hierarchies.append(hierarchy)

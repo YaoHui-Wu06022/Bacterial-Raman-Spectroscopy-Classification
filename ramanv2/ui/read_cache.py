@@ -20,6 +20,7 @@ from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.data.count import collect_taxon_counts, summarize_dataset
 from ramanv2.data.hierarchy_config import HierarchySpec
 from ramanv2.data.runtime.index import DatasetIndex
+from ramanv2.modeling.run_manifest import LEVEL_DIR_PATTERN, find_model_slot_dirs
 from ramanv2.pipeline.cleaning import scan_date_names
 
 
@@ -30,6 +31,15 @@ _EXPERIMENT_MARKERS = (
     HIERARCHY_META_FILE_NAME,
 )
 _EXPERIMENT_MIN_MARKERS = (HIERARCHY_META_FILE_NAME,)
+
+
+def _has_model_slot(experiment_dir: Path) -> bool:
+    """判断实验根下是否至少存在一个已完成训练的模型槽位。"""
+    return any(
+        find_model_slot_dirs(path)
+        for path in experiment_dir.iterdir()
+        if path.is_dir() and LEVEL_DIR_PATTERN.match(path.name)
+    )
 
 
 @st.cache_data(show_spinner=False)
@@ -117,18 +127,9 @@ def cached_calibration_reports(
 
 @st.cache_data(show_spinner=False)
 def cached_run_dirs(level_dir: str, version: int) -> tuple[str, ...]:
-    """缓存结果分析页的 run 目录递归扫描。"""
+    """缓存结果分析页的模型槽位扫描。"""
     del version
-    root = Path(level_dir)
-    if not root.is_dir():
-        return ()
-    return tuple(
-        str(path.resolve())
-        for path in sorted(
-            (path for path in root.rglob("run_*") if path.is_dir()),
-            key=lambda path: build_natural_key(path.as_posix()),
-        )
-    )
+    return tuple(str(path.resolve()) for path in find_model_slot_dirs(level_dir))
 
 
 @st.cache_data(show_spinner=False)
@@ -146,7 +147,9 @@ def cached_experiment_dirs(
     result = [
         path.resolve()
         for path in root.iterdir()
-        if path.is_dir() and all((path / marker).is_file() for marker in markers)
+        if path.is_dir()
+        and all((path / marker).is_file() for marker in markers)
+        and _has_model_slot(path)
     ]
     return tuple(
         str(path)

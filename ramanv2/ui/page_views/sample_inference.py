@@ -9,7 +9,7 @@ import streamlit as st
 
 from ramanv2.common.naming import build_natural_key
 from ramanv2.common.device import resolve_device
-from ramanv2.evaluation.test_set import TEST_RESULT_DIR_NAME
+from ramanv2.core.run_context import INFERENCE_RESULT_DIR_NAME
 from ramanv2.inference.input_cache import build_test_cache
 from ramanv2.modeling.predictor import load_predictor
 from ramanv2.inference.folder_inference import (
@@ -158,9 +158,8 @@ def _get_cached_predictor(experiment_dir: Path, level_name: str):
 
 
 def _predict_level_names(meta: dict[str, Any]) -> list[str]:
-    """head_names 末位是 leaf 汇总头，预测层级只保留可训练层级。"""
-    names = meta.get("head_names") or meta.get("level_names") or []
-    return [str(name) for name in names if str(name) != "leaf"]
+    """返回可训练的业务层级名称。"""
+    return [str(name) for name in (meta.get("head_names") or [])]
 
 
 def _target_class_names(meta: dict[str, Any], level_name: str) -> list[str]:
@@ -243,7 +242,7 @@ def _prepare_test_inputs(
 
 
 def _render_existing_result(experiment_dir: Path, level_name: str) -> None:
-    result_dir = experiment_dir / level_name / TEST_RESULT_DIR_NAME
+    result_dir = experiment_dir / level_name / INFERENCE_RESULT_DIR_NAME
     summary_path = result_dir / SUMMARY_JSON_NAME
     if not summary_path.is_file():
         return

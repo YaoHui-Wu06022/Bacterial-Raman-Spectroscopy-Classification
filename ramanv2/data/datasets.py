@@ -10,10 +10,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
+from ramanv2.common.defaults import DEFAULT_BAD_BANDS
 from ramanv2.common.file_ops import read_json, write_json
 from ramanv2.common.naming import ANALYSIS_DELETE_RELATIVE, PIPELINE_DIR_NAME
 from ramanv2.common.paths import DATASET_ROOT
-from ramanv2.core.config import DEFAULT_BAD_BANDS
 from ramanv2.data.hierarchy_config import HIERARCHY_FILE_NAME, HierarchySpec
 
 
@@ -139,7 +139,10 @@ class DatasetRegistry:
         specs: list[DatasetSpec] = []
         if root.is_dir():
             for directory in sorted(root.iterdir(), key=lambda path: path.name):
-                if directory.is_dir() and (directory / "cosmic_data").is_dir():
+                if not directory.is_dir():
+                    continue
+                # 本地数据集以 cosmic_data 为锚；远程训练包只有配置与 init/init_test。
+                if (directory / "cosmic_data").is_dir() or (directory / DATASET_CONFIG_FILE_NAME).is_file():
                     specs.append(_build_spec(directory, root))
         if not specs:
             raise FileNotFoundError(f"dataset 下没有包含 cosmic_data 的数据集：{root}")

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -33,8 +33,9 @@ def write_model_report(
     labels: Sequence[int],
     predictions: Sequence[int],
     sample_name: str = "val_eval_results.csv",
+    extra_summary: Mapping[str, Any] | None = None,
 ) -> Path:
-    """写入模型评估的逐样本结果、指标报告和混淆矩阵。"""
+    """写入模型评估的逐样本结果、指标摘要和混淆矩阵。"""
     target_dir = Path(result_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     _write_classification_outputs(
@@ -43,9 +44,9 @@ def write_model_report(
         paths,
         labels,
         predictions,
-        report_name="classification_report.txt",
-        matrix_name="confusion_matrix_raw.csv",
+        report_name=None,
         sample_name=sample_name,
+        extra_summary=extra_summary,
     )
     return target_dir
 
@@ -66,7 +67,6 @@ def write_baseline_report(
         labels,
         predictions,
         report_name="metrics.txt",
-        matrix_name="confusion_matrix.csv",
         sample_name=None,
     )
     return target_dir
@@ -104,9 +104,9 @@ def _write_classification_outputs(
     labels: Sequence[int],
     predictions: Sequence[int],
     *,
-    report_name: str,
-    matrix_name: str,
+    report_name: str | None,
     sample_name: str | None,
+    extra_summary: Mapping[str, Any] | None = None,
 ) -> None:
     """以统一指标内核生成一个分类结果目录。"""
     label_values = np.asarray(labels, dtype=np.int64)
@@ -123,17 +123,17 @@ def _write_classification_outputs(
         output_dict=True,
         zero_division=0,
     )
-    (result_dir / report_name).write_text(
-        _format_report(report, class_names, metrics), encoding="utf-8"
-    )
+    if report_name is not None:
+        (result_dir / report_name).write_text(
+            _format_report(report, class_names, metrics), encoding="utf-8"
+        )
     matrix = confusion_matrix(label_values, prediction_values, labels=class_ids)
-    pd.DataFrame(matrix, index=class_names, columns=class_names).to_csv(result_dir / matrix_name)
     _write_confusion_matrix(result_dir / CONFUSION_MATRIX_FILE_NAME, matrix, class_names)
     if sample_name is not None:
         pd.DataFrame(
             {"path": list(paths), "label_true": label_values, "label_pred": prediction_values}
         ).to_csv(result_dir / sample_name, index=False)
-    _write_metrics_json(result_dir, class_names, report, metrics, matrix)
+    _write_metrics_json(result_dir, class_names, report, metrics, matrix, extra_summary)
 
 
 def _write_metrics_json(
@@ -142,8 +142,9 @@ def _write_metrics_json(
     report: dict,
     metrics: dict[str, float],
     matrix: np.ndarray,
+    extra_summary: Mapping[str, Any] | None = None,
 ) -> None:
-    """写入供界面稳定读取的评估摘要，不替代现有文本与 CSV 报告。"""
+    """写入供界面稳定读取的评估摘要。"""
     support = int(matrix.sum())
     classes = [
         {
@@ -165,6 +166,7 @@ def _write_metrics_json(
         "classes": classes,
         "matrix": matrix.astype(int).tolist(),
     }
+    values.update(extra_summary or {})
     write_json(result_dir / METRICS_FILE_NAME, values)
 
 

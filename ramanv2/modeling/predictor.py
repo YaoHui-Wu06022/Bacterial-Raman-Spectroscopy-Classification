@@ -10,17 +10,13 @@ import torch
 
 from ramanv2.core.run_snapshot import RunSnapshot, load_run_snapshot
 from ramanv2.core.config import InputConfig
-from ramanv2.core.run_context import HIERARCHY_META_FILE_NAME
+from ramanv2.core.run_context import HIERARCHY_META_FILE_NAME, MODEL_FILE_NAME
 from ramanv2.common.hierarchy import load_hierarchy_meta, normalize_level_name, resolve_allowed_indices
 from ramanv2.core.input_spec import InputSpec, build_input_spec
 from ramanv2.common.paths import find_ancestor_dir
 from ramanv2.modeling.factory import build_model, validate_model_input
 from ramanv2.modeling.model_spec import build_model_spec
-from ramanv2.modeling.run_manifest import (
-    build_used_run_values,
-    has_model_path,
-    resolve_entry_path,
-)
+from ramanv2.modeling.run_manifest import has_model_path, resolve_entry_path
 
 
 @dataclass(frozen=True)
@@ -65,7 +61,6 @@ class Predictor:
             self.meta,
             self.experiment_dir,
             self.run_dir,
-            self.predict_level,
         )
         _class_ids, names = _resolve_entry_classes(
             self.meta,
@@ -87,7 +82,6 @@ class Predictor:
                 self.meta,
                 self.experiment_dir,
                 self.run_dir,
-                self.predict_level,
             )
             return self._predict_entry(
                 values,
@@ -188,40 +182,12 @@ class Predictor:
             for index in indices
         ]
 
-    def build_used_runs(self) -> dict[str, Any]:
-        """导出本次预测可能使用的模型 run 记录。"""
-        if self.run_dir is not None:
-            entry, parent_id = _find_run_entry(
-                self.meta,
-                self.experiment_dir,
-                self.run_dir,
-                self.predict_level,
-            )
-            if parent_id is None:
-                return {self.predict_level: build_used_run_values(entry)}
-            return {self.predict_level: {str(parent_id): build_used_run_values(entry)}}
-        used: dict[str, Any] = {}
-        for level_name in self.level_order:
-            global_entry = (self.meta.get("level_models") or {}).get(level_name)
-            if global_entry and has_model_path(global_entry):
-                used[level_name] = build_used_run_values(global_entry)
-                continue
-            parent_entries = (self.meta.get("parent_models") or {}).get(level_name) or {}
-            used[level_name] = {
-                str(parent_id): build_used_run_values(entry)
-                for parent_id, entry in parent_entries.items()
-                if entry.get("model_path")
-            }
-        return used
-
-
 def load_predictor(
     source_dir: Path | str,
     device: torch.device | str,
     predict_level: int | str,
-    model_run_dir: Path | str | None = None,
 ) -> Predictor:
-    """从实验目录和可选历史 run 构建独立推理预测器。"""
+    """从实验目录或模型槽位构建推理预测器。"""
     source_path = Path(source_dir).resolve()
     experiment_dir = find_ancestor_dir(source_path, HIERARCHY_META_FILE_NAME)
     meta = load_hierarchy_meta(experiment_dir / HIERARCHY_META_FILE_NAME)
@@ -231,11 +197,7 @@ def load_predictor(
     head_names = tuple(meta.get("head_names") or [])
     if level_name not in head_names:
         raise ValueError(f"未知预测层级：{level_name}；可选值：{list(head_names)}")
-    run_dir = (
-        Path(model_run_dir).resolve()
-        if model_run_dir is not None
-        else source_path if source_path.name.startswith("run_") else None
-    )
+    run_dir = _resolve_source_run_dir(source_path, experiment_dir)
     entry = _resolve_input_entry(meta, experiment_dir, run_dir, level_name)
     snapshot = load_run_snapshot(
         resolve_entry_path(experiment_dir, entry, "run_dir"),
@@ -268,7 +230,7 @@ def _resolve_input_entry(
 ) -> Mapping[str, Any]:
     """选择用于确定输入规格的模型条目。"""
     if run_dir is not None:
-        entry, _ = _find_run_entry(meta, experiment_dir, run_dir, level_name)
+        entry, _ = _find_run_entry(meta, experiment_dir, run_dir)
         return entry
     for current_level in meta.get("head_names") or []:
         global_entry = (meta.get("level_models") or {}).get(current_level)
@@ -313,53 +275,46 @@ def _resolve_single_child_class_id(
     entry = (
         ((meta.get("parent_models") or {}).get(level_name) or {}).get(str(parent_id))
     )
-    if not entry or has_model_path(entry):
+    if entry and has_model_path(entry):
         return None
-    child_ids = [int(item) for item in entry.get("child_ids") or []]
+    child_ids = [
+        int(item)
+        for item in (
+            ((meta.get("parent_to_children") or {}).get(level_name) or {})
+            .get(str(parent_id))
+            or []
+        )
+    ]
     return child_ids[0] if len(child_ids) == 1 else None
+
+
+def _resolve_source_run_dir(
+    source_path: Path,
+    experiment_dir: Path,
+) -> Path | None:
+    """解析实验根或模型槽位目录，拒绝无法识别的目录。"""
+    if source_path == experiment_dir:
+        return None
+    if (source_path / MODEL_FILE_NAME).is_file():
+        return source_path
+    raise ValueError(f"不是有效的模型槽位目录：{source_path}")
 
 
 def _find_run_entry(
     meta: Mapping[str, Any],
     experiment_dir: Path,
     run_dir: Path,
-    level_name: str,
 ) -> tuple[Mapping[str, Any], int | None]:
-    """定位元数据中的 run，或构建指定的历史全局模型条目。"""
+    """在元数据中定位模型槽位条目。"""
     target = run_dir.resolve()
-    for level_name, entry in (meta.get("level_models") or {}).items():
+    for _level_name, entry in (meta.get("level_models") or {}).items():
         if resolve_entry_path(experiment_dir, entry, "run_dir") == target:
             return entry, None
-    for level_name, entries in (meta.get("parent_models") or {}).items():
+    for _level_name, entries in (meta.get("parent_models") or {}).items():
         for parent_text, entry in entries.items():
             if resolve_entry_path(experiment_dir, entry, "run_dir") == target:
                 return entry, int(parent_text)
-    global_entry = (meta.get("level_models") or {}).get(level_name)
-    if global_entry is None:
-        raise FileNotFoundError(
-            f"{HIERARCHY_META_FILE_NAME} 未记录 run，且 {level_name} 没有全局模型：{run_dir}"
-        )
-    try:
-        relative_run_dir = run_dir.relative_to(experiment_dir).as_posix()
-    except ValueError as error:
-        raise ValueError(f"历史 run 必须位于实验目录内：{run_dir}") from error
-    model_path = run_dir / f"{level_name}_model.pt"
-    if not model_path.is_file():
-        raise FileNotFoundError(f"历史 run 缺少模型文件：{model_path}")
-    return {
-        "run_dir": relative_run_dir,
-        "model_path": model_path.relative_to(experiment_dir).as_posix(),
-        "config_path": (run_dir / "model_config.yaml")
-        .relative_to(experiment_dir)
-        .as_posix(),
-        "resolved_config_path": (run_dir / "resolved_config.yaml")
-        .relative_to(experiment_dir)
-        .as_posix(),
-        "log_path": (run_dir / "logs" / "run.log")
-        .relative_to(experiment_dir)
-        .as_posix(),
-        "trained_at": f"direct_{run_dir.name}",
-    }, None
+    raise FileNotFoundError(f"{HIERARCHY_META_FILE_NAME} 未记录模型槽位：{run_dir}")
 
 
 def _resolve_class_count(

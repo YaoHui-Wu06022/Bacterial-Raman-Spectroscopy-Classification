@@ -97,25 +97,20 @@ def _render_dataset_summary(index: DatasetIndex, train_dir: Path, *, flat: bool 
 
 def _render_training_scope(index: DatasetIndex | None) -> dict[str, object]:
     if index is None:
-        return {"level_name": "level_1", "train_per_parent_enable": False}
+        return {"level_name": "level_1", "parent_name": None}
     level_labels = {f"第{number}层": name for number, name in enumerate(index.level_names, 1)}
     selected_level = st.selectbox("训练层级", list(level_labels), key="training_level")
     level_name = level_labels[selected_level]
     parent_level = index.get_parent_level(level_name)
-    per_parent_enable = False
     parent_name = None
     if parent_level is not None:
-        per_parent_enable = st.checkbox("按父类分别训练子模型", value=True, key="train_per_parent")
-        if per_parent_enable:
-            parent_names = ["全部父类", *index.get_class_names(parent_level)]
-            selected_parent = st.selectbox("训练父类", parent_names, key="training_parent")
-            parent_name = None if selected_parent == "全部父类" else selected_parent
+        parent_names = index.get_class_names(parent_level)
+        parent_name = st.selectbox("训练父类", parent_names, key="training_parent")
     else:
-        st.caption("当前层级没有父类，将使用全局模型。")
+        st.caption("当前层级没有父类，将训练全局模型。")
     return {
         "level_name": level_name,
-        "train_per_parent_enable": per_parent_enable,
-        "only_parent_name": parent_name,
+        "parent_name": parent_name,
     }
 
 
@@ -221,8 +216,7 @@ def _build_train_request(values: dict[str, Any], scope: dict[str, object]) -> Tr
     return TrainRequest(
         config=config,
         level_name=str(scope["level_name"]),
-        only_parent_name=scope.get("only_parent_name"),
-        train_per_parent_enable=bool(scope.get("train_per_parent_enable", False)),
+        parent_name=scope.get("parent_name"),
     )
 
 

@@ -7,12 +7,7 @@ import argparse
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
     """注册独立推理命令参数。"""
-    parser.add_argument("--source-dir", required=True, help="实验目录或单个 run 目录")
-    parser.add_argument(
-        "--model-run-dir",
-        default=None,
-        help="覆盖层级元数据，直接使用实验目录内的历史全局 run",
-    )
+    parser.add_argument("--source-dir", required=True, help="实验目录")
     parser.add_argument("--level", required=True, help="目标层级，例如 level_1")
     parser.add_argument("--input-dir", default=None, help="覆盖 profile 默认测试目录")
     parser.add_argument("--one-dir", default=None, help="只预测输入根下的一个文件夹")
@@ -29,7 +24,6 @@ def run_command(args: argparse.Namespace) -> int:
     run_independent_inference(
         args.source_dir,
         args.level,
-        model_run_dir=args.model_run_dir,
         input_dir=args.input_dir,
         one_dir=args.one_dir,
         top_k=args.top_k,

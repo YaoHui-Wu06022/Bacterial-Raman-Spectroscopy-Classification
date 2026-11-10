@@ -9,10 +9,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, fields
 from typing import Any, Mapping
 
+from ramanv2.common.defaults import DEFAULT_BAD_BANDS
 from ramanv2.common.hierarchy import LABEL_SCHEMA
-
-
-DEFAULT_BAD_BANDS: tuple[tuple[float, float], ...] = ()
 
 
 @dataclass(frozen=True)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable
 
 import streamlit as st
@@ -10,29 +11,28 @@ from ramanv2.common.paths import DATASET_ROOT
 from ramanv2.data.datasets import DatasetRegistry, load_dataset_registry
 from ramanv2.ui.page_context import PageContext, build_page_context
 from ramanv2.ui.page_state import load_page_state, write_page_state
-from ramanv2.ui.page_views.affine_calibration import render_affine_calibration_page
-from ramanv2.ui.page_views.cleaning import render_cleaning_page
-from ramanv2.ui.page_views.dataset_acquisition import render_dataset_acquisition_page
-from ramanv2.ui.page_views.dataset_config import render_dataset_config_page
-from ramanv2.ui.page_views.model_training import render_training_page
-from ramanv2.ui.page_views.result_analysis import render_result_analysis_page
-from ramanv2.ui.page_views.sample_inference import render_sample_inference_page
 
 
 PageRenderer = Callable[[PageContext], None]
 
-PAGE_NAMES = ("数据清洗", "仿射校准", "数据集获取", "训练配置", "结果分析", "样本推理", "数据集配置")
 PAGE_ALIASES = {"层级训练": "训练配置"}
-PAGES: dict[str, PageRenderer] = {
-    "数据清洗": render_cleaning_page,
-    "仿射校准": render_affine_calibration_page,
-    "数据集获取": render_dataset_acquisition_page,
-    "训练配置": render_training_page,
-    "结果分析": render_result_analysis_page,
-    "样本推理": render_sample_inference_page,
-    "数据集配置": render_dataset_config_page,
+PAGE_TARGETS = {
+    "数据清洗": ("ramanv2.ui.page_views.cleaning", "render_cleaning_page"),
+    "仿射校准": ("ramanv2.ui.page_views.affine_calibration", "render_affine_calibration_page"),
+    "数据集获取": ("ramanv2.ui.page_views.dataset_acquisition", "render_dataset_acquisition_page"),
+    "训练配置": ("ramanv2.ui.page_views.model_training", "render_training_page"),
+    "结果分析": ("ramanv2.ui.page_views.result_analysis", "render_result_analysis_page"),
+    "样本推理": ("ramanv2.ui.page_views.sample_inference", "render_sample_inference_page"),
+    "数据集配置": ("ramanv2.ui.page_views.dataset_config", "render_dataset_config_page"),
 }
+PAGE_NAMES = tuple(PAGE_TARGETS)
 _DATASET_SESSION_KEYS = {"dataset_id", "active_page", "dataset_selector"}
+
+
+def _load_page_renderer(page_name: str) -> PageRenderer:
+    """按当前页面导入渲染函数，避免启动时加载全部页面依赖。"""
+    module_name, function_name = PAGE_TARGETS[page_name]
+    return getattr(importlib.import_module(module_name), function_name)
 
 
 def _select_dataset_id(registry: DatasetRegistry) -> str:
@@ -64,7 +64,7 @@ def main() -> None:
     dataset_id = _select_dataset_id(registry)
     context = build_page_context(dataset_id, registry)
     if not context.has_dataset_config:
-        render_dataset_config_page(context)
+        _load_page_renderer("数据集配置")(context)
         return
     # 状态文件是跨页面和跨浏览器会话的唯一来源，避免使用旧会话对象覆盖新状态。
     state = load_page_state(context)
@@ -84,4 +84,5 @@ def main() -> None:
     if state.active_page != page_name:
         state.active_page = page_name
         write_page_state(context, state)
-    PAGES[page_name](context)
+    renderer = _load_page_renderer(page_name)
+    renderer(context)

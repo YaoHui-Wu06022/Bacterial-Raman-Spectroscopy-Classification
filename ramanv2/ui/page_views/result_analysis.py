@@ -1,15 +1,14 @@
-"""单个训练 run 的评估、Analysis 与 UMAP 页面。"""
+"""单个模型槽位的评估、Analysis 与 UMAP 页面。"""
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import streamlit as st
 
-from ramanv2.analysis.runner import run_interpret_run, run_umap_run
+from ramanv2.analysis.interpret import interpret_level, interpret_slot, umap_slot
 from ramanv2.common.naming import build_natural_key
 from ramanv2.core.run_context import (
     ANALYSIS_LOG_FILE_NAME,
@@ -20,7 +19,12 @@ from ramanv2.core.run_context import (
     VAL_RESULT_DIR_NAME,
 )
 from ramanv2.evaluation.model_eval import evaluate_model_run
+from ramanv2.evaluation.level_summary import (
+    LEVEL_SUMMARY_DIR_NAME,
+    summarize_level_results,
+)
 from ramanv2.ui.read_cache import (
+    LEVEL_DIR_PATTERN,
     cached_experiment_dirs,
     cached_json_file,
     cached_run_dirs,
@@ -34,9 +38,6 @@ from ramanv2.ui.page_state import (
     render_action_error,
     ui_cache_version,
 )
-
-
-_LEVEL_PATTERN = re.compile(r"^level_\d+$")
 
 
 @dataclass(frozen=True)
@@ -88,18 +89,20 @@ def render_result_analysis_page(context) -> None:
     )
     st.session_state["result_analysis_level"] = level_name
     run_dirs = _find_run_dirs(experiment_dir / level_name)
+    if len(run_dirs) > 1:
+        _render_level_summary(experiment_dir, level_name)
     if not run_dirs:
-        st.warning("当前层级没有可用的 run。")
+        st.warning("当前层级没有可用的模型。")
         return
     run_labels = [str(path.relative_to(experiment_dir)) for path in run_dirs]
     run_label = st.selectbox(
-        "run", run_labels,
+        "模型", run_labels,
         index=_selected_index("result_analysis_run", run_labels),
         key="result_analysis_run_select",
     )
     st.session_state["result_analysis_run"] = run_label
     run_dir = run_dirs[run_labels.index(run_label)]
-    st.caption(f"当前 run：{run_dir}")
+    st.caption(f"当前模型：{run_dir}")
     for section in _RESULT_SECTIONS:
         _render_result_section(run_dir, level_name, section)
 
@@ -122,17 +125,63 @@ def _find_level_dirs(experiment_dir: Path | str) -> list[Path]:
     """列出实验根下的业务层级目录。"""
     root = Path(experiment_dir)
     return sorted(
-        (path for path in root.iterdir() if path.is_dir() and _LEVEL_PATTERN.match(path.name)),
+        (path for path in root.iterdir() if path.is_dir() and LEVEL_DIR_PATTERN.match(path.name)),
         key=lambda path: build_natural_key(path.name),
     )
 
 
 def _find_run_dirs(level_dir: Path | str) -> list[Path]:
-    """递归发现全局模型和父类子模型的 run_* 目录。"""
+    """发现全局模型和父类子模型的槽位目录。"""
     root = Path(level_dir)
     if not root.is_dir():
         return []
     return [Path(path) for path in cached_run_dirs(str(root.resolve()), ui_cache_version("analysis"))]
+
+
+def _render_level_summary(experiment_dir: Path, level_name: str) -> None:
+    """渲染层级汇总的生成与查看区域。"""
+    st.subheader("层级汇总")
+    summary_root = Path(experiment_dir) / level_name / LEVEL_SUMMARY_DIR_NAME
+    if st.button(
+        "重算层级汇总",
+        type="primary",
+        width="stretch",
+        key=f"level_summary_compute_{level_name}",
+    ):
+        try:
+            with st.spinner("正在拼接验证与测试结果…"):
+                summarize_level_results(experiment_dir, level_name)
+            invalidate_ui_cache(*INVALIDATE_ANALYSIS)
+            st.success("层级汇总已更新。")
+        except UI_ACTION_ERRORS as error:
+            render_action_error("层级汇总", error)
+    tabs = st.tabs(["验证汇总", "测试汇总", "Analysis 汇总"])
+    for tab, output_name in zip(tabs[:2], ("val_result", "test_result")):
+        with tab:
+            result_dir = summary_root / output_name
+            if not (result_dir / METRICS_FILE_NAME).is_file():
+                st.info("尚未生成层级汇总。")
+                continue
+            _render_confusion(Path(experiment_dir) / level_name, result_dir)
+    with tabs[2]:
+        if st.button(
+            "重算层级归因",
+            type="primary",
+            width="stretch",
+            key=f"level_analysis_compute_{level_name}",
+        ):
+            try:
+                with st.spinner("正在聚合层级归因…"):
+                    interpret_level(experiment_dir, level_name)
+                invalidate_ui_cache(*INVALIDATE_ANALYSIS)
+                st.success("层级归因已更新。")
+            except UI_ACTION_ERRORS as error:
+                render_action_error("层级归因", error)
+        analysis_dir = summary_root / ANALYSIS_RESULT_DIR_NAME
+        if (analysis_dir / "figures").is_dir():
+            _render_analysis(Path(experiment_dir) / level_name, analysis_dir)
+        else:
+            st.info("尚未生成层级归因汇总。")
 
 
 def _render_result_section(run_dir: Path, level_name: str, section: ResultSection) -> None:
@@ -228,7 +277,7 @@ _RESULT_SECTIONS = (
         title="Analysis",
         read_label="读取已有 Analysis",
         compute_label="重新计算 Analysis",
-        compute=lambda run_dir, level_name: run_interpret_run(run_dir, level_name, umap_enable=False),
+        compute=lambda run_dir, level_name: interpret_slot(run_dir, level_name, umap_enable=False),
         result_path=lambda run_dir: run_dir / ANALYSIS_RESULT_DIR_NAME,
         exists=Path.is_dir,
         missing_message="尚无 Analysis 结果，请点击重新计算。",
@@ -242,7 +291,7 @@ _RESULT_SECTIONS = (
         title="UMAP",
         read_label="读取已有 UMAP",
         compute_label="重新计算 UMAP",
-        compute=run_umap_run,
+        compute=umap_slot,
         result_path=lambda run_dir: run_dir / ANALYSIS_RESULT_DIR_NAME / "figures" / UMAP_FIGURE_NAME,
         exists=Path.is_file,
         missing_message="尚无 UMAP 图，请点击重新计算。",

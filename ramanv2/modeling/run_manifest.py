@@ -1,11 +1,35 @@
-"""评估与推理共用的模型 run 清单产物。"""
+"""评估与推理共用的模型槽位路径解析。"""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
-from ramanv2.common.file_ops import write_json
+from ramanv2.common.naming import build_natural_key
+from ramanv2.core.run_context import MODEL_FILE_NAME
+
+
+LEVEL_DIR_PATTERN = re.compile(r"^level_\d+$")
+_PARENT_SLOT_PATTERN = re.compile(r"^level_\d+_\d+$")
+
+
+def find_model_slot_dirs(level_dir: Path | str) -> tuple[Path, ...]:
+    """列出层级目录下的全局模型槽位和父类子模型槽位。"""
+    root = Path(level_dir)
+    if not root.is_dir():
+        return ()
+    slots: list[Path] = []
+    if (root / MODEL_FILE_NAME).is_file():
+        slots.append(root)
+    slots.extend(
+        path
+        for path in root.iterdir()
+        if path.is_dir()
+        and _PARENT_SLOT_PATTERN.match(path.name)
+        and (path / MODEL_FILE_NAME).is_file()
+    )
+    return tuple(sorted(slots, key=lambda path: build_natural_key(path.as_posix())))
 
 
 def resolve_entry_path(
@@ -21,34 +45,14 @@ def resolve_entry_path(
     return path.resolve() if path.is_absolute() else (experiment_dir / path).resolve()
 
 
-def build_used_run_values(values: Mapping[str, Any]) -> dict[str, Any]:
-    """提取用于评估报告的稳定 run 定位字段。"""
-    return {
-        key: values[key]
-        for key in ("run_dir", "model_path", "config_path", "trained_at")
-        if values.get(key) is not None
-    }
-
-
 def has_model_path(entry: Any) -> bool:
     """判断模型槽位是否已经训练并记录了模型文件。"""
     return isinstance(entry, Mapping) and bool(entry.get("model_path"))
 
 
-def write_run_manifest(
-    output_path: Path | str,
-    mode: str,
-    level_name: str,
-    runs: Mapping[str, Any],
-) -> None:
-    """写出本次评估或推理实际使用的模型 run。"""
-    payload = {"mode": mode, "target_level": level_name, "runs": dict(runs)}
-    write_json(output_path, payload)
-
-
 __all__ = [
-    "build_used_run_values",
+    "LEVEL_DIR_PATTERN",
+    "find_model_slot_dirs",
     "has_model_path",
     "resolve_entry_path",
-    "write_run_manifest",
 ]

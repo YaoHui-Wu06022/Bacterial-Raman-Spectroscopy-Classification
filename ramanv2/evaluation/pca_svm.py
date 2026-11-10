@@ -11,13 +11,12 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
-from ramanv2.common.hierarchy import select_parent_indices
+from ramanv2.core.run_context import BASELINE_VAL_RESULT_DIR_NAME
 from ramanv2.data.runtime.input import InputPreprocessor
 from ramanv2.evaluation.context import (
     EvaluationContext,
     load_evaluation_context,
     resolve_level_name,
-    resolve_result_dir,
     resolve_run_class_ids,
     resolve_run_entry,
 )
@@ -41,13 +40,13 @@ def evaluate_baseline_run(
     level_name: str,
     spec: BaselineSpec = BaselineSpec(),
 ) -> Path:
-    """在一个明确 run 的任务类别空间中拟合并评估 PCA-SVM。"""
+    """在一个模型槽位的类别空间中拟合并评估 PCA-SVM。"""
     context = load_evaluation_context(source_dir)
     run_entry = resolve_run_entry(context)
     level_name = resolve_level_name(context, level_name)
     if run_entry.level_name != level_name:
         raise ValueError(
-            f"run 属于 {run_entry.level_name}，不能按 {level_name} 评估"
+            f"模型槽位属于 {run_entry.level_name}，不能按 {level_name} 评估"
         )
     class_ids = resolve_run_class_ids(context.dataset_index, run_entry)
     train_indices = _select_class_indices(context, context.train_indices, level_name, class_ids)
@@ -61,101 +60,10 @@ def evaluate_baseline_run(
         class_ids,
         spec,
     )
-    result_dir = resolve_result_dir(context, level_name, "baseline", "run", run_entry)
+    result_dir = run_entry.run_dir / BASELINE_VAL_RESULT_DIR_NAME
     output_dir = write_baseline_report(result_dir, class_names, validation_labels, predictions)
     _write_pca_summary(output_dir, pca)
     write_pca_scatter(output_dir, train_features, train_labels, class_names)
-    return output_dir
-
-
-def evaluate_baseline_parent_routed(
-    source_dir: Path | str,
-    level_name: str,
-    spec: BaselineSpec = BaselineSpec(),
-) -> Path:
-    """按真实父类分别拟合 PCA-SVM 并汇总目标层全局指标。"""
-    context = load_evaluation_context(source_dir)
-    level_name = resolve_level_name(context, level_name)
-    parent_level = context.dataset_index.get_parent_level(level_name)
-    if parent_level is None:
-        return _evaluate_global_baseline(context, level_name, spec, "parent-routed")
-    level_index = context.dataset_index.head_name_to_idx[level_name]
-    parent_index = context.dataset_index.head_name_to_idx[parent_level]
-    mapping = (context.meta.get("parent_to_children") or {}).get(level_name) or {}
-    labels: list[int] = []
-    predictions: list[int] = []
-    for parent_text, child_values in sorted(mapping.items(), key=lambda item: int(item[0])):
-        parent_id = int(parent_text)
-        child_ids = [int(item) for item in child_values]
-        train_indices = select_parent_indices(
-            context.dataset_index.level_labels,
-            context.train_indices,
-            parent_index=parent_index,
-            level_index=level_index,
-            parent_id=parent_id,
-        )
-        validation_indices = select_parent_indices(
-            context.dataset_index.level_labels,
-            context.validation_indices,
-            parent_index=parent_index,
-            level_index=level_index,
-            parent_id=parent_id,
-        )
-        if len(child_ids) == 1:
-            valid_labels = context.dataset_index.level_labels[validation_indices, level_index]
-            valid_labels = valid_labels[valid_labels >= 0]
-            labels.extend(valid_labels.astype(int).tolist())
-            predictions.extend([child_ids[0]] * len(valid_labels))
-            continue
-        _features, _train_labels, validation_labels, predicted_labels, _pca = _fit_predict(
-            context,
-            level_name,
-            train_indices,
-            validation_indices,
-            child_ids,
-            spec,
-        )
-        labels.extend(child_ids[int(label)] for label in validation_labels)
-        predictions.extend(child_ids[int(label)] for label in predicted_labels)
-    result_dir = resolve_result_dir(context, level_name, "baseline", "parent-routed")
-    return write_baseline_report(
-        result_dir,
-        context.dataset_index.get_class_names(level_name),
-        labels,
-        predictions,
-    )
-
-
-def _evaluate_global_baseline(
-    context: EvaluationContext,
-    level_name: str,
-    spec: BaselineSpec,
-    mode: str,
-) -> Path:
-    """在一个完整目标层类别空间中拟合并评估 PCA-SVM。"""
-    class_ids = list(range(context.dataset_index.num_classes_by_level[level_name]))
-    train_features, train_labels, validation_labels, predictions, pca = _fit_predict(
-        context,
-        level_name,
-        context.train_indices,
-        context.validation_indices,
-        class_ids,
-        spec,
-    )
-    result_dir = resolve_result_dir(context, level_name, "baseline", mode)
-    output_dir = write_baseline_report(
-        result_dir,
-        context.dataset_index.get_class_names(level_name),
-        validation_labels,
-        predictions,
-    )
-    _write_pca_summary(output_dir, pca)
-    write_pca_scatter(
-        output_dir,
-        train_features,
-        train_labels,
-        context.dataset_index.get_class_names(level_name),
-    )
     return output_dir
 
 
