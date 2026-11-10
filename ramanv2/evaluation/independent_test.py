@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,7 @@ from ramanv2.common.device import resolve_device
 from ramanv2.common.file_ops import read_json
 from ramanv2.common.naming import build_natural_key
 from ramanv2.common.paths import relpath
-from ramanv2.core.run_context import METRICS_FILE_NAME
+from ramanv2.core.run_context import METRICS_FILE_NAME, TEST_RESULT_DIR_NAME
 from ramanv2.data.dataset_io import load_arc_intensity
 from ramanv2.data.profiles import resolve_selection
 from ramanv2.data.runtime.input import InputPreprocessor
@@ -30,7 +31,6 @@ from ramanv2.inference.test_labels import build_folder_summary, build_test_folde
 from ramanv2.modeling.predictor import Predictor, load_predictor
 
 
-TEST_RESULT_DIR_NAME = "test_result"
 TEST_SAMPLE_CSV_NAME = "test_eval_results.csv"
 
 
@@ -54,6 +54,7 @@ def evaluate_test_set(
     run_entry = resolve_run_entry(context)
     level_name = run_entry.level_name
     target_device = resolve_device(device)
+    random.seed(context.config.execution.seed)
     test_path = (
         resolve_preprocessed_test_dir(
             context.config.dataset.profile_id,
@@ -103,6 +104,7 @@ def evaluate_test_set(
         predicted,
         sample_name=TEST_SAMPLE_CSV_NAME,
         extra_summary={"folder": folder_metrics},
+        metric_class_ids=sorted(set(truth)),
     )
     metrics = read_json(result_dir / METRICS_FILE_NAME)
     summary = metrics["summary"]
@@ -122,6 +124,7 @@ def evaluate_test_set(
         excluded_samples=len(sample_folders) - int(indices.size),
         excluded_folders=excluded_folders,
     )
+    _maybe_generate_level_inference(context, level_name, test_path, target_device)
     return {
         "run_dir": str(run_entry.run_dir),
         "level_name": level_name,
@@ -253,6 +256,32 @@ def compute_folder_metrics(
         "folder_correct": correct,
         "folder_accuracy": correct / total if total else 0.0,
     }
+
+
+def _maybe_generate_level_inference(
+    context: Any,
+    level_name: str,
+    test_path: Path,
+    device: Any,
+) -> None:
+    """test_result 生成后补齐已完备层级的级联推理；未补齐时由 helper 跳过。"""
+    from ramanv2.inference.folder_inference import run_experiment_inference
+
+    random.seed(context.config.execution.seed)
+    levels = tuple((context.meta or {}).get("head_names") or (level_name,))
+    try:
+        results = run_experiment_inference(
+            context.experiment_dir,
+            test_path,
+            levels,
+            device=device,
+            seed=context.config.execution.seed,
+        )
+    except FileNotFoundError as error:
+        print(f"[Inference] 跳过级联推理：{error}")
+        return
+    for name, result_dir in results.items():
+        print(f"[Inference] {name} -> {result_dir}")
 
 
 def _scan_test_set(test_path: Path) -> tuple[list[str], list[Path], list[str]]:

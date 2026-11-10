@@ -34,4 +34,4 @@ def _exclude_from_package(source_path: Path, package_dir: Path) -> bool:
     return "__pycache__" in relative_parts or source_path.suffix == ".pyc"
 
 
-__all__ = ["build_package_archive", "run_command"]
+__all__ = ["build_package_archive"]

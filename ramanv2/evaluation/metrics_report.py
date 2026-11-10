@@ -34,8 +34,13 @@ def write_model_report(
     predictions: Sequence[int],
     sample_name: str = "val_eval_results.csv",
     extra_summary: Mapping[str, Any] | None = None,
+    metric_class_ids: Sequence[int] | None = None,
 ) -> Path:
-    """写入模型评估的逐样本结果、指标摘要和混淆矩阵。"""
+    """写入模型评估的逐样本结果、指标摘要和混淆矩阵。
+
+    ``metric_class_ids`` 限定分类报告与 macro 指标参与的类别，None 表示全部；
+    独立测试传入有样本覆盖的类别，避免 support=0 的类按 F1=0 拉低 macro。
+    """
     target_dir = Path(result_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     _write_classification_outputs(
@@ -47,6 +52,7 @@ def write_model_report(
         report_name=None,
         sample_name=sample_name,
         extra_summary=extra_summary,
+        metric_class_ids=metric_class_ids,
     )
     return target_dir
 
@@ -107,14 +113,19 @@ def _write_classification_outputs(
     report_name: str | None,
     sample_name: str | None,
     extra_summary: Mapping[str, Any] | None = None,
+    metric_class_ids: Sequence[int] | None = None,
 ) -> None:
-    """以统一指标内核生成一个分类结果目录。"""
+    """以统一指标内核生成一个分类结果目录。
+
+    混淆矩阵保持模型完整类别布局，分类报告与 macro 指标按 ``metric_class_ids`` 取子集。
+    """
     label_values = np.asarray(labels, dtype=np.int64)
     prediction_values = np.asarray(predictions, dtype=np.int64)
     if label_values.size == 0:
         raise RuntimeError("评估后没有有效验证样本")
     class_ids = list(range(len(class_names)))
-    metrics = compute_classification_metrics(label_values, prediction_values, class_ids)
+    metric_ids = class_ids if metric_class_ids is None else list(metric_class_ids)
+    metrics = compute_classification_metrics(label_values, prediction_values, metric_ids)
     report = classification_report(
         label_values,
         prediction_values,
@@ -125,7 +136,12 @@ def _write_classification_outputs(
     )
     if report_name is not None:
         (result_dir / report_name).write_text(
-            _format_report(report, class_names, metrics), encoding="utf-8"
+            _format_report(
+                report,
+                [class_names[class_id] for class_id in metric_ids],
+                metrics,
+            ),
+            encoding="utf-8",
         )
     matrix = confusion_matrix(label_values, prediction_values, labels=class_ids)
     _write_confusion_matrix(result_dir / CONFUSION_MATRIX_FILE_NAME, matrix, class_names)

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import csv
+import json
+import random
 import shutil
 from collections import defaultdict
 from pathlib import Path
@@ -14,8 +16,18 @@ import torch
 
 from ramanv2.common.device import resolve_device
 from ramanv2.common.file_ops import publish_directory
+from ramanv2.common.hierarchy import load_hierarchy_meta
 from ramanv2.common.paths import find_ancestor_dir
-from ramanv2.core.run_context import HIERARCHY_META_FILE_NAME, INFERENCE_RESULT_DIR_NAME
+from ramanv2.core.run_context import (
+    CASCADE_MODE_DIR_NAME,
+    HIERARCHY_META_FILE_NAME,
+    INFERENCE_RESULT_DIR_NAME,
+    LEVEL_SUMMARY_DIR_NAME,
+    METRICS_FILE_NAME,
+    MODEL_FILE_NAME,
+    PARENT_KNOWN_MODE_DIR_NAME,
+    TEST_RESULT_DIR_NAME,
+)
 from ramanv2.data.hierarchy_config import HierarchySpec, resolve_hierarchy_from_meta
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.data.profiles import resolve_selection
@@ -27,6 +39,7 @@ from ramanv2.inference.folder_report import (
 )
 from ramanv2.inference.input_cache import CachedFolder, load_test_cache
 from ramanv2.modeling.predictor import Predictor, load_predictor
+from ramanv2.modeling.run_manifest import has_model_path, resolve_entry_path
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.bad_bands import build_valid_mask
 from ramanv2.inference.spectrum_input import (
@@ -45,6 +58,7 @@ from ramanv2.inference.test_labels import (
 SUMMARY_TEXT_NAME = "summary.txt"
 SUMMARY_JSON_NAME = "summary.json"
 SPECTRA_FIGURE_NAME = "spectra.png"
+CASCADE_SUMMARY_HEADER = "===== 级联推理 ====="
 
 def run_independent_inference(
     source_dir: Path | str,
@@ -125,11 +139,89 @@ def run_independent_inference(
         summary = write_summary_report(temp_dir / SUMMARY_TEXT_NAME, rows, evaluate_enable)
         write_summary_json(temp_dir / SUMMARY_JSON_NAME, summary)
         publish_directory(temp_dir, target_dir)
+        merge_level_test_inference_summary(
+            predictor.experiment_dir,
+            predictor.meta,
+            predictor.predict_level,
+        )
     except Exception:
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise
     print(f"[Saved] cascade inference results -> {target_dir}")
     return target_dir
+
+
+def run_experiment_inference(
+    source_dir: Path | str,
+    input_dir: Path | str,
+    levels: tuple[str, ...] = ("level_1", "level_2"),
+    *,
+    device: torch.device | str | None = None,
+    seed: int | None = 42,
+) -> dict[str, Path]:
+    """按层级生成级联 inference_result；跳过未训练完整的层级。"""
+    experiment_dir = find_ancestor_dir(source_dir, HIERARCHY_META_FILE_NAME)
+    meta = load_hierarchy_meta(experiment_dir / HIERARCHY_META_FILE_NAME)
+    if meta is None:
+        raise FileNotFoundError(f"缺少 {HIERARCHY_META_FILE_NAME}：{experiment_dir}")
+    test_dir = Path(input_dir).resolve()
+    if not test_dir.is_dir():
+        raise FileNotFoundError(f"测试目录不存在：{test_dir}")
+    head_names = tuple(meta.get("head_names") or [])
+    results: dict[str, Path] = {}
+    for level_name in levels:
+        if level_name not in head_names:
+            print(f"[Inference] 跳过 {level_name}：实验未训练该层级")
+            continue
+        level_index = head_names.index(level_name)
+        prerequisites = head_names[:level_index]
+        if any(
+            not _level_models_ready(meta, experiment_dir, prerequisite)
+            for prerequisite in prerequisites
+        ):
+            print(f"[Inference] 跳过 {level_name}：上级模型未就绪")
+            continue
+        if not _level_models_ready(meta, experiment_dir, level_name):
+            print(f"[Inference] 跳过 {level_name}：模型槽位未补齐")
+            continue
+        if seed is not None:
+            random.seed(seed)
+        results[level_name] = run_independent_inference(
+            experiment_dir,
+            level_name,
+            input_dir=test_dir,
+            device=device,
+        )
+    return results
+
+
+def _level_models_ready(
+    meta: dict[str, Any],
+    experiment_dir: Path,
+    level_name: str,
+) -> bool:
+    """判断一个层级的全局模型或全部多子类父模型是否已落盘。"""
+    global_entry = (meta.get("level_models") or {}).get(level_name)
+    if has_model_path(global_entry):
+        return _entry_model_exists(experiment_dir, global_entry)
+    parent_map = (meta.get("parent_to_children") or {}).get(level_name) or {}
+    parent_models = (meta.get("parent_models") or {}).get(level_name) or {}
+    if not parent_map:
+        return False
+    for parent_text, children in parent_map.items():
+        if len(children) <= 1:
+            continue
+        entry = parent_models.get(str(parent_text))
+        if not has_model_path(entry):
+            return False
+        if not _entry_model_exists(experiment_dir, entry):
+            return False
+    return True
+
+
+def _entry_model_exists(experiment_dir: Path, entry: Any) -> bool:
+    slot_dir = resolve_entry_path(experiment_dir, entry, "run_dir")
+    return (slot_dir / MODEL_FILE_NAME).is_file()
 
 
 def _run_folder_predictions(
@@ -289,9 +381,153 @@ def _resolve_test_dir(predictor: Predictor, input_dir: Path | str | None) -> Pat
     return resolve_selection(predictor.dataset_id, predictor.profile_id).test_root
 
 
+def resolve_cascade_test_result_dir(
+    experiment_dir: Path | str,
+    meta: dict[str, Any],
+    level_name: str,
+) -> Path:
+    """返回从头级联模式的测试结果目录。"""
+    level_dir = Path(experiment_dir) / level_name
+    global_entry = (meta.get("level_models") or {}).get(level_name)
+    if has_model_path(global_entry):
+        return level_dir / TEST_RESULT_DIR_NAME
+    return level_dir / LEVEL_SUMMARY_DIR_NAME / CASCADE_MODE_DIR_NAME / TEST_RESULT_DIR_NAME
+
+
+def resolve_parent_known_test_result_dir(
+    experiment_dir: Path | str,
+    meta: dict[str, Any],
+    level_name: str,
+) -> Path:
+    """返回已知上层模式的测试结果目录。"""
+    return (
+        Path(experiment_dir)
+        / level_name
+        / LEVEL_SUMMARY_DIR_NAME
+        / PARENT_KNOWN_MODE_DIR_NAME
+        / TEST_RESULT_DIR_NAME
+    )
+
+
+def resolve_level_inference_dir(
+    experiment_dir: Path | str,
+    meta: dict[str, Any],
+    level_name: str,
+) -> Path:
+    """返回挂在从头级联 test_result 下的 inference_result 目录。"""
+    return resolve_cascade_test_result_dir(experiment_dir, meta, level_name) / INFERENCE_RESULT_DIR_NAME
+
+
+def merge_level_test_inference_summary(
+    experiment_dir: Path | str,
+    meta: dict[str, Any],
+    level_name: str,
+) -> None:
+    """把模型测试摘要与级联摘要合并为外层 test_result/summary.txt。"""
+    test_result_dir = resolve_cascade_test_result_dir(experiment_dir, meta, level_name)
+    inference_dir = resolve_level_inference_dir(experiment_dir, meta, level_name)
+    summary_json = inference_dir / SUMMARY_JSON_NAME
+    if not summary_json.is_file():
+        return
+    payload = json.loads(summary_json.read_text(encoding="utf-8"))
+    summary_path = test_result_dir / SUMMARY_TEXT_NAME
+    global_entry = (meta.get("level_models") or {}).get(level_name)
+    is_global = has_model_path(global_entry)
+    base_text = ""
+    if is_global and summary_path.is_file():
+        base_text = summary_path.read_text(encoding="utf-8").split(
+            CASCADE_SUMMARY_HEADER, 1
+        )[0].rstrip()
+    else:
+        metrics_path = test_result_dir / METRICS_FILE_NAME
+        if metrics_path.is_file():
+            base_text = _build_metrics_summary(metrics_path, level_name)
+        elif summary_path.is_file():
+            base_text = summary_path.read_text(encoding="utf-8").split(
+                CASCADE_SUMMARY_HEADER, 1
+            )[0].rstrip()
+    cascade_text = _build_cascade_summary(payload)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(
+        "\n\n".join(part for part in (base_text, cascade_text) if part) + "\n",
+        encoding="utf-8",
+    )
+    (inference_dir / SUMMARY_TEXT_NAME).unlink(missing_ok=True)
+
+
+def _build_metrics_summary(metrics_path: Path, level_name: str) -> str:
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    summary = metrics.get("summary") or {}
+    lines = [
+        "独立测试集评估汇总",
+        f"target_level = {level_name}",
+        "",
+        "整体结果（部署口径）",
+        "=====================================",
+        f"Spectrum Accuracy = {float(summary.get('accuracy', 0.0)) * 100:.4f}%  "
+        f"(support={int(summary.get('support', 0))})",
+        f"Macro F1          = {float(summary.get('macro_f1', 0.0)) * 100:.4f}%",
+        f"Macro Recall      = {float(summary.get('macro_recall', 0.0)) * 100:.4f}%",
+    ]
+    folder = metrics.get("folder")
+    if isinstance(folder, dict):
+        lines.append(
+            f"Folder Accuracy   = {float(folder.get('folder_accuracy', 0.0)) * 100:.4f}%  "
+            f"({int(folder.get('folder_correct', 0))}/{int(folder.get('folder_count', 0))})"
+        )
+    lines.append("=====================================")
+    return "\n".join(lines)
+
+
+def _build_cascade_summary(payload: dict[str, Any]) -> str:
+    rows = payload.get("rows") or []
+    folder_count = int(payload.get("folder_count", 0))
+    evaluated = int(payload.get("evaluated_folder_count", 0))
+    folder_correct = int(payload.get("folder_correct_count", 0))
+    spectrum_correct = int(payload.get("spectrum_correct_count", 0))
+    spectrum_total = int(payload.get("spectrum_total_count", 0))
+    folder_accuracy = float(payload.get("folder_accuracy", 0.0))
+    spectrum_accuracy = float(payload.get("spectrum_accuracy", 0.0))
+    lines = [
+        CASCADE_SUMMARY_HEADER,
+        "",
+        f"Folders        : {folder_count}",
+        f"Folder correct : {folder_correct}/{evaluated} ({folder_accuracy * 100:.2f}%)",
+        f"Spectrum correct: {spectrum_correct}/{spectrum_total} ({spectrum_accuracy * 100:.2f}%)",
+        f"Evaluated folders: {evaluated}",
+        f"Unevaluated folders: {int(payload.get('unevaluated_folder_count', 0))}",
+        "",
+        "folder\texpected_label\texpected_in_model\tpredicted_label\thigh_confidence\t"
+        "required_majority_count\tmajority_count\ttotal_count\tcorrect_count\tcorrect_ratio\tfolder_correct",
+    ]
+    for row in rows:
+        lines.append(
+            "\t".join(
+                (
+                    str(row.get("folder", "")),
+                    str(row.get("expected_label", "")),
+                    str(bool(row.get("expected_in_model", False))),
+                    str(row.get("predicted_label", "")),
+                    str(bool(row.get("high_confidence", False))),
+                    str(row.get("required_majority_count", 0)),
+                    str(row.get("majority_count", 0)),
+                    str(row.get("total_count", 0)),
+                    str(row.get("correct_count", 0)),
+                    f"{float(row.get('correct_ratio', 0.0)):.6f}",
+                    str(bool(row.get("folder_correct", False))),
+                )
+            )
+        )
+    return "\n".join(lines)
+
+
 def _resolve_result_dir(predictor: Predictor) -> Path:
-    """返回层级级级联推理结果目录。"""
-    return predictor.experiment_dir / predictor.predict_level / INFERENCE_RESULT_DIR_NAME
+    """返回层级级联推理结果目录。"""
+    return resolve_level_inference_dir(
+        predictor.experiment_dir,
+        predictor.meta,
+        predictor.predict_level,
+    )
 
 
 def _build_train_mean_bank(predictor: Predictor, preprocessor) -> dict[str, np.ndarray]:
@@ -325,4 +561,11 @@ def _build_train_mean_bank(predictor: Predictor, preprocessor) -> dict[str, np.n
     }
 
 
-__all__ = ["run_independent_inference"]
+__all__ = [
+    "merge_level_test_inference_summary",
+    "resolve_cascade_test_result_dir",
+    "resolve_level_inference_dir",
+    "resolve_parent_known_test_result_dir",
+    "run_experiment_inference",
+    "run_independent_inference",
+]

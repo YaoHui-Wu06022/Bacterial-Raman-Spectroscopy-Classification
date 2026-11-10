@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -11,9 +12,13 @@ from ramanv2.common.device import resolve_device
 from ramanv2.common.hierarchy import load_hierarchy_meta, normalize_level_name
 from ramanv2.common.paths import relpath
 from ramanv2.core.run_context import (
+    CASCADE_MODE_DIR_NAME,
     HIERARCHY_META_FILE_NAME,
+    LEVEL_SUMMARY_DIR_NAME,
     METRICS_FILE_NAME,
     MODEL_FILE_NAME,
+    PARENT_KNOWN_MODE_DIR_NAME,
+    TEST_RESULT_DIR_NAME,
     VAL_RESULT_DIR_NAME,
 )
 from ramanv2.data.dataset_io import load_arc_intensity
@@ -25,9 +30,9 @@ from ramanv2.evaluation.context import (
 )
 from ramanv2.evaluation.metrics_report import write_model_report
 from ramanv2.evaluation.independent_test import (
-    TEST_RESULT_DIR_NAME,
     TEST_SAMPLE_CSV_NAME,
     compute_folder_metrics,
+    resolve_preprocessed_test_dir,
 )
 from ramanv2.inference.spectrum_input import build_inference_preprocessor
 from ramanv2.modeling.predictor import load_predictor
@@ -38,11 +43,10 @@ from ramanv2.modeling.run_manifest import (
 )
 
 
-LEVEL_SUMMARY_DIR_NAME = "level_summary"
 VAL_SAMPLE_CSV_NAME = "val_eval_results.csv"
 _KIND_SPECS = (
-    ("val_result", VAL_RESULT_DIR_NAME, VAL_SAMPLE_CSV_NAME, False),
-    ("test_result", TEST_RESULT_DIR_NAME, TEST_SAMPLE_CSV_NAME, True),
+    ("val_result", VAL_RESULT_DIR_NAME, VAL_SAMPLE_CSV_NAME, False, False),
+    ("test_result", TEST_RESULT_DIR_NAME, TEST_SAMPLE_CSV_NAME, True, True),
 )
 
 
@@ -75,7 +79,7 @@ def summarize_level_results(
     level_name: str,
     device: str | None = None,
 ) -> dict[str, Any]:
-    """拼接一个层级下多个模型槽位的验证/测试结果。"""
+    """生成已知上层与从头级联两种模式的验证/测试汇总。"""
     assert_multi_model_level(source_dir, level_name, "层级汇总")
     context = load_evaluation_context(source_dir)
     level_name = resolve_level_name(context, level_name)
@@ -84,8 +88,8 @@ def summarize_level_results(
     class_names = context.dataset_index.get_class_names(level_name)
     predictor_cache: dict[Path, tuple[Any, Any]] = {}
     summary_root = level_dir / LEVEL_SUMMARY_DIR_NAME
-    results: dict[str, str] = {}
-    for output_name, result_dir_name, sample_csv_name, folder_enable in _KIND_SPECS:
+    parent_known_root = summary_root / PARENT_KNOWN_MODE_DIR_NAME
+    for output_name, result_dir_name, sample_csv_name, folder_enable, covered_enable in _KIND_SPECS:
         frames, sources = _collect_level_frames(
             context,
             level_name,
@@ -109,22 +113,165 @@ def summarize_level_results(
                 predictions,
                 class_names,
             )
-        output_dir = summary_root / output_name
         write_model_report(
-            output_dir,
+            parent_known_root / output_name,
             class_names,
             paths,
             labels,
             predictions,
             sample_name=sample_csv_name,
             extra_summary=extra_summary,
+            metric_class_ids=sorted(set(labels)) if covered_enable else None,
         )
-        results[output_name] = str(output_dir)
+
+    from ramanv2.inference.folder_inference import (
+        merge_level_test_inference_summary,
+        resolve_level_inference_dir,
+        run_experiment_inference,
+    )
+
+    test_dir = resolve_preprocessed_test_dir(
+        context.config.dataset.profile_id,
+        dataset_id=context.config.dataset.dataset_id,
+    )
+    cascade_results = run_experiment_inference(
+        context.experiment_dir,
+        test_dir,
+        (level_name,),
+        device=target_device,
+        seed=context.config.execution.seed,
+    )
+    if level_name not in cascade_results:
+        raise RuntimeError(f"{level_name} 的级联模型未补齐，无法生成 cascade 结果")
+    cascade_root = summary_root / CASCADE_MODE_DIR_NAME
+    inference_dir = resolve_level_inference_dir(
+        context.experiment_dir,
+        context.meta,
+        level_name,
+    )
+    _write_cascade_test_report(
+        context.meta,
+        level_name,
+        test_dir,
+        inference_dir,
+        cascade_root / TEST_RESULT_DIR_NAME,
+    )
+    _write_cascade_val_report(
+        context,
+        level_name,
+        target_device,
+        cascade_root / VAL_RESULT_DIR_NAME,
+    )
+    merge_level_test_inference_summary(context.experiment_dir, context.meta, level_name)
+    from ramanv2.inference.folder_inference import _build_metrics_summary
+
+    for result_dir in (
+        parent_known_root / VAL_RESULT_DIR_NAME,
+        parent_known_root / TEST_RESULT_DIR_NAME,
+        cascade_root / VAL_RESULT_DIR_NAME,
+    ):
+        metrics_path = result_dir / METRICS_FILE_NAME
+        if metrics_path.is_file():
+            (result_dir / "summary.txt").write_text(
+                _build_metrics_summary(metrics_path, level_name) + "\n",
+                encoding="utf-8",
+            )
     return {
         "level_name": level_name,
         "level_summary_dir": str(summary_root),
-        "results": results,
+        "results": {
+            PARENT_KNOWN_MODE_DIR_NAME: str(parent_known_root),
+            CASCADE_MODE_DIR_NAME: str(cascade_root),
+        },
     }
+
+
+def _write_cascade_test_report(
+    meta: dict[str, Any],
+    level_name: str,
+    test_dir: Path,
+    inference_dir: Path,
+    output_dir: Path,
+) -> None:
+    """把级联推理的逐文件 top-1 写成标准 test_result 指标。"""
+    payload = json.loads((inference_dir / "summary.json").read_text(encoding="utf-8"))
+    class_names = list(meta["class_names_by_level"][level_name])
+    name_to_id = {name: index for index, name in enumerate(class_names)}
+    paths: list[str] = []
+    labels: list[int] = []
+    predictions: list[int] = []
+    for row in payload.get("rows") or []:
+        expected_label = str(row.get("expected_label", ""))
+        if expected_label not in name_to_id:
+            continue
+        folder = str(row.get("folder", ""))
+        for item in row.get("file_predictions") or []:
+            values = item.get("predictions") or []
+            if not values:
+                continue
+            class_id = values[0].get("class_id")
+            if class_id is None:
+                continue
+            paths.append(str(test_dir / folder / str(item.get("file", ""))))
+            labels.append(name_to_id[expected_label])
+            predictions.append(int(class_id))
+    if not paths:
+        raise RuntimeError(f"{level_name} 的级联测试结果没有可写入的预测")
+    folders = [Path(path).parent.name for path in paths]
+    folder_metrics = compute_folder_metrics(folders, labels, predictions, class_names)
+    write_model_report(
+        output_dir,
+        class_names,
+        paths,
+        labels,
+        predictions,
+        sample_name=TEST_SAMPLE_CSV_NAME,
+        extra_summary={
+            "sources": [{"kind": "cascade", "level_name": level_name, "sample_count": len(paths)}],
+            "folder": folder_metrics,
+        },
+        metric_class_ids=sorted(set(labels)),
+    )
+
+
+def _write_cascade_val_report(
+    context: EvaluationContext,
+    level_name: str,
+    device: Any,
+    output_dir: Path,
+) -> None:
+    """对验证集执行从顶层到本层的级联预测并写标准 val_result。"""
+    predictor = load_predictor(context.experiment_dir, device, level_name)
+    preprocessor = build_inference_preprocessor(context.input_spec, predictor.device)
+    class_names = context.dataset_index.get_class_names(level_name)
+    name_to_id = {name: index for index, name in enumerate(class_names)}
+    paths: list[str] = []
+    labels: list[int] = []
+    predictions: list[int] = []
+    for raw_index in context.validation_indices:
+        index = int(raw_index)
+        inputs = preprocessor.preprocess_intensity(context.dataset_index.get_raw_intensity(index))
+        prediction = predictor.predict_tensor(inputs, top_k=1)[0]
+        true_key = context.dataset_index.get_level_key(index, level_name)
+        if true_key not in name_to_id:
+            raise ValueError(f"验证集真实标签不在目标层级类别中：{true_key}")
+        paths.append(str(context.dataset_index.samples[index]))
+        labels.append(name_to_id[true_key])
+        predictions.append(int(prediction.class_id))
+    if not paths:
+        raise RuntimeError(f"{level_name} 没有可生成 cascade 的验证样本")
+    write_model_report(
+        output_dir,
+        class_names,
+        paths,
+        labels,
+        predictions,
+        sample_name="val_eval_results.csv",
+        extra_summary={
+            "sources": [{"kind": "cascade", "level_name": level_name, "sample_count": len(paths)}],
+        },
+        metric_class_ids=sorted(set(labels)),
+    )
 
 
 def _collect_level_frames(
@@ -183,6 +330,16 @@ def _collect_level_frames(
                 sample_csv_name,
             )
             if frame is None:
+                if result_dir_name == TEST_RESULT_DIR_NAME:
+                    sources.append(
+                        {
+                            "kind": "model",
+                            "run_dir": relpath(slot, context.experiment_dir),
+                            "parent_id": parent_id,
+                            "sample_count": 0,
+                        }
+                    )
+                    continue
                 raise FileNotFoundError(
                     f"{level_name} 缺少父类 {parent_id} 的 {result_dir_name}，"
                     "请先评估该模型"

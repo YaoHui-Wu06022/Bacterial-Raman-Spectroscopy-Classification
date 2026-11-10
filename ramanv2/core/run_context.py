@@ -28,6 +28,10 @@ SE_STATS_FILE_NAME = "se_stats.pt"
 CHECKPOINT_FILE_NAME = "checkpoint.pt"
 VAL_RESULT_DIR_NAME = "val_result"
 BASELINE_VAL_RESULT_DIR_NAME = "baseline_val_result"
+TEST_RESULT_DIR_NAME = "test_result"
+LEVEL_SUMMARY_DIR_NAME = "level_summary"
+CASCADE_MODE_DIR_NAME = "cascade"
+PARENT_KNOWN_MODE_DIR_NAME = "parent_known"
 ANALYSIS_RESULT_DIR_NAME = "analysis_result"
 INFERENCE_RESULT_DIR_NAME = "inference_result"
 METRICS_FILE_NAME = "metrics.json"
@@ -150,8 +154,8 @@ def _clear_derived_results(run_dir: Path) -> None:
     for name in (
         VAL_RESULT_DIR_NAME,
         BASELINE_VAL_RESULT_DIR_NAME,
+        TEST_RESULT_DIR_NAME,
         ANALYSIS_RESULT_DIR_NAME,
-        INFERENCE_RESULT_DIR_NAME,
     ):
         result_dir = run_dir / name
         if result_dir.is_dir():

@@ -13,8 +13,10 @@ from ramanv2.common.naming import build_natural_key
 from ramanv2.core.run_context import (
     ANALYSIS_LOG_FILE_NAME,
     ANALYSIS_RESULT_DIR_NAME,
+    CASCADE_MODE_DIR_NAME,
     CONFUSION_MATRIX_FILE_NAME,
     METRICS_FILE_NAME,
+    PARENT_KNOWN_MODE_DIR_NAME,
     UMAP_FIGURE_NAME,
     VAL_RESULT_DIR_NAME,
 )
@@ -143,24 +145,35 @@ def _render_level_summary(experiment_dir: Path, level_name: str) -> None:
     st.subheader("层级汇总")
     summary_root = Path(experiment_dir) / level_name / LEVEL_SUMMARY_DIR_NAME
     if st.button(
-        "重算层级汇总",
+        "重算层级汇总（两种模式）",
         type="primary",
         width="stretch",
         key=f"level_summary_compute_{level_name}",
     ):
         try:
-            with st.spinner("正在拼接验证与测试结果…"):
+            with st.spinner("正在拼接两种模式的验证与测试结果…"):
                 summarize_level_results(experiment_dir, level_name)
             invalidate_ui_cache(*INVALIDATE_ANALYSIS)
             st.success("层级汇总已更新。")
         except UI_ACTION_ERRORS as error:
             render_action_error("层级汇总", error)
-    tabs = st.tabs(["验证汇总", "测试汇总", "Analysis 汇总"])
+    mode_labels = {
+        PARENT_KNOWN_MODE_DIR_NAME: "已知上层（parent_known）",
+        CASCADE_MODE_DIR_NAME: "从头级联（cascade）",
+    }
+    mode = st.selectbox(
+        "评估模式",
+        [PARENT_KNOWN_MODE_DIR_NAME, CASCADE_MODE_DIR_NAME],
+        format_func=lambda value: mode_labels[value],
+        key=f"level_summary_mode_{level_name}",
+    )
+    mode_root = summary_root / mode
+    tabs = st.tabs(["验证结果", "测试结果", "Analysis 汇总"])
     for tab, output_name in zip(tabs[:2], ("val_result", "test_result")):
         with tab:
-            result_dir = summary_root / output_name
+            result_dir = mode_root / output_name
             if not (result_dir / METRICS_FILE_NAME).is_file():
-                st.info("尚未生成层级汇总。")
+                st.info("尚未生成该模式的层级汇总。")
                 continue
             _render_confusion(Path(experiment_dir) / level_name, result_dir)
     with tabs[2]:

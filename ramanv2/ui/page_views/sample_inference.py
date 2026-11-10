@@ -9,13 +9,14 @@ import streamlit as st
 
 from ramanv2.common.naming import build_natural_key
 from ramanv2.common.device import resolve_device
-from ramanv2.core.run_context import INFERENCE_RESULT_DIR_NAME
 from ramanv2.inference.input_cache import build_test_cache
 from ramanv2.modeling.predictor import load_predictor
 from ramanv2.inference.folder_inference import (
     SPECTRA_FIGURE_NAME,
     SUMMARY_JSON_NAME,
     SUMMARY_TEXT_NAME,
+    resolve_cascade_test_result_dir,
+    resolve_level_inference_dir,
     run_independent_inference,
 )
 from ramanv2.ui.read_cache import (
@@ -74,7 +75,7 @@ def render_sample_inference_page(context) -> None:
     )
     if not folders:
         st.info(f"{context.init_test_root} 下没有可推理的测试文件夹。")
-        _render_existing_result(experiment_dir, level_name)
+        _render_existing_result(experiment_dir, level_name, meta)
         return
     folder_info = _build_folder_info(folders, set(target_labels), context.hierarchy)
     category_options = sorted(
@@ -105,7 +106,7 @@ def render_sample_inference_page(context) -> None:
     )
     if not selected_folders:
         st.warning("请至少选择一个测试文件夹。")
-        _render_existing_result(experiment_dir, level_name)
+        _render_existing_result(experiment_dir, level_name, meta)
         return
 
     st.caption("样本推理会从每个文件夹随机抽取最多 10 条光谱，同一 cell 只取 1 条。")
@@ -131,7 +132,7 @@ def render_sample_inference_page(context) -> None:
             context.init_test_root,
             infer_enable=True,
         )
-    _render_existing_result(experiment_dir, level_name)
+    _render_existing_result(experiment_dir, level_name, meta)
 
 
 def _list_experiment_dirs(context, profile) -> list[Path]:
@@ -241,8 +242,8 @@ def _prepare_test_inputs(
         render_action_error(label, error)
 
 
-def _render_existing_result(experiment_dir: Path, level_name: str) -> None:
-    result_dir = experiment_dir / level_name / INFERENCE_RESULT_DIR_NAME
+def _render_existing_result(experiment_dir: Path, level_name: str, meta: dict) -> None:
+    result_dir = resolve_level_inference_dir(experiment_dir, meta, level_name)
     summary_path = result_dir / SUMMARY_JSON_NAME
     if not summary_path.is_file():
         return
@@ -307,7 +308,10 @@ def _render_existing_result(experiment_dir: Path, level_name: str) -> None:
                     )
     with st.expander("查看结果目录", expanded=False):
         st.write(str(result_dir))
-        summary_text = result_dir / SUMMARY_TEXT_NAME
+        summary_text = (
+            resolve_cascade_test_result_dir(experiment_dir, meta, level_name)
+            / SUMMARY_TEXT_NAME
+        )
         if summary_text.is_file():
             stat = summary_text.stat()
             st.code(cached_text_file(str(summary_text.resolve()), stat.st_mtime_ns, stat.st_size), language="text")

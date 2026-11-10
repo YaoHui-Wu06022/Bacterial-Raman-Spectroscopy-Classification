@@ -9,7 +9,7 @@ from typing import Any
 import streamlit as st
 
 from ramanv2.core.config import build_config
-from ramanv2.packaging.platform_bundle import build_platform_bundle
+from ramanv2.packaging.platform_bundle import DATA_ARCHIVE_NAME, build_platform_bundle
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.training.workflow import TrainRequest, run_training
 from ramanv2.ui.components.pickers import render_profile_picker
@@ -232,7 +232,7 @@ def _render_platform_export(profiles, default_profile: str, bundle_root: Path) -
     )
     output_dir = bundle_root / profile_id
     st.caption(f"输出目录：{output_dir}")
-    if st.button("生成 data.tar.xz 和 ramanv2.zip", width="stretch"):
+    if st.button(f"生成 {DATA_ARCHIVE_NAME} 和 ramanv2.zip", width="stretch"):
         try:
             with st.spinner("正在生成数据包…"):
                 report = build_platform_bundle(profile_id, output_dir)
@@ -253,7 +253,7 @@ def _render_download_buttons(report: dict[str, object]) -> None:
     data_report = report.get("data_archive", {})
     package_report = report.get("package_archive", {})
     for label, item, key in (
-        ("下载 data.tar.xz", data_report, "download_data_tar_xz"),
+        (f"下载 {DATA_ARCHIVE_NAME}", data_report, "download_data_npz"),
         ("下载 ramanv2.zip", package_report, "download_ramanv2_zip"),
     ):
         if not isinstance(item, dict):
