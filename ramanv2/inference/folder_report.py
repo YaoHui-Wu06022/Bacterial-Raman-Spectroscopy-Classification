@@ -29,9 +29,6 @@ def write_file_report(
                 f"Expected label      : {summary['expected_label']}\n",
                 f"Expected in model   : {summary['expected_in_model']}\n",
                 f"Majority prediction : {summary['predicted_label']}\n",
-                f"High confidence     : {summary['high_confidence']}\n",
-                "Required votes      : "
-                f"{summary['required_majority_count']}/{summary['total_count']}\n",
                 "Correct spectra     : "
                 f"{summary['correct_count']}/{summary['total_count']} "
                 f"({summary['correct_ratio'] * 100:.2f}%)\n",
@@ -98,8 +95,6 @@ def write_summary_report(
             "expected_label",
             "expected_in_model",
             "predicted_label",
-            "high_confidence",
-            "required_majority_count",
             "majority_count",
             "total_count",
             "correct_count",

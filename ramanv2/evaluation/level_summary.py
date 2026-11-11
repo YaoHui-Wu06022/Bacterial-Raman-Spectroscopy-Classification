@@ -29,6 +29,7 @@ from ramanv2.evaluation.context import (
     resolve_level_name,
 )
 from ramanv2.evaluation.metrics_report import write_model_report
+from ramanv2.evaluation.summary_text import build_result_summary
 from ramanv2.evaluation.independent_test import (
     TEST_SAMPLE_CSV_NAME,
     compute_folder_metrics,
@@ -55,7 +56,7 @@ def assert_multi_model_level(
     level_name: str,
     summary_label: str,
 ) -> tuple[Path, dict[str, Any], str]:
-    """确认层级存在多个模型槽位，且不是全局模型层级。"""
+    """确认层级存在父类模型槽位，且不是全局模型层级。"""
     experiment_dir = resolve_experiment_dir(source_dir)
     meta = load_hierarchy_meta(experiment_dir / HIERARCHY_META_FILE_NAME)
     if meta is None:
@@ -67,10 +68,8 @@ def assert_multi_model_level(
     if has_model_path(global_entry):
         raise ValueError(f"{level} 是全局模型层级，不需要{summary_label}")
     slots = find_model_slot_dirs(experiment_dir / level)
-    if len(slots) < 2:
-        raise ValueError(
-            f"{level} 只有 {len(slots)} 个模型槽位，不需要{summary_label}"
-        )
+    if not slots:
+        raise ValueError(f"{level} 没有父类模型槽位，无法生成{summary_label}")
     return experiment_dir, meta, level
 
 
@@ -163,17 +162,16 @@ def summarize_level_results(
         cascade_root / VAL_RESULT_DIR_NAME,
     )
     merge_level_test_inference_summary(context.experiment_dir, context.meta, level_name)
-    from ramanv2.inference.folder_inference import _build_metrics_summary
-
-    for result_dir in (
-        parent_known_root / VAL_RESULT_DIR_NAME,
-        parent_known_root / TEST_RESULT_DIR_NAME,
-        cascade_root / VAL_RESULT_DIR_NAME,
+    for result_dir, mode, title in (
+        (parent_known_root / VAL_RESULT_DIR_NAME, PARENT_KNOWN_MODE_DIR_NAME, "验证集评估汇总"),
+        (parent_known_root / TEST_RESULT_DIR_NAME, PARENT_KNOWN_MODE_DIR_NAME, "独立测试集评估汇总"),
+        (cascade_root / VAL_RESULT_DIR_NAME, CASCADE_MODE_DIR_NAME, "验证集评估汇总"),
     ):
         metrics_path = result_dir / METRICS_FILE_NAME
         if metrics_path.is_file():
+            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
             (result_dir / "summary.txt").write_text(
-                _build_metrics_summary(metrics_path, level_name) + "\n",
+                build_result_summary(metrics, level_name, mode, title=title),
                 encoding="utf-8",
             )
     return {

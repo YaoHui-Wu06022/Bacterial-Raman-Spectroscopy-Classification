@@ -74,17 +74,10 @@ def build_folder_summary(
     class_names: list[str],
     predictions: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """汇总文件夹多数投票；票数不足 60% 时视为没有高置信输出。
-
-    10 条样本时至少 6 条支持同一标签才算文件夹输出，否则 ``predicted_label``
-    记为 ``unknown``，文件夹按判断失败计入准确率。
-    """
+    """汇总文件夹投票，直接取票数最多的标签作为文件夹输出。"""
     counter = Counter(item["top1_label"] for item in predictions)
     majority_label, majority_count = counter.most_common(1)[0] if counter else ("unknown", 0)
     total_count = len(predictions)
-    required_count = (total_count * 6 + 9) // 10
-    high_confidence = bool(total_count and majority_count >= required_count)
-    predicted_label = majority_label if high_confidence else "unknown"
     expected_in_model = expected_label in set(class_names)
     correct_count = (
         sum(item["top1_label"] == expected_label for item in predictions)
@@ -95,14 +88,10 @@ def build_folder_summary(
         "folder": folder_name,
         "expected_label": expected_label or "unknown",
         "expected_in_model": bool(expected_in_model),
-        "predicted_label": predicted_label,
-        "high_confidence": high_confidence,
-        "required_majority_count": int(required_count),
+        "predicted_label": majority_label,
         "majority_count": int(majority_count),
         "total_count": total_count,
         "correct_count": int(correct_count),
         "correct_ratio": correct_count / total_count if total_count else 0.0,
-        "folder_correct": bool(
-            expected_in_model and high_confidence and majority_label == expected_label
-        ),
+        "folder_correct": bool(expected_in_model and majority_label == expected_label),
     }

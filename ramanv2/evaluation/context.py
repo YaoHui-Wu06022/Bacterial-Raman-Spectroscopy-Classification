@@ -93,22 +93,40 @@ def resolve_level_name(context: EvaluationContext, level_value: str) -> str:
     return context.dataset_index.resolve_level_name(level_value)
 
 
+def _iter_run_entries(experiment_dir: Path, meta: Mapping[str, Any]):
+    """按层级元数据顺序产出全局与父类模型槽位条目。"""
+    for level_name, values in (meta.get("level_models") or {}).items():
+        if not isinstance(values, Mapping):
+            continue
+        run_dir = resolve_entry_path(experiment_dir, values, "run_dir")
+        yield RunEntry(str(level_name), None, values, run_dir)
+    for level_name, entries in (meta.get("parent_models") or {}).items():
+        for parent_text, values in (entries or {}).items():
+            if not isinstance(values, Mapping) or not values.get("run_dir"):
+                continue
+            run_dir = resolve_entry_path(experiment_dir, values, "run_dir")
+            yield RunEntry(str(level_name), int(parent_text), values, run_dir)
+
+
 def resolve_run_entry(context: EvaluationContext) -> RunEntry:
     """从输入目录在层级元数据中定位唯一模型 run。"""
-    for level_name, values in (context.meta.get("level_models") or {}).items():
-        if not isinstance(values, dict):
-            continue
-        run_dir = resolve_entry_path(context.experiment_dir, values, "run_dir")
-        if run_dir == context.source_dir:
-            return RunEntry(str(level_name), None, values, run_dir)
-    for level_name, entries in (context.meta.get("parent_models") or {}).items():
-        for parent_text, values in (entries or {}).items():
-            if not isinstance(values, dict) or not values.get("run_dir"):
-                continue
-            run_dir = resolve_entry_path(context.experiment_dir, values, "run_dir")
-            if run_dir == context.source_dir:
-                return RunEntry(str(level_name), int(parent_text), values, run_dir)
+    for entry in _iter_run_entries(context.experiment_dir, context.meta):
+        if entry.run_dir == context.source_dir:
+            return entry
     raise FileNotFoundError(f"hierarchy_meta.json 未记录 run：{context.source_dir}")
+
+
+def resolve_slot_target(source_dir: Path | str) -> tuple[str, int | None]:
+    """按实验元数据把模型槽位目录解析为层级名称与父类索引。"""
+    source_path = Path(source_dir).resolve()
+    experiment_dir = resolve_experiment_dir(source_path)
+    meta = load_hierarchy_meta(experiment_dir / HIERARCHY_META_FILE_NAME)
+    if meta is None:
+        raise FileNotFoundError(f"缺少 {HIERARCHY_META_FILE_NAME}：{experiment_dir}")
+    for entry in _iter_run_entries(experiment_dir, meta):
+        if entry.run_dir == source_path:
+            return entry.level_name, entry.parent_id
+    raise FileNotFoundError(f"hierarchy_meta.json 未记录模型槽位：{source_path}")
 
 
 def resolve_run_class_ids(dataset_index: Any, run_entry: Any) -> list[int]:

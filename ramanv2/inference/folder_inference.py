@@ -31,6 +31,7 @@ from ramanv2.core.run_context import (
 from ramanv2.data.hierarchy_config import HierarchySpec, resolve_hierarchy_from_meta
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.data.profiles import resolve_selection
+from ramanv2.evaluation.summary_text import build_result_summary
 from ramanv2.inference.folder_report import (
     plot_folder_spectra,
     write_file_report,
@@ -58,7 +59,6 @@ from ramanv2.inference.test_labels import (
 SUMMARY_TEXT_NAME = "summary.txt"
 SUMMARY_JSON_NAME = "summary.json"
 SPECTRA_FIGURE_NAME = "spectra.png"
-CASCADE_SUMMARY_HEADER = "===== 级联推理 ====="
 
 def run_independent_inference(
     source_dir: Path | str,
@@ -184,6 +184,9 @@ def run_experiment_inference(
         if not _level_models_ready(meta, experiment_dir, level_name):
             print(f"[Inference] 跳过 {level_name}：模型槽位未补齐")
             continue
+        if _is_direct_pass_level(meta, level_name):
+            print(f"[Inference] 跳过 {level_name}：单类层级直通，无模型产物")
+            continue
         if seed is not None:
             random.seed(seed)
         results[level_name] = run_independent_inference(
@@ -207,7 +210,7 @@ def _level_models_ready(
     parent_map = (meta.get("parent_to_children") or {}).get(level_name) or {}
     parent_models = (meta.get("parent_models") or {}).get(level_name) or {}
     if not parent_map:
-        return False
+        return _is_direct_pass_level(meta, level_name)
     for parent_text, children in parent_map.items():
         if len(children) <= 1:
             continue
@@ -217,6 +220,18 @@ def _level_models_ready(
         if not _entry_model_exists(experiment_dir, entry):
             return False
     return True
+
+
+def _is_direct_pass_level(meta: dict[str, Any], level_name: str) -> bool:
+    """判断层级是否只有一个类别且没有该层模型，可直接透传。"""
+    class_names = (meta.get("class_names_by_level") or {}).get(level_name) or []
+    if len(class_names) != 1:
+        return False
+    global_entry = (meta.get("level_models") or {}).get(level_name)
+    if has_model_path(global_entry):
+        return False
+    parent_entries = (meta.get("parent_models") or {}).get(level_name) or {}
+    return not any(has_model_path(entry) for entry in parent_entries.values())
 
 
 def _entry_model_exists(experiment_dir: Path, entry: Any) -> bool:
@@ -423,102 +438,29 @@ def merge_level_test_inference_summary(
     meta: dict[str, Any],
     level_name: str,
 ) -> None:
-    """把模型测试摘要与级联摘要合并为外层 test_result/summary.txt。"""
+    """把模型测试指标与级联文件夹表合并为外层 test_result/summary.txt。"""
     test_result_dir = resolve_cascade_test_result_dir(experiment_dir, meta, level_name)
+    metrics_path = test_result_dir / METRICS_FILE_NAME
+    if not metrics_path.is_file():
+        return
     inference_dir = resolve_level_inference_dir(experiment_dir, meta, level_name)
     summary_json = inference_dir / SUMMARY_JSON_NAME
     if not summary_json.is_file():
         return
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
     payload = json.loads(summary_json.read_text(encoding="utf-8"))
-    summary_path = test_result_dir / SUMMARY_TEXT_NAME
     global_entry = (meta.get("level_models") or {}).get(level_name)
-    is_global = has_model_path(global_entry)
-    base_text = ""
-    if is_global and summary_path.is_file():
-        base_text = summary_path.read_text(encoding="utf-8").split(
-            CASCADE_SUMMARY_HEADER, 1
-        )[0].rstrip()
-    else:
-        metrics_path = test_result_dir / METRICS_FILE_NAME
-        if metrics_path.is_file():
-            base_text = _build_metrics_summary(metrics_path, level_name)
-        elif summary_path.is_file():
-            base_text = summary_path.read_text(encoding="utf-8").split(
-                CASCADE_SUMMARY_HEADER, 1
-            )[0].rstrip()
-    cascade_text = _build_cascade_summary(payload)
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    summary_path.write_text(
-        "\n\n".join(part for part in (base_text, cascade_text) if part) + "\n",
+    mode = "model" if has_model_path(global_entry) else CASCADE_MODE_DIR_NAME
+    (test_result_dir / SUMMARY_TEXT_NAME).write_text(
+        build_result_summary(
+            metrics,
+            level_name,
+            mode,
+            inference_payload=payload,
+        ),
         encoding="utf-8",
     )
     (inference_dir / SUMMARY_TEXT_NAME).unlink(missing_ok=True)
-
-
-def _build_metrics_summary(metrics_path: Path, level_name: str) -> str:
-    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-    summary = metrics.get("summary") or {}
-    lines = [
-        "独立测试集评估汇总",
-        f"target_level = {level_name}",
-        "",
-        "整体结果（部署口径）",
-        "=====================================",
-        f"Spectrum Accuracy = {float(summary.get('accuracy', 0.0)) * 100:.4f}%  "
-        f"(support={int(summary.get('support', 0))})",
-        f"Macro F1          = {float(summary.get('macro_f1', 0.0)) * 100:.4f}%",
-        f"Macro Recall      = {float(summary.get('macro_recall', 0.0)) * 100:.4f}%",
-    ]
-    folder = metrics.get("folder")
-    if isinstance(folder, dict):
-        lines.append(
-            f"Folder Accuracy   = {float(folder.get('folder_accuracy', 0.0)) * 100:.4f}%  "
-            f"({int(folder.get('folder_correct', 0))}/{int(folder.get('folder_count', 0))})"
-        )
-    lines.append("=====================================")
-    return "\n".join(lines)
-
-
-def _build_cascade_summary(payload: dict[str, Any]) -> str:
-    rows = payload.get("rows") or []
-    folder_count = int(payload.get("folder_count", 0))
-    evaluated = int(payload.get("evaluated_folder_count", 0))
-    folder_correct = int(payload.get("folder_correct_count", 0))
-    spectrum_correct = int(payload.get("spectrum_correct_count", 0))
-    spectrum_total = int(payload.get("spectrum_total_count", 0))
-    folder_accuracy = float(payload.get("folder_accuracy", 0.0))
-    spectrum_accuracy = float(payload.get("spectrum_accuracy", 0.0))
-    lines = [
-        CASCADE_SUMMARY_HEADER,
-        "",
-        f"Folders        : {folder_count}",
-        f"Folder correct : {folder_correct}/{evaluated} ({folder_accuracy * 100:.2f}%)",
-        f"Spectrum correct: {spectrum_correct}/{spectrum_total} ({spectrum_accuracy * 100:.2f}%)",
-        f"Evaluated folders: {evaluated}",
-        f"Unevaluated folders: {int(payload.get('unevaluated_folder_count', 0))}",
-        "",
-        "folder\texpected_label\texpected_in_model\tpredicted_label\thigh_confidence\t"
-        "required_majority_count\tmajority_count\ttotal_count\tcorrect_count\tcorrect_ratio\tfolder_correct",
-    ]
-    for row in rows:
-        lines.append(
-            "\t".join(
-                (
-                    str(row.get("folder", "")),
-                    str(row.get("expected_label", "")),
-                    str(bool(row.get("expected_in_model", False))),
-                    str(row.get("predicted_label", "")),
-                    str(bool(row.get("high_confidence", False))),
-                    str(row.get("required_majority_count", 0)),
-                    str(row.get("majority_count", 0)),
-                    str(row.get("total_count", 0)),
-                    str(row.get("correct_count", 0)),
-                    f"{float(row.get('correct_ratio', 0.0)):.6f}",
-                    str(bool(row.get("folder_correct", False))),
-                )
-            )
-        )
-    return "\n".join(lines)
 
 
 def _resolve_result_dir(predictor: Predictor) -> Path:

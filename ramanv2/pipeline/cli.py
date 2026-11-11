@@ -115,7 +115,9 @@ def run_command(args: argparse.Namespace) -> int:
         from ramanv2.common.arc_data import has_arc_data
 
         if not dates and spec.cosmic_dir.is_dir():
-            dates = sorted(path.name for path in spec.cosmic_dir.iterdir() if path.is_dir())
+            from ramanv2.pipeline.cleaning import scan_date_names
+
+            dates = scan_date_names(spec.cosmic_dir)
         bead_dates = [
             date_name for date_name in dates
             if has_arc_data(Path(source_root) / date_name / BEAD_FOLDER_NAME, recursive=True)

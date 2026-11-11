@@ -266,12 +266,13 @@ def _resolve_single_child_class_id(
     level_name: str,
     parent_id: int | None,
 ) -> int | None:
-    """解析无下层模型的唯一子类直通结果。"""
+    """解析无模型的唯一类别/唯一子类直通结果。"""
     global_entry = (meta.get("level_models") or {}).get(level_name)
     if global_entry and has_model_path(global_entry):
         return None
     if parent_id is None:
-        return None
+        class_names = (meta.get("class_names_by_level") or {}).get(level_name) or []
+        return 0 if len(class_names) == 1 else None
     entry = (
         ((meta.get("parent_models") or {}).get(level_name) or {}).get(str(parent_id))
     )

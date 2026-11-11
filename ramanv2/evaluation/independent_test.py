@@ -11,7 +11,6 @@ import numpy as np
 from ramanv2.common.device import resolve_device
 from ramanv2.common.file_ops import read_json
 from ramanv2.common.naming import build_natural_key
-from ramanv2.common.paths import relpath
 from ramanv2.core.run_context import METRICS_FILE_NAME, TEST_RESULT_DIR_NAME
 from ramanv2.data.dataset_io import load_arc_intensity
 from ramanv2.data.profiles import resolve_selection
@@ -22,6 +21,7 @@ from ramanv2.evaluation.context import (
     resolve_run_entry,
 )
 from ramanv2.evaluation.metrics_report import write_model_report
+from ramanv2.evaluation.summary_text import build_result_summary
 from ramanv2.inference.spectrum_input import (
     build_inference_preprocessor,
     list_spectrum_paths,
@@ -108,22 +108,7 @@ def evaluate_test_set(
     )
     metrics = read_json(result_dir / METRICS_FILE_NAME)
     summary = metrics["summary"]
-    excluded_folders = len(folder_names) - len(
-        {sample_folders[int(index)] for index in indices}
-    )
-    _write_summary_text(
-        result_dir,
-        experiment_dir=context.experiment_dir,
-        model_dir=run_entry.run_dir,
-        level_name=level_name,
-        parent_id=run_entry.parent_id,
-        test_dir=test_path,
-        sample_count=int(indices.size),
-        folder_metrics=folder_metrics,
-        metrics=metrics,
-        excluded_samples=len(sample_folders) - int(indices.size),
-        excluded_folders=excluded_folders,
-    )
+    _write_summary_text(result_dir, level_name, metrics)
     _maybe_generate_level_inference(context, level_name, test_path, target_device)
     return {
         "run_dir": str(run_entry.run_dir),
@@ -148,81 +133,12 @@ def evaluate_test_set(
 
 def _write_summary_text(
     result_dir: Path,
-    *,
-    experiment_dir: Path,
-    model_dir: Path,
     level_name: str,
-    parent_id: int | None,
-    test_dir: Path,
-    sample_count: int,
-    folder_metrics: dict[str, Any],
     metrics: dict[str, Any],
-    excluded_samples: int,
-    excluded_folders: int,
 ) -> None:
-    """写入独立测试评估的可读汇总。"""
-    summary = metrics["summary"]
-    classes = metrics["classes"]
-    support = int(summary["support"])
-    covered = sum(1 for item in classes if int(item["support"]) > 0)
-    weak = sorted(
-        (item for item in classes if int(item["support"]) > 0),
-        key=lambda item: float(item["f1_score"]),
-    )[:5]
-    lines = [
-        "独立测试集评估汇总",
-        f"experiment_dir = {experiment_dir}",
-        f"target_level = {level_name}",
-        f"model = {relpath(model_dir, experiment_dir)}",
-    ]
-    if parent_id is not None:
-        lines.append(f"parent_id = {parent_id}")
-    lines.extend(
-        [
-            f"test_dir = {test_dir}",
-            f"test_sample_count = {sample_count}",
-            f"test_folder_count = {int(folder_metrics['folder_count'])}",
-            f"excluded_samples = {excluded_samples}",
-            f"excluded_folders = {excluded_folders}",
-            "",
-            "整体结果（部署口径）",
-            "=====================================",
-            f"target_level = {level_name}  mode = model",
-            f"Spectrum Accuracy = {float(summary['accuracy']) * 100:.4f}%  "
-            f"(support={support})",
-            f"Folder Accuracy   = {float(folder_metrics['folder_accuracy']) * 100:.4f}%  "
-            f"({int(folder_metrics['folder_correct'])}/{int(folder_metrics['folder_count'])})",
-            f"Class Coverage    = {covered}/{len(classes)}",
-            f"Macro F1          = {float(summary['macro_f1']) * 100:.4f}%",
-            f"Macro Recall      = {float(summary['macro_recall']) * 100:.4f}%",
-            "=====================================",
-            "",
-            f"{'target_level':<14}{'mode':<16}{'spectrum_acc':>13}{'folder_acc':>12}"
-            f"{'support':>9}{'folders':>9}{'macro_f1':>10}{'macro_recall':>14}",
-            f"{level_name:<14}{'model':<16}"
-            f"{float(summary['accuracy']) * 100:>12.4f}%"
-            f"{float(folder_metrics['folder_accuracy']) * 100:>11.4f}%"
-            f"{support:>9d}{int(folder_metrics['folder_count']):>9d}"
-            f"{float(summary['macro_f1']) * 100:>9.4f}%"
-            f"{float(summary['macro_recall']) * 100:>13.4f}%",
-        ]
-    )
-    if weak:
-        weak_text = "; ".join(
-            f"{item['name']} f1={float(item['f1_score']) * 100:.2f}% "
-            f"recall={float(item['recall']) * 100:.2f}% "
-            f"support={int(item['support'])}"
-            for item in weak
-        )
-        lines.extend(
-            [
-                "",
-                "最弱类别（按 F1 升序取前 5）",
-                f"{level_name}/model: {weak_text}",
-            ]
-        )
+    """按项目统一格式写入独立测试摘要。"""
     (Path(result_dir) / "summary.txt").write_text(
-        "\n".join(lines) + "\n",
+        build_result_summary(metrics, level_name, "model"),
         encoding="utf-8",
     )
 

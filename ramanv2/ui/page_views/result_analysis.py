@@ -9,12 +9,14 @@ from pathlib import Path
 import streamlit as st
 
 from ramanv2.analysis.interpret import interpret_level, interpret_slot, umap_slot
+from ramanv2.common.hierarchy import load_hierarchy_meta
 from ramanv2.common.naming import build_natural_key
 from ramanv2.core.run_context import (
     ANALYSIS_LOG_FILE_NAME,
     ANALYSIS_RESULT_DIR_NAME,
     CASCADE_MODE_DIR_NAME,
     CONFUSION_MATRIX_FILE_NAME,
+    HIERARCHY_META_FILE_NAME,
     METRICS_FILE_NAME,
     PARENT_KNOWN_MODE_DIR_NAME,
     UMAP_FIGURE_NAME,
@@ -25,6 +27,7 @@ from ramanv2.evaluation.level_summary import (
     LEVEL_SUMMARY_DIR_NAME,
     summarize_level_results,
 )
+from ramanv2.modeling.run_manifest import has_model_path
 from ramanv2.ui.read_cache import (
     LEVEL_DIR_PATTERN,
     cached_experiment_dirs,
@@ -91,7 +94,9 @@ def render_result_analysis_page(context) -> None:
     )
     st.session_state["result_analysis_level"] = level_name
     run_dirs = _find_run_dirs(experiment_dir / level_name)
-    if len(run_dirs) > 1:
+    meta = load_hierarchy_meta(experiment_dir / HIERARCHY_META_FILE_NAME)
+    global_entry = (meta.get("level_models") or {}).get(level_name) if meta else None
+    if run_dirs and not has_model_path(global_entry):
         _render_level_summary(experiment_dir, level_name)
     if not run_dirs:
         st.warning("当前层级没有可用的模型。")
