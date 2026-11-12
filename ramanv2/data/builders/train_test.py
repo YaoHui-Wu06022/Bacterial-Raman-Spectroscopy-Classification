@@ -13,7 +13,7 @@ import numpy as np
 
 from ramanv2.common.paths import resolve_path
 from ramanv2.core.config import InputConfig
-from ramanv2.data.hierarchy_config import HierarchySpec
+from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.preprocess import preprocess_single_spectrum
 

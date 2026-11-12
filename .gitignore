@@ -5,4 +5,5 @@
 *.pyc
 *.pyo
 ramanv2.zip
+data.npz
 /pipeline.db

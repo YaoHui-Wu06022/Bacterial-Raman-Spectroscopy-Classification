@@ -15,7 +15,7 @@ from ramanv2.common.hierarchy import assert_hierarchy_compatible, load_hierarchy
 from ramanv2.core.input_spec import InputSpec, build_input_spec
 from ramanv2.common.paths import find_ancestor_dir
 from ramanv2.data.runtime.index import DatasetIndex
-from ramanv2.data.hierarchy_config import resolve_hierarchy_from_meta
+from ramanv2.data.hierarchy_spec import resolve_hierarchy_from_meta
 from ramanv2.data.profiles import resolve_selection
 from ramanv2.modeling.run_manifest import resolve_entry_path
 from ramanv2.training.split import load_split_files

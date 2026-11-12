@@ -8,7 +8,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from ramanv2.analysis.interpret import interpret_level, interpret_slot, umap_slot
+from ramanv2.analysis.interpret import interpret_slot, umap_slot
 from ramanv2.common.hierarchy import load_hierarchy_meta
 from ramanv2.common.naming import build_natural_key
 from ramanv2.core.run_context import (
@@ -173,33 +173,14 @@ def _render_level_summary(experiment_dir: Path, level_name: str) -> None:
         key=f"level_summary_mode_{level_name}",
     )
     mode_root = summary_root / mode
-    tabs = st.tabs(["验证结果", "测试结果", "Analysis 汇总"])
-    for tab, output_name in zip(tabs[:2], ("val_result", "test_result")):
+    tabs = st.tabs(["验证结果", "测试结果"])
+    for tab, output_name in zip(tabs, ("val_result", "test_result")):
         with tab:
             result_dir = mode_root / output_name
             if not (result_dir / METRICS_FILE_NAME).is_file():
                 st.info("尚未生成该模式的层级汇总。")
                 continue
             _render_confusion(Path(experiment_dir) / level_name, result_dir)
-    with tabs[2]:
-        if st.button(
-            "重算层级归因",
-            type="primary",
-            width="stretch",
-            key=f"level_analysis_compute_{level_name}",
-        ):
-            try:
-                with st.spinner("正在聚合层级归因…"):
-                    interpret_level(experiment_dir, level_name)
-                invalidate_ui_cache(*INVALIDATE_ANALYSIS)
-                st.success("层级归因已更新。")
-            except UI_ACTION_ERRORS as error:
-                render_action_error("层级归因", error)
-        analysis_dir = summary_root / ANALYSIS_RESULT_DIR_NAME
-        if (analysis_dir / "figures").is_dir():
-            _render_analysis(Path(experiment_dir) / level_name, analysis_dir)
-        else:
-            st.info("尚未生成层级归因汇总。")
 
 
 def _render_result_section(run_dir: Path, level_name: str, section: ResultSection) -> None:

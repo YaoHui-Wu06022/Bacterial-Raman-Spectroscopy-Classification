@@ -8,11 +8,11 @@ from pathlib import Path
 from ramanv2.common.paths import PROJECT_ROOT
 from ramanv2.data.dataset_mapping import (
     DatasetMapping,
-    build_hierarchy_mapping,
+    MAPPING_FILE_NAME,
     ensure_dataset_mapping,
 )
 from ramanv2.data.datasets import DatasetRegistry, DatasetSpec, load_dataset_registry
-from ramanv2.data.hierarchy_config import HierarchySpec
+from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.data.profiles import (
     DatasetProfile,
     DatasetSelection,
@@ -61,30 +61,37 @@ class PageContext:
         raise KeyError(f"数据集 {self.dataset_id} 没有 profile：{selected or '<空>'}")
 
     def profile_dir(self, profile: DatasetProfile) -> Path:
-        """返回 profile 在数据集内的阶段目录根。"""
-        return self.dataset_spec.profile_root(profile.profile_id)
+        """返回主数据源的阶段目录根。"""
+        del profile
+        return self.dataset_spec.dataset_dir
 
     def training_dir(self, profile: DatasetProfile) -> Path:
-        """返回 profile 的 train 目录，缺失时回退 init。"""
-        return DatasetSelection(self.dataset_spec, profile, self.profile_dir(profile)).train_dir
+        """返回主数据源的 train 目录，缺失时回退 init。"""
+        return DatasetSelection(
+            self.dataset_spec,
+            profile,
+            self.profile_dir(profile),
+            self.dataset_spec.hierarchy,
+        ).train_dir
 
     def experiment_root(self, profile: DatasetProfile) -> Path:
         """返回 profile 的训练实验输出目录。"""
-        return self.output_root / profile.dataset_name
+        return (
+            self.output_root
+            / self.dataset_spec.directory.name
+            / profile.dataset_name
+        )
 
     def experiment_roots(self) -> tuple[Path, ...]:
         """返回当前数据集所有 profile 的实验输出目录。"""
         return tuple(self.experiment_root(profile) for profile in self.profiles)
 
     def dataset_mapping(self) -> DatasetMapping:
-        """返回当前数据集的属/前缀映射；flat 数据集直接由层级配置构造。"""
-        if self.hierarchy.is_flat:
-            return build_hierarchy_mapping(self.hierarchy)
+        """按 label_source 返回当前数据集的通用前缀映射。"""
         return ensure_dataset_mapping(
-            self.classification_workbook,
+            self.dataset_spec.label_source,
+            self.dataset_spec.dataset_dir,
             self.dataset_mapping_file,
-            self.dataset_spec.workbook_columns,
-            self.dataset_spec.profile_rules,
         )
 
 
@@ -117,5 +124,5 @@ def build_page_context(
         output_root=root / "output",
         bundle_root=root / "output" / "bundle",
         classification_workbook=spec.workbook_path,
-        dataset_mapping_file=spec.metadata_dir / "profile_catalog.json",
+        dataset_mapping_file=spec.metadata_dir / MAPPING_FILE_NAME,
     )

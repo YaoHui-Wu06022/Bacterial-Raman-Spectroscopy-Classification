@@ -63,7 +63,7 @@ def _configure_baseline_parser(parser: argparse.ArgumentParser) -> None:
     """注册 PCA-SVM baseline 参数。"""
     _add_common_options(parser)
     parser.add_argument("--all-channels", action="store_true", dest="all_channels_enable")
-    parser.add_argument("--pca-components", type=float, default=0.95)
+    parser.add_argument("--pca-components", type=int, default=30)
     parser.add_argument("--svm-c", type=float, default=1.0)
     parser.add_argument("--svm-kernel", default="rbf")
     parser.add_argument("--svm-gamma", default="scale")

@@ -28,7 +28,7 @@ class BaselineSpec:
     """PCA-SVM 的可复现实验参数。"""
 
     all_channels_enable: bool = False
-    pca_components: float = 0.95
+    pca_components: int | float = 30
     svm_c: float = 1.0
     svm_kernel: str = "rbf"
     svm_gamma: str = "scale"

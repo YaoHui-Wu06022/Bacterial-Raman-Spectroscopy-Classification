@@ -22,6 +22,23 @@ from ramanv2.common.plotting import configure_matplotlib_fonts
 configure_matplotlib_fonts()
 
 
+def _extract_embeddings(
+    model: torch.nn.Module,
+    inputs: torch.Tensor,
+    batch_size: int = 128,
+) -> torch.Tensor:
+    """分批提取 embedding，避免整层 Train/Val 一次性前向占满显存。"""
+    embeddings: list[torch.Tensor] = []
+    with torch.no_grad():
+        for start in range(0, len(inputs), batch_size):
+            _logits, batch_embeddings = model(
+                inputs[start : start + batch_size],
+                return_embedding_enable=True,
+            )
+            embeddings.append(batch_embeddings.cpu())
+    return torch.cat(embeddings, dim=0)
+
+
 def write_train_val_umap(
     model: torch.nn.Module,
     train_inputs: torch.Tensor,
@@ -39,12 +56,8 @@ def write_train_val_umap(
         import umap
     except ImportError as exc:
         raise ImportError("UMAP 分析需要安装 umap-learn") from exc
-    with torch.no_grad():
-        _train_logits, train_embeddings = model(train_inputs, return_embedding_enable=True)
-        _validation_logits, validation_embeddings = model(
-            validation_inputs,
-            return_embedding_enable=True,
-        )
+    train_embeddings = _extract_embeddings(model, train_inputs)
+    validation_embeddings = _extract_embeddings(model, validation_inputs)
     arrays = [train_embeddings.cpu().numpy(), validation_embeddings.cpu().numpy()]
     labels = np.concatenate(
         [

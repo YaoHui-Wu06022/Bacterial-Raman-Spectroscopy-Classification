@@ -25,6 +25,7 @@ from ramanv2.common.arc_data import is_arc_data_name, list_arc_data_paths, read_
 from ramanv2.common.plotting import add_bad_band_spans, configure_matplotlib_fonts
 from ramanv2.core.config import InputConfig
 from ramanv2.data.config import DEFAULT_BUILD_CONFIG, DataBuildConfig
+from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.data.preprocess import build_preprocess_kwargs
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.bad_bands import build_valid_mask
@@ -153,19 +154,23 @@ def _prune_folder_median_cache(cache_root: Path, state: list[dict[str, str]]) ->
                 path.unlink(missing_ok=True)
 
 
-def iter_init_folders(init_dir: Path) -> list[Path]:
-    """列出 init 中全部属和文件夹目录。"""
-    if not init_dir.is_dir():
+def iter_init_folders(init_dir: Path, depth: int = 1) -> list[Path]:
+    """列出 init 中指定目录深度下的全部来源文件夹。"""
+    if not init_dir.is_dir() or depth < 1:
         return []
-    return [
-        folder_dir
-        for genus_dir in sorted(
-            path for path in init_dir.iterdir() if path.is_dir() and path.name not in PLOT_EXCLUDED_NAMES
-        )
-        for folder_dir in sorted(
-            path for path in genus_dir.iterdir() if path.is_dir() and path.name not in PLOT_EXCLUDED_NAMES
-        )
-    ]
+    depth = max(int(depth), 1)
+    current = [init_dir]
+    for _ in range(depth + 1):
+        current = [
+            child
+            for parent in current
+            for child in sorted(
+                path
+                for path in parent.iterdir()
+                if path.is_dir() and path.name not in PLOT_EXCLUDED_NAMES
+            )
+        ]
+    return current
 
 
 def _scatter_valid_segment(
@@ -294,14 +299,19 @@ def write_plot_state(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(sorted(rows, key=lambda row: (row["genus"], row["folder"])))
 
 
-def build_plot_state(folders: list[Path]) -> list[dict[str, str]]:
+def build_plot_state(folders: list[Path], root_dir: Path | None = None) -> list[dict[str, str]]:
     """整理文件夹前缀和文件摘要，用于增量更新总览图。"""
     rows = []
     for folder in folders:
+        group_name = (
+            folder.parent.relative_to(root_dir).as_posix()
+            if root_dir is not None
+            else folder.parent.name
+        )
         file_count, file_signature = _scan_folder_spectra(folder)
         rows.append(
             {
-                "genus": folder.parent.name,
+                "genus": group_name,
                 "folder": folder.name,
                 "prefix": parse_folder_prefix(folder.name),
                 "file_count": str(file_count),
@@ -430,19 +440,21 @@ def plot_prefix_init(
     force_enable: bool = False,
     config: PrefixPlotConfig | None = None,
     *,
+    hierarchy: HierarchySpec | None = None,
     progress_callback: Callable[[str, str, int, int], None] | None = None,
 ) -> list[Path]:
-    """从任意属/种两层 init 目录生成 prefix-plot。
+    """从 init 目录生成 prefix-plot。
 
-    ``progress_callback(属, 前缀, 已处理分组数, 待处理分组数)`` 在每组绘制后调用，
-    供界面显示进度。
+    ``progress_callback(分组, 前缀, 已处理分组数, 待处理分组数)`` 在每组绘制后调用，
+    供界面显示进度。``hierarchy`` 决定来源文件夹的目录深度；未提供时按一层分组。
     """
     configure_matplotlib_fonts()
     plot_config = resolve_plot_config(config)
     input_dir = Path(init_dir).resolve()
     figure_dir = Path(output_dir).resolve()
-    folders = iter_init_folders(input_dir)
-    state = build_plot_state(folders)
+    depth = hierarchy.directory_depth if hierarchy is not None else 1
+    folders = iter_init_folders(input_dir, depth)
+    state = build_plot_state(folders, input_dir)
     signatures = {(row["genus"], row["folder"]): row["file_signature"] for row in state}
     cache_root = _resolve_plot_cache_dir(input_dir, plot_config)
     prior = read_plot_state(figure_dir / "prefix_plot_state.csv")
@@ -450,10 +462,11 @@ def plot_prefix_init(
     axis = build_plot_axis(plot_config)
     grouped = {}
     for folder in folders:
-        grouped.setdefault((folder.parent.name, parse_folder_prefix(folder.name)), []).append(folder)
+        group_name = folder.parent.relative_to(input_dir).as_posix()
+        grouped.setdefault((group_name, parse_folder_prefix(folder.name)), []).append(folder)
     current_groups = set(grouped)
-    for genus, prefix in changed - current_groups:
-        stale_output = figure_dir / genus / f"{prefix}.png"
+    for group_name, prefix in changed - current_groups:
+        stale_output = figure_dir / group_name / f"{prefix}.png"
         if stale_output.is_file():
             stale_output.unlink()
     targets = [
@@ -463,17 +476,17 @@ def plot_prefix_init(
     ]
     total = len(targets)
     outputs = []
-    for index, (genus, prefix) in enumerate(targets, start=1):
-        group = grouped[(genus, prefix)]
-        output_path = figure_dir / genus / f"{prefix}.png"
+    for index, (group_name, prefix) in enumerate(targets, start=1):
+        group = grouped[(group_name, prefix)]
+        output_path = figure_dir / group_name / f"{prefix}.png"
         curves = {}
         for folder in group:
             median_curves = build_folder_median_curves(
                 folder,
                 axis,
                 plot_config,
-                cache_root / genus,
-                signatures.get((genus, folder.name)),
+                cache_root / group_name,
+                signatures.get((group_name, folder.name)),
             )
             if median_curves is not None:
                 curves[folder.name] = median_curves
@@ -482,13 +495,15 @@ def plot_prefix_init(
                 curves,
                 axis,
                 output_path,
-                f"{prefix} median spectra" if plot_config.flat else f"{genus} {prefix} median spectra",
+                f"{prefix} median spectra"
+                if plot_config.flat
+                else f"{group_name.replace('/', ' / ')} {prefix} median spectra",
                 plot_config.input.bad_bands,
                 plot_config.input.norm_method,
             )
             outputs.append(output_path)
         if progress_callback is not None:
-            progress_callback(genus, prefix, index, total)
+            progress_callback(group_name, prefix, index, total)
     _prune_folder_median_cache(cache_root, state)
     write_plot_state(figure_dir / "prefix_plot_state.csv", state)
     return outputs
@@ -500,10 +515,18 @@ def build_prefix_plots(
     force_enable: bool = False,
     config: PrefixPlotConfig | None = None,
     *,
+    hierarchy: HierarchySpec | None = None,
     progress_callback: Callable[[str, str, int, int], None] | None = None,
 ) -> list[Path]:
     """为指定 init 目录生成同前缀总览图。"""
-    return plot_prefix_init(init_root, output_root, force_enable, config, progress_callback=progress_callback)
+    return plot_prefix_init(
+        init_root,
+        output_root,
+        force_enable,
+        config,
+        hierarchy=hierarchy,
+        progress_callback=progress_callback,
+    )
 
 
 def build_prefix_plots_for_groups(

@@ -717,6 +717,7 @@ def _render_analysis_removal_section(context: PageContext, state: PipelineState)
         mapping,
         state.cleaning.folder_catalog,
         state.cleaning.completed_folder_keys,
+        hierarchy=context.hierarchy,
     )
     report = _analysis_report()
 
@@ -918,7 +919,9 @@ def _render_auxiliary_sections(context: PageContext, state: PipelineState, *, in
     _render_folder_restore_section(context)
     _render_folder_removal_section(context, state)
     _render_restore_section(context)
-    if include_analysis and not context.hierarchy.is_flat:
+    if include_analysis and (
+        not context.hierarchy.is_flat or context.dataset_spec.label_source
+    ):
         _render_analysis_removal_section(context, state)
 
 

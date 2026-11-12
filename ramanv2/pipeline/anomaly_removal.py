@@ -32,6 +32,7 @@ from ramanv2.common.file_ops import (
     write_text_atomic,
 )
 from ramanv2.data.dataset_mapping import DatasetMapping
+from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.pipeline.cleaning import scan_date_names, scan_review_folders
 from ramanv2.pipeline.state import invalidate_downstream
 from ramanv2.records.lineage import (
@@ -89,6 +90,7 @@ def check_analysis_gate(
     mapping: DatasetMapping,
     folder_catalog: dict[str, set[str]],
     completed_folder_keys: set[str],
+    hierarchy: HierarchySpec | None = None,
 ) -> AnalysisGate:
     """检查清洗进度与 shift 可用性，不读取光谱内容。"""
     root = Path(data_root).resolve()
@@ -144,7 +146,7 @@ def check_analysis_gate(
                 )
 
     try:
-        plan = scan_supplement_plan(supplement_root, init_root, mapping)
+        plan = scan_supplement_plan(supplement_root, init_root, mapping, hierarchy=hierarchy)
     except (OSError, ValueError, TypeError) as error:
         issues.append(f"补充数据扫描失败：{error}")
         plan = None

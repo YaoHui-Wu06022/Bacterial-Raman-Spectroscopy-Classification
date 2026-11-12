@@ -1,15 +1,12 @@
-"""常规数据集 profile 映射与按数据集解析的目录布局。"""
+"""数据集主数据源解析与阶段目录布局。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 
-from ramanv2.data.datasets import (
-    FLAT_PROFILE_ID,
-    DatasetRegistry,
-    DatasetSpec,
-)
+from ramanv2.data.datasets import DatasetRegistry, DatasetSpec
+from ramanv2.data.hierarchy_spec import HierarchySpec
 
 
 # 测试母本目录名；由数据构建阶段统一使用。
@@ -18,13 +15,12 @@ TEST_ROOT_NAME = "init_test"
 
 @dataclass(frozen=True)
 class DatasetProfile:
-    """描述一个 profile 及其在所属数据集内的阶段目录名称。"""
+    """描述数据集的唯一主数据源及其阶段目录名称。"""
 
     profile_id: str
     dataset_name: str
     dataset_id: str = ""
     dataset_dir_name: str = ""
-    subdir: str = ""
     root_init: str = "init"
     root_init_test: str = "init_test"
     root_train_clean: str = "train"
@@ -43,6 +39,7 @@ class DatasetSelection:
     spec: DatasetSpec
     profile: DatasetProfile
     dataset_dir: Path
+    hierarchy: HierarchySpec
 
     @property
     def train_dir(self) -> Path:
@@ -60,42 +57,29 @@ class DatasetSelection:
 
 
 def list_spec_profiles(spec: DatasetSpec) -> list[DatasetProfile]:
-    """不加载注册表，直接从数据集规格构造 profile 列表。"""
-    if spec.is_flat:
-        return [_build_flat_profile(spec)]
-    return [_build_profile(profile_id, spec) for profile_id in spec.profiles]
+    """每个数据集只有一个主数据源。"""
+    return [_build_profile(spec)]
 
 
 def select_profile_id(spec: DatasetSpec, profile_key: str | None = None) -> str:
-    """在数据集内选择 profile；空键取 dataset.json 默认项，再取第一个。"""
+    """返回数据集主数据源标识；传入其他键视为错误。"""
     key = "" if profile_key is None else str(profile_key).strip()
-    if spec.is_flat:
-        if key and key != FLAT_PROFILE_ID:
-            raise KeyError(
-                f"扁平数据集 {spec.dataset_id} 只有 profile {FLAT_PROFILE_ID}"
-            )
-        return FLAT_PROFILE_ID
-    if key:
-        if key not in spec.profiles:
-            raise KeyError(f"数据集 {spec.dataset_id} 没有 profile：{key}")
-        return key
-    if not spec.profiles:
-        raise KeyError(f"数据集 {spec.dataset_id} 没有可用 profile")
-    preferred = spec.default_profile
-    return preferred if preferred in spec.profiles else spec.profiles[0]
+    if key and key != spec.dataset_id:
+        raise KeyError(f"数据集 {spec.dataset_id} 只有主数据源 {spec.dataset_id}")
+    return spec.dataset_id
 
 
 def resolve_spec_profile(spec: DatasetSpec, profile_key: str | None = None) -> DatasetProfile:
-    """在指定数据集规格内解析 profile。"""
-    profile_id = select_profile_id(spec, profile_key)
-    return _build_flat_profile(spec) if spec.is_flat else _build_profile(profile_id, spec)
+    """返回数据集的唯一主数据源。"""
+    select_profile_id(spec, profile_key)
+    return _build_profile(spec)
 
 
 def list_profiles(
     dataset_id: str | None = None,
     project_root: Path | str | None = None,
 ) -> list[DatasetProfile]:
-    """返回指定数据集目录中发现的 profile。"""
+    """返回指定数据集的主数据源。"""
     return list_spec_profiles(_load_registry(project_root).resolve(dataset_id))
 
 
@@ -104,44 +88,31 @@ def resolve_selection(
     profile_id: str | None = None,
     project_root: Path | str | None = None,
 ) -> DatasetSelection:
-    """唯一的 dataset/profile 解析入口。
-
-    未给数据集时按 profile 归属反查；两者都为空时使用默认数据集。
-    """
+    """唯一的 dataset 解析入口；profile 参数仅用于兼容等价的数据集标识。"""
     registry = _load_registry(project_root)
     dataset_key = "" if dataset_id is None else str(dataset_id).strip()
     profile_key = "" if profile_id is None else str(profile_id).strip()
     if dataset_key:
         spec = registry.resolve(dataset_key)
     elif profile_key:
-        spec = registry.resolve_for_profile(profile_key)
+        spec = registry.resolve(profile_key)
     else:
         spec = registry.resolve()
     profile = resolve_spec_profile(spec, profile_key)
     return DatasetSelection(
         spec=spec,
         profile=profile,
-        dataset_dir=spec.profile_root(profile.profile_id),
+        dataset_dir=spec.dataset_dir,
+        hierarchy=spec.hierarchy,
     )
 
 
-def _build_profile(profile_id: str, spec: DatasetSpec) -> DatasetProfile:
+def _build_profile(spec: DatasetSpec) -> DatasetProfile:
     return DatasetProfile(
-        profile_id=profile_id,
-        dataset_name=profile_id,
-        dataset_id=spec.dataset_id,
-        dataset_dir_name=spec.directory.name,
-        subdir=profile_id,
-    )
-
-
-def _build_flat_profile(spec: DatasetSpec) -> DatasetProfile:
-    return DatasetProfile(
-        profile_id=FLAT_PROFILE_ID,
+        profile_id=spec.dataset_id,
         dataset_name=spec.dataset_id,
         dataset_id=spec.dataset_id,
         dataset_dir_name=spec.directory.name,
-        subdir="",
     )
 
 

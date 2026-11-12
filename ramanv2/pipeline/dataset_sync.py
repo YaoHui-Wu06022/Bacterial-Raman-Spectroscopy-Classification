@@ -24,7 +24,7 @@ from ramanv2.common.naming import (
 )
 from ramanv2.common.file_ops import preserve_paths, publish_file, rename_directory, _remove_path
 from ramanv2.data.builders.init import build_init_datasets
-from ramanv2.data.hierarchy_config import HierarchySpec
+from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.data.count import summarize_dataset
@@ -56,9 +56,10 @@ def run_test_to_init(
     state: PipelineState,
     state_file: Path,
     source_id: str,
+    hierarchy: HierarchySpec,
 ) -> dict[str, object]:
     """直接迁移已有 init_test 单组到 init，复用双向迁移事务。"""
-    return _run_dataset_transfer(data_root, init_root, mapping, state, state_file, source_id, False)
+    return _run_dataset_transfer(data_root, init_root, mapping, state, state_file, source_id, False, hierarchy)
 
 
 def collect_init_export_sources(data_root: Path, init_root: Path, state: PipelineState) -> dict[str, str]:
@@ -68,17 +69,16 @@ def collect_init_export_sources(data_root: Path, init_root: Path, state: Pipelin
         return {}
     exports = {entry["source"] for entry in report.get("test_exports", [])}
     records = load_folder_lineage(data_root)["folders"]
-    init_key = os.path.normcase(str(init_root.resolve()))
+    init_root = init_root.resolve()
     sources = {}
     for source_id, record in records.items():
         value = record.get("outputs", {}).get("init")
         if source_id in exports or not value:
             continue
-        # lineage 存绝对路径；用字符串比较父目录，避免为每个组做一次 resolve 磁盘查询。
         path = Path(value)
-        if os.path.normcase(str(path.parent.parent)) != init_key or not has_arc_data(path):
+        if not path.resolve().is_relative_to(init_root) or not has_arc_data(path):
             continue
-        sources[source_id] = f"{path.parent.name}/{path.name}"
+        sources[source_id] = source_id
     return dict(sorted(sources.items(), key=lambda item: build_natural_key(item[1])))
 
 
@@ -89,9 +89,10 @@ def run_init_to_test(
     state: PipelineState,
     state_file: Path,
     source_id: str,
+    hierarchy: HierarchySpec,
 ) -> dict[str, object]:
     """将所选 init 整夹移入 init_test，不重建其余数据。"""
-    return _run_dataset_transfer(data_root, init_root, mapping, state, state_file, source_id, True)
+    return _run_dataset_transfer(data_root, init_root, mapping, state, state_file, source_id, True, hierarchy)
 
 
 def _run_dataset_transfer(
@@ -102,6 +103,7 @@ def _run_dataset_transfer(
     state_file: Path,
     source_id: str,
     to_test_enable: bool,
+    hierarchy: HierarchySpec,
 ) -> dict[str, object]:
     """双向共用预检查、迁移、绘图及状态发布；任一失败恢复原文件和路由。"""
     parts = source_id.split("/")
@@ -132,7 +134,7 @@ def _run_dataset_transfer(
             raise ValueError("缺少 init 输出路径")
         source = Path(value).resolve()
         match = CANONICAL_FOLDER_PATTERN.fullmatch(source.name)
-        if source.parent.parent != init_root.resolve() or match is None or match.group(2) != date_name:
+        if init_root.resolve() not in source.parents or match is None or match.group(2) != date_name:
             raise ValueError("init 来源路径无效")
         if any(key != source_id and value.get("outputs", {}).get("init") == str(source) for key, value in records.items()):
             raise ValueError("init 文件夹被多个来源共用")
@@ -159,17 +161,18 @@ def _run_dataset_transfer(
         raise ValueError(f"种前缀 {prefix} 未映射到属，请先补充分类名单")
     if record.get("init_pending") or filenames != {p.name for p in iter_arc_data_paths(data_root / source_id)}:
         raise ValueError("所选数据尚未同步源谱变更，请先按日期更新后再迁移")
-    genus_dir = (init_root / genus).resolve()
-    if genus_dir.parent != init_root.resolve():
-        raise ValueError("属目录超出 init")
+    init_parent = (init_root / hierarchy.init_relative_dir(folder_name)).resolve()
+    if init_parent != init_root.resolve() and init_root.resolve() not in init_parent.parents:
+        raise ValueError("init 分组目录超出 init")
+    group_key = hierarchy.init_relative_dir(folder_name).as_posix()
     if to_test_enable:
-        if source.parent != genus_dir:
-            raise ValueError("init 的属目录与种前缀映射不一致")
+        if source.parent != init_parent:
+            raise ValueError("init 的分组目录与种前缀映射不一致")
         # 统一编号后文件夹名已唯一，移入 init_test 保持原名、扁平存放。
         target = test_root / source.name
     else:
-        # 移回 init 保持原名，放入对应属目录。
-        target = genus_dir / source.name
+        # 移回 init 保持原名，放入对应分组目录。
+        target = init_parent / source.name
     if target.exists():
         raise FileExistsError(f"目标文件夹已存在：{target}")
     summary = summarize_dataset(init_root)
@@ -179,21 +182,21 @@ def _run_dataset_transfer(
         summary["genus_count"] -= int(
             not any(
                 not path.is_relative_to(source)
-                for path in iter_arc_data_paths(genus_dir, recursive=True)
+                for path in iter_arc_data_paths(init_parent, recursive=True)
             )
         )
     else:
         summary["file_count"] += len(filenames)
         summary["folder_count"] += 1
-        summary["genus_count"] += int(not has_arc_data(genus_dir, recursive=True))
+        summary["genus_count"] += int(not has_arc_data(init_parent, recursive=True))
     figure_root = init_root.parent / "fig_init"
-    plot_path = figure_root / genus / f"{prefix}.png"
+    plot_path = figure_root / group_key / f"{prefix}.png"
     snapshots = [source, target if target.parent.exists() else target.parent, plot_path, lineage_path(data_root), state_file]
     with preserve_paths(snapshots):
         target.parent.mkdir(parents=True, exist_ok=True)
         rename_directory(source, target)
         with TemporaryDirectory(prefix=".test_return_plot_", dir=figure_root.parent) as temporary:
-            plots = build_prefix_plots_for_groups(init_root, Path(temporary), {(genus, prefix)})
+            plots = build_prefix_plots_for_groups(init_root, Path(temporary), {(group_key, prefix)})
             if plots:
                 publish_file(plots[0], plot_path)
             elif to_test_enable:
@@ -486,8 +489,6 @@ def _merge_date_init_report(
     merged["selected_test_folders"] = sorted(selected, key=build_natural_key)
     merged["date_stats"] = dict(previous.get("date_stats", {}))
     merged["conflict_dates"] = list(previous.get("conflict_dates", []))
-    merged["generated_profiles"] = list(previous.get("generated_profiles", []))
-    merged["profile_stats"] = dict(previous.get("profile_stats", {}))
     merged["init_root"] = str(init_root.resolve())
     if previous.get("test_root"):
         merged["test_root"] = previous["test_root"]
@@ -564,8 +565,6 @@ def run_date_dataset_update(
             build_init_datasets(
                 shift_root,
                 init_root,
-                {},
-                mapping,
                 set(dates),
                 mode="replace_dates",
                 date_names=existing_dates,
@@ -580,8 +579,6 @@ def run_date_dataset_update(
             build_init_datasets(
                 shift_root,
                 init_root,
-                {},
-                mapping,
                 set(dates),
                 mode="incremental",
                 date_names=new_dates,
@@ -613,7 +610,7 @@ def run_date_dataset_update(
     plot_error = None
     plot_count = 0
     try:
-        plot_count = len(build_prefix_plots(init_root, figure_root))
+        plot_count = len(build_prefix_plots(init_root, figure_root, hierarchy=hierarchy))
     except (OSError, ValueError, RuntimeError) as error:
         plot_error = str(error)
     if plot_error is None:

@@ -18,6 +18,7 @@ from ramanv2.common.file_ops import (
     write_text_atomic,
 )
 from ramanv2.common.paths import PROJECT_ROOT
+from ramanv2.data.dataset_mapping import MAPPING_FILE_NAME
 from ramanv2.data.profiles import DatasetProfile, DatasetSelection, resolve_selection
 from ramanv2.packaging.source_archive import build_package_archive
 
@@ -181,9 +182,8 @@ def restore_data_archive(
 
 
 def _archive_root(profile: DatasetProfile) -> Path:
-    """返回数据集在归档中的根目录；扁平数据集没有 profile 子目录。"""
-    root = Path("dataset") / profile.dataset_dir_name
-    return root / profile.subdir if profile.subdir else root
+    """返回数据集在归档中的根目录。"""
+    return Path("dataset") / profile.dataset_dir_name
 
 
 def _resolve_stage_dirs(
@@ -220,6 +220,14 @@ def _resolve_config_files(
         (dataset_archive_root / "dataset.json", selection.spec.config_path),
         (dataset_archive_root / "hierarchy.json", selection.spec.hierarchy_path),
     ]
+    mapping_source = selection.spec.metadata_dir / MAPPING_FILE_NAME
+    if mapping_source.is_file():
+        candidates.append(
+            (
+                dataset_archive_root / selection.spec.metadata_dir.name / MAPPING_FILE_NAME,
+                mapping_source,
+            )
+        )
     return [(archive_path, source) for archive_path, source in candidates if source.is_file()]
 
 

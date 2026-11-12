@@ -10,7 +10,16 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dataset", default=None, help="数据集标识；默认按 profile 归属解析")
     parser.add_argument("--profile", required=True, help="常规数据集 profile 标识")
     parser.add_argument("--level", required=True, help="训练层级，如 level_1")
-    parser.add_argument("--parent", default=None, help="目标父类名称或索引；除首层外必填")
+    parser.add_argument(
+        "--parent",
+        default=None,
+        help="目标父类名称或索引；除首层外必填，--global-head 时留空",
+    )
+    parser.add_argument(
+        "--global-head",
+        action="store_true",
+        help="训练该层全部类别的全局模型；不能与 --parent 同时使用",
+    )
     parser.add_argument("--experiment-dir", default=None, help="固定实验根目录")
     parser.add_argument("--resume-run-dir", default=None, help="从指定模型槽位目录恢复训练")
     parser.set_defaults(run_command=run_command)
@@ -36,7 +45,7 @@ def run_command(args: argparse.Namespace) -> int:
         {
             "dataset_id": spec.dataset_id,
             "profile_id": selection.profile.profile_id,
-            "label_schema": spec.hierarchy.label_schema,
+            "label_schema": selection.hierarchy.label_schema,
             "bad_bands": spec.bad_bands,
         }
     )
@@ -45,6 +54,7 @@ def run_command(args: argparse.Namespace) -> int:
         level_name=args.level,
         parent_id=parent_id,
         parent_name=parent_name,
+        global_head_enable=bool(args.global_head),
         experiment_dir=args.experiment_dir,
         resume_run_dir=args.resume_run_dir,
     )

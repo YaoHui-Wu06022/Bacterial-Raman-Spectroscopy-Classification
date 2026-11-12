@@ -28,7 +28,7 @@ from ramanv2.core.run_context import (
     PARENT_KNOWN_MODE_DIR_NAME,
     TEST_RESULT_DIR_NAME,
 )
-from ramanv2.data.hierarchy_config import HierarchySpec, resolve_hierarchy_from_meta
+from ramanv2.data.hierarchy_spec import HierarchySpec, resolve_hierarchy_from_meta
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.data.profiles import resolve_selection
 from ramanv2.evaluation.summary_text import build_result_summary

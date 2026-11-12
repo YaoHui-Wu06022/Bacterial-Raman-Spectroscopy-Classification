@@ -25,7 +25,6 @@ from ramanv2.ui.read_cache import (
     cached_json_file,
     cached_text_file,
 )
-from ramanv2.ui.components.pickers import render_profile_picker
 from ramanv2.ui.formatting import format_ratio, relative_label
 from ramanv2.ui.page_state import (
     INVALIDATE_INFERENCE,
@@ -39,9 +38,7 @@ from ramanv2.ui.page_state import (
 def render_sample_inference_page(context) -> None:
     """渲染实验选择、测试缓存、样本推理和结果查看区域。"""
     st.title("样本推理")
-    profile = render_profile_picker(context, label="选择 Profile", key="inference_profile")
-    if profile is None:
-        return
+    profile = context.profile()
     experiment_dirs = _list_experiment_dirs(context, profile)
     if not experiment_dirs:
         st.info(f"没有找到 {profile.dataset_name} 的有效实验目录。")

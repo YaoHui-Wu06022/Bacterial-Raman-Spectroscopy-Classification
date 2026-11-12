@@ -142,7 +142,6 @@ class AnalysisConfig:
 
     umap_neighbors: int = 15
     umap_min_dist: float = 0.1
-    inherit_missing_levels_use: bool = True
     attribution_split: str = "train"
     attribution_batch_count: int = 10
     ig_steps: int = 32

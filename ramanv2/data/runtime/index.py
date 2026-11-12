@@ -10,7 +10,7 @@ import numpy as np
 from ramanv2.common.hierarchy import parts_to_key
 from ramanv2.common.naming import parse_folder_prefix
 from ramanv2.data.dataset_io import iter_arc_dirs, load_arc_intensity
-from ramanv2.data.hierarchy_config import HierarchySpec
+from ramanv2.data.hierarchy_spec import HierarchySpec
 
 
 class DatasetIndex:

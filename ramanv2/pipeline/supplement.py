@@ -17,7 +17,7 @@ from ramanv2.common.arc_data import (
 from ramanv2.common.naming import CANONICAL_FOLDER_PATTERN, build_natural_key, parse_folder_prefix
 from ramanv2.data.builders.init import build_full_init, build_spectrum_folder
 from ramanv2.data.dataset_mapping import DatasetMapping
-from ramanv2.data.hierarchy_config import HierarchySpec
+from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.data.count import summarize_dataset
 
 
@@ -50,6 +50,7 @@ def scan_supplement_plan(
     supplement_root: Path | str,
     init_root: Path | str,
     mapping: DatasetMapping,
+    hierarchy: HierarchySpec | None = None,
 ) -> SupplementPlan:
     """扫描补充数据目录并核对现有 init 中未被覆盖的直放组，不修改任何文件。"""
     root = Path(supplement_root)
@@ -92,20 +93,35 @@ def scan_supplement_plan(
                     prefix=prefix,
                     genus=genus,
                     source_dir=folder,
-                    target_relative=Path(genus) / folder.name,
+                    target_relative=(
+                        hierarchy.init_relative_dir(folder.name) / folder.name
+                        if hierarchy is not None
+                        else Path(genus) / folder.name
+                    ),
                     file_count=direct_count,
                 )
             )
     planned_targets = {group.target_relative.as_posix() for group in groups}
     unbacked: list[str] = []
     if init.is_dir():
-        for genus_dir in sorted((path for path in init.iterdir() if path.is_dir()), key=lambda path: build_natural_key(path.name)):
-            for folder in sorted((path for path in genus_dir.iterdir() if path.is_dir()), key=lambda path: build_natural_key(path.name)):
-                if CANONICAL_FOLDER_PATTERN.fullmatch(folder.name):
+        if hierarchy is not None:
+            leaf_depth = max(hierarchy.directory_depth, 1) + 1
+            for path in sorted(init.rglob("*"), key=lambda item: build_natural_key(item.as_posix())):
+                relative = path.relative_to(init)
+                if not path.is_dir() or len(relative.parts) != leaf_depth:
                     continue
-                relative = f"{genus_dir.name}/{folder.name}"
-                if relative not in planned_targets:
-                    unbacked.append(relative)
+                if CANONICAL_FOLDER_PATTERN.fullmatch(path.name):
+                    continue
+                if relative.as_posix() not in planned_targets:
+                    unbacked.append(relative.as_posix())
+        else:
+            for genus_dir in sorted((path for path in init.iterdir() if path.is_dir()), key=lambda path: build_natural_key(path.name)):
+                for folder in sorted((path for path in genus_dir.iterdir() if path.is_dir()), key=lambda path: build_natural_key(path.name)):
+                    if CANONICAL_FOLDER_PATTERN.fullmatch(folder.name):
+                        continue
+                    relative = f"{genus_dir.name}/{folder.name}"
+                    if relative not in planned_targets:
+                        unbacked.append(relative)
     if unbacked and not root.is_dir():
         errors.append(f"补充数据目录不存在，且 init 中有无来源直放组：{'、'.join(unbacked)}")
     return SupplementPlan(

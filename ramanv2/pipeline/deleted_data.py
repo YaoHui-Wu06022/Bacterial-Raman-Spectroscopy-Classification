@@ -70,7 +70,7 @@ def _sub_directories(path: Path) -> list[os.DirEntry[str]]:
 
 def scan_deleted_spectra(
     data_root: Path | str,
-    profile_catalog: DatasetMapping,
+    dataset_mapping: DatasetMapping,
     species_name: str | None = None,
     date_name: str | None = None,
     include_bead: bool = False,
@@ -80,7 +80,7 @@ def scan_deleted_spectra(
     manual_root = root / MANUAL_DELETE_RELATIVE.as_posix()
     if not manual_root.is_dir():
         return []
-    prefix_genus = build_prefix_to_genus(profile_catalog)
+    prefix_genus = build_prefix_to_genus(dataset_mapping)
     records: list[DeletedSpectrum] = []
     for date_entry in sorted(_sub_directories(manual_root), key=lambda entry: build_natural_key(entry.name)):
         if date_name is not None and date_entry.name != str(date_name):
@@ -247,7 +247,7 @@ def restore_deleted_spectra(
     shift_root: Path | str,
     init_root: Path | str,
     state_path: Path | str,
-    profile_catalog: DatasetMapping,
+    dataset_mapping: DatasetMapping,
     selected_relative_paths: list[str] | tuple[str, ...] | set[str],
 ) -> dict[str, object]:
     """把 cosmic 删除区的普通谱移回原位。
@@ -266,10 +266,10 @@ def restore_deleted_spectra(
     selected = sorted(normalized, key=build_natural_key)
     if not selected:
         raise ValueError("至少选择一条需要恢复的光谱")
-    prefix_genus = build_prefix_to_genus(profile_catalog)
+    prefix_genus = build_prefix_to_genus(dataset_mapping)
     records = {
         item.relative_path: item
-        for item in scan_deleted_spectra(root, profile_catalog, include_bead=True)
+        for item in scan_deleted_spectra(root, dataset_mapping, include_bead=True)
     }
     missing = [path for path in selected if path not in records]
     if missing:
@@ -445,7 +445,7 @@ def restore_deleted_folder(
     shift_root: Path | str,
     init_root: Path | str,
     state_path: Path | str,
-    profile_catalog: DatasetMapping,
+    dataset_mapping: DatasetMapping,
     source_id: str,
 ) -> dict[str, object]:
     """把整夹删除归档整体移回 cosmic_data，并让该文件夹重新进入清洗队列。
@@ -453,7 +453,7 @@ def restore_deleted_folder(
     只改 cosmic 与清洗状态：不写 shift、不作废审核结论。shift 由仿射校准页的重建入口
     按已确认参数生成（重建时才作废该日期审核结论），init 由数据集获取页重建。
     """
-    del init_root, profile_catalog  # 整夹恢复不写 shift、不写 init。
+    del init_root, dataset_mapping  # 整夹恢复不写 shift、不写 init。
     root = Path(data_root).resolve()
     parts = str(source_id).replace("\\", "/").split("/", 1)
     if len(parts) != 2:

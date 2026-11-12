@@ -16,12 +16,10 @@ from ramanv2.core.run_context import (
     HIERARCHY_META_FILE_NAME,
     LEVEL_SUMMARY_DIR_NAME,
     METRICS_FILE_NAME,
-    MODEL_FILE_NAME,
     PARENT_KNOWN_MODE_DIR_NAME,
     TEST_RESULT_DIR_NAME,
     VAL_RESULT_DIR_NAME,
 )
-from ramanv2.data.dataset_io import load_arc_intensity
 from ramanv2.evaluation.context import (
     EvaluationContext,
     load_evaluation_context,
@@ -77,15 +75,21 @@ def summarize_level_results(
     source_dir: Path | str,
     level_name: str,
     device: str | None = None,
+    *,
+    auto_evaluate_enable: bool = True,
 ) -> dict[str, Any]:
-    """生成已知上层与从头级联两种模式的验证/测试汇总。"""
+    """生成已知上层与从头级联两种模式的验证/测试汇总。
+
+    ``auto_evaluate_enable`` 为真时，缺失的父类 val_result/test_result 会先自动评估。
+    """
     assert_multi_model_level(source_dir, level_name, "层级汇总")
     context = load_evaluation_context(source_dir)
     level_name = resolve_level_name(context, level_name)
+    if auto_evaluate_enable:
+        _ensure_level_results(context, level_name, device)
     level_dir = context.experiment_dir / level_name
     target_device = resolve_device(device)
     class_names = context.dataset_index.get_class_names(level_name)
-    predictor_cache: dict[Path, tuple[Any, Any]] = {}
     summary_root = level_dir / LEVEL_SUMMARY_DIR_NAME
     parent_known_root = summary_root / PARENT_KNOWN_MODE_DIR_NAME
     for output_name, result_dir_name, sample_csv_name, folder_enable, covered_enable in _KIND_SPECS:
@@ -94,8 +98,6 @@ def summarize_level_results(
             level_name,
             result_dir_name,
             sample_csv_name,
-            target_device,
-            predictor_cache,
         )
         combined = pd.concat(frames, ignore_index=True)
         if combined.empty:
@@ -272,13 +274,54 @@ def _write_cascade_val_report(
     )
 
 
+def _ensure_level_results(
+    context: EvaluationContext,
+    level_name: str,
+    device: str | None,
+) -> None:
+    """补齐层级汇总所需的父类验证/测试结果，缺失槽位自动评估一次。"""
+    from ramanv2.evaluation.independent_test import evaluate_test_set
+    from ramanv2.evaluation.model_eval import evaluate_model_run
+
+    level_dir = context.experiment_dir / level_name
+    global_entry = (context.meta.get("level_models") or {}).get(level_name)
+    if has_model_path(global_entry):
+        slots = [level_dir]
+    else:
+        parent_to_children = (
+            (context.meta.get("parent_to_children") or {}).get(level_name) or {}
+        )
+        slots = [
+            level_dir / f"{level_name}_{int(parent_text)}"
+            for parent_text, child_ids in sorted(
+                parent_to_children.items(), key=lambda item: int(item[0])
+            )
+            if len(child_ids) > 1
+        ]
+    test_dir = resolve_preprocessed_test_dir(
+        context.config.dataset.profile_id,
+        dataset_id=context.config.dataset.dataset_id,
+    )
+    for slot in slots:
+        if not (slot / VAL_RESULT_DIR_NAME / METRICS_FILE_NAME).is_file():
+            print(f"[Level Summary] 自动评估验证集：{slot}")
+            evaluate_model_run(slot, level_name, device)
+        if not (slot / TEST_RESULT_DIR_NAME / METRICS_FILE_NAME).is_file() and test_dir.is_dir():
+            print(f"[Level Summary] 自动评估测试集：{slot}")
+            try:
+                evaluate_test_set(slot, device, test_dir)
+            except RuntimeError as error:
+                if "测试集没有属于" in str(error):
+                    print(f"[Level Summary] 跳过无测试覆盖的槽位：{slot}")
+                else:
+                    raise
+
+
 def _collect_level_frames(
     context: EvaluationContext,
     level_name: str,
     result_dir_name: str,
     sample_csv_name: str,
-    device: Any,
-    predictor_cache: dict[Path, tuple[Any, Any]],
 ) -> tuple[list[pd.DataFrame], list[dict[str, Any]]]:
     """收集一个层级下所有模型槽位或单子类继承的结果行。"""
     level_dir = context.experiment_dir / level_name
@@ -354,14 +397,11 @@ def _collect_level_frames(
             continue
         frame, source = _inherit_single_child(
             context,
-            level_name,
             parent_level,
             parent_id,
             int(child_ids[0]),
             result_dir_name,
             sample_csv_name,
-            device,
-            predictor_cache,
         )
         if not frame.empty:
             frames.append(frame)
@@ -373,16 +413,13 @@ def _collect_level_frames(
 
 def _inherit_single_child(
     context: EvaluationContext,
-    level_name: str,
     parent_level: str,
     parent_id: int,
     child_id: int,
     result_dir_name: str,
     sample_csv_name: str,
-    device: Any,
-    predictor_cache: dict[Path, tuple[Any, Any]],
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """继承父层模型的预测；误判样本继续由误判父类的子模型级联预测。"""
+    """已知父类时单子类直通：继承父层样本并把唯一子类作为预测。"""
     parent_level_dir = context.experiment_dir / parent_level
     matched_frames: list[pd.DataFrame] = []
     parent_slots: list[Path] = []
@@ -424,29 +461,11 @@ def _inherit_single_child(
 
     parent_frame = matched_frames[0]
     parent_slot = parent_slots[0]
-    target_predictions: list[int] = []
-    for parent_prediction, sample_path in zip(
-        parent_frame["label_pred"].astype(int),
-        parent_frame["path"].astype(str),
-    ):
-        if int(parent_prediction) == parent_id:
-            target_predictions.append(child_id)
-            continue
-        target_predictions.append(
-            _predict_routed_child(
-                context,
-                level_name,
-                int(parent_prediction),
-                sample_path,
-                device,
-                predictor_cache,
-            )
-        )
     frame = pd.DataFrame(
         {
             "path": parent_frame["path"].values,
             "label_true": [child_id] * len(parent_frame),
-            "label_pred": target_predictions,
+            "label_pred": [child_id] * len(parent_frame),
         }
     )
     return frame, {
@@ -457,42 +476,6 @@ def _inherit_single_child(
         "child_id": child_id,
         "sample_count": int(len(frame)),
     }
-
-
-def _predict_routed_child(
-    context: EvaluationContext,
-    level_name: str,
-    parent_id: int,
-    sample_path: str,
-    device: Any,
-    predictor_cache: dict[Path, tuple[Any, Any]],
-) -> int:
-    """按父层误判类别选择子模型，并对同一光谱继续级联预测。"""
-    children = (
-        ((context.meta.get("parent_to_children") or {}).get(level_name) or {})
-        .get(str(parent_id))
-        or []
-    )
-    if not children:
-        raise ValueError(f"{level_name} 的父类 {parent_id} 没有子类，无法继续级联")
-    if len(children) == 1:
-        return int(children[0])
-    slot = context.experiment_dir / level_name / f"{level_name}_{parent_id}"
-    if not (slot / MODEL_FILE_NAME).is_file():
-        raise FileNotFoundError(
-            f"层级汇总的继承样本需要 {level_name} 父类 {parent_id} 的子模型：{slot}"
-        )
-    cached = predictor_cache.get(slot)
-    if cached is None:
-        predictor = load_predictor(slot, device, level_name)
-        preprocessor = build_inference_preprocessor(
-            context.input_spec,
-            predictor.device,
-        )
-        predictor_cache[slot] = (predictor, preprocessor)
-    predictor, preprocessor = predictor_cache[slot]
-    inputs = preprocessor.preprocess_intensity(load_arc_intensity(sample_path))
-    return int(predictor.predict_tensor(inputs, top_k=1)[0].class_id)
 
 
 def _read_slot_results(

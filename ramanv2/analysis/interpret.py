@@ -31,12 +31,7 @@ from ramanv2.evaluation.context import (
     resolve_level_name,
     resolve_run_entry,
 )
-from ramanv2.evaluation.level_summary import (
-    LEVEL_SUMMARY_DIR_NAME,
-    assert_multi_model_level,
-)
 from ramanv2.modeling.predictor import load_predictor
-from ramanv2.modeling.run_manifest import has_model_path, resolve_entry_path
 from ramanv2.spectra.axis import expected_wavenumbers
 
 
@@ -97,27 +92,6 @@ def umap_slot(
     return output_path
 
 
-def interpret_level(
-    source_dir: str,
-    level_name: str,
-    device: str | None = None,
-    attribution_batch_count: int | None = None,
-    umap_enable: bool = True,
-) -> Path:
-    """聚合一个层级多个模型的归因，写入 level_summary/analysis_result。"""
-    assert_multi_model_level(source_dir, level_name, "层级归因汇总")
-    context = load_evaluation_context(source_dir)
-    level = resolve_level_name(context, level_name)
-    tasks = build_level_tasks(context, level)
-    return _run_level_analysis(
-        context,
-        tasks,
-        device,
-        attribution_batch_count,
-        umap_enable,
-    )
-
-
 def build_slot_task(context: EvaluationContext, level_name: str) -> AnalysisTask:
     """从明确模型槽位构建唯一的分析任务。"""
     run_entry = resolve_run_entry(context)
@@ -132,35 +106,6 @@ def build_slot_task(context: EvaluationContext, level_name: str) -> AnalysisTask
         run_entry.values,
         run_entry.run_dir,
     )
-
-
-def build_level_tasks(context: EvaluationContext, level_name: str) -> list[AnalysisTask]:
-    """构建一个层级下所有已完成训练模型的分析任务。"""
-    global_entry = (context.meta.get("level_models") or {}).get(level_name)
-    if has_model_path(global_entry):
-        slot_dir = resolve_entry_path(context.experiment_dir, global_entry, "run_dir")
-        return [_build_task(context, level_name, None, global_entry, slot_dir)]
-
-    parent_to_children = (
-        (context.meta.get("parent_to_children") or {}).get(level_name) or {}
-    )
-    entries = (context.meta.get("parent_models") or {}).get(level_name) or {}
-    tasks: list[AnalysisTask] = []
-    for parent_text in sorted(parent_to_children, key=lambda item: int(item)):
-        parent_id = int(parent_text)
-        children = parent_to_children.get(parent_text) or []
-        entry = entries.get(str(parent_id))
-        if not has_model_path(entry):
-            if len(children) > 1:
-                raise FileNotFoundError(
-                    f"{level_name} 父类 {parent_id} 缺少子模型，无法生成层级归因"
-                )
-            continue
-        slot_dir = resolve_entry_path(context.experiment_dir, entry, "run_dir")
-        tasks.append(_build_task(context, level_name, parent_id, entry, slot_dir))
-    if not tasks:
-        raise ValueError(f"没有可分析的模型：level={level_name}")
-    return tasks
 
 
 def _build_task(
@@ -243,74 +188,7 @@ def _run_slot_analysis(
         summaries,
         log_dir / ANALYSIS_LOG_FILE_NAME,
         tasks=[task],
-        mode="slot",
         level_name=task.level_name,
-        device=device,
-        execution_config=context.config.execution,
-        channel_names=_resolve_channel_names(context.input_spec),
-        se_lines=se_lines,
-        figure_dir=figure_dir,
-        separate_class_plots_enable=context.config.analysis.separate_class_plots_use,
-    )
-    return output_dir
-
-
-def _run_level_analysis(
-    context,
-    tasks,
-    device_value: str | None,
-    attribution_batch_count: int | None,
-    umap_enable: bool,
-) -> Path:
-    """聚合一个层级多个模型的归因并写入 level_summary/analysis_result。"""
-    device = _resolve_device(device_value)
-    level_name = tasks[0].level_name
-    output_dir = (
-        context.experiment_dir
-        / level_name
-        / LEVEL_SUMMARY_DIR_NAME
-        / ANALYSIS_RESULT_DIR_NAME
-    )
-    figure_dir, log_dir = _prepare_analysis_dirs(output_dir)
-    task_report_enable = len(tasks) == 1
-    summaries = [
-        _analyze_task(
-            context,
-            task,
-            device,
-            figure_dir,
-            collect_embedding=umap_enable and len(tasks) == 1,
-            write_reports_enable=task_report_enable,
-            attribution_batch_count=attribution_batch_count,
-        )
-        for task in tasks
-    ]
-    if context.config.analysis.inherit_missing_levels_use:
-        summaries.extend(
-            _inherit_single_child_summaries(
-                context,
-                level_name,
-                device,
-                figure_dir,
-                attribution_batch_count,
-            )
-        )
-    write_aggregate_reports(
-        summaries,
-        figure_dir,
-        _resolve_channel_names(context.input_spec),
-        expected_wavenumbers(context.config.input),
-        context.config.input.bad_bands,
-        context.config.analysis.row_norm,
-        context.config.analysis.separate_class_plots_use,
-    )
-    se_lines = write_se_summary(tasks, log_dir / "se_summary.txt")
-    _write_analysis_log(
-        summaries,
-        log_dir / ANALYSIS_LOG_FILE_NAME,
-        tasks=tasks,
-        mode="level",
-        level_name=level_name,
         device=device,
         execution_config=context.config.execution,
         channel_names=_resolve_channel_names(context.input_spec),
@@ -403,78 +281,6 @@ def _analyze_task(
     }
 
 
-def _inherit_single_child_summaries(
-    context,
-    level_name: str,
-    device,
-    figure_dir: Path,
-    attribution_batch_count: int | None,
-) -> list[dict]:
-    """将单子类父分支的父层模型归因映射到唯一子类。"""
-    parent_level = context.dataset_index.get_parent_level(level_name)
-    mapping = (context.meta.get("parent_to_children") or {}).get(level_name) or {}
-    single_children = {
-        int(parent_id): int(children[0])
-        for parent_id, children in mapping.items()
-        if len(children) == 1
-    }
-    if parent_level is None or not single_children:
-        return []
-    parent_tasks = build_level_tasks(context, parent_level)
-    summaries_by_slot: dict[str, dict] = {}
-    class_names = context.dataset_index.get_class_names(level_name)
-    inherited: list[dict] = []
-    for parent_id, child_id in single_children.items():
-        parent_task = next(
-            (task for task in parent_tasks if parent_id in task.class_ids),
-            None,
-        )
-        if parent_task is None:
-            raise FileNotFoundError(
-                f"层级归因汇总需要 {parent_level} 中包含父类 {parent_id} 的模型"
-            )
-        parent_summary = summaries_by_slot.get(parent_task.slot_dir)
-        if parent_summary is None:
-            parent_summary = _analyze_task(
-                context,
-                parent_task,
-                device,
-                figure_dir,
-                collect_embedding=False,
-                write_reports_enable=False,
-                attribution_batch_count=attribution_batch_count,
-            )
-            summaries_by_slot[parent_task.slot_dir] = parent_summary
-        row = next(
-            (
-                index
-                for index, class_id in enumerate(parent_summary["class_ids"])
-                if int(class_id) == parent_id
-            ),
-            None,
-        )
-        if row is None:
-            continue
-        inherited.append(
-            {
-                "class_ids": (child_id,),
-                "class_names": (class_names[child_id],),
-                "channel": parent_summary["channel"],
-                "band": parent_summary["band"][row : row + 1],
-                "counts": parent_summary["counts"][row : row + 1],
-                "mean": parent_summary["mean"][row : row + 1],
-                "mean_counts": parent_summary["mean_counts"][row : row + 1],
-                "weight": int(parent_summary["counts"][row]),
-                "layer": parent_summary["layer"],
-                "log": (
-                    f"{level_name} child={child_id}: inherited from "
-                    f"{parent_level} parent={parent_id}"
-                ),
-            }
-        )
-    return inherited
-
-
 def _save_task_umap(context, task, model, device, output_path: Path) -> None:
     """收集同一模型的 Train/Val 输入并生成联合 UMAP。"""
     train_inputs, train_labels = collect_task_inputs(context, task, "train", device)
@@ -522,7 +328,6 @@ def _write_analysis_log(
     summaries,
     output_path: Path,
     tasks,
-    mode: str,
     level_name: str,
     device: torch.device,
     execution_config,
@@ -532,17 +337,6 @@ def _write_analysis_log(
     separate_class_plots_enable: bool,
 ) -> None:
     """按稳定段落写入通道、层、SE 与波段归因摘要日志。"""
-    if mode == "level" and len(summaries) > 1:
-        _write_aggregate_analysis_log(
-            summaries,
-            output_path,
-            tasks,
-            level_name,
-            device,
-            execution_config,
-            figure_dir,
-        )
-        return
     channel = _aggregate_summary_values(summaries, "channel")
     layer_scores = _aggregate_layer_scores(summaries)
     band_count = len({name for summary in summaries for name in summary["class_names"]})
@@ -571,46 +365,6 @@ def _write_analysis_log(
             f"{band_count if separate_class_plots_enable else 1}",
             "Saved full-spectrum band importance CSV: "
             f"{figure_dir / 'band_importance_per_class.csv'}",
-        ]
-    )
-    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def _write_aggregate_analysis_log(
-    summaries,
-    output_path: Path,
-    tasks,
-    level_name: str,
-    device: torch.device,
-    execution_config,
-    figure_dir: Path,
-) -> None:
-    """写入层级级多模型归因汇总日志。"""
-    lines = [
-        f"Aggregate analysis for {level_name} over {len(tasks)} models.",
-        "Using device: "
-        f"{device.type} (config.use_gpu={execution_config.use_gpu}, "
-        f"cuda_available={torch.cuda.is_available()})",
-    ]
-    lines.extend(f"--- Model {task.parent_id} ---" for task in tasks)
-    inherited_lines = [
-        summary["log"]
-        for summary in summaries
-        if "inherited from" in summary.get("log", "")
-    ]
-    if inherited_lines:
-        lines.extend(["", "Inherited single-child attribution:", *inherited_lines])
-    lines.extend(
-        [
-            "",
-            "Saved aggregate channel importance: "
-            f"{figure_dir / 'channel_importance_IG_aggregate.png'}",
-            "Saved aggregate layer importance: "
-            f"{figure_dir / 'layer_importance_aggregate.png'}",
-            "Saved aggregate band importance heatmap: "
-            f"{figure_dir / 'band_importance_heatmap_aggregate.png'}",
-            "Saved aggregate band importance CSV: "
-            f"{figure_dir / 'band_importance_per_class_aggregate.csv'}",
         ]
     )
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -662,4 +416,4 @@ def build_se_summary_lines(tasks) -> list[str]:
     return lines
 
 
-__all__ = ["interpret_level", "interpret_slot", "umap_slot"]
+__all__ = ["interpret_slot", "umap_slot"]

@@ -12,7 +12,6 @@ from ramanv2.core.config import build_config
 from ramanv2.packaging.platform_bundle import DATA_ARCHIVE_NAME, build_platform_bundle
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.training.workflow import TrainRequest, run_training
-from ramanv2.ui.components.pickers import render_profile_picker
 from ramanv2.ui.read_cache import cached_dataset_index, cached_file_bytes
 from ramanv2.ui.page_state import (
     INVALIDATE_TRAINING,
@@ -39,30 +38,23 @@ def render_training_page(context) -> None:
         if signature is not None and signature != context.dataset_spec.hierarchy_signature():
             st.warning("层级配置已变化，请先在「数据集获取」重建 init 和 train。")
             return
-    profiles = list(context.profiles)
-    profile = render_profile_picker(
-        context,
-        label="训练数据集",
-        key="training_profile",
-        empty_message="当前没有可训练的数据集。",
-    )
-    if profile is None:
-        return
+    profile = context.profile()
     profile_id = profile.profile_id
+    profile_hierarchy = context.hierarchy
     train_dir = context.training_dir(profile)
     index = cached_dataset_index(
         str(train_dir.resolve()),
         ui_cache_version("training"),
-        json.dumps(context.hierarchy.to_payload(), ensure_ascii=False, sort_keys=True),
+        json.dumps(profile_hierarchy.to_payload(), ensure_ascii=False, sort_keys=True),
     )
     if index is None:
         st.info(f"未找到可训练数据：{train_dir}")
     else:
-        _render_dataset_summary(index, train_dir, flat=context.hierarchy.is_flat)
+        _render_dataset_summary(index, train_dir, flat=profile_hierarchy.is_flat)
 
     st.subheader("训练范围")
     scope = _render_training_scope(index)
-    values = _render_config_controls(profile_id, context)
+    values = _render_config_controls(profile_id, context, profile_hierarchy)
 
     if st.button("开始本地训练", type="primary", disabled=index is None, width="stretch"):
         try:
@@ -78,7 +70,11 @@ def render_training_page(context) -> None:
         except UI_ACTION_ERRORS as error:
             render_action_error("本地训练", error)
 
-    _render_platform_export(profiles, context.default_profile_id, context.bundle_root)
+    _render_platform_export(
+        context.default_profile_id,
+        context.dataset_spec.display_name,
+        context.bundle_root,
+    )
 
 
 def _render_dataset_summary(index: DatasetIndex, train_dir: Path, *, flat: bool = False) -> None:
@@ -91,8 +87,10 @@ def _render_dataset_summary(index: DatasetIndex, train_dir: Path, *, flat: bool 
         metrics[number + 1].metric(f"第{number}层总类别数", f"{class_counts[level_name]} 个")
     if flat:
         st.caption("第1层按类别统计；同一类别的不同日期、批次合并计数。")
-    else:
+    elif len(index.level_names) == 2:
         st.caption("第1层按属统计，第2层按规范种前缀去重；同一种的不同日期、批次合并计数。")
+    else:
+        st.caption("按层级依次统计；同一类别的不同日期、批次合并计数。")
 
 
 def _render_training_scope(index: DatasetIndex | None) -> dict[str, object]:
@@ -103,24 +101,33 @@ def _render_training_scope(index: DatasetIndex | None) -> dict[str, object]:
     level_name = level_labels[selected_level]
     parent_level = index.get_parent_level(level_name)
     parent_name = None
+    global_head_enable = False
     if parent_level is not None:
-        parent_names = index.get_class_names(parent_level)
-        parent_name = st.selectbox("训练父类", parent_names, key="training_parent")
+        global_head_enable = st.checkbox(
+            "训练该层全局模型（不区分父类）",
+            key="training_global_head",
+        )
+        if global_head_enable:
+            st.caption("本次训练该层全部类别的全局模型，不再选择父类。")
+        else:
+            parent_names = index.get_class_names(parent_level)
+            parent_name = st.selectbox("训练父类", parent_names, key="training_parent")
     else:
         st.caption("当前层级没有父类，将训练全局模型。")
     return {
         "level_name": level_name,
         "parent_name": parent_name,
+        "global_head_enable": global_head_enable,
     }
 
 
-def _render_config_controls(profile_id: str, context) -> dict[str, Any]:
+def _render_config_controls(profile_id: str, context, hierarchy) -> dict[str, Any]:
     """用中文点击控件生成现有 build_config 所需的局部覆盖值。"""
     defaults = build_config(
         {
             "dataset_id": context.dataset_id,
             "profile_id": profile_id,
-            "label_schema": context.dataset_spec.hierarchy.label_schema,
+            "label_schema": hierarchy.label_schema,
             "bad_bands": context.bad_bands,
         }
     )
@@ -138,7 +145,7 @@ def _render_config_controls(profile_id: str, context) -> dict[str, Any]:
 
     values: dict[str, Any] = {
         "dataset_id": context.dataset_id,
-        "label_schema": context.dataset_spec.hierarchy.label_schema,
+        "label_schema": hierarchy.label_schema,
         "bad_bands": context.bad_bands,
         "profile_id": profile_id,
         "epochs": st.slider("训练轮数", 1, 300, epoch_default, key="training_epochs"),
@@ -217,21 +224,15 @@ def _build_train_request(values: dict[str, Any], scope: dict[str, object]) -> Tr
         config=config,
         level_name=str(scope["level_name"]),
         parent_name=scope.get("parent_name"),
+        global_head_enable=bool(scope.get("global_head_enable", False)),
     )
 
 
-def _render_platform_export(profiles, default_profile: str, bundle_root: Path) -> None:
+def _render_platform_export(profile_id: str, display_name: str, bundle_root: Path) -> None:
     st.divider()
     st.subheader("远程平台数据包")
-    profile_ids = [profile.profile_id for profile in profiles]
-    profile_id = st.selectbox(
-        "导出数据集",
-        profile_ids,
-        index=profile_ids.index(default_profile) if default_profile in profile_ids else 0,
-        key="bundle_export_profile",
-    )
     output_dir = bundle_root / profile_id
-    st.caption(f"输出目录：{output_dir}")
+    st.caption(f"当前数据集：{display_name}；输出目录：{output_dir}")
     if st.button(f"生成 {DATA_ARCHIVE_NAME} 和 ramanv2.zip", width="stretch"):
         try:
             with st.spinner("正在生成数据包…"):

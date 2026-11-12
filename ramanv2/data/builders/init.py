@@ -28,7 +28,7 @@ from ramanv2.common.naming import (
 )
 from ramanv2.common.file_ops import create_temporary_path, publish_directory, read_json, rename_directory, _remove_path
 from ramanv2.data.count import summarize_dataset
-from ramanv2.data.hierarchy_config import HierarchySpec
+from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.data.profiles import TEST_ROOT_NAME
 from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.records.lineage import apply_output_path, initialize_folder_lineage, load_folder_lineage, write_folder_lineage
@@ -102,8 +102,6 @@ def build_full_init(
     report = build_init_datasets(
         shift_root,
         init_root,
-        {},
-        mapping,
         completed_dates,
         test_root=resolved_test_root,
         selected_test_folders=selected_test_folders,
@@ -145,210 +143,9 @@ def build_spectrum_folder(source_folder: Path, target_folder: Path, filenames: s
     return len(files)
 
 
-def build_profile_dataset(
-    init_root: Path | str,
-    profile_root: Path | str,
-    profile_name: str,
-    catalog: DatasetMapping,
-    *,
-    allowed_test_targets: set[str] | None = None,
-) -> dict[str, object]:
-    """从全量 init 原子构建一个固定 Profile，并从全局 init_test 派生其测试集。"""
-    if profile_name not in catalog.datasets:
-        raise ValueError(f"未知 Profile：{profile_name}")
-    mapping = catalog.subset(profile_name)
-    report = build_profile_datasets(
-        init_root,
-        {profile_name: profile_root},
-        mapping,
-        allowed_test_targets=allowed_test_targets,
-    )
-    report["profile"] = profile_name
-    report["count"] = summarize_dataset(Path(profile_root).resolve())
-    return report
-
-
-def build_profile_datasets(
-    init_root: Path | str,
-    profile_roots: dict[str, Path | str],
-    mapping: DatasetMapping,
-    *,
-    allowed_test_targets: set[str] | None = None,
-) -> dict[str, object]:
-    """从全量 init 构建各 profile init，并从全局 init_test 派生 profile 测试集。"""
-    source_root = Path(init_root).resolve()
-    roots = {name: Path(path).resolve() for name, path in profile_roots.items()}
-    if not source_root.is_dir():
-        raise FileNotFoundError(f"全量 init 不存在：{source_root}")
-    if set(roots) != set(mapping.datasets):
-        raise ValueError("profile 输出目录必须与名单中的 datasets 完全一致")
-    if any(root == source_root or source_root in root.parents for root in roots.values()):
-        raise ValueError("profile 输出目录不能位于全量 init 内部")
-    if len(set(roots.values())) != len(roots):
-        raise ValueError("profile 输出目录不能重复")
-    for root in roots.values():
-        if root.exists() and not root.is_dir():
-            raise NotADirectoryError(f"profile 输出目录不是目录：{root}")
-
-    master_test_root = source_root.parent / TEST_ROOT_NAME
-    test_targets: dict[str, Path] = {}
-    if master_test_root.is_dir():
-        test_targets = {
-            name: roots[name].parent / TEST_ROOT_NAME
-            for name in mapping.datasets
-        }
-        _validate_profile_test_targets(source_root, roots, test_targets)
-
-    source_genera = {path.name: path for path in source_root.iterdir() if path.is_dir()}
-    temporary_roots: dict[str, Path] = {}
-    temporary_test_roots: dict[str, Path] = {}
-    profiles: dict[str, dict[str, object]] = {}
-    try:
-        for profile_name, genera in mapping.datasets.items():
-            temporary = create_temporary_path(roots[profile_name])
-            temporary.mkdir(parents=True, exist_ok=False)
-            temporary_roots[profile_name] = temporary
-            source_files = 0
-            source_folders: set[str] = set()
-            for genus in genera:
-                genus_dir = source_genera.get(genus)
-                if genus_dir is None:
-                    raise ValueError(f"profile {profile_name} 引用了不存在的属目录：{genus}")
-                for source_file in list_arc_data_paths(
-                    genus_dir,
-                    recursive=True,
-                    key=lambda path: build_natural_key(path.as_posix()),
-                ):
-                    _validate_spectrum(source_file)
-                    relative = source_file.relative_to(source_root)
-                    target = temporary / relative
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(source_file, target)
-                    source_axis, source_intensity = read_arc_data(source_file)
-                    target_axis, target_intensity = read_arc_data(target)
-                    if not np.array_equal(source_axis, target_axis) or not np.array_equal(source_intensity, target_intensity):
-                        raise ValueError(f"复制后光谱校验失败：{source_file}")
-                    source_files += 1
-                    source_folders.add(relative.parent.as_posix())
-            if source_files == 0:
-                raise RuntimeError(f"profile {profile_name} 没有可用光谱")
-            profiles[profile_name] = {
-                "genera": list(genera),
-                "genus_count": len(genera),
-                "folder_count": len(source_folders),
-                "source_files": source_files,
-                "output_files": source_files,
-                "output_root": str(roots[profile_name]),
-            }
-            if profile_name in test_targets:
-                test_folder_count, test_files = _stage_profile_test_set(
-                    master_test_root,
-                    temporary_test_roots,
-                    test_targets[profile_name],
-                    profile_name,
-                    mapping,
-                    allowed_test_targets=allowed_test_targets,
-                )
-                profiles[profile_name]["test_folder_count"] = test_folder_count
-                profiles[profile_name]["test_files"] = test_files
-                profiles[profile_name]["test_output_root"] = str(test_targets[profile_name])
-        publish_roots = dict(temporary_roots)
-        publish_targets = dict(roots)
-        for profile_name, temporary in temporary_test_roots.items():
-            key = f"{profile_name}__{TEST_ROOT_NAME}"
-            publish_roots[key] = temporary
-            publish_targets[key] = test_targets[profile_name]
-        _publish_all(publish_roots, publish_targets)
-    except Exception:
-        for temporary in (*temporary_roots.values(), *temporary_test_roots.values()):
-            shutil.rmtree(temporary, ignore_errors=True)
-        raise
-    return {
-        "status": "ready",
-        "source_root": str(source_root),
-        "profiles": profiles,
-        "profile_count": len(profiles),
-        "source_files": sum(int(item["source_files"]) for item in profiles.values()),
-    }
-
-
-def _validate_profile_test_targets(
-    source_root: Path,
-    roots: dict[str, Path],
-    test_targets: dict[str, Path],
-) -> None:
-    """校验 profile init 与派生测试集目录不重复、不互相嵌套。"""
-    targets = [*roots.values(), *test_targets.values()]
-    if len(set(targets)) != len(targets):
-        raise ValueError("profile init 与 init_test 输出目录不能重复")
-    for target in test_targets.values():
-        if target.exists() and not target.is_dir():
-            raise NotADirectoryError(f"profile 测试集输出不是目录：{target}")
-        if target == source_root or source_root in target.parents or target in source_root.parents:
-            raise ValueError("profile 测试集输出目录不能与全量 init 互相嵌套")
-    for init_path in roots.values():
-        for test_path in test_targets.values():
-            if init_path == test_path or init_path in test_path.parents or test_path in init_path.parents:
-                raise ValueError("profile init 与 init_test 输出目录不能互相嵌套")
-
-
-def _stage_profile_test_set(
-    master_test_root: Path,
-    temporary_test_roots: dict[str, Path],
-    target_root: Path,
-    profile_name: str,
-    mapping: DatasetMapping,
-    *,
-    allowed_test_targets: set[str] | None = None,
-) -> tuple[int, int]:
-    """把全局 init_test 中属于该 profile 的文件夹复制到临时测试集目录。"""
-    genera = set(mapping.datasets[profile_name])
-    prefix_to_genus = {
-        prefix: genus
-        for genus, prefixes in mapping.genera.items()
-        for prefix in prefixes
-    }
-    temporary = create_temporary_path(target_root)
-    temporary.mkdir(parents=True, exist_ok=False)
-    temporary_test_roots[profile_name] = temporary
-    folder_count = 0
-    file_count = 0
-    for folder in sorted(
-        (path for path in master_test_root.iterdir() if path.is_dir()),
-        key=lambda path: build_natural_key(path.name),
-    ):
-        if allowed_test_targets is not None and folder.name not in allowed_test_targets:
-            continue
-        prefix = parse_folder_prefix(folder.name, uppercase_enable=True)
-        if prefix_to_genus.get(prefix) not in genera:
-            continue
-        files = list_arc_data_paths(
-            folder,
-            recursive=True,
-            key=lambda path: build_natural_key(path.as_posix()),
-        )
-        if not files:
-            continue
-        for source_file in files:
-            _validate_spectrum(source_file)
-            relative = source_file.relative_to(folder)
-            target = temporary / folder.name / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_file, target)
-            source_axis, source_intensity = read_arc_data(source_file)
-            target_axis, target_intensity = read_arc_data(target)
-            if not np.array_equal(source_axis, target_axis) or not np.array_equal(source_intensity, target_intensity):
-                raise ValueError(f"复制后光谱校验失败：{source_file}")
-            file_count += 1
-        folder_count += 1
-    return folder_count, file_count
-
-
 def build_init_datasets(
     shift_root: Path | str,
     init_root: Path | str,
-    profile_roots: dict[str, Path | str],
-    mapping: DatasetMapping | None,
     affine_completed_dates: list[str] | set[str] | tuple[str, ...],
     mode: BuildMode = "full",
     date_names: list[str] | set[str] | tuple[str, ...] | None = None,
@@ -362,18 +159,12 @@ def build_init_datasets(
     """按批准日期构建 init；replace_dates 仅替换已生成日期及已导出的测试组。"""
     if mode not in {"full", "incremental", "replace_dates"}:
         raise ValueError("mode 必须是 full、incremental 或 replace_dates")
-    if mode == "replace_dates" and (date_names is None or profile_roots):
-        raise ValueError("按日期替换必须指定日期，且不能更新 Profile")
+    if mode == "replace_dates" and date_names is None:
+        raise ValueError("按日期替换必须指定日期")
     source_root = Path(shift_root).resolve()
     full_root = Path(init_root).resolve()
-    roots = {name: Path(path).resolve() for name, path in profile_roots.items()}
     resolved_test_root = Path(test_root).resolve() if test_root is not None and publish_test_enable else None
-    _validate_output_roots(full_root, roots, resolved_test_root)
-    unknown_profiles = set(roots) - set(mapping.datasets if mapping is not None else {})
-    if unknown_profiles:
-        raise ValueError(f"profile 没有对应名单：{sorted(unknown_profiles)}")
-    if hierarchy.is_flat and roots:
-        raise ValueError("平展数据集不能生成 profile 数据集")
+    _validate_output_roots(full_root, resolved_test_root)
     if not source_root.is_dir():
         raise FileNotFoundError(f"shift_data 不存在：{source_root}")
 
@@ -428,7 +219,7 @@ def build_init_datasets(
         groups = [group for group in groups if not group.is_test]
     if not groups:
         raise ValueError("没有可发布的来源组：请检查 shift、affine 与测试集选择")
-    destination_roots = {"__all__": full_root, **roots}
+    destination_roots = {"__all__": full_root}
     if resolved_test_root is not None:
         destination_roots["__test__"] = resolved_test_root
     replaced_init_dirs: list[Path] = []
@@ -471,7 +262,6 @@ def build_init_datasets(
         date_name: {"source_files": 0, "output_files": 0, "folder_count": 0, "test_files": 0}
         for date_name in eligible_dates
     }
-    profile_stats = {name: 0 for name in roots}
     test_files = 0
     test_folders: set[str] = set()
     total_source_files = sum(len(group.files) for group in groups)
@@ -482,7 +272,7 @@ def build_init_datasets(
                 _remove_path(temporary_roots["__all__"] / relative)
             for name in replaced_test_names:
                 _remove_path(temporary_roots["__test__"] / name)
-        plans = [(group, _resolve_destinations(group, mapping, temporary_roots, hierarchy)) for group in groups]
+        plans = [(group, _resolve_destinations(group, temporary_roots, hierarchy)) for group in groups]
         with ThreadPoolExecutor(max_workers=_copy_worker_count()) as executor:
             futures = {
                 executor.submit(_copy_group_files, group, destinations): group
@@ -494,17 +284,13 @@ def build_init_datasets(
                 date_stats[group.date_name]["folder_count"] += 1
                 date_stats[group.date_name]["source_files"] += len(group.files)
                 source_files += len(group.files)
-                for profile_name, count in counts.items():
+                for target_name, count in counts.items():
                     output_files += count
                     date_stats[group.date_name]["output_files"] += count
-                    if profile_name == "__all__":
-                        continue
-                    if profile_name == "__test__":
+                    if target_name == "__test__":
                         test_files += count
                         test_folders.add(group.target_name)
                         date_stats[group.date_name]["test_files"] += count
-                    else:
-                        profile_stats[profile_name] += count
                 processed_source_files += len(group.files)
                 if progress_callback is not None:
                     progress_callback(group.date_name, processed_source_files, total_source_files)
@@ -533,8 +319,6 @@ def build_init_datasets(
             "init_source_files": source_files - test_files,
             "init_output_files": output_files - test_files,
             "date_stats": date_stats,
-            "profile_stats": profile_stats,
-            "generated_profiles": sorted(roots),
             "init_root": str(full_root),
             "test_root": str(resolved_test_root) if resolved_test_root is not None else None,
             "test_files": test_files,
@@ -562,17 +346,11 @@ def build_init_datasets(
                         test_path=str(resolved_test_root / relative) if resolved_test_root is not None else None,
                     )
                     continue
-                profile_paths = {
-                    name: str(root / relative)
-                    for name, root in roots.items()
-                    if mapping is not None and group.genus in mapping.datasets.get(name, ())
-                }
                 apply_output_path(
                     payload,
                     group.date_name,
                     group.source_name or group.source_dir.name,
                     init_path=str(full_root / relative),
-                    profile_paths=profile_paths,
                 )
             for record in payload.get("folders", {}).values():
                 if record.get("date") in eligible_dates and (mode != "replace_dates" or replaced_init_dirs):
@@ -638,7 +416,6 @@ def _collect_source_groups(
 
 def _resolve_destinations(
     group: _SourceGroup,
-    mapping: DatasetMapping | None,
     temporary_roots: dict[str, Path],
     hierarchy: HierarchySpec,
 ) -> list[tuple[str, Path]]:
@@ -647,24 +424,18 @@ def _resolve_destinations(
         if "__test__" not in temporary_roots:
             raise ValueError("测试目录需要配置 test_root")
         return [("__test__", temporary_roots["__test__"] / target_relative)]
-    destinations = [("__all__", temporary_roots["__all__"] / target_relative)]
-    if mapping is not None:
-        for profile_name, genera in mapping.datasets.items():
-            if profile_name in temporary_roots and group.genus in genera:
-                destinations.append((profile_name, temporary_roots[profile_name] / target_relative))
-    return destinations
+    return [("__all__", temporary_roots["__all__"] / target_relative)]
 
 
 def _validate_output_roots(
     full_root: Path,
-    profile_roots: dict[str, Path],
     test_root: Path | None = None,
 ) -> None:
-    roots = [full_root, *profile_roots.values()]
+    roots = [full_root]
     if test_root is not None:
         roots.append(test_root)
     if len(set(roots)) != len(roots):
-        raise ValueError("init、profile 和 init_test 输出目录不能重复")
+        raise ValueError("init 和 init_test 输出目录不能重复")
     for index, root in enumerate(roots):
         for other in roots[index + 1 :]:
             if root in other.parents or other in root.parents:
@@ -832,7 +603,5 @@ __all__ = [
     "build_full_init",
     "build_test_folder",
     "build_spectrum_folder",
-    "build_profile_dataset",
     "build_init_datasets",
-    "build_profile_datasets",
 ]

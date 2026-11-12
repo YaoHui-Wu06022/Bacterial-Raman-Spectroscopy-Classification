@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ramanv2.common.naming import build_natural_key, parse_folder_prefix
 from ramanv2.data.dataset_io import iter_arc_dirs
+from ramanv2.data.hierarchy_spec import HierarchySpec
 
 
 def _compute_totals(node: dict) -> int:
@@ -73,29 +74,95 @@ def summarize_dataset(root_dir: Path | str) -> dict[str, int | bool]:
     }
 
 
-def collect_taxon_counts(root_dir: Path | str) -> dict[str, list[dict[str, str | int]]]:
-    """按 init 的属/来源目录计数；同属内同一种前缀跨日期合并，不读取谱内容。"""
-    tree = build_count_tree(root_dir)
-    species = {}
-    for genus, genus_tree in tree.items():
-        if genus.startswith("__"):
+def _collect_leaf_dirs(node: dict, parts: tuple[str, ...] = ()) -> list[tuple[tuple[str, ...], int]]:
+    """递归收集含光谱的叶子目录及其相对路径层级。"""
+    leaves: list[tuple[tuple[str, ...], int]] = []
+    if node.get("__count__", 0):
+        leaves.append((parts, int(node["__count__"])))
+    for name, child in node.items():
+        if not name.startswith("__"):
+            leaves.extend(_collect_leaf_dirs(child, (*parts, name)))
+    return leaves
+
+
+def summarize_dataset_hierarchy(root_dir: Path | str, hierarchy: HierarchySpec) -> dict[str, object]:
+    """按层级配置统计每个业务层级的类别数量、文件夹数与光谱数。"""
+    root_path = Path(root_dir)
+    if not root_path.is_dir():
+        return {"exists": False, "levels": [], "folder_count": 0, "file_count": 0}
+    tree = build_count_tree(root_path)
+    leaves = _collect_leaf_dirs(tree)
+    levels: list[dict[str, object]] = []
+    for depth, level in enumerate(hierarchy.levels):
+        if level.directory:
+            values = {parts[depth] for parts, _ in leaves if len(parts) > depth}
+        else:
+            mapping = hierarchy.mappings.get(level.name, {})
+            prefixes = {
+                parse_folder_prefix(parts[-1], uppercase_enable=True)
+                for parts, _ in leaves
+                if parts
+            }
+            values = {mapping.get(prefix, prefix) for prefix in prefixes}
+        levels.append({"name": level.display_name, "count": len(values)})
+    return {
+        "exists": True,
+        "levels": levels,
+        "folder_count": len(leaves),
+        "file_count": sum(count for _, count in leaves),
+    }
+
+
+def collect_taxon_counts(
+    root_dir: Path | str,
+    hierarchy: HierarchySpec | None = None,
+) -> dict[str, object]:
+    """按 init 层级统计类别、来源文件夹与光谱数，不读取谱内容。
+
+    叶子目录的目录层级取自相对路径，非目录层级按文件夹前缀映射；同一类别
+    跨日期合并。返回每个层级的显示名、各类别明细，以及按父层级汇总的行。
+    """
+    hierarchy = hierarchy or HierarchySpec.flat()
+    root_path = Path(root_dir)
+    levels = list(hierarchy.levels)
+    depth = hierarchy.directory_depth
+    grouped: dict[tuple[str, ...], dict[str, object]] = {}
+    for leaf_dir, filenames in iter_arc_dirs(root_path):
+        relative = leaf_dir.relative_to(root_path)
+        if len(relative.parts) != depth + 1:
             continue
-        for folder, group in genus_tree.items():
-            if folder.startswith("__") or not group["__total__"]:
-                continue
-            prefix = parse_folder_prefix(folder, uppercase_enable=True)
-            row = species.setdefault((genus, prefix), {"genus": genus, "prefix": prefix, "folder_count": 0, "file_count": 0})
-            row["folder_count"] += 1
-            row["file_count"] += group["__total__"]
-    species_rows = sorted(species.values(), key=lambda row: (build_natural_key(row["genus"]), build_natural_key(row["prefix"])))
-    genera = {}
-    for row in species_rows:
-        genus = row["genus"]
-        summary = genera.setdefault(genus, {"genus": genus, "species_count": 0, "folder_count": 0, "file_count": 0})
-        summary["species_count"] += 1
-        summary["folder_count"] += row["folder_count"]
-        summary["file_count"] += row["file_count"]
-    return {"genera": list(genera.values()), "species": species_rows}
+        prefix = parse_folder_prefix(leaf_dir.name, uppercase_enable=True)
+        values = list(relative.parts[:depth])
+        for level in levels[depth:]:
+            mapping = hierarchy.mappings.get(level.name, {})
+            values.append(mapping.get(prefix, prefix))
+        key = tuple(values)
+        row = grouped.setdefault(
+            key,
+            {"values": key, "folder_count": 0, "file_count": 0},
+        )
+        row["folder_count"] = int(row["folder_count"]) + 1
+        row["file_count"] = int(row["file_count"]) + len(filenames)
+
+    def sort_key(item: dict[str, object]) -> tuple[str, ...]:
+        return tuple(build_natural_key(value) for value in item["values"])
+
+    rows = sorted(grouped.values(), key=sort_key)
+    summaries: dict[tuple[str, ...], dict[str, object]] = {}
+    for row in rows:
+        parent = tuple(row["values"][:-1])
+        summary = summaries.setdefault(
+            parent,
+            {"values": parent, "species_count": 0, "folder_count": 0, "file_count": 0},
+        )
+        summary["species_count"] = int(summary["species_count"]) + 1
+        summary["folder_count"] = int(summary["folder_count"]) + int(row["folder_count"])
+        summary["file_count"] = int(summary["file_count"]) + int(row["file_count"])
+    return {
+        "levels": [level.display_name for level in levels],
+        "rows": rows,
+        "summaries": sorted(summaries.values(), key=sort_key),
+    }
 
 
 def _print_tree(node: dict, level: int = 0, name: str | None = None) -> None:

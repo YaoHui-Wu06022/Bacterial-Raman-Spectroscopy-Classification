@@ -6,7 +6,7 @@ from collections import Counter
 from typing import Any, Mapping
 
 from ramanv2.common.naming import parse_folder_prefix
-from ramanv2.data.hierarchy_config import resolve_hierarchy_from_meta
+from ramanv2.data.hierarchy_spec import resolve_hierarchy_from_meta
 
 
 def build_test_input_selection(

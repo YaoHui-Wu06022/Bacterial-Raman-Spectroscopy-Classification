@@ -11,6 +11,7 @@ from ramanv2.common.arc_data import count_arc_data, iter_arc_data_paths
 from ramanv2.common.naming import MANUAL_DELETE_RELATIVE, build_natural_key
 from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.data.datasets import resolve_project_root_for_dataset_dir
+from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.data.profiles import resolve_selection
 from ramanv2.records.lineage import (
     initialize_folder_lineage,
@@ -134,7 +135,11 @@ def _folder_catalog(payload: dict[str, object]) -> dict[str, set[str]]:
     return catalog
 
 
-def _direct_init_folders(init_root: Path, referenced: set[Path]) -> tuple[list[str], int]:
+def _direct_init_folders(
+    init_root: Path,
+    referenced: set[Path],
+    hierarchy: HierarchySpec,
+) -> tuple[list[str], int]:
     """列出直接放进 ``init``、没有 cosmic 来源的组。
 
     这类组（例如只有处理结果、没有原始采集目录的 ``20261027`` 批次）不参与走向树，
@@ -144,8 +149,11 @@ def _direct_init_folders(init_root: Path, referenced: set[Path]) -> tuple[list[s
     files = 0
     if not init_root.is_dir():
         return names, files
-    for group in sorted(init_root.glob("*/*"), key=lambda item: build_natural_key(item.as_posix())):
-        if not group.is_dir() or group.resolve() in referenced:
+    leaf_depth = max(hierarchy.directory_depth, 1) + 1
+    for group in sorted(init_root.rglob("*"), key=lambda item: build_natural_key(item.as_posix())):
+        if not group.is_dir() or len(group.relative_to(init_root).parts) != leaf_depth:
+            continue
+        if group.resolve() in referenced:
             continue
         count = count_arc_data(group)
         if not count:
@@ -189,6 +197,7 @@ def _rebuild_full_init_report(
     payload: dict[str, object],
     init_root: Path,
     test_root: Path | None,
+    hierarchy: HierarchySpec,
 ) -> dict[str, object]:
     """按走向记录里的 ``outputs`` 与磁盘计数重写 ``dataset_builds.full_init``。
 
@@ -248,7 +257,7 @@ def _rebuild_full_init_report(
                     }
                 )
     dates = sorted(date_stats, key=build_natural_key)
-    direct_folders, direct_files = _direct_init_folders(init_root, referenced)
+    direct_folders, direct_files = _direct_init_folders(init_root, referenced, hierarchy)
     return {
         "status": "ready",
         "mode": "full",
@@ -266,8 +275,6 @@ def _rebuild_full_init_report(
         "direct_init_files": direct_files,
         "init_disk_files": init_files + direct_files,
         "date_stats": date_stats,
-        "profile_stats": {},
-        "generated_profiles": [],
         "init_root": str(init_root),
         "test_root": str(test_root) if test_root is not None else None,
         "test_files": test_files,
@@ -314,7 +321,10 @@ def rebuild_pipeline_records(
     write_folder_lineage(root, payload)
 
     full_report = _rebuild_full_init_report(
-        payload, init_target, test_target if test_target.is_dir() else None
+        payload,
+        init_target,
+        test_target if test_target.is_dir() else None,
+        selection.hierarchy,
     )
     catalog = _folder_catalog(payload)
     committed = _manual_deleted_paths(root)

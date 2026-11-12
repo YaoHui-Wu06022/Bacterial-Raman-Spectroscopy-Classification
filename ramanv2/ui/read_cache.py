@@ -17,8 +17,8 @@ from ramanv2.core.run_context import (
     VALIDATION_SPLIT_FILE_NAME,
 )
 from ramanv2.data.calibration.affine import load_calibration_report
-from ramanv2.data.count import collect_taxon_counts, summarize_dataset
-from ramanv2.data.hierarchy_config import HierarchySpec
+from ramanv2.data.count import collect_taxon_counts, summarize_dataset, summarize_dataset_hierarchy
+from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.modeling.run_manifest import LEVEL_DIR_PATTERN, find_model_slot_dirs
 from ramanv2.pipeline.cleaning import scan_date_names
@@ -50,10 +50,31 @@ def cached_dataset_summary(root_dir: str, version: int) -> dict[str, int | bool]
 
 
 @st.cache_data(show_spinner=False)
-def cached_dataset_taxon_counts(root_dir: str, version: int) -> dict[str, list[dict[str, str | int]]]:
-    """缓存属/种明细；构建、补偿及删除同步后沿用 dataset 版本失效。"""
+def cached_dataset_hierarchy_summary(
+    root_dir: str,
+    hierarchy_payload: str,
+    version: int,
+) -> dict[str, object]:
+    """按 profile 层级缓存类别计数；层级配置变化时签名随之失效。"""
     del version
-    return collect_taxon_counts(Path(root_dir))
+    return summarize_dataset_hierarchy(
+        Path(root_dir),
+        HierarchySpec.from_payload(json.loads(hierarchy_payload)),
+    )
+
+
+@st.cache_data(show_spinner=False)
+def cached_dataset_taxon_counts(
+    root_dir: str,
+    hierarchy_payload: str,
+    version: int,
+) -> dict[str, object]:
+    """缓存层级/类别明细；层级或 dataset 版本变化时失效。"""
+    del version
+    return collect_taxon_counts(
+        Path(root_dir),
+        HierarchySpec.from_payload(json.loads(hierarchy_payload)),
+    )
 
 
 @st.cache_data(show_spinner=False)

@@ -1,7 +1,7 @@
 """数据集发现与 dataset.json 配置。
 
-数据集就是 ``dataset/<id>/`` 下含 ``cosmic_data`` 的目录；层级由同目录
-``hierarchy.json`` 描述，缺失时按平展处理。
+数据集就是 ``dataset/<id>/`` 下含 ``cosmic_data`` 的目录；层级由
+``dataset.json`` 的 ``label_source`` 与层级投影配置派生。
 """
 
 from __future__ import annotations
@@ -14,13 +14,16 @@ from ramanv2.common.defaults import DEFAULT_BAD_BANDS
 from ramanv2.common.file_ops import read_json, write_json
 from ramanv2.common.naming import ANALYSIS_DELETE_RELATIVE, PIPELINE_DIR_NAME
 from ramanv2.common.paths import DATASET_ROOT
-from ramanv2.data.hierarchy_config import HIERARCHY_FILE_NAME, HierarchySpec
+from ramanv2.data.dataset_mapping import MAPPING_FILE_NAME, ensure_dataset_mapping
+from ramanv2.data.hierarchy_spec import (
+    HIERARCHY_FILE_NAME,
+    HierarchySpec,
+    build_projected_hierarchy,
+)
 
 
 DATASET_CONFIG_FILE_NAME = "dataset.json"
 DATASET_CONFIG_VERSION = 1
-FLAT_PROFILE_ID = "FLAT"
-_PROFILE_MARKERS = ("init", "train", "test", "fig_train")
 _RESERVED_DATASET_CHILDREN = {
     "cosmic_data",
     "shift_data",
@@ -43,13 +46,12 @@ class DatasetSpec:
     directory: Path
     bad_bands: tuple[tuple[float, float], ...]
     hierarchy: HierarchySpec
-    profiles: tuple[str, ...] = ()
-    aliases: tuple[str, ...] = ()
     is_default: bool = False
-    workbook_columns: tuple[str, ...] = ()
-    profile_rules: Mapping[str, Any] = field(default_factory=dict)
     classification_workbook: str | None = None
     supplement_dir: str | None = None
+    label_source: Mapping[str, Any] = field(default_factory=dict)
+    taxonomy_labels: Mapping[str, str] = field(default_factory=dict)
+    hierarchy_config: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def is_flat(self) -> bool:
@@ -99,11 +101,6 @@ class DatasetSpec:
     def supplement_path(self) -> Path | None:
         return self.resolve_subdir(self.supplement_dir)
 
-    @property
-    def default_profile(self) -> str:
-        """dataset.json 声明的默认 profile；未配置时为空字符串。"""
-        return str(self.profile_rules.get("default_profile", "")).strip()
-
     def resolve_subdir(self, relative: str | None) -> Path | None:
         if relative is None or not str(relative).strip():
             return None
@@ -111,13 +108,6 @@ class DatasetSpec:
         if target != self.dataset_dir and self.dataset_dir not in target.parents:
             raise ValueError(f"数据集路径不能越界：{relative}")
         return target
-
-    def profile_root(self, profile_id: str) -> Path:
-        if self.is_flat:
-            return self.dataset_dir
-        if profile_id not in self.profiles:
-            raise KeyError(f"数据集 {self.dataset_id} 未注册 profile：{profile_id}")
-        return self.dataset_dir / profile_id
 
     def hierarchy_signature(self) -> str:
         return self.hierarchy.signature()
@@ -162,40 +152,21 @@ class DatasetRegistry:
         if key == "":
             key = self.default_dataset_id
         for spec in self.datasets:
-            if spec.dataset_id == key or key in spec.aliases or spec.directory.name == key:
+            if spec.dataset_id == key or spec.directory.name == key:
                 return spec
         raise KeyError(f"未知数据集：{key}")
 
     def resolve_for_profile(self, profile_id: str) -> DatasetSpec:
-        key = str(profile_id).strip()
-        matches = [
-            spec
-            for spec in self.datasets
-            if key in spec.profiles or (spec.is_flat and key == FLAT_PROFILE_ID)
-        ]
-        if not matches:
-            raise KeyError(f"未知数据集 profile：{key}")
-        if len(matches) > 1:
-            owners = ", ".join(spec.dataset_id for spec in matches)
-            raise ValueError(f"profile {key} 同时注册在多个数据集：{owners}")
-        return matches[0]
+        return self.resolve(profile_id)
 
     def validate(self) -> None:
         if not self.datasets:
             raise ValueError("没有可用数据集")
         ids: set[str] = set()
-        profile_owners: dict[str, str] = {}
         for spec in self.datasets:
             if spec.dataset_id in ids:
                 raise ValueError(f"dataset_id 重复：{spec.dataset_id}")
             ids.add(spec.dataset_id)
-            for profile_id in spec.profiles:
-                if profile_id in profile_owners:
-                    raise ValueError(
-                        f"profile {profile_id} 同时属于 "
-                        f"{profile_owners[profile_id]} 与 {spec.dataset_id}"
-                    )
-                profile_owners[profile_id] = spec.dataset_id
         if self.default_dataset_id not in ids:
             raise ValueError(f"默认数据集未注册：{self.default_dataset_id}")
 
@@ -228,10 +199,9 @@ def write_dataset_config(
     bad_bands: tuple[tuple[float, float], ...] | list[list[float]],
     *,
     dataset_id: str | None = None,
-    aliases: tuple[str, ...] | list[str] = (),
-    profiles: tuple[str, ...] | list[str] | None = None,
-    workbook_columns: tuple[str, ...] | list[str] | None = None,
-    profile_rules: Mapping[str, Any] | None = None,
+    label_source: Mapping[str, Any] | None = None,
+    taxonomy_labels: Mapping[str, str] | None = None,
+    hierarchy: Mapping[str, Any] | None = None,
     is_default: bool = False,
 ) -> Path:
     directory = Path(dataset_dir).resolve()
@@ -240,20 +210,14 @@ def write_dataset_config(
         "dataset_id": str(dataset_id).strip() if dataset_id else directory.name,
         "display_name": str(display_name).strip() or directory.name,
         "bad_bands": [[float(start), float(end)] for start, end in bad_bands],
-        "aliases": sorted({str(alias).strip() for alias in aliases if str(alias).strip()}),
         "default": bool(is_default),
     }
-    if profiles is not None:
-        seen: list[str] = []
-        for profile in profiles:
-            name = str(profile).strip()
-            if name and name not in seen:
-                seen.append(name)
-        payload["profiles"] = seen
-    if workbook_columns is not None:
-        payload["workbook_columns"] = [str(column) for column in workbook_columns]
-    if profile_rules is not None:
-        payload["profile_rules"] = dict(profile_rules)
+    if label_source is not None:
+        payload["label_source"] = dict(label_source)
+    if taxonomy_labels is not None:
+        payload["taxonomy_labels"] = dict(taxonomy_labels)
+    if hierarchy is not None:
+        payload["hierarchy"] = dict(hierarchy)
     _validate_bad_bands(payload["bad_bands"])
     path = directory / DATASET_CONFIG_FILE_NAME
     write_json(path, payload)
@@ -283,18 +247,56 @@ def _build_spec(
     config = load_dataset_config(directory)
     dataset_id = str(config.get("dataset_id", "")).strip() or directory.name
     bad_bands = _read_bad_bands(config.get("bad_bands"))
-    hierarchy = HierarchySpec.load(directory / HIERARCHY_FILE_NAME)
-    config_profiles = config.get("profiles")
-    profiles = (
-        tuple(str(item) for item in config_profiles if str(item).strip())
-        if isinstance(config_profiles, list)
-        else _discover_profiles(directory)
+    label_source_payload = config.get("label_source")
+    label_source = (
+        dict(label_source_payload)
+        if isinstance(label_source_payload, Mapping)
+        else {}
     )
-    workbook_columns = tuple(
-        str(item) for item in config.get("workbook_columns", []) if str(item).strip()
+    taxonomy_labels_payload = config.get("taxonomy_labels")
+    taxonomy_labels = (
+        {str(key): str(value) for key, value in taxonomy_labels_payload.items()}
+        if isinstance(taxonomy_labels_payload, Mapping)
+        else {}
     )
-    profile_rules = config.get("profile_rules")
-    profile_rules = dict(profile_rules) if isinstance(profile_rules, Mapping) else {}
+    hierarchy_config = config.get("hierarchy")
+    hierarchy_config = (
+        dict(hierarchy_config)
+        if isinstance(hierarchy_config, Mapping)
+        else {}
+    )
+    mapping = (
+        ensure_dataset_mapping(
+            label_source,
+            directory,
+            directory / PIPELINE_DIR_NAME / MAPPING_FILE_NAME,
+        )
+        if label_source
+        else None
+    )
+    hierarchy = (
+        build_projected_hierarchy(
+            mapping,
+            hierarchy_config.get("levels", ()),
+            hierarchy_config.get("directories", ()),
+            taxonomy_labels,
+        )
+        if mapping is not None and hierarchy_config
+        else HierarchySpec.load(directory / HIERARCHY_FILE_NAME)
+    )
+    workbook_name = (
+        str(label_source.get("file", "")).strip()
+        if str(label_source.get("kind", "")).strip().lower() == "workbook"
+        else ""
+    )
+    classification_workbook = (
+        workbook_name
+        if workbook_name and (directory / workbook_name).is_file()
+        else _find_classification_workbook(
+            directory,
+            tuple(str(column) for column in dict(label_source.get("levels") or {}).values()),
+        )
+    )
     return DatasetSpec(
         dataset_id=dataset_id,
         display_name=str(config.get("display_name", "")).strip() or dataset_id,
@@ -302,13 +304,12 @@ def _build_spec(
         directory=directory.resolve(),
         bad_bands=bad_bands,
         hierarchy=hierarchy,
-        profiles=profiles,
-        aliases=tuple(str(alias) for alias in config.get("aliases", []) if str(alias).strip()),
         is_default=bool(config.get("default", False)),
-        workbook_columns=workbook_columns,
-        profile_rules=profile_rules,
-        classification_workbook=_find_classification_workbook(directory, workbook_columns),
+        classification_workbook=classification_workbook,
         supplement_dir="extra_data" if (directory / "extra_data").is_dir() else None,
+        label_source=label_source,
+        taxonomy_labels=taxonomy_labels,
+        hierarchy_config=hierarchy_config,
     )
 
 
@@ -328,16 +329,6 @@ def _validate_bad_bands(bands: list[list[float]]) -> None:
     for start, end in bands:
         if not start < end:
             raise ValueError(f"坏区起点必须小于终点：{start}-{end}")
-
-
-def _discover_profiles(directory: Path) -> tuple[str, ...]:
-    profiles = []
-    for child in sorted(directory.iterdir(), key=lambda path: path.name):
-        if not child.is_dir() or child.name in _RESERVED_DATASET_CHILDREN or child.name.startswith("."):
-            continue
-        if any((child / marker).exists() for marker in _PROFILE_MARKERS):
-            profiles.append(child.name)
-    return tuple(profiles)
 
 
 def _find_classification_workbook(

@@ -156,11 +156,12 @@ def run_folder_offset(
             raise ValueError("缺少该文件夹的 init 来源记录，请先按日期更新")
         init_target = Path(output).resolve()
         match = CANONICAL_FOLDER_PATTERN.fullmatch(init_target.name)
-        if init_target.parent.parent != init_root.resolve() or not match or match.group(2) != date_name:
+        if init_root.resolve() not in init_target.parents or not match or match.group(2) != date_name:
             raise ValueError("该文件夹的 init 输出路径无效")
         if not init_target.is_dir():
             raise ValueError("该文件夹尚未生成 init，请先按日期更新")
-        plot_groups = {(init_target.parent.name, match.group(1).upper())}
+        group_key = init_target.parent.relative_to(init_root.resolve()).as_posix()
+        plot_groups = {(group_key, match.group(1).upper())}
     old_count = count_arc_data(init_target) if init_target is not None else 0
     snapshots = [*folders, shift_root / date_name / folder_name, lineage_path(root), state_file]
     snapshots.append(test_target if test_target is not None else init_target)

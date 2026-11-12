@@ -100,10 +100,9 @@ def render_dataset_config_page(context: PageContext) -> None:
                 display_name,
                 bands,
                 dataset_id=dataset_id,
-                aliases=spec.aliases,
-                profiles=spec.profiles,
-                workbook_columns=spec.workbook_columns,
-                profile_rules=spec.profile_rules,
+                label_source=spec.label_source,
+                taxonomy_labels=spec.taxonomy_labels,
+                hierarchy=spec.hierarchy_config,
                 is_default=spec.is_default,
             )
         except UI_ACTION_ERRORS as error:

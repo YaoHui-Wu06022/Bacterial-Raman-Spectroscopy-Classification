@@ -65,6 +65,7 @@ class TrainRequest:
     level_name: str
     parent_id: int | None = None
     parent_name: str | None = None
+    global_head_enable: bool = False
     experiment_dir: Path | str | None = None
     train_dir: Path | str | None = None
     resume_run_dir: Path | str | None = None
@@ -87,10 +88,9 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
     existing_meta = load_hierarchy_meta(experiment_dir / "hierarchy_meta.json")
     if request.resume_run_dir is not None:
         load_run_snapshot(request.resume_run_dir)
-    dataset_spec = selection.spec
     dataset_index = DatasetIndex(
         _resolve_train_dir(request, selection),
-        hierarchy=dataset_spec.hierarchy,
+        hierarchy=selection.hierarchy,
     )
     level_name = dataset_index.resolve_level_name(request.level_name)
     parent_id = resolve_parent_target(
@@ -98,6 +98,7 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
         level_name,
         request.parent_id,
         request.parent_name,
+        request.global_head_enable,
     )
     level_models: dict[str, dict[str, Any]] = {}
     parent_models: dict[str, dict[str, dict[str, Any]]] = {}
@@ -105,7 +106,7 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
         **dataset_index.hierarchy_metadata,
         level_models=level_models,
         parent_models=parent_models,
-        label_schema=dataset_spec.hierarchy.label_schema,
+        label_schema=selection.hierarchy.label_schema,
         hierarchy=dataset_index.hierarchy.to_payload(),
     )
     # 先检查历史标签空间，避免创建槽位、改写快照后才发现分类头不兼容。
@@ -185,7 +186,13 @@ def _resolve_experiment_dir(request: TrainRequest, selection: DatasetSelection) 
     if request.experiment_dir is not None:
         return resolve_path(request.experiment_dir)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return PROJECT_ROOT / "output" / selection.profile.dataset_name / timestamp
+    return (
+        PROJECT_ROOT
+        / "output"
+        / selection.spec.directory.name
+        / selection.profile.dataset_name
+        / timestamp
+    )
 
 
 def _resolve_train_dir(request: TrainRequest, selection: DatasetSelection) -> Path:

@@ -108,7 +108,9 @@ def _restore_random_state(checkpoint: dict[str, object]) -> None:
         torch.set_rng_state(torch_state.cpu())
     cuda_state = checkpoint.get("cuda_rng_state")
     if torch.cuda.is_available() and cuda_state is not None:
-        torch.cuda.set_rng_state_all(cuda_state)
+        # torch.load(map_location=device) 会把保存时位于 CPU 的 RNG 状态搬到 GPU，
+        # 而 set_rng_state 只接受 CPU ByteTensor。
+        torch.cuda.set_rng_state_all([state.cpu() for state in cuda_state])
     numpy_state = checkpoint.get("numpy_rng_state")
     if numpy_state is not None:
         np.random.set_state(numpy_state)

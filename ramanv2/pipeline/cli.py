@@ -9,7 +9,7 @@ from pathlib import Path
 from ramanv2.common.file_ops import write_json
 from ramanv2.common.naming import BEAD_FOLDER_NAME
 from ramanv2.data.datasets import annotate_dataset_build
-from ramanv2.data.dataset_mapping import ensure_dataset_mapping
+from ramanv2.data.dataset_mapping import MAPPING_FILE_NAME, ensure_dataset_mapping
 from ramanv2.data.profiles import resolve_selection
 from ramanv2.pipeline.state import pipeline_state_path_for_spec
 
@@ -38,15 +38,10 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     init.add_argument("--test-folder", dest="test_folders", action="append", default=[])
     init.set_defaults(run_command=run_command)
 
-    acquire = commands.add_parser("acquire", help="从全量 init 生成 profile 子集")
-    acquire.add_argument("--dataset", default=DEFAULT_DATASET_ID, help="数据集标识，默认使用默认数据集")
-    acquire.add_argument("--init-root")
-    acquire.add_argument("--profile", required=True, help="数据集内 profile 标识")
-    acquire.set_defaults(run_command=run_command)
-
     plots = commands.add_parser("plot-prefix", help="生成指定 init 目录的 prefix-plot")
     plots.add_argument("--input-root", required=True)
     plots.add_argument("--output-root", required=True)
+    plots.add_argument("--profile", default=None, help="可选 profile；提供时按该 profile 层级扫描目录")
     plots.add_argument("--force", action="store_true", dest="force_enable")
     plots.set_defaults(run_command=run_command)
 
@@ -66,14 +61,11 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def _dataset_mapping_for_spec(spec):
-    """按数据集规格读取 profile 名单；扁平数据集没有 profile 名单。"""
-    if spec.is_flat:
-        return None
+    """按 label_source 读取或生成当前数据集的通用前缀映射。"""
     return ensure_dataset_mapping(
-        spec.workbook_path,
-        spec.metadata_dir / "profile_catalog.json",
-        spec.workbook_columns,
-        spec.profile_rules,
+        spec.label_source,
+        spec.directory,
+        spec.metadata_dir / MAPPING_FILE_NAME,
     )
 
 
@@ -151,7 +143,7 @@ def run_command(args: argparse.Namespace) -> int:
         if spec.is_flat:
             plan = SupplementPlan(groups=(), errors=(), unbacked_init_folders=())
         else:
-            plan = scan_supplement_plan(spec.supplement_path, init_root, catalog)
+            plan = scan_supplement_plan(spec.supplement_path, init_root, catalog, hierarchy=spec.hierarchy)
             errors = validate_supplement_plan(plan)
             if errors:
                 raise ValueError("补充数据校验失败：" + "；".join(errors))
@@ -206,28 +198,20 @@ def run_command(args: argparse.Namespace) -> int:
         )
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return 0
-    if args.command == "acquire":
-        from ramanv2.data.builders.init import build_profile_dataset
-
-        catalog = _dataset_mapping_for_spec(spec)
-        profile = selection.profile
-        profile_root = selection.dataset_dir / profile.root_init
-        report = build_profile_dataset(args.init_root or spec.init_dir, profile_root, profile.profile_id, catalog)
-        profiles = state.dataset_builds.setdefault("profiles", {})
-        if not isinstance(profiles, dict):
-            profiles = {}
-            state.dataset_builds["profiles"] = profiles
-        profiles[profile.profile_id] = report
-        plot_reports = state.dataset_builds.get("prefix_plots")
-        if isinstance(plot_reports, dict):
-            plot_reports.pop(profile.profile_id, None)
-        write_pipeline_state(state_path, state)
-        print(json.dumps(report, ensure_ascii=False, indent=2))
-        return 0
     if args.command == "plot-prefix":
         from ramanv2.data.plots.prefix import build_prefix_plots
 
-        outputs = build_prefix_plots(args.input_root, args.output_root, args.force_enable)
+        hierarchy = (
+            resolve_selection(profile_id=args.profile).hierarchy
+            if getattr(args, "profile", None)
+            else None
+        )
+        outputs = build_prefix_plots(
+            args.input_root,
+            args.output_root,
+            args.force_enable,
+            hierarchy=hierarchy,
+        )
         print(f"figures={len(outputs)}")
         return 0
     raise RuntimeError(f"未知 pipeline 命令：{args.command}")

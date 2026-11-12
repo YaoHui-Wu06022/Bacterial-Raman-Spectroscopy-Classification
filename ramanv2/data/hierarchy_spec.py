@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -51,6 +51,7 @@ class HierarchySpec:
     mappings: Mapping[str, Mapping[str, str]]
     version: int = HIERARCHY_VERSION
     explicit: bool = False
+    source_keys: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.levels:
@@ -199,6 +200,40 @@ class HierarchySpec:
             if prefix.startswith(key):
                 return mapping[key]
         return None
+
+
+def build_projected_hierarchy(
+    mapping: Any,
+    level_keys: list[str] | tuple[str, ...],
+    directory_keys: list[str] | tuple[str, ...],
+    display_names: Mapping[str, str] | None = None,
+) -> HierarchySpec:
+    """由通用前缀表投影出业务层级；目录层必须位于层级前缀。"""
+    keys = tuple(str(key) for key in level_keys)
+    if not keys:
+        raise ValueError("层级投影不能为空")
+    directories = tuple(str(key) for key in directory_keys)
+    if directories and keys[: len(directories)] != directories:
+        raise ValueError(f"目录层级必须位于层级前缀：{directories} / {keys}")
+    labels = dict(display_names or {})
+    levels = tuple(
+        HierarchyLevel(
+            name=f"level_{index + 1}",
+            display_name=labels.get(key, key),
+            directory=index < len(directories),
+        )
+        for index, key in enumerate(keys)
+    )
+    mappings = {
+        level.name: mapping.prefix_values(key)
+        for level, key in zip(levels, keys)
+    }
+    return HierarchySpec(
+        levels=levels,
+        mappings=mappings,
+        explicit=True,
+        source_keys={level.name: key for level, key in zip(levels, keys)},
+    )
 
 
 def resolve_hierarchy_from_meta(meta: Mapping[str, Any]) -> HierarchySpec:

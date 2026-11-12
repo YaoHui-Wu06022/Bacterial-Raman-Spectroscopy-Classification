@@ -292,9 +292,18 @@ def resolve_parent_target(
     level_name: str,
     parent_id: int | None,
     parent_name: str | None,
+    global_head_enable: bool = False,
 ) -> int | None:
-    """解析本次训练的目标父类；首层返回 None，其余层级必须指定 parent。"""
+    """解析本次训练的目标父类；全局模型返回 None。
+
+    ``global_head_enable`` 为真时表示训练该层全部类别的全局模型，
+    任意层级都允许不指定父类；否则首层全局，其余层级必须指定父类。
+    """
     resolved_level = dataset.resolve_level_name(level_name)
+    if global_head_enable:
+        if parent_id is not None or parent_name is not None:
+            raise ValueError("训练全局模型时不能指定 parent")
+        return None
     parent_level = dataset.get_parent_level(resolved_level)
     if parent_level is None:
         if parent_id is not None or parent_name is not None:

@@ -38,9 +38,46 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     count.add_argument("--stage", choices=DATA_STAGES, default="train", help="数据阶段，默认 train")
     count.set_defaults(run_command=run_command)
 
+    split = commands.add_parser("split", help="为同一 profile 的多个实验生成共享切分")
+    split.add_argument("--profile", required=True, help="profile 标识，例如 PB 或 FBB")
+    split.add_argument("--tag", required=True, help="实验组标签，仅 ASCII 字母、数字、_、-")
+    split.add_argument(
+        "--experiments",
+        default="main",
+        help="逗号分隔的实验名；单个 main 时目录直接用 tag",
+    )
+    split.add_argument("--seed", type=int, default=42, help="切分随机种子")
+    split.add_argument("--ratio", type=float, default=0.8, help="训练集比例")
+    split.set_defaults(run_command=run_command)
+
 
 def run_command(args: argparse.Namespace) -> int:
     """执行一个已解析的 data 子命令。"""
+    if args.command == "split":
+        from ramanv2.data.experiment_group import build_experiment_group
+
+        experiment_names = tuple(
+            name.strip() for name in str(args.experiments).split(",") if name.strip()
+        )
+        report = build_experiment_group(
+            profile_id=args.profile,
+            tag=args.tag,
+            experiment_names=experiment_names,
+            seed=args.seed,
+            train_ratio=args.ratio,
+        )
+        print(
+            f"profile = {report['profile_id']}  samples = {report['sample_count']}  "
+            f"train = {report['train_count']}  val = {report['val_count']}"
+        )
+        for name, item in report["experiments"].items():
+            state = "复用" if item["split_reused"] else "新建"
+            print(
+                f"  {name:8} {state} {item['experiment_dir']}  "
+                f"train_sha={item['train_split_sha256'][:12]}"
+            )
+        return 0
+
     from ramanv2.core.config import InputConfig
     from ramanv2.data.profiles import resolve_selection
 
@@ -56,7 +93,7 @@ def run_command(args: argparse.Namespace) -> int:
                 profile,
                 dataset_dir,
                 input_config=InputConfig(bad_bands=spec.bad_bands),
-                hierarchy=spec.hierarchy,
+                hierarchy=selection.hierarchy,
             )
         else:
             build_test(

@@ -1,4 +1,4 @@
-"""全量 init 和固定 Profile 数据集获取页面。"""
+"""全量 init 数据获取页面。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from ramanv2.common.naming import (
     build_natural_key,
     parse_folder_prefix,
 )
-from ramanv2.data.builders.init import build_full_init, build_profile_dataset
+from ramanv2.data.builders.init import build_full_init
 from ramanv2.data.plots.prefix import PrefixPlotConfig, build_prefix_plots
 from ramanv2.pipeline.calibration import run_folder_offset
 from ramanv2.data.datasets import annotate_dataset_build
@@ -36,10 +36,13 @@ from ramanv2.pipeline.supplement import (
 )
 from ramanv2.pipeline.state import PipelineState
 from ramanv2.pipeline.db import database_path, load_test_defaults
-from ramanv2.ui.components.pickers import render_profile_picker
 from ramanv2.ui.formatting import progress_ratio
 from ramanv2.ui.page_context import PageContext
-from ramanv2.ui.read_cache import cached_dataset_summary, cached_dataset_taxon_counts
+from ramanv2.ui.read_cache import (
+    cached_dataset_hierarchy_summary,
+    cached_dataset_summary,
+    cached_dataset_taxon_counts,
+)
 from ramanv2.ui.page_state import (
     INVALIDATE_DATASET,
     INVALIDATE_SPECTRA,
@@ -58,37 +61,41 @@ from ramanv2.ui.page_state import (
 SOURCE_RESERVED_NAMES = SPECIAL_FOLDER_NAMES
 
 
-def _render_count_metrics(summary: dict[str, int | bool], test_summary: dict[str, int | bool]) -> None:
-    """标出 init 与 init_test 的分配，避免把 init 单独的光谱数误认为数据丢失。"""
-    metrics = st.columns(3)
-    metrics[0].metric("属数量", f"{summary['genus_count']} 个")
-    metrics[1].metric("种数量", f"{summary['species_count']} 个")
-    metrics[2].metric("init 光谱数量", f"{summary['file_count']} 条")
-    if test_summary["exists"]:
-        st.caption(
-            f"init_test 另有 {test_summary['folder_count']} 个文件夹、{test_summary['file_count']} 条；"
-            f"两处合计 {summary['file_count'] + test_summary['file_count']} 条。"
+def _render_taxon_counts(init_root: Path, hierarchy) -> None:
+    """按当前层级展示父级汇总与各类别明细，普通交互复用缓存。"""
+    with st.expander("层级数量统计", expanded=False):
+        counts = cached_dataset_taxon_counts(
+            str(init_root.resolve()),
+            json.dumps(hierarchy.to_payload(), ensure_ascii=False, sort_keys=True),
+            ui_cache_version("dataset"),
         )
-
-
-def _render_taxon_counts(init_root: Path) -> None:
-    """展示当前 init 的属汇总及种前缀明细，普通交互复用缓存。"""
-    with st.expander("属／种数量统计", expanded=False):
-        counts = cached_dataset_taxon_counts(str(init_root.resolve()), ui_cache_version("dataset"))
-        if not counts["species"]:
+        rows = counts["rows"]
+        levels = counts["levels"]
+        if not rows:
             st.info("当前 init 中没有可统计的光谱。")
             return
-        st.caption("仅统计当前 init；种按规范前缀区分，同一种跨日期合并。init_test 不计入。")
-        genus_tab, species_tab = st.tabs(["各属汇总", "各种明细"])
-        with genus_tab:
+        st.caption("仅统计当前 init；按层级分组，同一类别跨日期合并。init_test 不计入。")
+        detail_label = levels[-1]
+        summary_label = levels[-2] if len(levels) >= 2 else "层级"
+        summary_tab, detail_tab = st.tabs([f"各{summary_label}汇总", f"各{detail_label}明细"])
+        with summary_tab:
             st.dataframe([
-                {"属": row["genus"], "种数": row["species_count"], "来源文件夹数": row["folder_count"], "光谱数": row["file_count"]}
-                for row in counts["genera"]
+                {
+                    **{label: value for label, value in zip(levels[:-1], row["values"])},
+                    f"{detail_label}数": row["species_count"],
+                    "来源文件夹数": row["folder_count"],
+                    "光谱数": row["file_count"],
+                }
+                for row in counts["summaries"]
             ], hide_index=True, width="stretch")
-        with species_tab:
+        with detail_tab:
             st.dataframe([
-                {"属": row["genus"], "种前缀": row["prefix"], "来源文件夹数": row["folder_count"], "光谱数": row["file_count"]}
-                for row in counts["species"]
+                {
+                    **{label: value for label, value in zip(levels, row["values"])},
+                    "来源文件夹数": row["folder_count"],
+                    "光谱数": row["file_count"],
+                }
+                for row in counts["rows"]
             ], hide_index=True, width="stretch")
 
 
@@ -98,6 +105,7 @@ def _render_prefix_plot_section(
     key: str,
     input_config=None,
     flat: bool = False,
+    hierarchy=None,
 ) -> None:
     """将已有图片查看和增量更新分开，默认不展开图像区域。"""
     if not init_root.is_dir():
@@ -125,6 +133,7 @@ def _render_prefix_plot_section(
                         figure_root,
                         force_enable=False,
                         config=PrefixPlotConfig(input=input_config, flat=flat) if input_config is not None else PrefixPlotConfig(flat=flat),
+                        hierarchy=hierarchy,
                         progress_callback=report_plot_progress,
                     )
                     progress.progress(1.0, text=f"已更新 {len(outputs)} 张 prefix-plot")
@@ -137,28 +146,30 @@ def _render_prefix_plot_section(
         if not figure_root.is_dir():
             st.info("当前还没有 prefix-plot，请点击“更新图信息”。")
             return
-        genus_paths = {
-            path.name: sorted(path.glob("*.png"), key=lambda item: build_natural_key(item.name))
-            for path in figure_root.iterdir()
-            if path.is_dir() and any(path.glob("*.png"))
-        }
-        if not genus_paths:
+        group_paths: dict[str, list[Path]] = {}
+        for path in figure_root.rglob("*.png"):
+            group_name = path.parent.relative_to(figure_root).as_posix()
+            if group_name != ".":
+                group_paths.setdefault(group_name, []).append(path)
+        for paths in group_paths.values():
+            paths.sort(key=lambda item: build_natural_key(item.name))
+        if not group_paths:
             st.info("当前没有可查看的 prefix-plot。")
             return
-        genus_name = st.selectbox(
-            "选择查看的类别" if flat else "选择查看的属",
-            sorted(genus_paths, key=build_natural_key),
+        group_name = st.selectbox(
+            "选择查看的类别" if flat else "选择查看的层级分组",
+            sorted(group_paths, key=build_natural_key),
             key=f"{key}_genus",
         )
-        plot_paths = genus_paths[genus_name]
+        plot_paths = group_paths[group_name]
         if flat:
             stems = [path.stem for path in plot_paths]
-            prefix_name = genus_name if genus_name in stems else stems[0]
-            caption = genus_name
+            prefix_name = group_name if group_name in stems else stems[0]
+            caption = group_name
         else:
             prefix_name = st.selectbox("选择查看的种前缀", [path.stem for path in plot_paths], key=f"{key}_prefix")
-            caption = f"{genus_name} / {prefix_name}"
-        selected = figure_root / genus_name / f"{prefix_name}.png"
+            caption = f"{group_name} / {prefix_name}"
+        selected = figure_root / group_name / f"{prefix_name}.png"
         if selected.is_file():
             st.image(str(selected), caption=caption, width="stretch")
 
@@ -168,11 +179,11 @@ def _render_supplement_plan(plan: SupplementPlan | None, supplement_root: Path) 
     if plan is None:
         return
     st.markdown("**补充数据**")
-    st.caption(f"来源目录：{supplement_root}；重建后按文件夹写入 dataset/init/<属>/<文件夹>。")
+    st.caption(f"来源目录：{supplement_root}；重建后按层级写入 dataset/init。")
     if plan.groups:
         st.dataframe(
             [
-                {"文件夹": group.folder_name, "属": group.genus, "光谱数": group.file_count}
+                {"文件夹": group.folder_name, "分组": group.genus, "光谱数": group.file_count}
                 for group in plan.groups
             ],
             hide_index=True,
@@ -311,7 +322,7 @@ def _render_date_dataset_update(context: PageContext, state, catalog: DatasetMap
         st.caption(
             "自动检测新增、待同步和 shift 文件变化的日期并默认勾选；已有日期沿用原 init/init_test 分流，"
             "同时重建两处产物；新增日期可在下方选择进入 init_test 的文件夹，其余进入 init。"
-            "其他日期编号保持不变。已有 Profile 需另行重新生成。"
+            "其他日期编号保持不变。"
         )
         st.dataframe(
             [
@@ -445,15 +456,23 @@ def _render_dataset_transfer(context: PageContext, state, catalog: DatasetMappin
         if genus is None:
             st.info(f"种前缀 {prefix} 未映射到属，请先补充分类名单。")
         else:
-            caption = "整夹移入 init_test；普通来源保留现有文件夹名。" if to_test_enable else f"整夹移入 init/{genus}，按 {prefix} 和采集日期追加编号。"
-            st.caption(caption + "仅更新对应审核图，已有 Profile 不变。")
+            caption = "整夹移入 init_test；普通来源保留现有文件夹名。" if to_test_enable else f"整夹移回 init 对应层级目录，按 {prefix} 和采集日期追加编号。"
+            st.caption(caption + "仅更新对应审核图。")
         label = "将所选 init 直接移入 init_test" if to_test_enable else "将所选 init_test 直接移回 init"
         if not st.button(label, key=f"{key}_confirm", disabled=genus is None, width="stretch"):
             return
         try:
             with st.spinner("正在迁移所选文件夹并更新分流记录……"):
                 run_transfer = run_init_to_test if to_test_enable else run_test_to_init
-                result = run_transfer(context.data_root, context.init_root, catalog, state, context.state_file, selected)
+                result = run_transfer(
+                    context.data_root,
+                    context.init_root,
+                    catalog,
+                    state,
+                    context.state_file,
+                    selected,
+                    context.hierarchy,
+                )
             invalidate_ui_cache(*INVALIDATE_DATASET)
             st.session_state["test_export_added_source" if to_test_enable else "test_return_removed_source"] = selected
             set_flash(
@@ -680,7 +699,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         catalog = context.dataset_mapping()
     except UI_ACTION_ERRORS as error:
         catalog = None
-        render_action_error("Profile 配置加载", error)
+        render_action_error("数据集映射加载", error)
 
     st.subheader("全量 init")
     full_summary = cached_dataset_summary(
@@ -696,10 +715,13 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     test_summary = cached_dataset_summary(
         str(context.init_test_root.resolve()), ui_cache_version("dataset")
     )
-    class_count = (
-        len([path for path in context.init_root.iterdir() if path.is_dir()])
-        if context.init_root.is_dir() else 0
+    hierarchy_summary = cached_dataset_hierarchy_summary(
+        str(context.init_root.resolve()),
+        json.dumps(context.hierarchy.to_payload(), ensure_ascii=False, sort_keys=True),
+        ui_cache_version("dataset"),
     )
+    hierarchy_levels = hierarchy_summary.get("levels") or []
+    class_count = int(hierarchy_levels[-1]["count"]) if hierarchy_levels else 0
     metrics = st.columns(5)
     metrics[0].metric(
         "状态",
@@ -707,17 +729,22 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
             "已生成" if full_summary["exists"] else "未生成"
         ),
     )
-    metrics[1].metric("类别数", f"{class_count} 个")
+    metrics[1].metric("末层类别数", f"{class_count} 个")
     metrics[2].metric("来源组数", f"{full_summary['folder_count']} 个")
     metrics[3].metric("init 光谱", f"{full_summary['file_count']} 条")
     metrics[4].metric("init_test 光谱", f"{test_summary['file_count']} 条")
+    if hierarchy_levels:
+        st.caption(
+            "层级计数："
+            + "；".join(f"{level['name']} {level['count']} 个" for level in hierarchy_levels)
+        )
     if context.hierarchy.is_flat:
         _render_flat_label_counts(context)
     else:
-        _render_taxon_counts(context.init_root)
+        _render_taxon_counts(context.init_root, context.hierarchy)
     eligible_dates = sorted(state.affine_completed_dates, key=build_natural_key)
     supplement_plan = (
-        scan_supplement_plan(context.supplement_root, context.init_root, catalog)
+        scan_supplement_plan(context.supplement_root, context.init_root, catalog, hierarchy=context.hierarchy)
         if not context.hierarchy.is_flat and catalog is not None
         else None
     )
@@ -823,7 +850,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                 )
                 set_flash(
                     "dataset",
-                    f"全量 init 生成完成，{supplement_note}；已有 Profile 保留，可按需重新生成。",
+                    f"全量 init 生成完成，{supplement_note}。",
                 )
             st.rerun()
         except UI_ACTION_ERRORS as error:
@@ -843,99 +870,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         "full_init",
         InputConfig(bad_bands=context.bad_bands),
         flat=context.hierarchy.is_flat,
+        hierarchy=context.hierarchy,
     )
     _render_affine_compensation(context, state, catalog)
 
-    st.subheader("Profile 数据集")
-    profile = render_profile_picker(
-        context,
-        label="选择 Profile",
-        key="dataset_profile_name",
-        profile_ids=list(context.dataset_spec.profiles),
-        empty_message="当前数据集没有 Profile 子目录。",
-        empty_kind="info",
-    )
-    if profile is None:
-        return
-    profile_name = profile.profile_id
-    profile_dir = context.profile_dir(profile)
-    profile_root = profile_dir / profile.root_init
-    profile_summary = cached_dataset_summary(
-        str(profile_root.resolve()), ui_cache_version("dataset")
-    )
-    profile_test_summary = cached_dataset_summary(
-        str((profile_dir / profile.root_test).resolve()), ui_cache_version("dataset")
-    )
-    _render_count_metrics(profile_summary, profile_test_summary)
-    profile_reports = state.dataset_builds.get("profiles", {})
-    if not isinstance(profile_reports, dict):
-        profile_reports = {}
-
-    full_init_report = state.dataset_builds.get("full_init")
-    full_init_report = full_init_report if isinstance(full_init_report, dict) else {}
-    test_exports = {
-        str(entry["target"]): str(entry["source"])
-        for entry in full_init_report.get("test_exports", [])
-        if isinstance(entry, dict) and entry.get("target") and entry.get("source")
-    }
-    configured_defaults = set(_load_configured_default_sources(context) or [])
-    prefix_to_genus = {
-        prefix: genus
-        for genus, prefixes in catalog.genera.items()
-        for prefix in prefixes
-    }
-    profile_genera = set(catalog.datasets.get(profile_name, ()))
-    profile_default_sources = {
-        source
-        for source in configured_defaults
-        if prefix_to_genus.get(
-            parse_folder_prefix(source.split("/", 1)[1], uppercase_enable=True)
-        ) in profile_genera
-    }
-    allowed_test_targets = {
-        target
-        for target, source in test_exports.items()
-        if source in profile_default_sources
-    }
-    strict_default_enable = st.checkbox(
-        "测试集严格按默认名单",
-        value=bool(profile_default_sources) and bool(test_exports),
-        disabled=not profile_default_sources or not test_exports,
-        key=f"profile_strict_test_defaults_{profile_name}",
-        help="只复制默认名单中属于当前 Profile 的测试夹，忽略全局 init_test 的历史遗留夹。",
-    )
-    if profile_default_sources and test_exports:
-        st.caption(
-            f"默认名单中属于 {profile_name} 的测试源 {len(profile_default_sources)} 个；"
-            f"严格模式候选 {len(allowed_test_targets)} 个测试夹，忽略历史遗留测试夹。"
-        )
-    elif not profile_default_sources:
-        st.warning(f"默认名单中没有 {profile_name} 的测试源；将保留现有 init_test。")
-
-    if st.button(
-        "从 init 生成数据集",
-        type="primary",
-        disabled=not full_init_ready,
-        width="stretch",
-    ):
-        try:
-            with st.status(f"正在生成 {profile_name} 数据集…", expanded=True) as status:
-                status.write("正在读取全量 init 并生成 Profile 子集，同时从全局 init_test 派生 Profile 测试集。")
-                report = build_profile_dataset(
-                    context.init_root,
-                    profile_root,
-                    profile_name,
-                    catalog,
-                    allowed_test_targets=(
-                        allowed_test_targets if strict_default_enable else None
-                    ),
-                )
-                status.update(label=f"{profile_name} 数据集生成完成", state="complete", expanded=False)
-            profile_reports[profile_name] = report
-            state.dataset_builds["profiles"] = profile_reports
-            invalidate_ui_cache(*INVALIDATE_DATASET)
-            write_page_state(context, state)
-            set_flash("dataset", f"{profile_name} 数据集生成完成。")
-            st.rerun()
-        except UI_ACTION_ERRORS as error:
-            render_action_error(f"{profile_name} 数据集生成", error)
