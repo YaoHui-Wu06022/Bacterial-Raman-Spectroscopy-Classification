@@ -22,10 +22,14 @@ def build_test_input_selection(
     rows = []
     for folder_name in folder_names:
         species_prefix = parse_folder_prefix(folder_name, uppercase_enable=True)
-        try:
-            expected_label = hierarchy.expected_label(folder_name, level_name)
-        except ValueError:
-            expected_label = None
+        # 文件夹本身已是目标层类别名时直接采用，避免物种前缀被截断后冲突。
+        if folder_name in model_labels:
+            expected_label = folder_name
+        else:
+            try:
+                expected_label = hierarchy.expected_label(folder_name, level_name)
+            except ValueError:
+                expected_label = None
         expected_in_model = expected_label in model_labels
         if expected_label is None:
             reason = "unmapped_species_prefix"

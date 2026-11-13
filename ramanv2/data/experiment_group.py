@@ -32,8 +32,8 @@ def build_experiment_group(
 ) -> dict[str, object]:
     """生成一份 canonical 切分，并写入同一 profile 的多个实验目录。
 
-    ``experiment_names`` 为 ``("main",)`` 时实验目录直接使用 ``tag``；
-    多个实验时使用 ``<tag>_<name>``。每个实验目录都会写入相同的
+    ``experiment_names`` 为 ``("main",)`` 时实验目录为 ``<tag>_<seed>``；
+    多个实验时使用 ``<tag>_<name>_<seed>``。每个实验目录都会写入相同的
     train/val 切分和共享配置，后续训练会复用该切分。
     """
     _validate_name(tag, "tag")
@@ -85,9 +85,9 @@ def build_experiment_group(
     targets: list[tuple[str, Path, bool]] = []
     for name in experiment_names:
         experiment_dir = (
-            output_root / tag
+            output_root / f"{tag}_{int(seed)}"
             if len(experiment_names) == 1 and name == "main"
-            else output_root / f"{tag}_{name}"
+            else output_root / f"{tag}_{name}_{int(seed)}"
         )
         existing = load_split_files(dataset, experiment_dir)
         reused = existing is not None

@@ -45,8 +45,15 @@ class RunEntry:
     run_dir: Path
 
 
-def load_evaluation_context(source_dir: Path | str) -> EvaluationContext:
-    """从实验或模型槽位目录读取评估所需的不可变输入。"""
+def load_evaluation_context(
+    source_dir: Path | str,
+    train_dir: Path | str | None = None,
+) -> EvaluationContext:
+    """从实验或模型槽位目录读取评估所需的不可变输入。
+
+    ``train_dir`` 用于非注册表数据集（如 BID）显式指定训练根；
+    传入时不再通过注册表解析数据集。
+    """
     source_path = Path(source_dir).resolve()
     experiment_dir = resolve_experiment_dir(source_path)
     shared_values = read_yaml_dict(experiment_dir / SHARED_CONFIG_NAME)
@@ -55,12 +62,16 @@ def load_evaluation_context(source_dir: Path | str) -> EvaluationContext:
     if meta is None:
         raise FileNotFoundError(f"缺少 {HIERARCHY_META_FILE_NAME}：{experiment_dir}")
     config = build_config(shared_values)
-    selection = resolve_selection(
-        config.dataset.dataset_id,
-        config.dataset.profile_id,
-    )
+    if train_dir is None:
+        selection = resolve_selection(
+            config.dataset.dataset_id,
+            config.dataset.profile_id,
+        )
+        resolved_train_dir = selection.train_dir
+    else:
+        resolved_train_dir = Path(train_dir).resolve()
     dataset_index = DatasetIndex(
-        selection.train_dir,
+        resolved_train_dir,
         hierarchy=resolve_hierarchy_from_meta(meta),
     )
     assert_hierarchy_compatible(meta, dataset_index.hierarchy_metadata)

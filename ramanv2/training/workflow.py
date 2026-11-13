@@ -71,6 +71,10 @@ class TrainRequest:
     resume_run_dir: Path | str | None = None
     initialize_model: Callable[[torch.nn.Module, TrainTask], None] | None = None
     apply_training_mode: Callable[[torch.nn.Module], None] | None = None
+    # 非注册表数据集（如 BID）可直接传入数据集选择，跳过注册表解析。
+    selection: DatasetSelection | None = None
+    # BID 等大数据集可跳过 train_data.npz 快照，评估只依赖切分文件。
+    train_archive_enable: bool = True
 
 
 def run_training(request: TrainRequest) -> dict[str, Any]:
@@ -83,7 +87,10 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
     validate_model_input(model_spec, input_spec)
     _set_random_seed(train_spec.seed, runtime_spec.deterministic_enable)
 
-    selection = resolve_selection(config.dataset.dataset_id, config.dataset.profile_id)
+    selection = request.selection or resolve_selection(
+        config.dataset.dataset_id,
+        config.dataset.profile_id,
+    )
     experiment_dir = _resolve_experiment_dir(request, selection)
     existing_meta = load_hierarchy_meta(experiment_dir / "hierarchy_meta.json")
     if request.resume_run_dir is not None:
@@ -119,7 +126,8 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
         train_spec.seed,
         experiment_context.experiment_dir,
     )
-    save_or_validate_train_archive(experiment_context, dataset_index, train_indices)
+    if request.train_archive_enable:
+        save_or_validate_train_archive(experiment_context, dataset_index, train_indices)
     train_task = _build_train_task(
         dataset_index,
         level_name,
@@ -190,7 +198,7 @@ def _resolve_experiment_dir(request: TrainRequest, selection: DatasetSelection) 
         PROJECT_ROOT
         / "output"
         / selection.spec.directory.name
-        / timestamp
+        / f"{timestamp}_{int(request.config.execution.seed)}"
     )
 
 

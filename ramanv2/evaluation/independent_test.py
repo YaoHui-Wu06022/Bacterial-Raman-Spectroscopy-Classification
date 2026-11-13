@@ -50,12 +50,14 @@ def evaluate_test_set(
     device: str | None = None,
     test_dir: Path | str | None = None,
     sample_limit: int | None = INFERENCE_SAMPLES_PER_FOLDER,
+    train_dir: Path | str | None = None,
 ) -> dict[str, Any]:
     """评估一个模型槽位在其类别范围内的独立测试表现。
 
     ``sample_limit`` 控制每个测试文件夹抽查的光谱数；``None`` 表示使用全部光谱。
+    ``train_dir`` 用于非注册表数据集显式指定训练根。
     """
-    context = load_evaluation_context(source_dir)
+    context = load_evaluation_context(source_dir, train_dir)
     run_entry = resolve_run_entry(context)
     level_name = run_entry.level_name
     target_device = resolve_device(device)

@@ -56,10 +56,10 @@ class ModelConfig:
     encoder_type: str = "transformer"
     transformer_nhead: int = 8
     transformer_dim: int = 256
-    transformer_ffn_dim: int = 512
+    transformer_ffn_dim: int = 1024
     transformer_layers: int = 2
     transformer_dropout: float = 0.2
-    lstm_hidden: int = 192
+    lstm_hidden: int = 256
     lstm_layers: int = 2
     lstm_dropout: float = 0.2
     lstm_bidirectional: bool = False

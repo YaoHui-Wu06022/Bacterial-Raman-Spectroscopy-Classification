@@ -23,9 +23,10 @@ def evaluate_model_run(
     source_dir: Path | str,
     level_name: str,
     device: str | None = None,
+    train_dir: Path | str | None = None,
 ) -> Path:
     """评估一个模型槽位在其类别范围内的验证集表现。"""
-    context = load_evaluation_context(source_dir)
+    context = load_evaluation_context(source_dir, train_dir)
     run_entry = resolve_run_entry(context)
     level_name = resolve_level_name(context, level_name)
     if run_entry.level_name != level_name:
