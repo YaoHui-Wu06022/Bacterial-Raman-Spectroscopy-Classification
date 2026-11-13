@@ -23,6 +23,7 @@ from ramanv2.evaluation.context import (
 from ramanv2.evaluation.metrics_report import write_model_report
 from ramanv2.evaluation.summary_text import build_result_summary
 from ramanv2.inference.spectrum_input import (
+    INFERENCE_SAMPLES_PER_FOLDER,
     build_inference_preprocessor,
     list_spectrum_paths,
     sample_folder_spectra,
@@ -48,8 +49,12 @@ def evaluate_test_set(
     source_dir: Path | str,
     device: str | None = None,
     test_dir: Path | str | None = None,
+    sample_limit: int | None = INFERENCE_SAMPLES_PER_FOLDER,
 ) -> dict[str, Any]:
-    """评估一个模型槽位在其类别范围内的独立测试表现。"""
+    """评估一个模型槽位在其类别范围内的独立测试表现。
+
+    ``sample_limit`` 控制每个测试文件夹抽查的光谱数；``None`` 表示使用全部光谱。
+    """
     context = load_evaluation_context(source_dir)
     run_entry = resolve_run_entry(context)
     level_name = run_entry.level_name
@@ -66,7 +71,7 @@ def evaluate_test_set(
     if not test_path.is_dir():
         raise FileNotFoundError(f"缺少独立测试集目录：{test_path}")
 
-    folder_names, sample_paths, sample_folders = _scan_test_set(test_path)
+    folder_names, sample_paths, sample_folders = _scan_test_set(test_path, sample_limit)
     level_class_names = context.dataset_index.get_class_names(level_name)
     label_by_folder, _rows = build_test_folder_labels(
         folder_names,
@@ -200,11 +205,13 @@ def _maybe_generate_level_inference(
         print(f"[Inference] {name} -> {result_dir}")
 
 
-def _scan_test_set(test_path: Path) -> tuple[list[str], list[Path], list[str]]:
+def _scan_test_set(
+    test_path: Path,
+    sample_limit: int | None = INFERENCE_SAMPLES_PER_FOLDER,
+) -> tuple[list[str], list[Path], list[str]]:
     """按自然序扫描扁平测试集，返回文件夹名、抽样光谱路径与逐谱所属文件夹。
 
-    每个文件夹按 cell 分组随机抽取最多 ``INFERENCE_SAMPLES_PER_FOLDER`` 条，
-    与样本推理保持一致的独立测试口径。
+    每个文件夹按 cell 分组随机抽取最多 ``sample_limit`` 条；``None`` 时使用全部光谱。
     """
     folder_names: list[str] = []
     sample_paths: list[Path] = []
@@ -216,7 +223,10 @@ def _scan_test_set(test_path: Path) -> tuple[list[str], list[Path], list[str]]:
         paths = list_spectrum_paths(folder_dir)
         if not paths:
             continue
-        sampled = sample_folder_spectra([(path.name, path) for path in paths])
+        sampled = sample_folder_spectra(
+            [(path.name, path) for path in paths],
+            sample_limit,
+        )
         folder_names.append(folder_dir.name)
         sample_paths.extend(path for _, path in sampled)
         sample_folders.extend([folder_dir.name] * len(sampled))

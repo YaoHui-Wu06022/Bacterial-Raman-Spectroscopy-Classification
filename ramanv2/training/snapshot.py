@@ -51,6 +51,14 @@ def save_or_validate_train_archive(
     return target_path
 
 
+def load_train_archive_summary(path: Path | str) -> tuple[int, tuple[int, ...]]:
+    """读取训练快照的样本数和强度矩阵形状。"""
+    with np.load(path, allow_pickle=False) as archive:
+        sample_count = int(archive["sample_count"])
+        shape = tuple(int(item) for item in archive["intensities"].shape)
+    return sample_count, shape
+
+
 def _build_sample_paths(dataset: Any, train_indices: Any, root_dir: Path) -> list[str]:
     """按 train split 顺序返回相对数据根的样本路径。"""
     return [
@@ -105,4 +113,8 @@ def _validate_archive(path: Path, paths: list[str]) -> None:
         raise ValueError(f"训练数据快照强度矩阵形状无效：{path}")
 
 
-__all__ = ["TRAIN_ARCHIVE_NAME", "save_or_validate_train_archive"]
+__all__ = [
+    "TRAIN_ARCHIVE_NAME",
+    "load_train_archive_summary",
+    "save_or_validate_train_archive",
+]

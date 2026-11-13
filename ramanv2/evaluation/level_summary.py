@@ -71,6 +71,18 @@ def assert_multi_model_level(
     return experiment_dir, meta, level
 
 
+def level_summary_availability(
+    experiment_dir: Path | str,
+    level_name: str,
+) -> tuple[bool, str]:
+    """判断实验是否具备生成层级汇总的条件，并返回原因。"""
+    try:
+        assert_multi_model_level(experiment_dir, level_name, "层级汇总")
+    except (FileNotFoundError, ValueError) as error:
+        return False, str(error)
+    return True, ""
+
+
 def summarize_level_results(
     source_dir: Path | str,
     level_name: str,
@@ -546,5 +558,6 @@ def _slot_class_ids(
 __all__ = [
     "LEVEL_SUMMARY_DIR_NAME",
     "assert_multi_model_level",
+    "level_summary_availability",
     "summarize_level_results",
 ]

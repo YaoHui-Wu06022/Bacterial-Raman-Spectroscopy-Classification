@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import stat
@@ -252,6 +253,15 @@ def read_json(path: Path | str) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def file_sha256(path: Path | str) -> str:
+    """分块计算文件 sha256，避免大文件整体读入内存。"""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def write_json(path: Path | str, payload: Any) -> Path:
     """以两空格缩进原子写入 JSON，并保留末尾换行。"""
     text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
@@ -260,6 +270,7 @@ def write_json(path: Path | str, payload: Any) -> Path:
 
 __all__ = [
     "create_temporary_path",
+    "file_sha256",
     "publish_directory",
     "publish_file",
     "publish_files",

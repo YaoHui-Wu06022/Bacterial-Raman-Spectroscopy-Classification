@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from pathlib import Path
 
-from ramanv2.core.config import build_config
+from ramanv2.common.file_ops import file_sha256
+from ramanv2.core.config import Config, build_config
 from ramanv2.core.run_context import open_experiment_context
 from ramanv2.common.paths import PROJECT_ROOT
 from ramanv2.data.profiles import resolve_selection
@@ -28,6 +28,7 @@ def build_experiment_group(
     seed: int = 42,
     train_ratio: float = 0.8,
     project_root: Path | str = PROJECT_ROOT,
+    config: Config | None = None,
 ) -> dict[str, object]:
     """生成一份 canonical 切分，并写入同一 profile 的多个实验目录。
 
@@ -62,7 +63,7 @@ def build_experiment_group(
     train_indices = sorted(int(index) for index in train_indices)
     val_indices = sorted(int(index) for index in val_indices)
 
-    config = build_config(
+    config = config or build_config(
         {
             "dataset_id": selection.spec.dataset_id,
             "profile_id": profile.profile_id,
@@ -70,6 +71,11 @@ def build_experiment_group(
             "bad_bands": selection.spec.bad_bands,
         }
     )
+    if (
+        config.dataset.dataset_id != selection.spec.dataset_id
+        or config.dataset.profile_id != profile.profile_id
+    ):
+        raise ValueError("传入的 config 与当前数据集不匹配")
     output_root = (
         Path(project_root).resolve()
         / "output"
@@ -100,8 +106,8 @@ def build_experiment_group(
         experiments[name] = {
             "experiment_dir": str(experiment_dir),
             "split_reused": reused,
-            "train_split_sha256": _file_sha256(experiment_dir / "train_split.json"),
-            "val_split_sha256": _file_sha256(experiment_dir / "val_split.json"),
+            "train_split_sha256": file_sha256(experiment_dir / "train_split.json"),
+            "val_split_sha256": file_sha256(experiment_dir / "val_split.json"),
         }
 
     return {
@@ -123,10 +129,3 @@ def _validate_name(value: str, label: str) -> None:
     text = str(value).strip()
     if not text or NAME_PATTERN.fullmatch(text) is None:
         raise ValueError(f"{label} 只能包含 ASCII 字母、数字、下划线和短横线：{value!r}")
-
-
-def _file_sha256(path: Path) -> str:
-    """计算切分文件哈希，用于确认多个实验使用同一份划分。"""
-    digest = hashlib.sha256()
-    digest.update(path.read_bytes())
-    return digest.hexdigest()

@@ -29,9 +29,11 @@ def _cell_key(file_name: str) -> str:
 
 def sample_folder_spectra(
     spectrum_items: list[tuple[str, Path]],
-    limit: int = INFERENCE_SAMPLES_PER_FOLDER,
+    limit: int | None = INFERENCE_SAMPLES_PER_FOLDER,
 ) -> list[tuple[str, Path]]:
-    """每个 cell 至多一条，随机抽取不超过 limit 条光谱。"""
+    """每个 cell 至多一条、随机抽取不超过 limit 条；limit 为 None 时返回全部光谱。"""
+    if limit is None:
+        return sorted(spectrum_items, key=lambda item: build_natural_key(item[0]))
     groups: dict[str, list[tuple[str, Path]]] = {}
     for item in spectrum_items:
         groups.setdefault(_cell_key(item[0]), []).append(item)
