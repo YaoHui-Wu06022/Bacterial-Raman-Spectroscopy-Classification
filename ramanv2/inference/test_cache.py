@@ -1,4 +1,4 @@
-"""样本推理的模型输入缓存。"""
+"""test 文件夹推理的模型输入缓存。"""
 
 from __future__ import annotations
 

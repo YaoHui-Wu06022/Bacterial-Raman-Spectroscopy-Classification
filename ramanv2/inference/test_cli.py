@@ -1,4 +1,4 @@
-"""独立推理命令参数解析。"""
+"""test 文件夹独立推理命令参数解析。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 def run_command(args: argparse.Namespace) -> int:
     """执行已经解析完成的独立推理请求。"""
-    from ramanv2.inference.folder_inference import run_independent_inference
+    from ramanv2.inference.test_inference import run_independent_inference
 
     run_independent_inference(
         args.source_dir,

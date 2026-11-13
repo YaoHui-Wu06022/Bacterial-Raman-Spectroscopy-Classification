@@ -25,7 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     import ramanv2.analysis.cli
     import ramanv2.data.cli
     import ramanv2.evaluation.cli
-    import ramanv2.inference.cli
+    import ramanv2.inference.test_cli
     import ramanv2.pipeline.cli
     import ramanv2.training.cli
 
@@ -41,8 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
     infer_parser = domains.add_parser("infer", help="执行独立推理")
     infer_commands = infer_parser.add_subparsers(dest="command", required=True)
     test_parser = infer_commands.add_parser("test", help="推理测试文件夹")
-    ramanv2.inference.cli.configure_parser(test_parser)
-    test_parser.set_defaults(run_command=ramanv2.inference.cli.run_command)
+    ramanv2.inference.test_cli.configure_parser(test_parser)
+    test_parser.set_defaults(run_command=ramanv2.inference.test_cli.run_command)
 
     evaluation_parser = domains.add_parser("evaluate", help="评估模型或 PCA-SVM baseline")
     ramanv2.evaluation.cli.configure_parser(evaluation_parser)

@@ -75,16 +75,13 @@ class PageContext:
         ).train_dir
 
     def experiment_root(self, profile: DatasetProfile) -> Path:
-        """返回 profile 的训练实验输出目录。"""
-        return (
-            self.output_root
-            / self.dataset_spec.directory.name
-            / profile.dataset_name
-        )
+        """返回当前数据集的实验输出目录。"""
+        del profile
+        return self.output_root / self.dataset_spec.directory.name
 
     def experiment_roots(self) -> tuple[Path, ...]:
-        """返回当前数据集所有 profile 的实验输出目录。"""
-        return tuple(self.experiment_root(profile) for profile in self.profiles)
+        """返回当前数据集的实验输出目录。"""
+        return (self.experiment_root(self.profile()),)
 
     def dataset_mapping(self) -> DatasetMapping:
         """按 label_source 返回当前数据集的通用前缀映射。"""

@@ -137,7 +137,7 @@ def summarize_level_results(
             metric_class_ids=sorted(set(labels)) if covered_enable else None,
         )
 
-    from ramanv2.inference.folder_inference import (
+    from ramanv2.inference.test_inference import (
         merge_level_test_inference_summary,
         resolve_level_inference_dir,
         run_experiment_inference,

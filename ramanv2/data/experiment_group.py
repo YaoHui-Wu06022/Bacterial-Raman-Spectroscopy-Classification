@@ -80,7 +80,6 @@ def build_experiment_group(
         Path(project_root).resolve()
         / "output"
         / selection.spec.directory.name
-        / profile.dataset_name
     )
     experiments: dict[str, dict[str, object]] = {}
     targets: list[tuple[str, Path, bool]] = []

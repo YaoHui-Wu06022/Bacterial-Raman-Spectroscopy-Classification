@@ -1,4 +1,4 @@
-"""独立文件夹推理的完整编排入口。"""
+"""test 文件夹独立推理的完整编排入口。"""
 
 from __future__ import annotations
 
@@ -32,13 +32,13 @@ from ramanv2.data.hierarchy_spec import HierarchySpec, resolve_hierarchy_from_me
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.data.profiles import resolve_selection
 from ramanv2.evaluation.summary_text import build_result_summary
-from ramanv2.inference.folder_report import (
+from ramanv2.inference.test_report import (
     plot_folder_spectra,
     write_file_report,
     write_summary_json,
     write_summary_report,
 )
-from ramanv2.inference.input_cache import CachedFolder, load_test_cache
+from ramanv2.inference.test_cache import CachedFolder, load_test_cache
 from ramanv2.modeling.predictor import Predictor, load_predictor
 from ramanv2.modeling.run_manifest import has_model_path, resolve_entry_path
 from ramanv2.spectra.axis import build_wn_ref

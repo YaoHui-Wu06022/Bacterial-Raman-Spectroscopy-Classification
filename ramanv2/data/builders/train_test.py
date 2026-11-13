@@ -213,11 +213,13 @@ def build_test(
     input_config: InputConfig = InputConfig(),
     reference_wavenumbers: np.ndarray | None = None,
     test_root: Path | str | None = None,
+    *,
+    hierarchy: HierarchySpec,
 ):
     """从 profile 专属的 ``<base_dir>/init_test`` 构建独立 test。
 
-    profile 测试集由全局 ``dataset/init_test`` 按前缀筛选后生成；需要改用其他
-    来源时才传 ``test_root``。输出写入 ``<base_dir>/<profile.root_test>``。
+    输出布局为 ``test/<最后一个层级的类别>/<来源文件夹>_<原文件名>``；
+    例如 PB 的 ``test/AB/AB20231221_01_cell...arc_data``。
     """
     config = resolve_build_config(config)
     base_dir = Path(base_dir)
@@ -233,6 +235,7 @@ def build_test(
     temp_output.mkdir(parents=True)
     groups_built = 0
     spectra_built = 0
+    target_level = hierarchy.level_names[-1]
     try:
         for relative_dir, leaf_name, raw_samples in iter_init_groups(input_path):
             cleaned = _physical_clean_group(
@@ -244,9 +247,14 @@ def build_test(
             )
             if not cleaned:
                 continue
-            _write_group(temp_output, relative_dir, cleaned)
+            class_name = hierarchy.resolve_values(leaf_name)[target_level]
+            renamed = [
+                (_ensure_name_prefix(leaf_name, filename), wavenumbers, intensities)
+                for filename, wavenumbers, intensities in cleaned
+            ]
+            _write_group(temp_output, Path(class_name), renamed)
             groups_built += 1
-            spectra_built += len(cleaned)
+            spectra_built += len(renamed)
         if groups_built == 0:
             raise RuntimeError("测试集构建未生成任何分组，拒绝发布空产物")
         publish_directory(temp_output, output_path)

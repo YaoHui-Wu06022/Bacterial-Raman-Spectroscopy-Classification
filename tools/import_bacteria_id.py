@@ -26,36 +26,36 @@ DATASET_ROOT = PROJECT_ROOT / "dataset"
 DEFAULT_SOURCE = DATASET_ROOT / "_sources" / "bacteria_id"
 
 STRAIN_NAMES = {
-    0: "CANDALB",
-    1: "CANDGLAB",
-    2: "KLEBAERO",
-    3: "ECOLIONE",
-    4: "ECOLITWO",
-    5: "ENTFAECM",
-    6: "EFAECALONE",
-    7: "EFAECALTWO",
-    8: "ENBCLOAC",
-    9: "KLEBPNEONE",
-    10: "KLEBPNETWO",
-    11: "PROMIRAB",
-    12: "PSAERONE",
-    13: "PSAERTWO",
-    14: "MSSAONE",
-    15: "MSSATHREE",
-    16: "MRSAISO",
-    17: "MRSATWO",
-    18: "MSSATWO",
-    19: "SALENTER",
-    20: "STAEPID",
-    21: "STALUGD",
-    22: "SERMARCE",
-    23: "STRPNEUTWO",
-    24: "STRPNEUONE",
-    25: "STRSANG",
-    26: "STREPA",
-    27: "STREPB",
-    28: "STREPC",
-    29: "STREPG",
+    0: "C. albicans",
+    1: "C. glabrata",
+    2: "K. aerogenes",
+    3: "E. coli 1",
+    4: "E. coli 2",
+    5: "E. faecium",
+    6: "E. faecalis 1",
+    7: "E. faecalis 2",
+    8: "E. cloacae",
+    9: "K. pneumoniae 1",
+    10: "K. pneumoniae 2",
+    11: "P. mirabilis",
+    12: "P. aeruginosa 1",
+    13: "P. aeruginosa 2",
+    14: "MSSA 1",
+    15: "MSSA 3",
+    16: "MRSA 1",
+    17: "MRSA 2",
+    18: "MSSA 2",
+    19: "S. enterica",
+    20: "S. epidermidis",
+    21: "S. lugdunensis",
+    22: "S. marcescens",
+    23: "S. pneumoniae 2",
+    24: "S. pneumoniae 1",
+    25: "S. sanguinis",
+    26: "Group A Strep",
+    27: "Group B Strep",
+    28: "Group C Strep",
+    29: "Group G Strep",
 }
 
 NPY_NAMES = {
@@ -111,11 +111,6 @@ def batch_name(class_name: str, source: str) -> str:
     return f"{class_name}_{BATCH_SUFFIX[source]}"
 
 
-def test_folder_name(class_name: str) -> str:
-    """init_test/test 里的文件夹名；同样以类别开头。"""
-    return f"{class_name}_01"
-
-
 def _iter_labeled_rows(source_dir: Path, source: str):
     """按原始行序产出 (类别名, 类内序号, 强度行)。"""
     x, y = load_pair(source_dir, source)
@@ -131,7 +126,7 @@ def _iter_labeled_rows(source_dir: Path, source: str):
 
 
 def write_init(source_dir: Path, source: str, init_root: Path, wavenumbers: np.ndarray) -> dict[str, int]:
-    """把来源按 ``init/<类别>/<批次>/<文件>`` 写出，返回每类数量。"""
+    """把来源按 ``init/<类别>/<类别>_<来源>/<文件>`` 写出。"""
     counts: dict[str, int] = {}
     axis_col = axis_column(wavenumbers)
     for name, offset, intensity in _iter_labeled_rows(source_dir, source):
@@ -145,17 +140,16 @@ def write_init(source_dir: Path, source: str, init_root: Path, wavenumbers: np.n
 
 
 def write_test(source_dir: Path, source: str, test_root: Path, wavenumbers: np.ndarray) -> dict[str, int]:
-    """把独立测试集写成 ``init_test/<类别><批次>/<文件>``，文件夹名以类别开头。"""
+    """把独立测试集写成 ``init_test/<显示名>/<文件>``。"""
     counts: dict[str, int] = {}
     axis_col = axis_column(wavenumbers)
     for name, offset, intensity in _iter_labeled_rows(source_dir, source):
-        folder = test_folder_name(name)
         write_spectrum(
-            test_root / folder / f"s{offset:05d}.arc_data",
+            test_root / name / f"s{offset:05d}.arc_data",
             axis_col,
             intensity,
         )
-        counts[folder] = counts.get(folder, 0) + 1
+        counts[name] = counts.get(name, 0) + 1
     return counts
 
 
@@ -165,7 +159,6 @@ def write_prebuilt(
     stage_root: Path,
     native_axis: np.ndarray,
     target_axis: np.ndarray,
-    test_enable: bool,
 ) -> dict[str, int]:
     """直接写出模型网格上的 train/test，跳过 airPLS 二次基线。
 
@@ -174,14 +167,13 @@ def write_prebuilt(
     counts: dict[str, int] = {}
     axis_col = axis_column(target_axis)
     for name, offset, intensity in _iter_labeled_rows(source_dir, source):
-        folder = test_folder_name(name) if test_enable else name
         values = np.interp(target_axis, native_axis, intensity)
         write_spectrum(
-            stage_root / folder / f"{source}_s{offset:05d}.arc_data",
+            stage_root / name / f"{source}_s{offset:05d}.arc_data",
             axis_col,
             values,
         )
-        counts[folder] = counts.get(folder, 0) + 1
+        counts[name] = counts.get(name, 0) + 1
     return counts
 
 
@@ -275,7 +267,6 @@ def import_experiment(
                 temp_dir / "train",
                 ascending_axis,
                 target_axis,
-                test_enable=False,
             )
         write_prebuilt(
             source_dir,
@@ -283,7 +274,6 @@ def import_experiment(
             temp_dir / "test",
             ascending_axis,
             target_axis,
-            test_enable=True,
         )
         prebuilt_note = f"  prebuilt={int(points)}pt[{cut_min},{cut_max}]"
 
@@ -308,9 +298,7 @@ def verify_experiment(name: str, experiment: dict[str, object], source_dir: Path
     axis = np.asarray(np.load(source_dir / "wavenumbers.npy")[::-1], dtype=np.float64)
     for source in experiment["init_sources"]:
         x, y = load_pair(source_dir, source)
-        names = STRAIN_NAMES
-        label = int(y[0])
-        class_name = names[label]
+        class_name = STRAIN_NAMES[int(y[0])]
         first_file = (
             target_dir
             / "init"

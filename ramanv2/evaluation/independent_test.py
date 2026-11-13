@@ -186,7 +186,7 @@ def _maybe_generate_level_inference(
     device: Any,
 ) -> None:
     """test_result 生成后补齐已完备层级的级联推理；未补齐时由 helper 跳过。"""
-    from ramanv2.inference.folder_inference import run_experiment_inference
+    from ramanv2.inference.test_inference import run_experiment_inference
 
     random.seed(context.config.execution.seed)
     levels = tuple((context.meta or {}).get("head_names") or (level_name,))

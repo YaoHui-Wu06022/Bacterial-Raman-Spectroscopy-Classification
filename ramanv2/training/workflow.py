@@ -190,7 +190,6 @@ def _resolve_experiment_dir(request: TrainRequest, selection: DatasetSelection) 
         PROJECT_ROOT
         / "output"
         / selection.spec.directory.name
-        / selection.profile.dataset_name
         / timestamp
     )
 

@@ -205,7 +205,13 @@ def load_predictor(
     )
     input_spec = build_input_spec(snapshot.config.input)
     if run_dir is None:
-        level_order = head_names[: head_names.index(level_name) + 1]
+        global_entry = (meta.get("level_models") or {}).get(level_name)
+        # 目标层有全局模型时可直接预测，不需要先走上级级联。
+        level_order = (
+            (level_name,)
+            if has_model_path(global_entry)
+            else head_names[: head_names.index(level_name) + 1]
+        )
     else:
         level_order = (level_name,)
     return Predictor(

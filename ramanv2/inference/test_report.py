@@ -1,4 +1,4 @@
-"""独立推理的文本、图像和运行清单产物。"""
+"""test 文件夹推理的文本、图像和运行清单产物。"""
 
 from __future__ import annotations
 

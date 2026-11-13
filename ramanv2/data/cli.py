@@ -100,6 +100,7 @@ def run_command(args: argparse.Namespace) -> int:
                 profile,
                 dataset_dir,
                 input_config=InputConfig(bad_bands=spec.bad_bands),
+                hierarchy=selection.hierarchy,
             )
         return 0
     if args.command == "count":

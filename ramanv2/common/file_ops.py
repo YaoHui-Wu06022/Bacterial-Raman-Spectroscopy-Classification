@@ -80,12 +80,19 @@ def rename_directory(source_path: Path | str, target_path: Path | str) -> None:
 
 
 def publish_file(temp_path: Path | str, target_path: Path | str) -> Path:
-    """原子替换一个文件，并在成功后清理临时路径。"""
+    """原子替换一个文件；目标被其他会话短暂占用时退避重试。"""
     temporary = Path(temp_path).resolve()
     target = Path(target_path).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(temporary, target)
-    return target
+    for attempt, delay in enumerate((0.0, 0.05, 0.2, 0.5, 1.0)):
+        if delay:
+            time.sleep(delay)
+        try:
+            os.replace(temporary, target)
+            return target
+        except PermissionError:
+            if attempt == 4:
+                raise
 
 
 def write_text_atomic(target_path: Path | str, text: str) -> Path:
