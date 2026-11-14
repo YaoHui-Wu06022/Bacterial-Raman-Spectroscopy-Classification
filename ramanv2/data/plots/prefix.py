@@ -22,7 +22,15 @@ from ramanv2.common.naming import (
     parse_folder_prefix,
 )
 from ramanv2.common.arc_data import is_arc_data_name, list_arc_data_paths, read_raw_arc_data
-from ramanv2.common.plotting import add_bad_band_spans, configure_matplotlib_fonts
+from ramanv2.common.plotting import (
+    CATEGORICAL_PALETTE,
+    FIGURE_DPI_PREFIX,
+    FIGURE_SIZE_PREFIX,
+    add_bad_band_spans,
+    configure_matplotlib_fonts,
+    plot_with_bad_band_breaks,
+    save_figure,
+)
 from ramanv2.core.config import InputConfig
 from ramanv2.data.config import DEFAULT_BUILD_CONFIG, DataBuildConfig
 from ramanv2.data.hierarchy_spec import HierarchySpec
@@ -36,40 +44,6 @@ from ramanv2.spectra.preprocess import preprocess_single_spectrum
 PLOT_CACHE_DIR_NAME = ".prefix_plot_cache"
 PLOT_RENDER_VERSION = "3"
 TARGET_CM = 1003.0
-PREFIX_PLOT_COLORS = (
-    "#d60000",
-    "#8c3bff",
-    "#018700",
-    "#00acc6",
-    "#e6a500",
-    "#ff7ed1",
-    "#6b004f",
-    "#573b00",
-    "#005659",
-    "#15e18c",
-    "#0000dd",
-    "#a17569",
-    "#bcb6ff",
-    "#bf03b8",
-    "#645472",
-    "#790000",
-    "#0774d8",
-    "#729a7c",
-    "#ff7752",
-    "#004b00",
-    "#8e7b01",
-    "#f2007b",
-    "#8eba00",
-    "#a57bb8",
-    "#5901a3",
-    "#e2afaf",
-    "#a03a52",
-    "#a1c8c8",
-    "#9e4b00",
-    "#546744",
-    "#bac389",
-    "#5e7b87",
-)
 PLOT_STATE_FIELDS = ("genus", "folder", "prefix", "file_count", "file_signature", "render_version")
 PLOT_EXCLUDED_NAMES = SPECIAL_FOLDER_NAMES
 
@@ -371,21 +345,6 @@ def _scan_folder_spectra(folder: Path) -> tuple[int, str]:
     return len(entries), digest.hexdigest()
 
 
-def plot_curve_outside_bad_bands(
-    subplot,
-    axis: np.ndarray,
-    values: np.ndarray,
-    bad_bands: tuple[tuple[float, float], ...],
-    **kwargs,
-) -> None:
-    """绘制坏区两侧曲线，避免跨越无效区连线。"""
-    plotted = np.asarray(values, dtype=np.float32).copy()
-    valid_mask = build_valid_mask(axis, bad_bands)
-    if valid_mask is not None:
-        plotted[~valid_mask] = np.nan
-    subplot.plot(axis, plotted, **kwargs)
-
-
 def plot_prefix_group(
     curves: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]],
     axis: np.ndarray,
@@ -395,7 +354,7 @@ def plot_prefix_group(
     norm_method: str,
 ) -> None:
     """绘制同属同前缀的 raw、归一化与 minmax 中位谱总览。"""
-    figure, axes = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
+    figure, axes = plt.subplots(3, 1, figsize=FIGURE_SIZE_PREFIX, sharex=True)
     norm_label = str(norm_method).upper()
     labels = ("Raw intensity", f"{norm_label} intensity", "minmax intensity")
     subtitles = (
@@ -411,7 +370,7 @@ def plot_prefix_group(
         for index, (name, items) in enumerate(curves.items()):
             values = items[curve_index] + index * offset
             options = {
-                "color": PREFIX_PLOT_COLORS[index % len(PREFIX_PLOT_COLORS)],
+                "color": CATEGORICAL_PALETTE[index % len(CATEGORICAL_PALETTE)],
                 "lw": 1.3,
                 "label": name,
             }
@@ -419,8 +378,8 @@ def plot_prefix_group(
                 subplot.plot(axis, values, **options)
             else:
                 subplot.axhline(index * offset, color="0.88", lw=0.7, zorder=0)
-                plot_curve_outside_bad_bands(subplot, axis, values, bad_bands, **options)
-        add_bad_band_spans(subplot, bad_bands, alpha=0.35)
+                plot_with_bad_band_breaks(subplot, axis, values, bad_bands, **options)
+        add_bad_band_spans(subplot, bad_bands)
         subplot.axvline(TARGET_CM, color="black", ls="--", lw=0.8, alpha=0.35)
         subplot.set_ylabel(labels[curve_index])
         subplot.set_title(subtitles[curve_index])
@@ -428,10 +387,8 @@ def plot_prefix_group(
         subplot.legend(loc="upper left", ncol=2, fontsize=8)
     figure.suptitle(title)
     axes[-1].set_xlabel("Wavenumber (cm$^{-1}$)")
-    figure.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(output_path, dpi=160)
-    plt.close(figure)
+    save_figure(figure, output_path, dpi=FIGURE_DPI_PREFIX)
 
 
 def plot_prefix_init(

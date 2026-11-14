@@ -9,7 +9,15 @@ from pathlib import Path
 import numpy as np
 
 from ramanv2.common.file_ops import create_temporary_path, publish_directory
-from ramanv2.common.plotting import add_bad_band_spans, configure_matplotlib_fonts
+from ramanv2.common.plotting import (
+    FIGURE_DPI_LEAF,
+    FIGURE_DPI_SUMMARY,
+    FIGURE_SIZE_LEAF,
+    add_bad_band_spans,
+    break_bad_bands,
+    configure_matplotlib_fonts,
+    save_figure,
+)
 from ramanv2.common.arc_data import read_arc_data
 from ramanv2.core.config import InputConfig
 from ramanv2.common.paths import resolve_path
@@ -66,7 +74,10 @@ def _prepare_plot_data(
         mean_values = np.where(valid_mask, mean_values, np.nan)
         q10_values = np.where(valid_mask, q10_values, np.nan)
         q90_values = np.where(valid_mask, q90_values, np.nan)
-    return bad_bands, wavenumbers, mean_values, q10_values, q90_values
+    axis, mean_values = break_bad_bands(wavenumbers, mean_values, bad_bands)
+    _, q10_values = break_bad_bands(wavenumbers, q10_values, bad_bands)
+    _, q90_values = break_bad_bands(wavenumbers, q90_values, bad_bands)
+    return bad_bands, axis, mean_values, q10_values, q90_values
 
 
 def _save_mean_plot(
@@ -83,7 +94,7 @@ def _save_mean_plot(
     bad_bands, axis, mean_values, q10_values, q90_values = _prepare_plot_data(
         wavenumbers, spectra, config
     )
-    figure, plot_axis = plt.subplots(figsize=(10, 5))
+    figure, plot_axis = plt.subplots(figsize=FIGURE_SIZE_LEAF)
     add_bad_band_spans(plot_axis, bad_bands, label="CCD-affected region")
     plot_axis.plot(axis, mean_values, label=f"Mean spectrum {config.norm_method}")
     plot_axis.fill_between(axis, q10_values, q90_values, alpha=0.3)
@@ -92,10 +103,8 @@ def _save_mean_plot(
     handles = [Patch(facecolor="C0", alpha=0.3, label="q10-q90 range")]
     handles.extend(plot_axis.get_legend_handles_labels()[0])
     plot_axis.legend(handles=handles)
-    figure.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(output_path, dpi=300)
-    plt.close(figure)
+    save_figure(figure, output_path, dpi=FIGURE_DPI_LEAF)
 
 
 def _safe_name(parts: tuple[str, ...]) -> str:
@@ -136,10 +145,8 @@ def _save_summary_plot(groups: dict, output_path: Path, config: TrainPlotConfig)
     plot_axis.margins(y=0.01)
     plot_axis.tick_params(axis="y", which="both", labelleft=False, left=False)
     plot_axis.set_xlabel("Wavenumber (cm$^{-1}$)")
-    figure.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(output_path, dpi=200)
-    plt.close(figure)
+    save_figure(figure, output_path, dpi=FIGURE_DPI_SUMMARY)
 
 
 def _generate_plots(train_dir: Path, figure_dir: Path, config: TrainPlotConfig) -> tuple[int, int, int]:
