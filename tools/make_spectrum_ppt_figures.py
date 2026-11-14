@@ -21,33 +21,49 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from ramanv2.common.arc_data import read_arc_data  # noqa: E402
 from ramanv2.common.plotting import (  # noqa: E402
-    FIGURE_DPI_DECK,
-    FIGURE_SIZE_DECK,
     PLOT_BACKGROUND,
-    PLOT_BASELINE_COLOR,
-    PLOT_FAINT_COLOR,
     PLOT_GRID_COLOR,
-    PLOT_LINE_COLOR,
-    PLOT_SMOOTH_COLOR,
     PLOT_SPINE_COLOR,
     PLOT_SPINE_WIDTH,
     PLOT_TICK_SIZE,
-    PLOT_ZERO_COLOR,
     apply_canvas,
     save_figure,
 )
 from ramanv2.spectra.normalize import normalize_spectrum  # noqa: E402
 from ramanv2.spectra.preprocess import fit_baseline_spectrum, preprocess_single_spectrum  # noqa: E402
+from ramanv2.data.runtime.augmentation import (  # noqa: E402
+    augment_axis_warp,
+    augment_piecewise_gain,
+    augment_strong_baseline,
+)
 
 DEFAULT_DATASET_DIR = REPO_ROOT / "dataset" / "病原菌"
 DEFAULT_SAMPLE = "Klebsiella/KP20240511_01/cell8_Area01_000.arc_data"
 DEFAULT_OUT_DIR = REPO_ROOT / "output" / "ppt流程图"
+LEGACY_FIGURE_NAMES = ("05_normalized.png", "06_model_input.png")
+
+# 本套 PPT 光谱图配色：主线跟模板蓝，基线与增强线用非主色对比。
+FIGURE_SIZE_DECK = (12.0, 8.0)
+FIGURE_DPI_DECK = 120
+PLOT_LINE_COLOR = "#1C60CD"
+PLOT_BASELINE_COLOR = "#E08214"
+PLOT_INPUT_RAW_COLOR = "#E08214"
+PLOT_INPUT_SMOOTH_COLOR = "#4E9A51"
+PLOT_AUG_WARP_COLOR = "#E08214"
+PLOT_AUG_BASELINE_COLOR = "#4E9A51"
+PLOT_AUG_GAIN_COLOR = "#B84A62"
+PLOT_ZERO_COLOR = "#91979E"
+PLOT_FAINT_COLOR = "#A8B0BA"
 
 CUT_MIN = 400.0
 CUT_MAX = 1800.0
 TARGET_POINTS = 1024
 WIN_SMOOTH = 11
 CHANNEL_OFFSET = 4.0
+# 示意图为看清差异放大了增强幅度；训练仍使用模块默认参数。
+SCHEMATIC_GAIN_STD = 0.30
+SCHEMATIC_WARP_ALPHA = 0.05
+SCHEMATIC_WARP_BETA = 3.0
 
 BASELINE_OPTIONS = {
     "baseline_lam": 1e5,
@@ -159,12 +175,47 @@ def build_stage_figures(dataset_dir: Path, sample_id: str, out_dir: Path) -> lis
     _save(fig, path)
     written.append(path)
 
+    span = float(np.percentile(interpolated, 98) - np.percentile(interpolated, 2))
+    offset_step = 1.15 * span
+    np.random.seed(11)
+    segments = []
+    left = 0
+    while left < interpolated.size:
+        right = min(interpolated.size, left + int(np.random.randint(90, 161)))
+        segments.append((left, right))
+        left = right
+    augmented_warp = augment_axis_warp(
+        interpolated,
+        alpha=SCHEMATIC_WARP_ALPHA,
+        beta=SCHEMATIC_WARP_BETA,
+    )
+    np.random.seed(29)
+    augmented_baseline = augment_strong_baseline(interpolated)
+    np.random.seed(5)
+    augmented_gain = augment_piecewise_gain(interpolated, segments, SCHEMATIC_GAIN_STD)
+
+    fig, ax = _new_figure()
+    tiers = (
+        (augmented_warp, PLOT_AUG_WARP_COLOR),
+        (augmented_baseline, PLOT_AUG_BASELINE_COLOR),
+        (augmented_gain, PLOT_AUG_GAIN_COLOR),
+    )
+    for tier_index, (values, color) in enumerate(tiers):
+        offset = tier_index * offset_step
+        ax.plot(axis, interpolated + offset, color=PLOT_FAINT_COLOR, linewidth=1.5)
+        ax.plot(axis, values + offset, color=color, linewidth=2)
+        ax.fill_between(axis, interpolated + offset, values + offset, color=color, alpha=0.18)
+    ax.set_xlim(CUT_MIN, CUT_MAX)
+    path = out_dir / "05_augmentation.png"
+    _save(fig, path)
+    written.append(path)
+
     normalized = normalize_spectrum(interpolated, "snv")
     fig, ax = _new_figure()
     ax.plot(axis, normalized, color=PLOT_LINE_COLOR, linewidth=2)
     ax.axhline(0.0, color=PLOT_ZERO_COLOR, linewidth=1.5, linestyle="--")
     ax.set_xlim(CUT_MIN, CUT_MAX)
-    path = out_dir / "05_normalized.png"
+    path = out_dir / "06_normalized.png"
     _save(fig, path)
     written.append(path)
 
@@ -172,10 +223,10 @@ def build_stage_figures(dataset_dir: Path, sample_id: str, out_dir: Path) -> lis
         savgol_filter(interpolated, WIN_SMOOTH, 3, mode="interp"), "snv"
     )
     fig, ax = _new_figure()
-    ax.plot(axis, normalized, color=PLOT_LINE_COLOR, linewidth=2)
-    ax.plot(axis, smooth_snv + CHANNEL_OFFSET, color=PLOT_SMOOTH_COLOR, linewidth=2)
+    ax.plot(axis, normalized, color=PLOT_INPUT_RAW_COLOR, linewidth=2)
+    ax.plot(axis, smooth_snv + CHANNEL_OFFSET, color=PLOT_INPUT_SMOOTH_COLOR, linewidth=2)
     ax.set_xlim(CUT_MIN, CUT_MAX)
-    path = out_dir / "06_model_input.png"
+    path = out_dir / "07_model_input.png"
     _save(fig, path)
     written.append(path)
 
@@ -190,6 +241,10 @@ def publish_figures(out_dir: Path, sample_id: str) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         for path in written:
             shutil.copy2(path, out_dir / path.name)
+        for name in LEGACY_FIGURE_NAMES:
+            stale = out_dir / name
+            if stale.is_file():
+                stale.unlink()
         print("published", len(written), "figures to", out_dir)
     finally:
         shutil.rmtree(staging, ignore_errors=True)

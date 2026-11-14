@@ -135,7 +135,7 @@ def _save_summary_plot(groups: dict, output_path: Path, config: TrainPlotConfig)
     finite_values = np.concatenate([values[np.isfinite(values)] for _, _, values, _ in rows])
     value_span = float(np.percentile(finite_values, 95) - np.percentile(finite_values, 5))
     offset_step = max(value_span * 1.05, 1e-6)
-    figure, plot_axis = plt.subplots(figsize=(8, max(4.0, 0.62 * len(rows) + 1.4)))
+    figure, plot_axis = plt.subplots(figsize=(12, max(4.0, 0.62 * len(rows) + 1.4)))
     add_bad_band_spans(plot_axis, rows[0][3])
     for index, (label, axis, values, _bad_bands) in enumerate(rows):
         offset = (len(rows) - index - 1) * offset_step

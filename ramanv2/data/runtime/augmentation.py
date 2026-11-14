@@ -157,14 +157,18 @@ def augment_strong_baseline(values: np.ndarray) -> np.ndarray:
     return values + baseline
 
 
-def augment_axis_warp(values: np.ndarray) -> np.ndarray:
-    """轻微扭曲采样位置，模拟坐标标定偏差。"""
+def augment_axis_warp(
+    values: np.ndarray,
+    alpha: float = AXIS_WARP_ALPHA,
+    beta: float = AXIS_WARP_BETA,
+) -> np.ndarray:
+    """轻微扭曲采样位置，模拟坐标标定偏差；示意图可传入更大的 alpha/beta。"""
     values = np.asarray(values, dtype=np.float32)
     length = len(values)
     positions = np.arange(length, dtype=np.float32)
     centered = positions - (length - 1) / 2.0
-    linear = np.random.uniform(-AXIS_WARP_ALPHA, AXIS_WARP_ALPHA) * centered
-    nonlinear = np.random.uniform(-AXIS_WARP_BETA, AXIS_WARP_BETA) * np.sin(
+    linear = np.random.uniform(-alpha, alpha) * centered
+    nonlinear = np.random.uniform(-beta, beta) * np.sin(
         2 * np.pi * positions / length + np.random.uniform(0, 2 * np.pi)
     )
     warped = np.clip(positions + linear + nonlinear, 0, length - 1)
