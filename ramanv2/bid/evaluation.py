@@ -35,6 +35,7 @@ def evaluate_bid_test_set(
     sample_limit: int | None = None,
     train_dir: Path | str | None = None,
     style: BidConfusionStyle = BID_CONFUSION_STYLE,
+    level_inference_enable: bool = False,
 ) -> dict[str, Any]:
     """评估 BID 独立测试集并重绘混淆矩阵。"""
     report = evaluate_test_set(
@@ -43,6 +44,7 @@ def evaluate_bid_test_set(
         test_dir,
         sample_limit,
         train_dir=train_dir,
+        level_inference_enable=level_inference_enable,
     )
     write_bid_confusion_matrix(report["result_dir"], style)
     return report

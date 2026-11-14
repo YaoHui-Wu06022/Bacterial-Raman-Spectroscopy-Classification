@@ -12,7 +12,7 @@ class DataBuildConfig:
     baseline_lam: float = 1e5
     baseline_asls_p: float = 0.01
     baseline_max_iter: int = 15
-    baseline_fit_min: float = 400.0
+    baseline_fit_min: float = 200.0
     baseline_fit_max: float = 2000.0
     cosmic_ray_profile_ids: tuple[str, ...] = ("original",)
     cosmic_ray_window_points: int = 7

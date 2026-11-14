@@ -161,6 +161,7 @@ def _write_matrix_figure(
         for col in range(count):
             facecolor = _cell_facecolor(
                 matrix[row, col],
+                float(ratios[row, col]),
                 block_ids[row],
                 block_ids[col],
                 row == col,
@@ -182,7 +183,7 @@ def _write_matrix_figure(
                 col,
                 int(matrix[row, col]),
                 float(ratios[row, col]),
-                row == col and matrix[row, col] > 0,
+                facecolor,
                 style,
             )
 
@@ -301,14 +302,15 @@ def _block_layout(
 
 def _cell_facecolor(
     value: int,
+    ratio: float,
     row_block: int,
     col_block: int,
     is_diagonal: bool,
     style: BidConfusionStyle,
 ) -> str:
-    """论文高亮块使用浅色底，对角线非零格使用深色底。"""
+    """论文高亮块使用浅色底，对角线按 recall 做深浅渐变。"""
     if is_diagonal and value > 0:
-        return style.diagonal_fill
+        return _blend_with_white(style.diagonal_fill, 0.35 + 0.65 * min(max(ratio, 0.0), 1.0))
     if row_block >= 0 and row_block == col_block:
         return style.blocks[row_block].fill
     return style.cell_background
@@ -320,13 +322,13 @@ def _write_cell_text(
     col: int,
     count: int,
     ratio: float,
-    dark_enable: bool,
+    facecolor: str,
     style: BidConfusionStyle,
 ) -> None:
     """在格内写入计数与比例；零值默认留空。"""
     if count == 0 and not style.show_zero_enable:
         return
-    color = "white" if dark_enable else "#111111"
+    color = _text_color(facecolor)
     axis.text(
         col + 0.5,
         row + 0.40,
@@ -432,6 +434,13 @@ def _text_color(color: str) -> str:
     red, green, blue = _hex_to_rgb(color)
     luminance = 0.299 * red + 0.587 * green + 0.114 * blue
     return "white" if luminance < 140 else "black"
+
+
+def _blend_with_white(color: str, ratio: float) -> str:
+    """按比例把颜色混入白色，ratio 为保留颜色的比例。"""
+    red, green, blue = _hex_to_rgb(color)
+    values = [round(channel * ratio + 255 * (1 - ratio)) for channel in (red, green, blue)]
+    return "#{:02X}{:02X}{:02X}".format(*values)
 
 
 def _hex_to_rgb(color: str) -> tuple[int, int, int]:

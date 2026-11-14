@@ -182,6 +182,19 @@ class Predictor:
             for index in indices
         ]
 
+    def predict_batch_class_ids(self, values: torch.Tensor) -> list[int]:
+        """单 run 路径下对一批 ``[B, C, L]`` 输入返回逐行 top-1 全局类别 id。"""
+        if self.run_dir is None:
+            raise ValueError("批量预测仅支持指定 run_dir 的单模型路径")
+        entry, parent_id = _find_run_entry(self.meta, self.experiment_dir, self.run_dir)
+        model = self.load_model(self.predict_level, entry, parent_id)
+        with torch.no_grad():
+            probabilities = torch.softmax(model(values.to(self.device)), dim=1)
+        class_ids, _names = _resolve_entry_classes(
+            self.meta, self.predict_level, parent_id, entry
+        )
+        return [int(class_ids[index]) for index in probabilities.argmax(dim=1).tolist()]
+
 def load_predictor(
     source_dir: Path | str,
     device: torch.device | str,

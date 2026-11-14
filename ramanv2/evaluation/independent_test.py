@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import torch
 
 from ramanv2.common.device import resolve_device
 from ramanv2.common.file_ops import read_json
@@ -33,6 +34,7 @@ from ramanv2.modeling.predictor import Predictor, load_predictor
 
 
 TEST_SAMPLE_CSV_NAME = "test_eval_results.csv"
+_TEST_BATCH_SIZE = 256
 
 
 def resolve_preprocessed_test_dir(
@@ -51,11 +53,13 @@ def evaluate_test_set(
     test_dir: Path | str | None = None,
     sample_limit: int | None = INFERENCE_SAMPLES_PER_FOLDER,
     train_dir: Path | str | None = None,
+    level_inference_enable: bool = False,
 ) -> dict[str, Any]:
     """评估一个模型槽位在其类别范围内的独立测试表现。
 
     ``sample_limit`` 控制每个测试文件夹抽查的光谱数；``None`` 表示使用全部光谱。
     ``train_dir`` 用于非注册表数据集显式指定训练根。
+    ``level_inference_enable`` 为 True 时才额外生成级联推理产物，默认关闭。
     """
     context = load_evaluation_context(source_dir, train_dir)
     run_entry = resolve_run_entry(context)
@@ -116,7 +120,8 @@ def evaluate_test_set(
     metrics = read_json(result_dir / METRICS_FILE_NAME)
     summary = metrics["summary"]
     _write_summary_text(result_dir, level_name, metrics)
-    _maybe_generate_level_inference(context, level_name, test_path, target_device)
+    if level_inference_enable:
+        _maybe_generate_level_inference(context, level_name, test_path, target_device)
     return {
         "run_dir": str(run_entry.run_dir),
         "level_name": level_name,
@@ -247,13 +252,38 @@ def _predict_indices(
 
     测试集已由 ``build_test`` 预处理到统一网格，这里直接沿用训练侧的
     ``InputPreprocessor``，不再重复基线、裁剪或插值。
+    GPU 下按批 forward，避免逐条 batch=1 的 kernel 启动开销。
     """
+    if predictor.device.type == "cuda":
+        return _predict_indices_batched(predictor, preprocessor, sample_paths, indices)
     predictions: list[int] = []
     for sample_index in indices:
         inputs = preprocessor.preprocess_intensity(
             load_arc_intensity(sample_paths[int(sample_index)])
         )
         predictions.append(predictor.predict_tensor(inputs, top_k=1)[0].class_id)
+    return predictions
+
+
+def _predict_indices_batched(
+    predictor: Predictor,
+    preprocessor: InputPreprocessor,
+    sample_paths: list[Path],
+    indices: np.ndarray,
+) -> list[int]:
+    """GPU 批量推理：逐批预处理并堆叠成 ``[B, C, L]`` 一次 forward。"""
+    predictions: list[int] = []
+    for start in range(0, len(indices), _TEST_BATCH_SIZE):
+        chunk = indices[start : start + _TEST_BATCH_SIZE]
+        batch = torch.cat(
+            [
+                preprocessor.preprocess_intensity(
+                    load_arc_intensity(sample_paths[int(sample_index)])
+                )
+                for sample_index in chunk
+            ]
+        )
+        predictions.extend(predictor.predict_batch_class_ids(batch))
     return predictions
 
 

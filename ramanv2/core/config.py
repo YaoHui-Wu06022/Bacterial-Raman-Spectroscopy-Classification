@@ -27,9 +27,9 @@ class InputConfig:
     """训练与推理共用的光谱输入规格。"""
 
     # 统一插值波数轴与 CCD 坏段；训练、推理和审核均以此为准。
-    cut_min: float = 600.0
+    cut_min: float = 400.0
     cut_max: float = 1800.0
-    target_points: int = 896
+    target_points: int = 1024
     bad_bands: tuple[tuple[float, float], ...] = DEFAULT_BAD_BANDS
     # 模型输入通道：原谱始终保留，平滑谱和一阶导由开关额外叠加。
     norm_method: str = "snv"
@@ -119,7 +119,7 @@ class TrainingConfig:
     max_pre_augs: int = 4
     # 同标签 mixup：每个样本的触发概率与 Beta 分布参数。
     use_mixup: bool = True
-    p_mixup: float = 0.05
+    p_mixup: float = 0.15
     mixup_alpha: float = 0.2
 
 

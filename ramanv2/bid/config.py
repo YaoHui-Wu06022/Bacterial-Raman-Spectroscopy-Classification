@@ -26,10 +26,19 @@ BID_STAGE_TRAINING_VALUES = {
     },
     "finetune": {
         "train_split": 0.9,
-        "patience": 40,
+        "patience": 20,
         "learning_rate": 1e-4,
-        "epochs": 30,
-        "use_supcon_loss": True,
+        "epochs": 50,
+        # BID 为已预处理的干净数据，微调阶段关闭随机增强与同标签 mixup。
+        "p_piecewise_gain": 0.0,
+        "p_noise": 0.0,
+        "p_axis": 0.0,
+        "p_baseline_weak": 0.0,
+        "p_baseline_strong": 0.0,
+        "use_mixup": False,
+        # BID 类平衡：focal 退化为普通 CE，关闭类别难度 EMA。
+        "gamma": 0.0,
+        "use_ema": False,
     },
 }
 
