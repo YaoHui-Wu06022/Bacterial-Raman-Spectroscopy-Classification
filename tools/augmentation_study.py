@@ -1,4 +1,4 @@
-"""在单个真实谱上审阅当前训练增强的效果；图中不标注概率与指标数值。"""
+"""在单谱上审阅训练增强：四种单谱扰动出一张 2×2 图，同标签 mixup 单独一张。"""
 
 from __future__ import annotations
 
@@ -28,10 +28,8 @@ from ramanv2.data.runtime.augmentation import (  # noqa: E402
     _build_random_segments,
     augment_axis_warp,
     augment_piecewise_gain,
-    augment_raw_spectrum,
     augment_strong_baseline,
     augment_weak_baseline,
-    build_augmentation_spec,
 )
 from ramanv2.spectra.preprocess import preprocess_single_spectrum  # noqa: E402
 
@@ -42,34 +40,28 @@ DEFAULT_OUT_ROOT = REPO_ROOT / "output" / "augmentation_study"
 CUT_MIN = 400.0
 CUT_MAX = 1800.0
 TARGET_POINTS = 1024
-DRAW_COUNT = 12
-DISPLAY_MIN = 600.0
-DISPLAY_MAX = 1800.0
 BAD_BAND = (900.0, 940.0)
+DRAW_COUNT = 12
 
-# 五排宽窄双栏版面：边距、行距和栏宽比沿用既有审图比例。
-FIGURE_SIZE = (14.63, 14.04)
-FIGURE_DPI = 100
-GRID_SPEC = {
-    "left": 54 / 1463,
-    "right": 1441 / 1463,
-    "bottom": 53 / 1404,
-    "top": 1351 / 1404,
-    "hspace": 81 / 195,
-    "wspace": 79 / 654,
-    "width_ratios": (985, 323),
-}
-ROW_COLORS = ("#2F5FD0", "#177E6B", "#793DD1", "#C15D00", "#0F1B2D")
+FIGURE_DPI = 120
+PERTURBATION_SIZE = (13.0, 8.5)
+MIXUP_SIZE = (11.0, 6.0)
 GRID_COLOR = "#EDEDED"
-DRAW_ALPHA = 0.5
-DRAW_WIDTH = 0.8
-BASE_WIDTH = 1.6
+SPINE_WIDTH = 0.8
 TICK_WIDTH = 0.8
 TICK_LENGTH = 3.5
+TICK_SIZE = 10
+DRAW_ALPHA = 0.45
+DRAW_WIDTH = 0.9
+BASE_WIDTH = 1.0
+PERTURBATION_COLORS = ("#2F5FD0", "#177E6B", "#793DD1", "#C15D00")
+MIXUP_COLORS = ("#793DD1", "#177E6B", "#C15D00", "#2F5FD0", "#B84A62")
+MIXUP_COUNT = 6
 
 
-def _load_corrected_spectrum(dataset_dir: Path, sample_id: str) -> tuple[np.ndarray, np.ndarray]:
-    wavenumbers, raw = read_arc_data(dataset_dir / "init" / sample_id)
+def _preprocess_spectrum(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """按训练口径把一条原始谱处理到 1024 点强度域，供审图叠加使用。"""
+    wavenumbers, raw = read_arc_data(path)
     axis, values, _ = preprocess_single_spectrum(
         wavenumbers,
         raw,
@@ -91,68 +83,110 @@ def _load_corrected_spectrum(dataset_dir: Path, sample_id: str) -> tuple[np.ndar
     return axis, values
 
 
-def _build_operations() -> list[tuple[str, str, object]]:
-    spec = build_augmentation_spec(TrainingConfig())
+def _load_corrected_spectrum(dataset_dir: Path, sample_id: str) -> tuple[np.ndarray, np.ndarray]:
+    return _preprocess_spectrum(dataset_dir / "init" / sample_id)
 
+
+def _load_class_partners(dataset_dir: Path, sample_id: str) -> list[np.ndarray]:
+    """读取同目录下其余同类光谱，作为同标签 mixup 的另一半。"""
+    sample_path = dataset_dir / "init" / sample_id
+    partners = []
+    for path in sorted(sample_path.parent.glob("*.arc_data")):
+        if path.name == sample_path.name:
+            continue
+        _, values = _preprocess_spectrum(path)
+        partners.append(values)
+    if not partners:
+        raise ValueError(f"同类目录没有可配对的第二条光谱：{sample_path.parent}")
+    return partners
+
+
+def _build_perturbations() -> list[tuple[str, object]]:
     def draw_gain(items: np.ndarray) -> np.ndarray:
         segments = _build_random_segments(items.size, 60, 180)
         return augment_piecewise_gain(items, segments, PIECEWISE_GAIN_STD)
 
-    operations = (
-        ("Piecewise gain", draw_gain),
-        ("Axis warp", augment_axis_warp),
-        ("Weak baseline", augment_weak_baseline),
-        ("Strong baseline", augment_strong_baseline),
-        ("Default combination", lambda items: augment_raw_spectrum(items, spec)),
+    return [
+        ("A  Piecewise gain", draw_gain),
+        ("B  Axis warp", augment_axis_warp),
+        ("C  Weak baseline", augment_weak_baseline),
+        ("D  Strong baseline", augment_strong_baseline),
+    ]
+
+
+def _prepare_panel(panel) -> None:
+    apply_canvas(
+        panel,
+        grid_color=GRID_COLOR,
+        spine_color="black",
+        spine_width=SPINE_WIDTH,
+        tick_size=TICK_SIZE,
     )
-    return [(title, color, operation) for (title, operation), color in zip(operations, ROW_COLORS)]
+    panel.tick_params(width=TICK_WIDTH, length=TICK_LENGTH)
+    add_bad_band_spans(panel, (BAD_BAND,), zorder=4)
 
 
-def build_study_figure(dataset_dir: Path, sample_id: str, out_dir: Path) -> Path:
-    """五排宽窄双栏审图：左栏原始强度叠加多次增强，右栏差值；坏区断开并盖灰带。"""
+def _plot_curve(panel, axis: np.ndarray, values: np.ndarray, color: str, **options) -> None:
+    plot_with_bad_band_breaks(panel, axis, values, (BAD_BAND,), color=color, **options)
+
+
+def build_perturbation_figure(
+    dataset_dir: Path, sample_id: str, out_dir: Path
+) -> Path:
+    """四种子谱扰动排成 2×2：每格是原始黑谱叠加多次同算子增强。"""
     axis, values = _load_corrected_spectrum(dataset_dir, sample_id)
-    operations = _build_operations()
-    figure, axes = plt.subplots(
-        len(operations),
-        2,
-        figsize=FIGURE_SIZE,
-        gridspec_kw=GRID_SPEC,
-        sharex=True,
-    )
-    for row_index, (title, color, operation) in enumerate(operations):
-        left, right = axes[row_index]
-        for panel in (left, right):
-            apply_canvas(
-                panel,
-                grid_color=GRID_COLOR,
-                spine_color="black",
-                spine_width=0.8,
-                tick_size=10,
-            )
-            panel.tick_params(width=TICK_WIDTH, length=TICK_LENGTH)
-            add_bad_band_spans(panel, (BAD_BAND,), zorder=4)
+    figure, axes = plt.subplots(2, 2, figsize=PERTURBATION_SIZE, sharex=True, sharey=True)
+    for index, (title, operation) in enumerate(_build_perturbations()):
+        panel = axes.ravel()[index]
+        _prepare_panel(panel)
         for draw_index in range(DRAW_COUNT):
-            np.random.seed(1000 * row_index + draw_index)
+            np.random.seed(1000 * index + draw_index)
             draw = operation(values.copy())
-            plot_with_bad_band_breaks(
-                left, axis, draw, (BAD_BAND,), color=color, linewidth=DRAW_WIDTH, alpha=DRAW_ALPHA
-            )
-            plot_with_bad_band_breaks(
-                right, axis, draw - values, (BAD_BAND,), color=color, linewidth=DRAW_WIDTH, alpha=DRAW_ALPHA
-            )
-        plot_with_bad_band_breaks(left, axis, values, (BAD_BAND,), color="black", linewidth=BASE_WIDTH, zorder=3)
-        left.set_title(title, loc="left", fontsize=10)
-        left.set_ylabel("intensity", fontsize=10)
-        right.axhline(0.0, color="black", linewidth=0.8)
-        right.set_ylabel("Δ", fontsize=10)
-    axes[-1, 0].set_xlabel("Raman shift (cm$^{-1}$)", fontsize=10)
-    axes[-1, 1].set_xlabel("Raman shift (cm$^{-1}$)", fontsize=10)
-    for left, right in axes:
-        left.set_xlim(DISPLAY_MIN, DISPLAY_MAX)
-        right.set_xlim(DISPLAY_MIN, DISPLAY_MAX)
-    figure.suptitle("Training augmentations on one real spectrum", fontsize=12, y=0.9868)
+            _plot_curve(panel, axis, draw, PERTURBATION_COLORS[index], linewidth=DRAW_WIDTH, alpha=DRAW_ALPHA)
+        _plot_curve(panel, axis, values, "black", linewidth=BASE_WIDTH, zorder=3)
+        panel.set_title(title, loc="left", fontsize=11)
+        panel.set_xlim(float(axis.min()), float(axis.max()))
+    for row_index in range(2):
+        axes[row_index, 0].set_ylabel("intensity", fontsize=10)
+    for panel in axes[0]:
+        panel.tick_params(labelbottom=False)
+    for panel in axes[1]:
+        panel.set_xlabel("Raman shift (cm$^{-1}$)", fontsize=10)
+    figure.tight_layout()
     out_dir.mkdir(parents=True, exist_ok=True)
-    output_path = out_dir / "augmentation_effects.png"
+    output_path = out_dir / "augmentation_perturbations.png"
+    figure.savefig(output_path, dpi=FIGURE_DPI, facecolor="white")
+    plt.close(figure)
+    return output_path
+
+
+def build_mixup_figure(dataset_dir: Path, sample_id: str, out_dir: Path) -> Path:
+    """同标签 mixup 单独一张：多条与同类谱按 Beta 权重混合的结果叠加。"""
+    axis, values = _load_corrected_spectrum(dataset_dir, sample_id)
+    partners = _load_class_partners(dataset_dir, sample_id)
+    alpha = float(TrainingConfig().mixup_alpha)
+    figure, panel = plt.subplots(figsize=MIXUP_SIZE)
+    _prepare_panel(panel)
+    for draw_index in range(MIXUP_COUNT):
+        np.random.seed(draw_index)
+        partner = partners[np.random.randint(len(partners))]
+        weight = np.random.beta(alpha, alpha)
+        mixed = weight * values + (1.0 - weight) * partner
+        _plot_curve(
+            panel,
+            axis,
+            mixed,
+            MIXUP_COLORS[draw_index % len(MIXUP_COLORS)],
+            linewidth=1.2,
+            alpha=0.75,
+        )
+    panel.set_title("Same-class mixup (batch)", loc="left", fontsize=12)
+    panel.set_xlim(float(axis.min()), float(axis.max()))
+    panel.set_xlabel("Raman shift (cm$^{-1}$)", fontsize=10)
+    panel.set_ylabel("intensity", fontsize=10)
+    figure.tight_layout()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    output_path = out_dir / "augmentation_mixup.png"
     figure.savefig(output_path, dpi=FIGURE_DPI, facecolor="white")
     plt.close(figure)
     return output_path
@@ -164,8 +198,12 @@ def main() -> None:
     parser.add_argument("--out-dir", default=None, help="输出目录；默认写入时间戳目录")
     args = parser.parse_args()
     out_dir = Path(args.out_dir) if args.out_dir else DEFAULT_OUT_ROOT / time.strftime("%Y%m%d_%H%M%S")
-    output_path = build_study_figure(DEFAULT_DATASET_DIR, args.sample_id, out_dir)
-    print("saved", output_path)
+    paths = (
+        build_perturbation_figure(DEFAULT_DATASET_DIR, args.sample_id, out_dir),
+        build_mixup_figure(DEFAULT_DATASET_DIR, args.sample_id, out_dir),
+    )
+    for path in paths:
+        print("saved", path)
 
 
 if __name__ == "__main__":

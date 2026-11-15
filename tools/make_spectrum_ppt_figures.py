@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -104,8 +105,20 @@ def _load_bad_bands(dataset_dir: Path) -> tuple[tuple[float, float], ...]:
     return tuple(tuple(float(value) for value in band) for band in spec.get("bad_bands", ()))
 
 
+def _load_date_affine(dataset_dir: Path, sample_id: str) -> tuple[float, float]:
+    """读取该采集日期已确认的波数轴仿射参数。"""
+    match = re.search(r"(20\d{6})", sample_id)
+    if match is None:
+        raise ValueError(f"样本路径里没有八位日期：{sample_id}")
+    report = dataset_dir / "shift_data" / match.group(1) / "shift" / "affine.json"
+    if not report.is_file():
+        raise FileNotFoundError(f"缺少日期仿射报告：{report}")
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    return float(payload["scale"]), float(payload["offset"])
+
+
 def build_stage_figures(dataset_dir: Path, sample_id: str, out_dir: Path) -> list[Path]:
-    """生成 01-06 七个阶段图，返回写出路径。"""
+    """生成 00-07 八个阶段图，返回写出路径。"""
     wavenumbers, raw = read_arc_data(dataset_dir / "init" / sample_id)
     bad_bands = _load_bad_bands(dataset_dir)
     fitted_w, corrected, _cleaned, baseline, _stats = fit_baseline_spectrum(
@@ -136,6 +149,35 @@ def build_stage_figures(dataset_dir: Path, sample_id: str, out_dir: Path) -> lis
     cropped_w, cropped = fitted_w[crop], corrected[crop]
 
     written: list[Path] = []
+
+    scale, offset = _load_date_affine(dataset_dir, sample_id)
+    before_axis = (wavenumbers - offset) / scale
+    calib_target = 1001.4
+    fig, ax = _new_figure()
+    ax.plot(before_axis, raw, color=PLOT_FAINT_COLOR, linewidth=1.6, label="before")
+    ax.plot(wavenumbers, raw, color=PLOT_LINE_COLOR, linewidth=2, label="after")
+    ax.set_xlim(float(before_axis.min()), float(before_axis.max()))
+    ax.legend(loc="upper right", fontsize=16, frameon=False)
+    ax.text(
+        0.02,
+        0.04,
+        f"corrected = {scale:.5f}·w + {offset:.2f}",
+        transform=ax.transAxes,
+        fontsize=15,
+        color=PLOT_ZERO_COLOR,
+    )
+    zoom = ax.inset_axes([0.06, 0.55, 0.34, 0.38])
+    zoom.plot(before_axis, raw, color=PLOT_FAINT_COLOR, linewidth=1.4)
+    zoom.plot(wavenumbers, raw, color=PLOT_LINE_COLOR, linewidth=1.8)
+    zoom.axvline(calib_target, color=PLOT_ZERO_COLOR, linewidth=1.0, linestyle="--")
+    zoom.set_xlim(calib_target - 55.0, calib_target + 55.0)
+    zoom.tick_params(labelsize=12)
+    for spine in zoom.spines.values():
+        spine.set_color(PLOT_SPINE_COLOR)
+        spine.set_linewidth(1.2)
+    path = out_dir / "00_shift_correction.png"
+    _save(fig, path)
+    written.append(path)
 
     fig, ax = _new_figure()
     ax.plot(wavenumbers, raw, color=PLOT_LINE_COLOR, linewidth=2)

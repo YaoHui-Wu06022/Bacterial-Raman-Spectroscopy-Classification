@@ -420,7 +420,6 @@ def _save_calibration_figure(
     result: BeadResult,
     scale: float | None,
     offset: float | None,
-    status: str,
     output_path: Path,
 ) -> None:
     wavenumbers, intensities = read_arc_data(result.path)
@@ -431,7 +430,7 @@ def _save_calibration_figure(
     raw_axis.set_title(f"校准前：{result.path.name}")
     if scale is not None and offset is not None:
         corrected_axis.plot(scale * wavenumbers[mask] + offset, intensities[mask], color="#4C72B0", linewidth=0.9)
-        corrected_axis.set_title(f"校准后预览（{status}）：scale={scale:.8f}，offset={offset:.4f}")
+        corrected_axis.set_title(f"校准后预览：scale={scale:.8f}，offset={offset:.4f}")
         for target in PRIMARY_PEAKS:
             corrected_axis.axvline(target, color="#C44E52", linestyle="--", linewidth=0.9)
         for target in AUXILIARY_PEAKS:
@@ -531,7 +530,7 @@ def analyze_date(date_dir: Path | str, output_root: Path | str) -> dict[str, obj
             payload = _failure_payload(date_path.name, "没有可用于日期级仿射拟合的小球谱")
             payload["bead_results"] = [_result_payload(result) for result in results]
             for result in results:
-                _save_calibration_figure(result, None, None, "needs_review", temporary / f"{result.path.stem}_calibration.png")
+                _save_calibration_figure(result, None, None, temporary / f"{result.path.stem}_calibration.png")
             _write_json(temporary / "affine.json", payload)
             published = publish_directory(temporary, output_date / SHIFT_DIR_NAME)
             return {**payload, "shift_dir": str(published)}
@@ -592,7 +591,7 @@ def analyze_date(date_dir: Path | str, output_root: Path | str) -> dict[str, obj
         plot_scale = diagnostic_scale if valid_count else None
         plot_offset = diagnostic_offset if valid_count else None
         for result in results:
-            _save_calibration_figure(result, plot_scale, plot_offset, status, temporary / f"{result.path.stem}_calibration.png")
+            _save_calibration_figure(result, plot_scale, plot_offset, temporary / f"{result.path.stem}_calibration.png")
         _write_json(temporary / "affine.json", payload)
         published = publish_directory(temporary, output_date / SHIFT_DIR_NAME)
         return {**payload, "shift_dir": str(published)}
