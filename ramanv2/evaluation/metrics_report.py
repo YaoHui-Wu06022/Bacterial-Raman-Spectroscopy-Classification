@@ -261,5 +261,5 @@ def _write_confusion_matrix(path: Path, matrix: np.ndarray, class_names: Sequenc
                 heatmap_position.height,
             ]
         )
-    figure.savefig(path, dpi=300)
+    figure.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(figure)
