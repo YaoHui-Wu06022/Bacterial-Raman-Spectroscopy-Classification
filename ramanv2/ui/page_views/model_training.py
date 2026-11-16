@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import os
+import re
+import time
 from pathlib import Path
 from typing import Any
 
+import torch
 import streamlit as st
 
 from ramanv2.core.config import build_config
@@ -26,6 +32,43 @@ from ramanv2.ui.page_state import (
 BATCH_SIZES = (8, 16, 32, 48, 64, 96, 128)
 WORKER_COUNTS = (-1, 0, 1, 2, 4, 8, 16)
 TARGET_POINTS = (256, 512, 896, 1024, 2048)
+LOG_MAX_LINES = 400
+LOG_FLUSH_SECONDS = 0.3
+
+
+class _LogStream(io.TextIOBase):
+    """把训练过程的 stdout/stderr 分行缓存，并节流刷新到页面占位符。"""
+
+    def __init__(self, placeholder) -> None:
+        self._placeholder = placeholder
+        self._lines: list[str] = []
+        self._buffer = ""
+        self._last_flush = 0.0
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, text: str) -> int:
+        self._buffer += text
+        parts = re.split(r"[\r\n]", self._buffer)
+        self._buffer = parts.pop()
+        for line in parts:
+            line = line.strip()
+            if not line:
+                continue
+            # 进度条反复覆盖同一行，只保留最新一条。
+            if line.startswith("Epoch ") and self._lines and self._lines[-1].startswith("Epoch "):
+                self._lines[-1] = line
+            else:
+                self._lines.append(line)
+        del self._lines[:-LOG_MAX_LINES]
+        if time.monotonic() - self._last_flush >= LOG_FLUSH_SECONDS:
+            self.flush()
+        return len(text)
+
+    def flush(self) -> None:
+        self._last_flush = time.monotonic()
+        self._placeholder.code("\n".join(self._lines) or "等待训练日志…", language="text")
 
 
 def render_training_page(context) -> None:
@@ -59,10 +102,22 @@ def render_training_page(context) -> None:
     if st.button("开始本地训练", type="primary", disabled=index is None, width="stretch"):
         try:
             request = _build_train_request(values, scope)
+            if request.config.execution.use_gpu and not torch.cuda.is_available():
+                raise RuntimeError(
+                    "当前 UI 使用的 Python 环境没有可用 CUDA。请用项目虚拟环境启动："
+                    " .venv\\Scripts\\python.exe -m streamlit run app.py"
+                )
+            device_name = torch.cuda.get_device_name(0) if request.config.execution.use_gpu else "CPU"
             with st.status("正在准备训练…", expanded=True) as status:
                 status.write("正在加载数据索引和训练配置。")
-                status.write("训练任务运行中，请等待当前训练任务完成。")
-                run_training(request)
+                status.write(f"训练设备：{device_name}")
+                status.write("训练任务运行中，可在下方查看实时日志。")
+                log_placeholder = st.empty()
+                stream = _LogStream(log_placeholder)
+                stream.flush()
+                with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
+                    run_training(request)
+                stream.flush()
                 status.update(label="训练完成", state="complete", expanded=False)
             invalidate_ui_cache(*INVALIDATE_TRAINING)
             st.success("本地训练完成。")
@@ -140,9 +195,19 @@ def _render_config_controls(profile_id: str, context, hierarchy) -> dict[str, An
     split_default = float(training.train_split)
     batch_default = int(training.batch_size)
     worker_default = int(training.train_loader_num_workers)
+    # Streamlit 在 Windows 下由运行器管理进程；DataLoader 继承多个 spawn
+    # worker 容易在点击按钮后重新执行页面，导致训练无法启动。GPU 训练仍
+    # 使用 pin_memory，只把数据读取退回当前进程以保证本地 UI 稳定。
+    if os.name == "nt" and worker_default < 0:
+        worker_default = 0
     persistent_default = bool(training.loader_persistent_workers)
     amp_default = bool(execution.use_amp)
 
+    use_gpu = st.checkbox("使用显卡", value=execution.use_gpu, key="training_gpu")
+    if use_gpu and torch.cuda.is_available():
+        st.caption(f"GPU：{torch.cuda.get_device_name(0)}（CUDA {torch.version.cuda}）")
+    elif use_gpu:
+        st.warning("当前 Python 环境未检测到 CUDA；点击训练时会提示启动项目虚拟环境。")
     values: dict[str, Any] = {
         "dataset_id": context.dataset_id,
         "label_schema": hierarchy.label_schema,
@@ -152,11 +217,19 @@ def _render_config_controls(profile_id: str, context, hierarchy) -> dict[str, An
         "patience": st.slider("早停等待轮数", 1, 150, patience_default, key="training_patience"),
         "train_split": st.slider("训练集比例", 0.50, 0.95, split_default, 0.05, key="training_split"),
         "batch_size": st.selectbox("批大小", BATCH_SIZES, index=BATCH_SIZES.index(batch_default), key="training_batch"),
+        "seed": st.number_input(
+            "随机种子",
+            min_value=0,
+            max_value=999_999,
+            value=int(execution.seed),
+            step=1,
+            key="training_seed",
+        ),
         "learning_rate": st.selectbox("学习率", (1e-5, 5e-5, 1e-4, 2e-4, 4e-4, 1e-3), index=4, key="training_lr"),
         "weight_decay": st.selectbox("权重衰减", (0.0, 1e-5, 1e-4, 1e-3), index=2, key="training_decay"),
         "train_loader_num_workers": st.selectbox("数据加载进程数（-1=按 CPU 自动）", WORKER_COUNTS, index=WORKER_COUNTS.index(worker_default), key="training_workers"),
         "val_loader_num_workers": st.selectbox("验证加载进程数（-1=按 CPU 自动）", WORKER_COUNTS, index=WORKER_COUNTS.index(worker_default), key="validation_workers"),
-        "use_gpu": st.checkbox("使用显卡", value=execution.use_gpu, key="training_gpu"),
+        "use_gpu": use_gpu,
         "use_amp": st.checkbox("使用混合精度", value=amp_default, key="training_amp"),
         "deterministic": st.checkbox("启用确定性训练", value=execution.deterministic, key="training_deterministic"),
         "norm_method": st.radio("输入归一化", ("SNV 标准化", "不归一化"), index=0 if input_config.norm_method == "snv" else 1, key="training_norm"),
