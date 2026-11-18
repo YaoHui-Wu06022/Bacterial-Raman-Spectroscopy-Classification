@@ -22,7 +22,7 @@ BID_INPUT_VALUES = {
 BID_STAGE_TRAINING_VALUES = {
     "ref": {
         "train_split": 0.9,
-        "patience": 40,
+        "patience": 20,
     },
     "finetune": {
         "train_split": 0.9,

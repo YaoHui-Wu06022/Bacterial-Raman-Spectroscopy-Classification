@@ -30,6 +30,7 @@ def run_training_scope(
     level_name: str,
     parent_ids: list[int | None] | tuple[int | None, ...],
     global_head_enable: bool = False,
+    initialize_model=None,
 ) -> TrainingScopeResult:
     """在固定实验目录内依次训练指定层级的所有父类槽位。"""
     target_dir = resolve_path(experiment_dir)
@@ -46,6 +47,7 @@ def run_training_scope(
                 parent_id=parent_id,
                 global_head_enable=global_head_enable,
                 experiment_dir=target_dir,
+                initialize_model=initialize_model,
             )
         )
         slot_dirs.append(slot_dir)

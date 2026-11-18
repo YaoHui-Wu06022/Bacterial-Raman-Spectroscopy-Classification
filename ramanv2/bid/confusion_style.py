@@ -39,15 +39,12 @@ class BidConfusionStyle:
 
     bands: tuple[BidClassBand, ...]
     blocks: tuple[BidHighlightBlock, ...]
-    cell_background: str = "#FFFAE1"
-    diagonal_fill: str = "#1E1A4A"
+    cell_background: str = "#FFFFFF"
     figure_size: tuple[float, float] = (13.0, 13.5)
     normalization: str = "row"
     show_zero_enable: bool = False
     count_font_size: float = 6.4
-    ratio_font_size: float = 5.2
     band_font_size: float = 8.0
-    axis_title_font_size: float = 11.0
 
 
 BID_CONFUSION_STYLE = BidConfusionStyle(
@@ -143,19 +140,19 @@ def _write_matrix_figure(
     class_names: list[str],
     style: BidConfusionStyle,
 ) -> None:
-    """绘制类别分组的计数与比例混淆矩阵。"""
+    """绘制类别分组的计数混淆矩阵。"""
     configure_matplotlib_fonts()
     ratios = _normalized_matrix(matrix, style.normalization)
     band_ids, band_starts = _band_layout(class_names, style)
     block_ids, block_starts = _block_layout(class_names, style.blocks)
     count = len(class_names)
     left, bottom, width, height = 0.21, 0.055, 0.72, 0.72
-    top_height = 0.18
+    top_height = 0.12
 
     figure = plt.figure(figsize=style.figure_size)
     axis = figure.add_axes([left, bottom, width, height])
     top_axis = figure.add_axes([left, bottom + height, width, top_height])
-    left_axis = figure.add_axes([left - 0.17, bottom, 0.16, height])
+    left_axis = figure.add_axes([left - 0.12, bottom, 0.12, height])
 
     for row in range(count):
         for col in range(count):
@@ -182,14 +179,11 @@ def _write_matrix_figure(
                 row,
                 col,
                 int(matrix[row, col]),
-                float(ratios[row, col]),
                 facecolor,
                 style,
             )
 
     for start, _stop in band_starts:
-        axis.axvline(start, color="#666666", linewidth=0.5, zorder=3)
-        axis.axhline(start, color="#666666", linewidth=0.5, zorder=3)
         top_axis.axvline(start, color="white", linewidth=0.8, zorder=3)
         left_axis.axhline(start, color="white", linewidth=0.8, zorder=3)
     for (start, stop), block in zip(block_starts, style.blocks):
@@ -205,8 +199,6 @@ def _write_matrix_figure(
                 zorder=3,
             )
         )
-    axis.axvline(count, color="#666666", linewidth=0.5, zorder=3)
-    axis.axhline(count, color="#666666", linewidth=0.5, zorder=3)
     axis.add_patch(
         Rectangle(
             (0, 0),
@@ -228,27 +220,8 @@ def _write_matrix_figure(
     for spine in axis.spines.values():
         spine.set_visible(False)
 
-    figure.text(
-        left + width / 2,
-        bottom + height + top_height + 0.008,
-        "Predicted",
-        ha="center",
-        va="bottom",
-        fontsize=style.axis_title_font_size,
-        fontweight="bold",
-    )
-    figure.text(
-        0.02,
-        bottom + height / 2,
-        "True",
-        ha="center",
-        va="center",
-        rotation=90,
-        fontsize=style.axis_title_font_size,
-        fontweight="bold",
-    )
     path.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(path, dpi=300)
+    figure.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.02)
     plt.close(figure)
 
 
@@ -308,12 +281,20 @@ def _cell_facecolor(
     is_diagonal: bool,
     style: BidConfusionStyle,
 ) -> str:
-    """论文高亮块使用浅色底，对角线按 recall 做深浅渐变。"""
+    """论文高亮块使用浅色底，对角线按 recall 走平常混淆矩阵的 Blues 由浅到深。"""
     if is_diagonal and value > 0:
-        return _blend_with_white(style.diagonal_fill, 0.35 + 0.65 * min(max(ratio, 0.0), 1.0))
+        return _blues_color(min(max(ratio, 0.0), 1.0))
     if row_block >= 0 and row_block == col_block:
         return style.blocks[row_block].fill
     return style.cell_background
+
+
+def _blues_color(ratio: float) -> str:
+    """与常规混淆矩阵一致，用 matplotlib Blues 映射 0–1 的比例。"""
+    from matplotlib import colormaps
+
+    red, green, blue, _alpha = colormaps["Blues"](ratio)
+    return "#{:02X}{:02X}{:02X}".format(round(red * 255), round(green * 255), round(blue * 255))
 
 
 def _write_cell_text(
@@ -321,31 +302,20 @@ def _write_cell_text(
     row: int,
     col: int,
     count: int,
-    ratio: float,
     facecolor: str,
     style: BidConfusionStyle,
 ) -> None:
-    """在格内写入计数与比例；零值默认留空。"""
+    """在格内写入计数；零值默认留空。"""
     if count == 0 and not style.show_zero_enable:
         return
-    color = _text_color(facecolor)
     axis.text(
         col + 0.5,
-        row + 0.40,
+        row + 0.5,
         str(count),
         ha="center",
         va="center",
         fontsize=style.count_font_size,
-        color=color,
-    )
-    axis.text(
-        col + 0.5,
-        row + 0.69,
-        f"{ratio * 100:.1f}%",
-        ha="center",
-        va="center",
-        fontsize=style.ratio_font_size,
-        color=color,
+        color=_text_color(facecolor),
     )
 
 
@@ -434,13 +404,6 @@ def _text_color(color: str) -> str:
     red, green, blue = _hex_to_rgb(color)
     luminance = 0.299 * red + 0.587 * green + 0.114 * blue
     return "white" if luminance < 140 else "black"
-
-
-def _blend_with_white(color: str, ratio: float) -> str:
-    """按比例把颜色混入白色，ratio 为保留颜色的比例。"""
-    red, green, blue = _hex_to_rgb(color)
-    values = [round(channel * ratio + 255 * (1 - ratio)) for channel in (red, green, blue)]
-    return "#{:02X}{:02X}{:02X}".format(*values)
 
 
 def _hex_to_rgb(color: str) -> tuple[int, int, int]:

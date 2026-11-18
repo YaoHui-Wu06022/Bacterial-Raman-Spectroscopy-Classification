@@ -55,9 +55,14 @@ def interpret_slot(
     device: str | None = None,
     attribution_batch_count: int | None = None,
     umap_enable: bool = True,
+    train_dir: Path | str | None = None,
 ) -> Path:
-    """分析一个模型槽位，结果写入槽位 analysis_result。"""
-    context = load_evaluation_context(source_dir)
+    """分析一个模型槽位，结果写入槽位 analysis_result。
+
+    ``train_dir`` 用于未注册数据集（如 BID）：数据索引与切分需显式指向训练根，
+    缺省时按注册表解析。
+    """
+    context = load_evaluation_context(source_dir, train_dir=train_dir)
     level = resolve_level_name(context, level_name)
     task = build_slot_task(context, level)
     return _run_slot_analysis(

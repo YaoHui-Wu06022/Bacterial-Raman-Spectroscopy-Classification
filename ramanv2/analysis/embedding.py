@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 from pathlib import Path
 import warnings
@@ -74,12 +75,16 @@ def write_train_val_umap(
             message=r"n_jobs value .* overridden to 1 by setting random_state.*",
             category=UserWarning,
         )
-        points = umap.UMAP(
-            n_neighbors=min(neighbors, max(2, len(splits) - 1)),
-            min_dist=min_dist,
-            n_jobs=1,
-            random_state=seed,
-        ).fit_transform(np.vstack(arrays))
+        umap_options = {
+            "n_neighbors": min(neighbors, max(2, len(splits) - 1)),
+            "min_dist": min_dist,
+            "n_jobs": 1,
+            "random_state": seed,
+        }
+        # 新版本 UMAP 默认管线即将切换；显式固定为 0.5.x 旧行为，保证跨环境 embedding 一致。
+        if "compatibility_layout" in inspect.signature(umap.UMAP.__init__).parameters:
+            umap_options["compatibility_layout"] = True
+        points = umap.UMAP(**umap_options).fit_transform(np.vstack(arrays))
     _save_split_umap(points, labels, splits, class_names, output_path)
 
 

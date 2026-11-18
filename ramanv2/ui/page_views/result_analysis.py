@@ -14,6 +14,7 @@ from ramanv2.common.naming import build_natural_key
 from ramanv2.core.run_context import (
     ANALYSIS_LOG_FILE_NAME,
     ANALYSIS_RESULT_DIR_NAME,
+    BASELINE_VAL_RESULT_DIR_NAME,
     CASCADE_MODE_DIR_NAME,
     CONFUSION_MATRIX_FILE_NAME,
     HIERARCHY_META_FILE_NAME,
@@ -23,6 +24,7 @@ from ramanv2.core.run_context import (
     VAL_RESULT_DIR_NAME,
 )
 from ramanv2.evaluation.model_eval import evaluate_model_run
+from ramanv2.evaluation.pca_svm import BaselineSpec, evaluate_baseline_run
 from ramanv2.evaluation.level_summary import (
     LEVEL_SUMMARY_DIR_NAME,
     summarize_level_results,
@@ -227,6 +229,19 @@ def _render_confusion(run_dir: Path, result_dir: Path) -> None:
         st.dataframe(payload.get("classes", []), width="stretch")
 
 
+def _render_baseline(run_dir: Path, result_dir: Path) -> None:
+    """展示 PCA-SVM 基线的混淆矩阵、指标与 PCA 信息。"""
+    _render_confusion(run_dir, result_dir)
+    report_path = result_dir / "metrics.txt"
+    if report_path.is_file():
+        stat = report_path.stat()
+        with st.expander("PCA-SVM 指标与 PCA 解释方差", expanded=False):
+            st.code(cached_text_file(str(report_path.resolve()), stat.st_mtime_ns, stat.st_size), language="text")
+    scatter_path = result_dir / "pca_scatter.png"
+    if scatter_path.is_file():
+        st.image(str(scatter_path), caption="PCA scatter (train)", width="stretch")
+
+
 def _render_analysis(run_dir: Path, analysis_dir: Path) -> None:
     _render_figures(analysis_dir / "figures", "Analysis 图表")
     log_path = analysis_dir / "logs" / ANALYSIS_LOG_FILE_NAME
@@ -270,6 +285,20 @@ _RESULT_SECTIONS = (
         error_label="混淆矩阵计算",
         success_message="混淆矩阵已重新计算。",
         render=_render_confusion,
+    ),
+    ResultSection(
+        key="baseline",
+        title="PCA-SVM 基线",
+        read_label="读取已有基线结果",
+        compute_label="重新计算基线结果",
+        compute=lambda run_dir, level_name: evaluate_baseline_run(run_dir, level_name, BaselineSpec()),
+        result_path=lambda run_dir: run_dir / BASELINE_VAL_RESULT_DIR_NAME,
+        exists=Path.is_dir,
+        missing_message="尚无 PCA-SVM 基线结果，请点击重新计算。",
+        pending_message="已有基线结果；点击读取已有基线结果后查看。",
+        error_label="PCA-SVM 基线计算",
+        success_message="PCA-SVM 基线结果已更新。",
+        render=_render_baseline,
     ),
     ResultSection(
         key="analysis",

@@ -95,7 +95,7 @@ def write_pca_scatter(
             plt.scatter(features[mask, 0], features[mask, 1], s=12, alpha=0.6, label=class_name)
     plt.xlabel("PC1")
     plt.ylabel("PC2")
-    plt.title("PCA scatter (train only)")
+    plt.title("PCA scatter")
     plt.legend(fontsize=7, ncol=2)
     plt.tight_layout()
     figure.savefig(path, dpi=300)

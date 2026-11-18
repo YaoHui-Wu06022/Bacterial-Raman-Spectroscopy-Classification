@@ -18,6 +18,8 @@ from .filters import median_filter_1d, odd_window_points
 
 # 基线拟合前只压制单点噪声，避免 airPLS 重加权在相近谱之间跳到不同不动点。
 BASELINE_INPUT_SMOOTH_WINDOW = 5
+# 多项式基线的固定阶数，配合非对称迭代加权抑制峰位被拉高。
+BASELINE_POLY_DEGREE = 5
 
 
 @lru_cache(maxsize=32)
@@ -111,7 +113,46 @@ def estimate_baseline(
         return asls_baseline(spectrum, lam=lam, p=p, niter=niter, valid_mask=valid_mask)
     if method == "airpls":
         return airpls_baseline(spectrum, lam=lam, niter=niter, valid_mask=valid_mask)
+    if method in {"poly", "polynomial"}:
+        return polynomial_baseline(spectrum, p=p, niter=niter, valid_mask=valid_mask)
     raise ValueError(f"Unknown baseline method: {method}")
+
+
+def polynomial_baseline(
+    spectrum,
+    degree: int = BASELINE_POLY_DEGREE,
+    p: float = 0.01,
+    niter: int = 15,
+    valid_mask=None,
+):
+    """使用非对称迭代加权的多项式拟合估计基线。
+
+    每轮只给高于当前曲线的点降权（权重 p），低于曲线的点保持 1-p，
+    使多项式贴合下包络而不是被峰位拉起；坏段通过 valid_mask 完全排除。
+    """
+    values = np.asarray(spectrum, dtype=np.float64)
+    length = len(values)
+    if length <= degree:
+        raise ValueError(f"谱长 {length} 不足多项式阶数 {degree} + 1")
+    positions = np.linspace(-1.0, 1.0, length)
+    weights = np.ones(length, dtype=np.float64)
+    fit_mask = np.ones(length, dtype=bool)
+    if valid_mask is not None:
+        fit_mask = np.asarray(valid_mask, dtype=bool)
+        weights[~fit_mask] = 0.0
+    baseline = np.zeros(length, dtype=np.float64)
+    for _ in range(int(niter)):
+        coefficients = np.polyfit(
+            positions[fit_mask],
+            values[fit_mask],
+            int(degree),
+            w=np.sqrt(weights[fit_mask]),
+        )
+        baseline = np.polyval(coefficients, positions)
+        residual = values - baseline
+        next_weights = np.where(residual > 0.0, float(p), 1.0 - float(p))
+        weights = np.where(fit_mask, next_weights, 0.0)
+    return baseline.astype(np.float32, copy=False)
 
 
 @dataclass(frozen=True)
