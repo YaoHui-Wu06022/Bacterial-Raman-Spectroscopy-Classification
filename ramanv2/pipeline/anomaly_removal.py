@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -23,13 +22,12 @@ from ramanv2.audit.heterogeneity import (
     HeterogeneityReport,
     SampleReport,
 )
-from ramanv2.common.arc_data import count_arc_data, iter_arc_data_paths
+from ramanv2.common.arc_data import iter_arc_data_paths
 from ramanv2.common.naming import BEAD_FOLDER_NAME, NON_TRAINING_FOLDER_NAMES, build_natural_key
 from ramanv2.common.file_ops import (
     move_files,
     preserve_paths,
     remove_empty_parent_directories,
-    write_text_atomic,
 )
 from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.data.hierarchy_spec import HierarchySpec
@@ -50,7 +48,6 @@ from ramanv2.pipeline.supplement import scan_supplement_plan
 
 
 ANALYSIS_REMOVAL_LOG_NAME = "analysis_removal_log.jsonl"
-ANALYSIS_REMOVAL_REPORT_NAME = "analysis_removal_report.md"
 ANALYSIS_REMOVAL_REASON = "analysis_subcluster_removal"
 ProgressCallback = Callable[[str, int, int], None]
 
@@ -316,104 +313,6 @@ def _mark_full_init_pending(state: PipelineState) -> None:
     state.dataset_builds.pop("latest", None)
 
 
-def _format_separation(value: object) -> str:
-    if isinstance(value, (int, float)) and math.isfinite(float(value)):
-        return f"{float(value):.3f}"
-    return "—"
-
-
-def write_removal_report(metadata_dir: Path | str, archive_root: Path | str) -> Path:
-    """把剔除日志汇总成归档目录下的 Markdown 报告，供人工核对删除数量。"""
-    log_path = Path(metadata_dir) / ANALYSIS_REMOVAL_LOG_NAME
-    if not log_path.is_file():
-        raise FileNotFoundError(f"剔除日志不存在：{log_path}")
-    runs = [
-        json.loads(line)
-        for line in log_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    if not runs:
-        raise ValueError("剔除日志为空")
-    latest = runs[-1]
-    archive = Path(archive_root)
-    archived_count = count_arc_data(archive, recursive=True)
-    figure_count = sum(1 for _ in archive.rglob("*.png"))
-
-    folder_rows: dict[str, dict[str, object]] = {}
-    dates: set[str] = set()
-    for sample in latest.get("samples", []):
-        sample_id = str(sample.get("sample_id", ""))
-        parts = sample_id.split("/")
-        if len(parts) < 2:
-            continue
-        key = "/".join(parts[:2])
-        row = folder_rows.setdefault(
-            key,
-            {
-                "source_kind": sample.get("source_kind", ""),
-                "verdict": sample.get("verdict", ""),
-                "separation": sample.get("cluster_separation"),
-                "count": 0,
-            },
-        )
-        row["count"] += 1
-        if not sample_id.startswith(f"{EXTRA_SOURCE}/"):
-            dates.add(parts[0])
-
-    lines = [
-        "# 全库高异常剔除记录",
-        "",
-        f"生成时间：{latest.get('committed_at', '')}",
-        f"归档目录：`{archive.name}`",
-        "",
-        "## 当前归档",
-        "",
-        f"- 光谱：{archived_count} 条",
-        f"- 证据图：{figure_count} 张",
-        "",
-        "## 最近一次剔除",
-        "",
-        f"- 合计：{latest.get('sample_count', 0)} 条"
-        f"（cosmic {latest.get('cosmic_count', 0)} / extra {latest.get('extra_count', 0)}）",
-        f"- 删除 shift 派生谱：{latest.get('shift_removed_count', 0)} 条",
-        f"- 涉及日期：{len(dates)} 个（{', '.join(sorted(dates))}）",
-        f"- 涉及文件夹：{len(folder_rows)} 个",
-        "",
-        "| 文件夹 | 类型 | 数量 | 判定 | 质心分离度 |",
-        "|---|---|---:|---|---:|",
-    ]
-    for key in sorted(folder_rows, key=build_natural_key):
-        row = folder_rows[key]
-        lines.append(
-            f"| {key} | {row['source_kind']} | {row['count']} | "
-            f"{row['verdict']} | {_format_separation(row['separation'])} |"
-        )
-    lines.extend(
-        [
-            "",
-            "## 历史剔除批次",
-            "",
-            "| 批次时间 | 合计 | cosmic | extra | 涉及文件夹 |",
-            "|---|---:|---:|---:|---:|",
-        ]
-    )
-    for run in runs:
-        folders = {
-            "/".join(str(sample.get("sample_id", "")).split("/")[:2])
-            for sample in run.get("samples", [])
-        }
-        timestamp = str(run.get("committed_at", "")).replace("T", " ")[:19]
-        lines.append(
-            f"| {timestamp} | {run.get('sample_count', 0)} | "
-            f"{run.get('cosmic_count', 0)} | {run.get('extra_count', 0)} | "
-            f"{len(folders)} |"
-        )
-    lines.extend(["", ""])
-    report_path = archive / ANALYSIS_REMOVAL_REPORT_NAME
-    write_text_atomic(report_path, "\n".join(lines))
-    return report_path
-
-
 def execute_analysis_removal(
     data_root: Path | str,
     shift_root: Path | str,
@@ -453,7 +352,6 @@ def execute_analysis_removal(
         state_file,
         metadata_dir / COMMIT_LOG_NAME,
         metadata_dir / ANALYSIS_REMOVAL_LOG_NAME,
-        root.parent / ANALYSIS_DELETE_RELATIVE / ANALYSIS_REMOVAL_REPORT_NAME,
         *sorted(archive_folders),
         *sorted(cosmic_folders),
         *sorted(shift_folders),
@@ -560,7 +458,6 @@ def execute_analysis_removal(
         }
         with (metadata_dir / ANALYSIS_REMOVAL_LOG_NAME).open("a", encoding="utf-8") as file:
             file.write(json.dumps(removal_payload, ensure_ascii=False) + "\n")
-        report_path = write_removal_report(metadata_dir, root.parent / ANALYSIS_DELETE_RELATIVE)
 
     state.__dict__.update(working.__dict__)
     return {
@@ -569,7 +466,6 @@ def execute_analysis_removal(
         "extra_count": len(extra_paths),
         "shift_removed_count": removed_shifts,
         "dates": dates,
-        "report_path": report_path.relative_to(root.parent).as_posix(),
         "archive_paths": [
             target.archive_path.relative_to(root.parent).as_posix()
             for target in targets
@@ -579,11 +475,9 @@ def execute_analysis_removal(
 
 __all__ = [
     "ANALYSIS_REMOVAL_LOG_NAME",
-    "ANALYSIS_REMOVAL_REPORT_NAME",
     "AnalysisGate",
     "RemovalTarget",
     "build_removal_targets",
     "check_analysis_gate",
     "execute_analysis_removal",
-    "write_removal_report",
 ]

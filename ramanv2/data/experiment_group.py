@@ -12,9 +12,9 @@ from ramanv2.common.paths import PROJECT_ROOT
 from ramanv2.data.profiles import resolve_selection
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.training.split import (
+    build_split_indices,
     load_split_files,
     save_split_files,
-    split_by_lowest_level_ratio,
 )
 
 
@@ -55,13 +55,11 @@ def build_experiment_group(
         hierarchy=selection.hierarchy,
         load_intensity_enable=False,
     )
-    train_indices, val_indices = split_by_lowest_level_ratio(
+    train_indices, val_indices = build_split_indices(
         dataset,
-        train_ratio=float(train_ratio),
-        seed=int(seed),
+        float(train_ratio),
+        int(seed),
     )
-    train_indices = sorted(int(index) for index in train_indices)
-    val_indices = sorted(int(index) for index in val_indices)
 
     config = config or build_config(
         {

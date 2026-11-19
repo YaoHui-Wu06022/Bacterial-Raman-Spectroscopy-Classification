@@ -207,6 +207,23 @@ def _map_split_paths(
     return np.array(sorted(indices))
 
 
+def build_split_indices(
+    dataset: Any,
+    train_ratio: float,
+    seed: int,
+) -> tuple[list[int], list[int]]:
+    """生成按索引排序的 train/val 切分，供落盘和训练共用。"""
+    train_indices, val_indices = split_by_lowest_level_ratio(
+        dataset,
+        train_ratio=float(train_ratio),
+        seed=int(seed),
+    )
+    return (
+        sorted(int(index) for index in train_indices),
+        sorted(int(index) for index in val_indices),
+    )
+
+
 def split_by_lowest_level_ratio(
     dataset: Any,
     train_ratio: float = 0.8,
@@ -274,17 +291,13 @@ def resolve_train_split(
         )
         return existing_split
 
-    train_indices, val_indices = split_by_lowest_level_ratio(
-        dataset,
-        train_ratio=train_ratio,
-        seed=seed,
-    )
+    train_indices, val_indices = build_split_indices(dataset, train_ratio, seed)
     save_split_files(dataset, train_indices, val_indices, split_dir)
     print(
         f"[Split] 新建 train_split.json/val_split.json："
         f"train={len(train_indices)}, val={len(val_indices)}"
     )
-    return np.array(sorted(train_indices)), np.array(sorted(val_indices))
+    return np.asarray(train_indices), np.asarray(val_indices)
 
 
 def resolve_parent_target(

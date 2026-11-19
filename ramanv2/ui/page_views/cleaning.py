@@ -695,6 +695,17 @@ def _run_analysis_removal_analysis(context: PageContext, mapping, gate) -> None:
     st.rerun()
 
 
+def _render_skipped_spectra(errors: tuple[str, ...]) -> None:
+    """展示预处理失败被跳过的光谱；没有跳过项时不渲染。"""
+    if not errors:
+        return
+    with st.expander(f"跳过的光谱（{len(errors)} 条）", expanded=False):
+        for error in errors[:50]:
+            st.write(error)
+        if len(errors) > 50:
+            st.caption(f"另有 {len(errors) - 50} 条未显示。")
+
+
 def _render_analysis_removal_section(context: PageContext, state: PipelineState) -> None:
     """全库高异常分析、预览勾选与二次确认剔除，只在清洗完成后出现。"""
     st.divider()
@@ -758,6 +769,11 @@ def _render_analysis_removal_section(context: PageContext, state: PipelineState)
             )
             return
 
+        if not report.folders:
+            st.info("分析完成，未发现符合条件的少数子簇。")
+            _render_skipped_spectra(report.errors)
+            return
+
         folder_frame = pd.DataFrame(report.folder_records())
         sample_frame = pd.DataFrame(report.sample_records())
         auto_count = int(sample_frame["auto_candidate"].sum())
@@ -769,12 +785,7 @@ def _render_analysis_removal_section(context: PageContext, state: PipelineState)
             "入选条件：少数簇占比 ≤ 20% 或去除最远 10% 后离散度比 ≤ 0.70，"
             f"且两簇质心距离 ≥ {AUTO_MIN_SEPARATION:.2f}。"
         )
-        if report.errors:
-            with st.expander(f"跳过的光谱（{len(report.errors)} 条）", expanded=False):
-                for error in report.errors[:50]:
-                    st.write(error)
-                if len(report.errors) > 50:
-                    st.caption(f"另有 {len(report.errors) - 50} 条未显示。")
+        _render_skipped_spectra(report.errors)
 
         with st.expander("文件夹级判定", expanded=False):
             display_columns = [
@@ -895,7 +906,7 @@ def _render_analysis_removal_section(context: PageContext, state: PipelineState)
                 set_flash(
                     "cleaning",
                     f"已剔除 {result['sample_count']} 条光谱，归档到 dataset/analysis_delete；"
-                    f"清单见 {result['report_path']}；init 已标记待重建。",
+                    "init 已标记待重建。",
                 )
                 st.rerun()
             except UI_ACTION_ERRORS as error:

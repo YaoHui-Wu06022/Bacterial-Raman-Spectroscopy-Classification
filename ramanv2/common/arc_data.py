@@ -58,6 +58,11 @@ def write_arc_data(path: Path | str, wavenumbers, intensities, fmt: str = "%.8f"
     np.savetxt(target, np.column_stack([wavenumbers, intensities]), fmt=[fmt, fmt])
 
 
+def is_hidden_dir_name(name: str) -> bool:
+    """判断目录名是否应跳过：隐藏目录（如 .ipynb_checkpoints）或 __pycache__ 一类。"""
+    return name.startswith(".") or name.startswith("__")
+
+
 def iter_arc_data_paths(root: Path | str, *, recursive: bool = False) -> Iterator[Path]:
     """按磁盘顺序产出目录下的光谱文件路径；recursive 时遍历整棵子树。"""
     base = Path(root)
@@ -65,7 +70,9 @@ def iter_arc_data_paths(root: Path | str, *, recursive: bool = False) -> Iterato
         return
     if recursive:
         for current, directory_names, file_names in os.walk(os.fspath(base)):
-            directory_names.sort()
+            directory_names[:] = sorted(
+                name for name in directory_names if not is_hidden_dir_name(name)
+            )
             for name in sorted(file_names):
                 if is_arc_data_name(name):
                     yield Path(current) / name

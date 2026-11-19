@@ -7,13 +7,19 @@ from pathlib import Path
 
 import numpy as np
 
-from ramanv2.common.arc_data import is_arc_data_name, read_arc_data
+from ramanv2.common.arc_data import is_arc_data_name, is_hidden_dir_name, read_arc_data
 
 
 def iter_arc_dirs(root_dir: Path | str):
-    """递归返回包含 `.arc_data` 文件的目录及其排序后的文件名。"""
+    """递归返回包含 `.arc_data` 文件的目录及其排序后的文件名。
+
+    隐藏目录和 ``__pycache__`` 一类不会进入扫描，避免 Jupyter checkpoint
+    被当成训练样本。
+    """
     for root, directories, filenames in os.walk(os.fspath(root_dir)):
-        directories.sort()
+        directories[:] = sorted(
+            name for name in directories if not is_hidden_dir_name(name)
+        )
         arc_files = sorted(name for name in filenames if is_arc_data_name(name))
         if arc_files:
             yield Path(root), arc_files
