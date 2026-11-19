@@ -182,6 +182,13 @@ class RamanClassifier1D(nn.Module):
         )
         del self._stem_kernel_sizes, self._block_kwargs, self._encoder_spec, self._make_backbone_activation
 
+    def load_state_dict(self, state_dict, *args, **kwargs):
+        """加载权重时丢弃旧 checkpoint 中的位置编码表；该表由公式重建。"""
+        filtered = {
+            name: value for name, value in state_dict.items() if name != "pos_encoder.pe"
+        }
+        return super().load_state_dict(filtered, *args, **kwargs)
+
     def forward_features(self, values: torch.Tensor) -> torch.Tensor:
         """将输入谱转换为主干序列特征。"""
         if self.cnn_backbone_enable:

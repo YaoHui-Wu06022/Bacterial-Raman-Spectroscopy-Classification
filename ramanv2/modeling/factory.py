@@ -1,6 +1,7 @@
 """模型构建的唯一应用入口。"""
 
 from ramanv2.modeling.classifier import RamanClassifier1D
+from ramanv2.modeling.layers import POSITION_ENCODING_LIMIT
 from ramanv2.modeling.model_spec import ModelSpec, validate_model_spec
 
 
@@ -22,5 +23,5 @@ def validate_model_input(model_spec: ModelSpec, input_spec) -> None:
     encoded_points = point_count // 4 if model_spec.backbone_type == "cnn" else point_count
     if encoded_points <= 0:
         raise ValueError("输入长度不足以通过 CNN pooling")
-    if model_spec.encoder_type == "transformer" and encoded_points > 1000:
+    if model_spec.encoder_type == "transformer" and encoded_points > POSITION_ENCODING_LIMIT:
         raise ValueError("输入长度超过 Transformer 位置编码上限")

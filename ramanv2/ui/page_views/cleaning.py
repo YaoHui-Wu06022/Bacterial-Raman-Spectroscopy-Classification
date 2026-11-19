@@ -700,7 +700,8 @@ def _render_analysis_removal_section(context: PageContext, state: PipelineState)
     st.divider()
     st.subheader("全库高异常剔除")
     st.caption(
-        "分析 shift_data 与 extra_data，用训练同一预处理链识别夹内少数子簇与样本级异常。"
+        "分析 shift_data 与 extra_data，用训练同一预处理链查找夹内少数样本子簇；"
+        "只列出子簇占比与质心分离度同时达标、可自动勾选的文件夹。"
         "剔除会归档到 dataset/analysis_delete，并删除 cosmic/shift/extra 中的对应光谱；"
         "init 不直接删除，只标记待重建。"
     )
@@ -752,24 +753,21 @@ def _render_analysis_removal_section(context: PageContext, state: PipelineState)
 
         if report is None:
             st.info(
-                "点击开始分析。自动勾选只针对“少数样本子簇”的 minority 样本；"
-                "双群分裂、整体弥散和单点异常只进入人工复核列表。"
+                "点击开始分析。只输出少数样本子簇成立的文件夹，"
+                "其 minority 样本会预先勾选。"
             )
             return
 
         folder_frame = pd.DataFrame(report.folder_records())
         sample_frame = pd.DataFrame(report.sample_records())
         auto_count = int(sample_frame["auto_candidate"].sum())
-        auto_folders = int((folder_frame["auto_candidate_count"] > 0).sum())
-        metrics = st.columns(5)
-        metrics[0].metric("分析文件夹", len(folder_frame))
-        metrics[1].metric("分析光谱", report.sample_count)
-        metrics[2].metric("自动候选夹", auto_folders)
-        metrics[3].metric("自动候选光谱", auto_count)
-        metrics[4].metric("跳过光谱", len(report.errors))
+        metrics = st.columns(3)
+        metrics[0].metric("入选文件夹", len(folder_frame))
+        metrics[1].metric("自动候选光谱", auto_count)
+        metrics[2].metric("跳过光谱", len(report.errors))
         st.caption(
-            f"自动勾选条件：判定为「少数样本子簇」且子簇质心距离 ≥ "
-            f"{AUTO_MIN_SEPARATION:.2f}。"
+            "入选条件：少数簇占比 ≤ 20% 或去除最远 10% 后离散度比 ≤ 0.70，"
+            f"且两簇质心距离 ≥ {AUTO_MIN_SEPARATION:.2f}。"
         )
         if report.errors:
             with st.expander(f"跳过的光谱（{len(report.errors)} 条）", expanded=False):
@@ -785,13 +783,11 @@ def _render_analysis_removal_section(context: PageContext, state: PipelineState)
                 "genus",
                 "source_kind",
                 "n_samples",
-                "verdict",
                 "minority_count",
+                "minority_fraction",
                 "cluster_separation",
                 "dispersion_ratio",
-                "drift_rho",
                 "auto_candidate_count",
-                "recommendation",
             ]
             st.dataframe(
                 folder_frame[display_columns].sort_values(
@@ -802,20 +798,20 @@ def _render_analysis_removal_section(context: PageContext, state: PipelineState)
                 width="stretch",
             )
 
-        review_frame = sample_frame[sample_frame["review_candidate"]].copy()
+        review_frame = sample_frame[sample_frame["auto_candidate"]].copy()
         show_all = st.checkbox(
-            "显示全部样本（含未触发复核的样本）",
+            "显示全部样本（含多数簇样本）",
             value=False,
             key=f"analysis_show_all_{report.generated_at}",
         )
         if show_all:
             review_frame = sample_frame.copy()
         if review_frame.empty:
-            st.info("没有进入复核列表的样本。")
+            st.info("没有可剔除的少数簇样本。")
             return
         review_frame = review_frame.sort_values(
-            ["auto_candidate", "distance_rank"],
-            ascending=[False, True],
+            ["distance_to_centroid", "auto_candidate"],
+            ascending=[False, False],
         )
         editor_frame = pd.DataFrame(
             {
@@ -823,16 +819,8 @@ def _render_analysis_removal_section(context: PageContext, state: PipelineState)
                 "文件夹": review_frame["folder_key"].to_numpy(),
                 "样本": review_frame["file_name"].to_numpy(),
                 "来源": review_frame["source_kind"].to_numpy(),
-                "判定": review_frame["verdict"].to_numpy(),
                 "子簇": review_frame["cluster"].to_numpy(),
-                "子簇距离": review_frame["cluster_separation"].round(3).to_numpy(),
                 "到质心": review_frame["distance_to_centroid"].round(3).to_numpy(),
-                "排名": review_frame["distance_rank"].to_numpy(),
-                "cos_z": review_frame["cos_z"].round(2).to_numpy(),
-                "knn_z": review_frame["knn_z"].round(2).to_numpy(),
-                "粗糙度z": review_frame["roughness_z"].round(2).to_numpy(),
-                "投票": review_frame["outlier_vote"].to_numpy(),
-                "自动候选": review_frame["auto_candidate"].to_numpy(),
             },
             index=review_frame["sample_id"].to_numpy(),
         )

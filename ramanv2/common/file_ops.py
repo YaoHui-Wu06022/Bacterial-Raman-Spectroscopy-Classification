@@ -111,7 +111,8 @@ def write_text_atomic(target_path: Path | str, text: str) -> Path:
             pass
     temporary = create_temporary_path(target)
     try:
-        temporary.write_text(text, encoding="utf-8")
+        # 固定 LF，避免 Windows 的 CRLF 让同一份文件在不同平台哈希不一致。
+        temporary.write_text(text, encoding="utf-8", newline="\n")
         for attempt, delay in enumerate((0.0, 0.05, 0.2, 0.5)):
             if delay:
                 time.sleep(delay)

@@ -89,17 +89,23 @@ class ResidualBottleneck1D(nn.Module):
         return self.out_act(values + residual)
 
 
-class PositionalEncoding1D(nn.Module):
-    """给一维序列特征加入固定正余弦位置编码。"""
+POSITION_ENCODING_LIMIT = 1024
 
-    def __init__(self, d_model: int, max_len: int = 1000):
+
+class PositionalEncoding1D(nn.Module):
+    """给一维序列特征加入固定正余弦位置编码。
+
+    编码表由公式生成、与训练无关，因此设为非持久 buffer，不写入 checkpoint。
+    """
+
+    def __init__(self, d_model: int, max_len: int = POSITION_ENCODING_LIMIT):
         super().__init__()
         encoding = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
         divisor = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float32) * (-math.log(10000.0) / d_model))
         encoding[:, 0::2] = torch.sin(position * divisor)
         encoding[:, 1::2] = torch.cos(position * divisor)
-        self.register_buffer("pe", encoding.unsqueeze(0))
+        self.register_buffer("pe", encoding.unsqueeze(0), persistent=False)
 
     def forward(self, values: torch.Tensor) -> torch.Tensor:
         return values + self.pe[:, :values.size(1), :]

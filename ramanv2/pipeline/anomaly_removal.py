@@ -542,7 +542,6 @@ def execute_analysis_removal(
             "committed_at": timestamp,
             "operation": "analysis_anomaly_removal",
             "reason": ANALYSIS_REMOVAL_REASON,
-            "drift_threshold": report.drift_threshold,
             "sample_count": total,
             "cosmic_count": len(commit_paths),
             "extra_count": len(extra_paths),
@@ -555,7 +554,6 @@ def execute_analysis_removal(
                     "verdict": target.folder.verdict,
                     "cluster": target.sample.cluster,
                     "cluster_separation": target.folder.cluster_separation,
-                    "outlier_vote": target.sample.outlier_vote,
                 }
                 for target in targets
             ],
