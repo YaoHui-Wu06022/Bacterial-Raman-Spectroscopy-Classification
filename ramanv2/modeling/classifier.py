@@ -50,6 +50,7 @@ class RamanClassifier1D(nn.Module):
         self.pooling_type = model_spec.pooling_type
         self.cosine_head_enable = model_spec.cosine_head_enable
         self._stem_kernel_sizes = model_spec.stem_kernel_sizes
+        self._pool_stages = tuple(bool(value) for value in model_spec.backbone_pool_stages)
         self._make_backbone_activation = partial(build_activation, negative_slope=model_spec.activation_negative_slope)
         self._block_kwargs = {
             "block_type": model_spec.cnn_block_type,
@@ -92,10 +93,10 @@ class RamanClassifier1D(nn.Module):
             ]
         )
         channels = 64
-        self.layer1, channels = self.build_stage(channels, 64, 2, False)
-        self.layer2, channels = self.build_stage(channels, 128, 2, True)
-        self.layer3, channels = self.build_stage(channels, 256, 2, True)
-        self.layer4, channels = self.build_stage(channels, 512, 2, False)
+        self.layer1, channels = self.build_stage(channels, 64, 2, self._pool_stages[0])
+        self.layer2, channels = self.build_stage(channels, 128, 2, self._pool_stages[1])
+        self.layer3, channels = self.build_stage(channels, 256, 2, self._pool_stages[2])
+        self.layer4, channels = self.build_stage(channels, 512, 2, self._pool_stages[3])
         self.proj = nn.Conv1d(channels, self.proj_dim, 1, bias=False)
 
     def build_stage(self, in_channels: int, out_channels: int, block_count: int, pool_first_enable: bool) -> tuple[nn.Sequential, int]:
@@ -180,7 +181,7 @@ class RamanClassifier1D(nn.Module):
             if self.cosine_head_enable
             else nn.Linear(self.feat_dim, self.num_classes)
         )
-        del self._stem_kernel_sizes, self._block_kwargs, self._encoder_spec, self._make_backbone_activation
+        del self._stem_kernel_sizes, self._pool_stages, self._block_kwargs, self._encoder_spec, self._make_backbone_activation
 
     def load_state_dict(self, state_dict, *args, **kwargs):
         """加载权重时丢弃旧 checkpoint 中的位置编码表；该表由公式重建。"""

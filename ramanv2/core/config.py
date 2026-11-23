@@ -68,6 +68,8 @@ class ModelConfig:
     cosine_head: bool = False
     cosine_scale: float = 25.0
     stem_kernel_sizes: tuple[int, ...] = (3, 7, 15)
+    # 四个卷积 stage 是否在开头做 2 倍下采样；默认与历史结构一致。
+    backbone_pool_stages: tuple[bool, ...] = (False, True, True, False)
 
 
 @dataclass(frozen=True)
@@ -209,6 +211,11 @@ def _coerce_field_value(name: str, value: Any) -> Any:
         return tuple((float(start), float(end)) for start, end in value)
     if name == "stem_kernel_sizes":
         return tuple(int(item) for item in value)
+    if name == "backbone_pool_stages":
+        return tuple(
+            item.strip().lower() in {"1", "true", "yes"} if isinstance(item, str) else bool(item)
+            for item in value
+        )
     return value
 
 

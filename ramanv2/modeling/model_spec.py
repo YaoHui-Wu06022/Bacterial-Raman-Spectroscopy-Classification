@@ -22,6 +22,7 @@ class ModelSpec:
     reduction: int
     activation_negative_slope: float
     stem_kernel_sizes: tuple[int, ...]
+    backbone_pool_stages: tuple[bool, ...]
     transformer_dim: int
     encoder_type: str
     transformer_nhead: int
@@ -50,6 +51,7 @@ def build_model_spec(model_config: ModelConfig, input_spec: InputSpec) -> ModelS
         reduction=int(model_config.reduction),
         activation_negative_slope=float(model_config.backbone_activation_negative_slope),
         stem_kernel_sizes=tuple(int(value) for value in model_config.stem_kernel_sizes),
+        backbone_pool_stages=tuple(bool(value) for value in model_config.backbone_pool_stages),
         transformer_dim=int(model_config.transformer_dim),
         encoder_type=str(model_config.encoder_type).lower(),
         transformer_nhead=int(model_config.transformer_nhead),
@@ -72,6 +74,8 @@ def validate_model_spec(model_spec: ModelSpec) -> None:
         raise ValueError(f"Unknown backbone_type: {model_spec.backbone_type}")
     if model_spec.cnn_block_type not in {"resnet", "resnext"}:
         raise ValueError(f"Unknown cnn_block_type: {model_spec.cnn_block_type}")
+    if model_spec.backbone_type == "cnn" and len(model_spec.backbone_pool_stages) != 4:
+        raise ValueError("backbone_pool_stages 必须包含 4 个阶段开关")
     if model_spec.encoder_type not in {"transformer", "lstm", "none"}:
         raise ValueError(f"Unknown encoder_type: {model_spec.encoder_type}")
     if model_spec.pooling_type not in {"attn", "stat"}:

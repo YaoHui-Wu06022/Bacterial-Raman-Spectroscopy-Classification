@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import os
+import shutil
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -133,8 +134,18 @@ def _write_folder_median_cache(
     os.replace(temporary, path)
 
 
+def _prune_plot_cache_buckets(cache_root: Path) -> None:
+    """删除当前绘图参数之外的旧缓存桶；换配置/版本后不再无限累积。"""
+    parent = cache_root.parent
+    if not parent.is_dir():
+        return
+    for path in parent.iterdir():
+        if path.is_dir() and path.name != cache_root.name:
+            shutil.rmtree(path, ignore_errors=True)
+
+
 def _prune_folder_median_cache(cache_root: Path, state: list[dict[str, str]]) -> None:
-    """删除与当前 init 文件夹状态不再匹配的中位谱缓存。"""
+    """删除与当前 init 文件夹状态不再匹配的中位谱缓存，并清理空目录。"""
     if not cache_root.is_dir():
         return
     current = {
@@ -146,6 +157,16 @@ def _prune_folder_median_cache(cache_root: Path, state: list[dict[str, str]]) ->
         for path in genus_dir.iterdir():
             if path.name.endswith(".npz") and (genus_dir.name, path.name) not in current:
                 path.unlink(missing_ok=True)
+    for genus_dir in list(cache_root.iterdir()):
+        if genus_dir.is_dir():
+            try:
+                genus_dir.rmdir()
+            except OSError:
+                pass
+    try:
+        cache_root.rmdir()
+    except OSError:
+        pass
 
 
 def iter_init_folders(init_dir: Path, depth: int = 1) -> list[Path]:
@@ -434,6 +455,7 @@ def plot_prefix_init(
     state = build_plot_state(folders, input_dir)
     signatures = {(row["genus"], row["folder"]): row["file_signature"] for row in state}
     cache_root = _resolve_plot_cache_dir(input_dir, plot_config)
+    _prune_plot_cache_buckets(cache_root)
     prior = read_plot_state(figure_dir / "prefix_plot_state.csv")
     changed = build_changed_plot_groups(state, prior)
     axis = build_plot_axis(plot_config)
@@ -519,6 +541,7 @@ def build_prefix_plots_for_groups(
     figure_dir = Path(output_root).resolve()
     axis = build_plot_axis(plot_config)
     cache_root = _resolve_plot_cache_dir(input_dir, plot_config)
+    _prune_plot_cache_buckets(cache_root)
     wanted = {(str(genus), str(prefix).upper()) for genus, prefix in group_keys}
     outputs: list[Path] = []
     for genus, prefix in sorted(wanted, key=lambda item: (build_natural_key(item[0]), build_natural_key(item[1]))):

@@ -20,7 +20,11 @@ def validate_model_input(model_spec: ModelSpec, input_spec) -> None:
     point_count = int(input_spec.point_count)
     if point_count <= 0:
         raise ValueError("InputSpec point_count 必须为正数")
-    encoded_points = point_count // 4 if model_spec.backbone_type == "cnn" else point_count
+    if model_spec.backbone_type == "cnn":
+        pool_count = sum(1 for flag in model_spec.backbone_pool_stages if flag)
+        encoded_points = point_count >> pool_count
+    else:
+        encoded_points = point_count
     if encoded_points <= 0:
         raise ValueError("输入长度不足以通过 CNN pooling")
     if model_spec.encoder_type == "transformer" and encoded_points > POSITION_ENCODING_LIMIT:
