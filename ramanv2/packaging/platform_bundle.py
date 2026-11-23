@@ -13,7 +13,6 @@ from ramanv2.common.arc_data import list_arc_data_paths, read_arc_data, write_ar
 from ramanv2.common.file_ops import (
     create_temporary_path,
     publish_directory,
-    publish_file,
     publish_files,
     write_text_atomic,
 )
@@ -27,27 +26,6 @@ STAGE_INIT = "init"
 STAGE_INIT_TEST = "init_test"
 DATA_ARCHIVE_NAME = "data.npz"
 ARCHIVE_VERSION = 1
-
-
-def build_profile_data_archive(
-    profile_id: str,
-    output_path: Path | str,
-    project_root: Path | str = PROJECT_ROOT,
-) -> dict[str, object]:
-    """将 profile 的 init 与测试集原始光谱打包为 data.npz。"""
-    selection = resolve_selection(profile_id=profile_id, project_root=project_root)
-    stage_dirs = _resolve_stage_dirs(selection)
-    config_files = _resolve_config_files(selection)
-
-    target = Path(output_path).resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = create_temporary_path(target)
-    try:
-        sample_counts = _build_data_archive(stage_dirs, config_files, temporary)
-        publish_file(temporary, target)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return _data_report(selection.profile, stage_dirs, config_files, target, sample_counts)
 
 
 def build_platform_bundle(
@@ -301,35 +279,8 @@ def _resolve_archive_path(root_dir: Path, relative_text: str) -> Path:
     return target
 
 
-def _data_report(
-    profile,
-    stage_dirs: dict[str, tuple[Path, Path]],
-    config_files: list[tuple[Path, Path]],
-    output_path: Path,
-    sample_counts: dict[str, int],
-) -> dict[str, object]:
-    return {
-        "profile_id": profile.profile_id,
-        "dataset_name": profile.dataset_name,
-        "source_init": str(stage_dirs[STAGE_INIT][1].resolve()),
-        "source_dirs": {
-            name: str(source_dir.resolve())
-            for name, (_archive_root, source_dir) in stage_dirs.items()
-        },
-        "config_files": {
-            archive_path.as_posix(): str(source_path.resolve())
-            for archive_path, source_path in config_files
-        },
-        "output_path": str(output_path),
-        "sample_count": sum(sample_counts.values()),
-        "sample_counts": sample_counts,
-        "file_size": output_path.stat().st_size,
-    }
-
-
 __all__ = [
     "DATA_ARCHIVE_NAME",
     "build_platform_bundle",
-    "build_profile_data_archive",
     "restore_data_archive",
 ]

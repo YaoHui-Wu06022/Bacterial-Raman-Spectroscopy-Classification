@@ -54,13 +54,6 @@ def list_inference_dates(dataset_dir: Path | str) -> list[Path]:
     )
 
 
-def resolve_date_result_dir(dataset_dir: Path | str, date_name: str) -> Path:
-    """返回一个日期的实际推理结果目录。"""
-    return (
-        resolve_inference_data_root(dataset_dir)
-        / UNLABELED_RESULT_DIR_NAME
-        / date_name
-    )
 
 
 def run_unlabeled_inference(
@@ -376,7 +369,6 @@ __all__ = [
     "UNLABELED_RESULT_DIR_NAME",
     "INFERENCE_DATA_DIR_NAME",
     "list_inference_dates",
-    "resolve_date_result_dir",
     "resolve_inference_data_root",
     "run_unlabeled_inference",
 ]

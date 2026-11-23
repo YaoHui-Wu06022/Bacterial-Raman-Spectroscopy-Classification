@@ -7,7 +7,6 @@ from pathlib import Path
 
 import streamlit as st
 
-from ramanv2.common.arc_data import has_arc_data
 from ramanv2.common.file_ops import read_json
 from ramanv2.common.naming import build_natural_key
 from ramanv2.core.config_snapshot import SHARED_CONFIG_NAME
@@ -177,16 +176,3 @@ def cached_experiment_dirs(
         for path in sorted(result, key=lambda item: build_natural_key(item.name), reverse=True)
     )
 
-
-@st.cache_data(show_spinner=False)
-def cached_test_folder_names(root_dir: str, version: int) -> tuple[str, ...]:
-    """缓存 init_test 的文件夹扫描。"""
-    del version
-    root = Path(root_dir)
-    if not root.is_dir():
-        return ()
-    return tuple(
-        path.name
-        for path in sorted(root.iterdir(), key=lambda item: build_natural_key(item.name))
-        if path.is_dir() and has_arc_data(path)
-    )

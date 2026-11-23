@@ -75,14 +75,6 @@ def resolve_spec_profile(spec: DatasetSpec, profile_key: str | None = None) -> D
     return _build_profile(spec)
 
 
-def list_profiles(
-    dataset_id: str | None = None,
-    project_root: Path | str | None = None,
-) -> list[DatasetProfile]:
-    """返回指定数据集的主数据源。"""
-    return list_spec_profiles(_load_registry(project_root).resolve(dataset_id))
-
-
 def resolve_selection(
     dataset_id: str | None = None,
     profile_id: str | None = None,

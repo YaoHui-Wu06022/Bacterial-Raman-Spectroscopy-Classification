@@ -91,10 +91,6 @@ class DatasetIndex:
         level_index = self.head_name_to_idx[self.resolve_level_name(level_name)]
         return list(self.class_names_by_level[level_index])
 
-    def get_hierarchy(self, index: int) -> dict[str, str | None]:
-        """返回样本的业务层级名称，不构建输入张量。"""
-        return dict(self.hier_names[index])
-
     def get_level_key(self, index: int, level_name: str) -> str | None:
         """返回样本在指定业务层级的稳定类别键。"""
         return self.hier_names[index].get(self.resolve_level_name(level_name))

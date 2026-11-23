@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
-from ramanv2.common.file_ops import read_json, write_json
+from ramanv2.common.file_ops import read_json
 from ramanv2.common.hierarchy import FLAT_LABEL_SCHEMA, HIERARCHY_LABEL_SCHEMA
 from ramanv2.common.naming import parse_folder_prefix
 
@@ -156,12 +156,6 @@ class HierarchySpec:
         parts = [values[level.name] for level in self.directory_levels]
         return Path(*parts) if parts else Path(".")
 
-    def class_relative_path(self, group_name: str) -> Path:
-        """train 中的类别路径：父目录值 + 非父目录层级值。"""
-        values = self.resolve_values(group_name)
-        parts = [values[level.name] for level in self.levels]
-        return Path(*parts) if parts else Path(".")
-
     def init_class_relative(self, relative_dir: Path, leaf_name: str) -> Path:
         """从 init 叶子相对目录还原 train 类别路径。"""
         directory_parts = tuple(relative_dir.parts[: self.directory_depth])
@@ -242,7 +236,3 @@ def resolve_hierarchy_from_meta(meta: Mapping[str, Any]) -> HierarchySpec:
     if not isinstance(payload, Mapping):
         raise ValueError("实验缺少 hierarchy，请用当前版本重新训练")
     return HierarchySpec.from_payload(payload)
-
-
-def write_hierarchy(path: Path | str, spec: HierarchySpec) -> None:
-    write_json(path, spec.to_payload())

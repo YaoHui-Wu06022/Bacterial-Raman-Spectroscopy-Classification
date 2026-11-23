@@ -33,6 +33,7 @@ from ramanv2.common.plotting import (
 )
 from ramanv2.core.config import InputConfig
 from ramanv2.data.config import DEFAULT_BUILD_CONFIG, DataBuildConfig
+from ramanv2.data.datasets import load_dataset_config
 from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.data.preprocess import build_preprocess_kwargs
 from ramanv2.spectra.axis import build_wn_ref
@@ -61,9 +62,28 @@ class PrefixPlotConfig:
 DEFAULT_PREFIX_PLOT_CONFIG = PrefixPlotConfig()
 
 
-def resolve_plot_config(config: PrefixPlotConfig | None = None) -> PrefixPlotConfig:
-    """返回调用方配置，缺失时使用数据模块默认值。"""
-    return DEFAULT_PREFIX_PLOT_CONFIG if config is None else config
+def resolve_plot_config(
+    config: PrefixPlotConfig | None = None,
+    init_dir: Path | str | None = None,
+) -> PrefixPlotConfig:
+    """返回调用方配置；未显式提供时读取 init 所在数据集的坏区，保证各入口一致。"""
+    if config is not None:
+        return config
+    if init_dir is None:
+        return DEFAULT_PREFIX_PLOT_CONFIG
+    try:
+        payload = load_dataset_config(Path(init_dir).resolve().parent)
+    except (OSError, ValueError):
+        return DEFAULT_PREFIX_PLOT_CONFIG
+    raw_bands = payload.get("bad_bands") or ()
+    bands = tuple(
+        (float(item[0]), float(item[1]))
+        for item in raw_bands
+        if isinstance(item, (list, tuple)) and len(item) == 2
+    )
+    if not bands:
+        return DEFAULT_PREFIX_PLOT_CONFIG
+    return PrefixPlotConfig(input=InputConfig(bad_bands=bands))
 
 
 def build_plot_axis(config: PrefixPlotConfig) -> np.ndarray:
@@ -406,8 +426,8 @@ def plot_prefix_init(
     供界面显示进度。``hierarchy`` 决定来源文件夹的目录深度；未提供时按一层分组。
     """
     configure_matplotlib_fonts()
-    plot_config = resolve_plot_config(config)
     input_dir = Path(init_dir).resolve()
+    plot_config = resolve_plot_config(config, input_dir)
     figure_dir = Path(output_dir).resolve()
     depth = hierarchy.directory_depth if hierarchy is not None else 1
     folders = iter_init_folders(input_dir, depth)
@@ -494,8 +514,8 @@ def build_prefix_plots_for_groups(
 ) -> list[Path]:
     """只重画指定属/前缀分组，不扫描其他 init 文件夹。"""
     configure_matplotlib_fonts()
-    plot_config = resolve_plot_config(config)
     input_dir = Path(init_root).resolve()
+    plot_config = resolve_plot_config(config, input_dir)
     figure_dir = Path(output_root).resolve()
     axis = build_plot_axis(plot_config)
     cache_root = _resolve_plot_cache_dir(input_dir, plot_config)

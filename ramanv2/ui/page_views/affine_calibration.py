@@ -188,6 +188,64 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
     """按日期复用已有参数，只更新对应 shift 数据。"""
     with st.expander("按日期更新", expanded=False):
         render_flash("affine_date_rebuild")
+        shift_date_names = [
+            path.name for path in sorted(context.shift_root.glob("*"))
+            if path.is_dir() and len(path.name) == 8 and path.name.isascii() and path.name.isdigit()
+            and (context.data_root / path.name).is_dir()
+        ]
+        date_reports = cached_calibration_reports(
+            str(context.shift_root.resolve()),
+            _report_fingerprint(context.shift_root, shift_date_names),
+        )
+        dates = [
+            date_name for date_name in shift_date_names
+            if (date_reports.get(date_name) or {}).get("status") == "manual_approved"
+        ]
+        compute_candidates = [
+            date_name for date_name in sorted(state.cleaning.completed_date_names)
+            if date_name not in dates
+            and has_active_source_folders(context.data_root, date_name)
+            and has_arc_data(context.data_root / date_name / BEAD_FOLDER_NAME)
+        ]
+        if compute_candidates:
+            st.caption("清洗完成、尚无仿射参数的日期可先计算单日仿射系数。")
+            compute_target = st.selectbox(
+                "选择待计算仿射系数的日期",
+                compute_candidates,
+                key="affine_compute_date",
+            )
+            if st.button("计算所选日期的仿射系数", key="affine_compute_date_confirm", width="stretch"):
+                try:
+                    with st.spinner(f"正在分析 {compute_target} 的小球并生成 shift 数据…"):
+                        compute_reports = run_affine_calibration(
+                            context.data_root, [compute_target], context.shift_root
+                        )
+                    compute_report = compute_reports[0] if compute_reports else {}
+                    compute_status = str(compute_report.get("status", ""))
+                    if compute_status == "manual_approved":
+                        state.affine_completed_dates.add(compute_target)
+                        invalidate_downstream(state, [compute_target])
+                        write_page_state(context, state)
+                        set_flash(
+                            "affine_date_rebuild",
+                            f"{compute_target} 的仿射系数已计算并发布，shift 数据已生成。",
+                        )
+                    else:
+                        detail = compute_report.get("error") or "；".join(
+                            str(item) for item in compute_report.get("errors") or []
+                        )
+                        set_flash(
+                            "affine_date_rebuild",
+                            f"{compute_target} 未通过校准（{compute_status or 'unknown'}）"
+                            + (f"：{detail}" if detail else ""),
+                            kind="error",
+                        )
+                    invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
+                    st.rerun()
+                except UI_ACTION_ERRORS as error:
+                    render_action_error("仿射系数计算", error)
+        else:
+            st.caption("当前没有待计算仿射系数的日期。")
         lineage_file = lineage_path(context.data_root)
         changes = _collect_folder_changes(
             str(context.data_root.resolve()),
@@ -210,27 +268,59 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
             ], hide_index=True, width="stretch")
         else:
             st.caption("暂无删除/恢复操作记录。")
-        shift_date_names = [
-            path.name for path in sorted(context.shift_root.glob("*"))
-            if path.is_dir() and len(path.name) == 8 and path.name.isascii() and path.name.isdigit()
-            and (context.data_root / path.name).is_dir()
+        update_targets = [date_name for date_name in pending if date_name in dates]
+        identity_targets = [
+            date_name for date_name in pending
+            if date_name not in dates
+            and has_active_source_folders(context.data_root, date_name)
+            and not has_arc_data(context.data_root / date_name / BEAD_FOLDER_NAME)
         ]
-        date_reports = cached_calibration_reports(
-            str(context.shift_root.resolve()),
-            _report_fingerprint(context.shift_root, shift_date_names),
-        )
-        dates = [
-            date_name for date_name in shift_date_names
-            if (date_reports.get(date_name) or {}).get("status") == "manual_approved"
+        skipped_targets = [
+            date_name for date_name in pending
+            if date_name not in dates and date_name not in identity_targets
         ]
+        if identity_targets:
+            st.caption(
+                "以下日期没有可用小球，可发布 identity 校准（scale=1/offset=0）后更新 shift："
+                + "、".join(identity_targets)
+            )
+            if st.button(
+                f"发布 identity 并更新 shift（{len(identity_targets)} 个）",
+                key="affine_identity_rebuild_confirm",
+                width="stretch",
+            ):
+                with st.spinner("正在复制 cosmic 光谱并发布 identity 校准……"):
+                    results = run_identity_affine(
+                        context.data_root, identity_targets, context.shift_root
+                    )
+                changed = [
+                    str(item["date"]) for item in results
+                    if item.get("status") == "manual_approved"
+                ]
+                failures = [
+                    f"{item['date']}：{item.get('error')}"
+                    for item in results
+                    if item.get("status") == "error"
+                ]
+                for date_name in changed:
+                    state.affine_completed_dates.add(date_name)
+                    invalidate_downstream(state, [date_name])
+                if changed:
+                    write_page_state(context, state)
+                invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
+                set_flash(
+                    "affine_date_rebuild",
+                    f"已发布 {len(changed)} 个日期的 identity 校准并更新 shift_data；"
+                    "init/init_test 可到「数据集获取」页按日期更新。"
+                    + (f"；失败：{'；'.join(failures)}" if failures else ""),
+                )
+                st.rerun()
         if not dates:
             st.info("当前没有可复用仿射参数的日期。")
             return
-        st.caption("复用已有仿射参数，从 cosmic_data 更新所选日期的 shift_data。init/init_test 请到「数据集获取」页按日期更新。")
-        update_targets = [date_name for date_name in pending if date_name in dates]
-        skipped_targets = [date_name for date_name in pending if date_name not in dates]
+        st.caption("复用已有仿射参数，从 cosmic_data 更新所选日期的 shift_data。")
         if skipped_targets:
-            st.caption("缺少 cosmic 数据或已确认参数，暂无法更新：" + "、".join(skipped_targets))
+            st.caption("缺少 cosmic 数据，暂无法更新：" + "、".join(skipped_targets))
         if update_targets and st.button(
             f"一键更新全部待更新日期（{len(update_targets)} 个）",
             key="affine_rebuild_pending_confirm",
@@ -434,7 +524,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
         "一键分析并校准",
         type="primary",
         disabled=not (pending_affine or affine_dates),
-        help="缺参数的分析小球算参数，已有参数的直接复用；两者都从 cosmic_data 重建 shift。",
+        help="缺参数的分析小球算参数，已有参数的直接复用",
         width="stretch",
     ):
         with st.spinner("正在分析小球并从 cosmic_data 重建 shift 数据……"):

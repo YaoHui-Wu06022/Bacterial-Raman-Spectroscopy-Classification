@@ -11,13 +11,10 @@ from pathlib import Path
 from typing import Callable, Literal, Mapping
 from uuid import uuid4
 
-import numpy as np
-
 from ramanv2.common.arc_data import (
     has_arc_data,
     list_arc_data_paths,
     parse_raw_arc_data,
-    read_arc_data,
 )
 from ramanv2.common.naming import (
     CANONICAL_FOLDER_PATTERN,
@@ -553,12 +550,6 @@ def _copy_group_files(group: _SourceGroup, destinations: list[tuple[str, Path]])
 def _copy_worker_count() -> int:
     """按 CPU 数决定并发复制线程数；源谱随机读延迟高，适度并发收益明显。"""
     return max(4, min(16, os.cpu_count() or 4))
-
-
-def _validate_spectrum(path: Path) -> None:
-    wavenumbers, intensities = read_arc_data(path)
-    if not wavenumbers.size or wavenumbers.size != intensities.size:
-        raise ValueError(f"无效光谱：{path}")
 
 
 def _is_manual_approved(path: Path) -> bool:

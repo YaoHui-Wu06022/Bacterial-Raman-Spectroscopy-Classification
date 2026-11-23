@@ -25,7 +25,6 @@ from ramanv2.core.run_context import (
     LEVEL_SUMMARY_DIR_NAME,
     METRICS_FILE_NAME,
     MODEL_FILE_NAME,
-    PARENT_KNOWN_MODE_DIR_NAME,
     TEST_RESULT_DIR_NAME,
 )
 from ramanv2.data.hierarchy_spec import HierarchySpec, resolve_hierarchy_from_meta
@@ -38,7 +37,6 @@ from ramanv2.inference.test_report import (
     write_summary_json,
     write_summary_report,
 )
-from ramanv2.inference.test_cache import CachedFolder, load_test_cache
 from ramanv2.modeling.predictor import Predictor, load_predictor
 from ramanv2.modeling.run_manifest import has_model_path, resolve_entry_path
 from ramanv2.spectra.axis import build_wn_ref
@@ -71,7 +69,6 @@ def run_independent_inference(
     device: torch.device | str | None = None,
     evaluate_enable: bool = True,
     plot_train_mean_enable: bool = False,
-    cached_test_root: Path | str | None = None,
     folder_names: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> Path:
     """运行层级级联样本推理并发布 `inference_result/` 产物目录。
@@ -86,22 +83,10 @@ def run_independent_inference(
     elif predictor.run_dir is not None:
         raise ValueError("inference_result 只记录级联预测，请从实验根加载模型")
     preprocessor = build_inference_preprocessor(predictor.input_spec, target_device)
-    cached_folders: list[CachedFolder] | None = None
     test_dir = _resolve_test_dir(predictor, input_dir)
-    if cached_test_root is not None:
-        if folder_names is None:
-            raise ValueError("使用测试缓存时必须指定文件夹")
-        selected_names = sorted({str(name) for name in folder_names})
-        cached_folders = load_test_cache(cached_test_root, selected_names, predictor)
-        input_dirs: list[Path] = []
-    else:
-        input_dirs = resolve_input_dirs(test_dir, one_dir)
+    input_dirs = resolve_input_dirs(test_dir, one_dir)
     expected_hierarchy = resolve_hierarchy_from_meta(predictor.meta)
-    available_names = (
-        [folder.folder_name for folder in cached_folders]
-        if cached_folders is not None
-        else [path.name for path in input_dirs]
-    )
+    available_names = [path.name for path in input_dirs]
     selected_names, selection_rows = build_test_input_selection(
         available_names,
         predictor.meta,
@@ -112,13 +97,12 @@ def run_independent_inference(
         selected_names = {str(name) for name in folder_names}
         for row in selection_rows:
             row["selected"] = row["folder"] in selected_names
-        if cached_folders is None:
-            input_dirs = [path for path in input_dirs if path.name in selected_names]
+        input_dirs = [path for path in input_dirs if path.name in selected_names]
     else:
         input_dirs = [path for path in input_dirs if path.name in selected_names]
     if not selected_names:
         raise FileNotFoundError(f"没有属于当前模型标签空间的推理文件夹：{test_dir}")
-    if cached_folders is None and folder_names is not None and not input_dirs:
+    if folder_names is not None and not input_dirs:
         raise FileNotFoundError(f"没有找到选定的推理文件夹：{sorted(selected_names)}")
     target_dir = _resolve_result_dir(predictor)
     temp_dir = target_dir.parent / f".{target_dir.name}_building_{uuid4().hex[:8]}"
@@ -134,7 +118,6 @@ def run_independent_inference(
             evaluate_enable,
             plot_train_mean_enable,
             expected_hierarchy,
-            cached_folders,
         )
         summary = write_summary_report(temp_dir / SUMMARY_TEXT_NAME, rows, evaluate_enable)
         write_summary_json(temp_dir / SUMMARY_JSON_NAME, summary)
@@ -248,7 +231,6 @@ def _run_folder_predictions(
     evaluate_enable: bool,
     plot_train_mean_enable: bool,
     expected_hierarchy: HierarchySpec,
-    cached_folders: list[CachedFolder] | None = None,
 ) -> list[dict[str, Any]]:
     """遍历所有输入文件夹，写入逐谱结果并返回有效汇总行。"""
     train_mean_bank = (
@@ -258,16 +240,10 @@ def _run_folder_predictions(
     )
     class_names = predictor.resolve_target_class_names()
     rows: list[dict[str, Any]] = []
-    if cached_folders is None:
-        folder_inputs = [
-            (folder_dir.name, [(path.name, path) for path in list_spectrum_paths(folder_dir)])
-            for folder_dir in input_dirs
-        ]
-    else:
-        folder_inputs = [
-            (folder.folder_name, [(item.file_name, item.path) for item in folder.files])
-            for folder in cached_folders
-        ]
+    folder_inputs = [
+        (folder_dir.name, [(path.name, path) for path in list_spectrum_paths(folder_dir)])
+        for folder_dir in input_dirs
+    ]
     for folder_name, spectrum_items in folder_inputs:
         row = _run_single_folder(
             folder_name,
@@ -409,21 +385,6 @@ def resolve_cascade_test_result_dir(
     return level_dir / LEVEL_SUMMARY_DIR_NAME / CASCADE_MODE_DIR_NAME / TEST_RESULT_DIR_NAME
 
 
-def resolve_parent_known_test_result_dir(
-    experiment_dir: Path | str,
-    meta: dict[str, Any],
-    level_name: str,
-) -> Path:
-    """返回已知上层模式的测试结果目录。"""
-    return (
-        Path(experiment_dir)
-        / level_name
-        / LEVEL_SUMMARY_DIR_NAME
-        / PARENT_KNOWN_MODE_DIR_NAME
-        / TEST_RESULT_DIR_NAME
-    )
-
-
 def resolve_level_inference_dir(
     experiment_dir: Path | str,
     meta: dict[str, Any],
@@ -507,7 +468,6 @@ __all__ = [
     "merge_level_test_inference_summary",
     "resolve_cascade_test_result_dir",
     "resolve_level_inference_dir",
-    "resolve_parent_known_test_result_dir",
     "run_experiment_inference",
     "run_independent_inference",
 ]

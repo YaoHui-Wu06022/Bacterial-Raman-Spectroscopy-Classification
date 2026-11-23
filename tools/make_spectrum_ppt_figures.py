@@ -40,7 +40,7 @@ from ramanv2.data.runtime.augmentation import (  # noqa: E402
 
 DEFAULT_DATASET_DIR = REPO_ROOT / "dataset" / "病原菌"
 DEFAULT_SAMPLE = "Klebsiella/KP20240511_01/cell8_Area01_000.arc_data"
-DEFAULT_OUT_DIR = REPO_ROOT / "output" / "ppt流程图"
+DEFAULT_OUT_DIR = REPO_ROOT / "output" / "ppt_fig"
 LEGACY_FIGURE_NAMES = ("05_normalized.png", "06_model_input.png")
 
 # 本套 PPT 光谱图配色：主线跟模板蓝，基线与增强线用非主色对比。

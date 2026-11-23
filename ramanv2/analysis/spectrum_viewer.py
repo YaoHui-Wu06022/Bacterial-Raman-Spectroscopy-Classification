@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import random
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,19 +10,14 @@ import numpy as np
 
 from ramanv2.common.arc_data import read_arc_data
 from ramanv2.common.naming import build_natural_key
-from ramanv2.common.paths import PROJECT_ROOT
 from ramanv2.core.config import InputConfig
-from ramanv2.core.input_spec import build_input_spec
 from ramanv2.data.config import DataBuildConfig, build_cosmic_ray_options, resolve_build_config
-from ramanv2.data.profiles import resolve_selection
-from ramanv2.data.runtime.input import InputPreprocessor
-from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.preprocess import fit_baseline_spectrum
 
 
 @dataclass(frozen=True)
 class PreparedSpectrum:
-    """保存一条谱的显示数据和模型输入通道。"""
+    """保存一条谱的显示数据与基线。"""
 
     path: Path
     raw_wavenumbers: np.ndarray
@@ -33,38 +27,7 @@ class PreparedSpectrum:
     baseline: np.ndarray
     corrected_wavenumbers: np.ndarray
     corrected_intensity: np.ndarray
-    input_wavenumbers: np.ndarray
-    model_channels: np.ndarray
     cosmic_ray_replaced: int
-
-
-def find_sample_path(
-    profile_id: str,
-    sample_path: str | Path | None,
-    sample_folder: str | Path | None,
-    sample_seed: int | None,
-    project_root: Path | str = PROJECT_ROOT,
-) -> Path:
-    """解析指定谱，或从指定目录稳定抽取一条谱。"""
-    root = Path(project_root).resolve()
-    if sample_path is not None:
-        path = Path(sample_path)
-        return path.resolve() if path.is_absolute() else (root / path).resolve()
-
-    selection = resolve_selection(profile_id=profile_id, project_root=root)
-    profile = selection.profile
-    dataset_dir = selection.dataset_dir
-    folder = Path(sample_folder) if sample_folder is not None else Path(profile.root_init)
-    sample_root = folder if folder.is_absolute() else (root / folder)
-    if not sample_root.exists() and not folder.is_absolute():
-        sample_root = dataset_dir / folder
-    candidates = sorted(
-        sample_root.rglob("*.arc_data"),
-        key=lambda path: build_natural_key(path.relative_to(sample_root).as_posix()),
-    )
-    if not candidates:
-        raise FileNotFoundError(f"未找到 .arc_data 文件：{sample_root}")
-    return random.Random(sample_seed).choice(candidates).resolve()
 
 
 def collect_folder_spectra(folder_path: str | Path) -> list[Path]:
@@ -88,7 +51,7 @@ def prepare_single_spectrum(
     *,
     profile_id: str,
 ) -> PreparedSpectrum:
-    """完成单谱宇宙射线处理、基线校正和三通道模型输入构建。"""
+    """完成单谱宇宙射线处理、基线校正与裁切。"""
     path = Path(spectrum_path).resolve()
     wavenumbers, raw_intensity = read_arc_data(path)
     if not wavenumbers.size or not raw_intensity.size:
@@ -120,25 +83,6 @@ def prepare_single_spectrum(
     if corrected_wavenumbers.size < 10:
         raise ValueError(f"裁切范围内的有效波数点不足：{path}")
 
-    input_wavenumbers = np.asarray(
-        build_wn_ref(
-            input_config.cut_min,
-            input_config.cut_max,
-            input_config.target_points,
-        ),
-        dtype=np.float32,
-    )
-    input_intensity = np.interp(
-        input_wavenumbers,
-        corrected_wavenumbers,
-        corrected_intensity,
-    ).astype(np.float32)
-
-    # 查看器固定展示三条网络输入通道，但不改动训练和推理配置。
-    display_config = replace(input_config, smooth_use=True, d1_use=True, bad_bands=())
-    input_spec = build_input_spec(display_config)
-    preprocessor = InputPreprocessor(input_spec, device="cpu")
-    model_channels = preprocessor.preprocess_intensity(input_intensity)[0].numpy()
     return PreparedSpectrum(
         path=path,
         raw_wavenumbers=np.asarray(wavenumbers, dtype=np.float32),
@@ -148,8 +92,6 @@ def prepare_single_spectrum(
         baseline=np.asarray(baseline, dtype=np.float32),
         corrected_wavenumbers=corrected_wavenumbers,
         corrected_intensity=corrected_intensity,
-        input_wavenumbers=input_wavenumbers,
-        model_channels=np.asarray(model_channels, dtype=np.float32),
         cosmic_ray_replaced=int(cosmic_stats.cosmic_ray),
     )
 
@@ -233,32 +175,6 @@ def plot_baseline_comparison(
     )
     corrected_axis.set_ylabel("去基线强度")
     corrected_axis.legend(loc="upper right")
-    figure.tight_layout()
-    plt.show()
-
-
-def plot_model_input(prepared: PreparedSpectrum) -> None:
-    """在一张图中展示原始、Smooth 和一阶导数三个输入通道。"""
-    import matplotlib.pyplot as plt
-
-    labels = ("原始归一化通道", "Smooth 通道", "一阶导数通道")
-    colors = ("#E41A1C", "#2166D1", "#1B8A1B")
-    figure, axes = plt.subplots(3, 1, figsize=(12, 11), sharex=True)
-    for axis, values, label, color in zip(
-        axes,
-        prepared.model_channels,
-        labels,
-        colors,
-    ):
-        axis.plot(
-            prepared.input_wavenumbers,
-            values,
-            color=color,
-            linewidth=1.3,
-            label=label,
-        )
-        _style_axis(axis, label)
-    figure.suptitle("网络输入三通道", y=0.995)
     figure.tight_layout()
     plt.show()
 
@@ -351,11 +267,9 @@ def _style_axis(
 __all__ = [
     "PreparedSpectrum",
     "collect_folder_spectra",
-    "find_sample_path",
     "plot_baseline_comparison",
     "plot_baseline_fit",
     "plot_folder_spectra",
-    "plot_model_input",
     "plot_raw_spectrum",
     "prepare_single_spectrum",
 ]

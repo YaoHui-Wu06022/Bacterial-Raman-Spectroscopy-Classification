@@ -156,9 +156,6 @@ class DatasetRegistry:
                 return spec
         raise KeyError(f"未知数据集：{key}")
 
-    def resolve_for_profile(self, profile_id: str) -> DatasetSpec:
-        return self.resolve(profile_id)
-
     def validate(self) -> None:
         if not self.datasets:
             raise ValueError("没有可用数据集")

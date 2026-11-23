@@ -21,7 +21,7 @@ from ramanv2.modeling.classifier import RamanClassifier1D  # noqa: E402
 from ramanv2.modeling.layers import PositionalEncoding1D  # noqa: E402
 from ramanv2.modeling.model_spec import build_model_spec  # noqa: E402
 
-DEFAULT_OUT_DIR = REPO_ROOT / "output" / "ppt流程图"
+DEFAULT_OUT_DIR = REPO_ROOT / "output" / "ppt_fig"
 FILE_NAME = "positional_encoding_slide.png"
 
 FIGURE_SIZE = (7.6, 7.4)

@@ -101,11 +101,6 @@ class DatasetMapping:
             rows=rows,
         )
 
-    @classmethod
-    def from_json(cls, path: Path | str) -> "DatasetMapping":
-        return cls.from_payload(read_json(path))
-
-
 def build_prefix_to_genus(mapping: DatasetMapping) -> dict[str, str]:
     """返回前缀到分组层级的反查表；名称沿用旧消费方。"""
     return mapping.prefix_to_group()
@@ -218,11 +213,6 @@ def from_folder_prefix(
     )
 
 
-def load_dataset_mapping(path: Path | str) -> DatasetMapping:
-    """读取 UTF-8 JSON 映射文件。"""
-    return DatasetMapping.from_json(path)
-
-
 def ensure_dataset_mapping(
     label_source: Mapping[str, object],
     dataset_dir: Path | str,
@@ -332,5 +322,4 @@ __all__ = [
     "ensure_dataset_mapping",
     "from_folder_prefix",
     "from_workbook",
-    "load_dataset_mapping",
 ]

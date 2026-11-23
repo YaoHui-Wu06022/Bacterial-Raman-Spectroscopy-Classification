@@ -15,7 +15,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-DEFAULT_OUT_DIR = REPO_ROOT / "output" / "ppt流程图"
+DEFAULT_OUT_DIR = REPO_ROOT / "output" / "ppt_fig"
 FILE_NAME = "focal_loss_slide.png"
 
 FIGURE_SIZE = (8.0, 5.6)

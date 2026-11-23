@@ -23,7 +23,7 @@ from ramanv2.data.config import resolve_build_config  # noqa: E402
 from ramanv2.spectra.preprocess import fit_baseline_spectrum  # noqa: E402
 
 DEFAULT_DATA_DIR = REPO_ROOT / "dataset" / "病原菌" / "init" / "Klebsiella"
-DEFAULT_OUTPUT_ROOT = REPO_ROOT / "output" / "spectrum_stacked"
+DEFAULT_OUTPUT_ROOT = REPO_ROOT / "output" / "ppt_fig"
 FOLDER_PREFIX = "KOX"
 DISPLAY_MIN, DISPLAY_MAX = 300.0, 2000.0
 CURVE_COLORS = ("#D62728", "#E08214", "#2E9E8F", "#1C60CD")

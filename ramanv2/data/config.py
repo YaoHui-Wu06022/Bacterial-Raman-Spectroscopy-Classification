@@ -14,7 +14,8 @@ class DataBuildConfig:
     baseline_max_iter: int = 15
     baseline_fit_min: float = 200.0
     baseline_fit_max: float = 2000.0
-    cosmic_ray_profile_ids: tuple[str, ...] = ("original",)
+    # 构建链不再逐谱启用宇宙射线去除。
+    cosmic_ray_profile_ids: tuple[str, ...] = ()
     cosmic_ray_window_points: int = 7
     cosmic_ray_threshold: float = 7.0
     cosmic_ray_max_iter: int = 2

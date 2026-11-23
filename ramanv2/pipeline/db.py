@@ -235,17 +235,6 @@ def load_state_payload(path: Path | str) -> dict[str, object] | None:
 
 
 
-def save_test_defaults(path: Path | str, folders: list[str], reason: str | None = None) -> None:
-    with connect(path) as connection:
-        connection.execute("DELETE FROM test_defaults")
-        timestamp = _now()
-        for rank, source_id in enumerate(folders):
-            connection.execute(
-                "INSERT INTO test_defaults(source_id, rank, reason, updated_at) VALUES (?, ?, ?, ?)",
-                (str(source_id), rank, reason, timestamp),
-            )
-
-
 def load_test_defaults(path: Path | str) -> list[str]:
     with connect(path) as connection:
         rows = connection.execute(
@@ -357,5 +346,4 @@ __all__ = [
     "refresh_fingerprints",
     "save_lineage_payload",
     "save_state_payload",
-    "save_test_defaults",
 ]
