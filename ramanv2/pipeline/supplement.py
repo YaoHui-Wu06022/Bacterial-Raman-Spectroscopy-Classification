@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -200,10 +200,77 @@ def build_full_init_with_supplements(
     return report
 
 
+def prepare_supplement_plan(
+    supplement_root: Path | str | None,
+    init_root: Path | str,
+    mapping: DatasetMapping | None,
+    hierarchy: HierarchySpec,
+) -> SupplementPlan:
+    """按层级准备补充数据计划；扁平数据集返回空计划。"""
+    if hierarchy.is_flat:
+        return SupplementPlan(groups=(), errors=(), unbacked_init_folders=())
+    if supplement_root is None:
+        raise ValueError("缺少补充数据目录")
+    if mapping is None:
+        raise ValueError("缺少数据集前缀映射")
+    return scan_supplement_plan(supplement_root, init_root, mapping, hierarchy=hierarchy)
+
+
+def build_init_from_shift(
+    shift_root: Path | str,
+    init_root: Path | str,
+    mapping: DatasetMapping | None,
+    completed_dates: list[str] | set[str] | tuple[str, ...],
+    *,
+    supplement_root: Path | str | None,
+    test_root: Path | str | None,
+    selected_test_folders: Sequence[str] | None,
+    hierarchy: HierarchySpec,
+    plan: SupplementPlan | None = None,
+    validate_plan: bool = True,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+) -> dict[str, object]:
+    """按数据集层级构建全量 init；扁平直建，层级数据先走补充计划。"""
+    if hierarchy.is_flat:
+        return build_full_init(
+            shift_root,
+            init_root,
+            mapping,
+            completed_dates,
+            test_root=test_root,
+            selected_test_folders=selected_test_folders,
+            hierarchy=hierarchy,
+            progress_callback=progress_callback,
+        )
+    resolved_plan = plan or prepare_supplement_plan(
+        supplement_root,
+        init_root,
+        mapping,
+        hierarchy,
+    )
+    if validate_plan:
+        errors = validate_supplement_plan(resolved_plan)
+        if errors:
+            raise ValueError("补充数据校验失败：" + "；".join(errors))
+    return build_full_init_with_supplements(
+        shift_root,
+        init_root,
+        mapping,
+        completed_dates,
+        resolved_plan,
+        test_root=test_root,
+        selected_test_folders=selected_test_folders,
+        hierarchy=hierarchy,
+        progress_callback=progress_callback,
+    )
+
+
 __all__ = [
     "SupplementGroup",
     "SupplementPlan",
     "apply_supplement_plan",
+    "build_init_from_shift",
+    "prepare_supplement_plan",
     "build_full_init_with_supplements",
     "scan_supplement_plan",
     "validate_supplement_plan",

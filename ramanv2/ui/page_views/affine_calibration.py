@@ -10,13 +10,13 @@ import streamlit as st
 from ramanv2.common.arc_data import count_arc_data, has_arc_data
 from ramanv2.common.naming import BEAD_FOLDER_NAME, MANUAL_DELETE_RELATIVE
 from ramanv2.pipeline.calibration import (
+    apply_affine_reports,
     rebuild_shift_data,
     run_affine_calibration,
     run_date_rebuild,
     run_identity_affine,
 )
 from ramanv2.pipeline.cleaning import commit_date_items, reconcile_cleaning_records, scan_review_folders
-from ramanv2.pipeline.state import invalidate_downstream
 from ramanv2.pipeline.lineage import has_active_source_folders, lineage_path, load_folder_lineage
 from ramanv2.ui.formatting import progress_ratio
 from ramanv2.ui.read_cache import cached_calibration_reports
@@ -222,9 +222,11 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
                         )
                     compute_report = compute_reports[0] if compute_reports else {}
                     compute_status = str(compute_report.get("status", ""))
-                    if compute_status == "manual_approved":
-                        state.affine_completed_dates.add(compute_target)
-                        invalidate_downstream(state, [compute_target])
+                    changed = apply_affine_reports(
+                        state,
+                        [item for item in compute_reports if item.get("status") == "manual_approved"],
+                    )
+                    if changed:
                         write_page_state(context, state)
                         set_flash(
                             "affine_date_rebuild",
@@ -302,9 +304,10 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
                     for item in results
                     if item.get("status") == "error"
                 ]
-                for date_name in changed:
-                    state.affine_completed_dates.add(date_name)
-                    invalidate_downstream(state, [date_name])
+                changed = apply_affine_reports(
+                    state,
+                    [item for item in results if item.get("status") == "manual_approved"],
+                )
                 if changed:
                     write_page_state(context, state)
                 invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
@@ -436,10 +439,10 @@ def _render_identity_affine_page(context: PageContext, state) -> None:
             for result in results
             if result.get("status") == "error"
         ]
-        for date_name in changed:
-            state.affine_completed_dates.add(date_name)
-        if changed:
-            invalidate_downstream(state, changed)
+        changed = apply_affine_reports(
+            state,
+            [item for item in results if item.get("status") == "manual_approved"],
+        )
         invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
         write_page_state(context, state)
         set_flash(
@@ -529,20 +532,16 @@ def render_affine_calibration_page(context: PageContext) -> None:
     ):
         with st.spinner("正在分析小球并从 cosmic_data 重建 shift 数据……"):
             reports = _run_analyze_and_rebuild(context, pending_affine, list(affine_dates))
-        for report in reports["calibration"]:
-            date_name = str(report["date"])
-            if report.get("status") == "manual_approved":
-                state.affine_completed_dates.add(date_name)
-            elif not report.get("skipped"):
-                state.affine_completed_dates.discard(date_name)
         rebuilt_dates = {
             str(report["date"])
             for report in reports["rebuild"]
             if report.get("status") == "rebuilt"
         }
-        changed_dates = rebuilt_dates | {str(report["date"]) for report in reports["calibration"] if report.get("status") == "manual_approved" and not report.get("skipped")}
-        if changed_dates:
-            invalidate_downstream(state, changed_dates)
+        apply_affine_reports(
+            state,
+            reports["calibration"],
+            invalidate_extra=rebuilt_dates,
+        )
         invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
         write_page_state(context, state)
         st.session_state["affine_analyze_reports"] = reports

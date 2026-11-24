@@ -6,6 +6,7 @@ import math
 import shutil
 from copy import deepcopy
 from datetime import datetime, timezone
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from ramanv2.common import file_ops
@@ -392,7 +393,36 @@ def rebuild_shift_folder(data_root: Path, shift_root: Path, date_name: str, fold
             shutil.rmtree(temporary)
 
 
+def apply_affine_reports(
+    state: PipelineState,
+    reports: Sequence[Mapping[str, object]],
+    *,
+    invalidate_extra: Iterable[str] = (),
+    pop_latest: bool = False,
+) -> list[str]:
+    """按 CLI 规则回填仿射状态并失效下游，返回实际失效日期。"""
+    invalidated = {str(item) for item in invalidate_extra}
+    for report in reports:
+        date_name = str(report.get("date", "")).strip()
+        if not date_name:
+            continue
+        status = str(report.get("status", ""))
+        skipped = bool(report.get("skipped"))
+        if status == "manual_approved":
+            state.affine_completed_dates.add(date_name)
+            if not skipped:
+                invalidated.add(date_name)
+        elif not skipped:
+            state.affine_completed_dates.discard(date_name)
+    if invalidated:
+        invalidate_downstream(state, invalidated)
+    if pop_latest:
+        state.dataset_builds.pop("latest", None)
+    return sorted(invalidated)
+
+
 __all__ = [
+    "apply_affine_reports",
     "load_date_affine_parameters",
     "rebuild_shift_data",
     "rebuild_shift_folder",

@@ -14,7 +14,6 @@ from ramanv2.common.naming import (
     build_natural_key,
     parse_folder_prefix,
 )
-from ramanv2.pipeline.init_builder import build_full_init
 from ramanv2.data.plots.prefix import PrefixPlotConfig, build_prefix_plots
 from ramanv2.pipeline.calibration import run_folder_offset
 from ramanv2.data.datasets import annotate_dataset_build
@@ -30,9 +29,8 @@ from ramanv2.pipeline.dataset_sync import (
 from ramanv2.pipeline.lineage import clear_test_routes, lineage_path, load_folder_lineage
 from ramanv2.pipeline.supplement import (
     SupplementPlan,
-    build_full_init_with_supplements,
-    scan_supplement_plan,
-    validate_supplement_plan,
+    build_init_from_shift,
+    prepare_supplement_plan,
 )
 from ramanv2.pipeline.state import PipelineState
 from ramanv2.pipeline.db import database_path, load_test_defaults
@@ -744,8 +742,8 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         _render_taxon_counts(context.init_root, context.hierarchy)
     eligible_dates = sorted(state.affine_completed_dates, key=build_natural_key)
     supplement_plan = (
-        scan_supplement_plan(context.supplement_root, context.init_root, catalog, hierarchy=context.hierarchy)
-        if not context.hierarchy.is_flat and catalog is not None
+        prepare_supplement_plan(context.supplement_root, context.init_root, catalog, context.hierarchy)
+        if catalog is not None
         else None
     )
     supplement_ready = context.hierarchy.is_flat or (
@@ -790,11 +788,6 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         disabled=not supplement_ready or not confirm_supplement,
         width="stretch",
     ):
-        if not context.hierarchy.is_flat:
-            validation_errors = validate_supplement_plan(supplement_plan)
-            if validation_errors:
-                st.error("补充数据校验失败：" + "；".join(validation_errors))
-                return
         try:
             with st.status("正在重建全量 init…", expanded=True) as status:
                 progress = st.progress(0.0, text="正在校验日期门禁并收集来源文件夹…")
@@ -806,29 +799,18 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                         text=f"[{processed}/{total} 条光谱] 正在处理 {date_name}…",
                     )
 
-                if context.hierarchy.is_flat:
-                    report = build_full_init(
-                        context.shift_root,
-                        context.init_root,
-                        catalog,
-                        eligible_dates,
-                        test_root=context.init_test_root,
-                        selected_test_folders=selected_test,
-                        hierarchy=context.hierarchy,
-                        progress_callback=report_copy_progress,
-                    )
-                else:
-                    report = build_full_init_with_supplements(
-                        context.shift_root,
-                        context.init_root,
-                        catalog,
-                        eligible_dates,
-                        supplement_plan,
-                        test_root=context.init_test_root,
-                        selected_test_folders=selected_test,
-                        hierarchy=context.hierarchy,
-                        progress_callback=report_copy_progress,
-                    )
+                report = build_init_from_shift(
+                    context.shift_root,
+                    context.init_root,
+                    catalog,
+                    eligible_dates,
+                    supplement_root=context.supplement_root,
+                    test_root=context.init_test_root,
+                    selected_test_folders=selected_test,
+                    hierarchy=context.hierarchy,
+                    plan=supplement_plan,
+                    progress_callback=report_copy_progress,
+                )
                 progress.progress(1.0, text="全量 init 写入完成")
                 status.update(label="全量 init 重建完成", state="complete", expanded=False)
             state.dataset_builds["full_init"] = annotate_dataset_build(report, context.dataset_spec)

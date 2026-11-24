@@ -148,8 +148,7 @@ def run_command(args: argparse.Namespace) -> int:
         print(json.dumps(state.to_payload(), ensure_ascii=False, indent=2))
         return 0
     if args.command == "affine":
-        from ramanv2.pipeline.calibration import run_affine_calibration, run_identity_affine
-        from ramanv2.pipeline.state import invalidate_downstream
+        from ramanv2.pipeline.calibration import apply_affine_reports, run_affine_calibration, run_identity_affine
 
         dates = args.date_names or sorted(state.cleaning.completed_date_names)
         source_root = args.source_root or spec.cosmic_dir
@@ -167,42 +166,22 @@ def run_command(args: argparse.Namespace) -> int:
         flat_dates = [date_name for date_name in dates if date_name not in set(bead_dates)]
         reports = run_affine_calibration(source_root, bead_dates, output_root)
         reports += run_identity_affine(source_root, flat_dates, output_root)
-        for report in reports:
-            date_name = str(report["date"])
-            if report.get("status") == "manual_approved":
-                state.affine_completed_dates.add(date_name)
-                if not report.get("skipped"):
-                    invalidate_downstream(state, [date_name])
-            elif not report.get("skipped"):
-                state.affine_completed_dates.discard(date_name)
-        state.dataset_builds.pop("latest", None)
+        apply_affine_reports(state, reports, pop_latest=True)
         write_pipeline_state(state_path, state)
         print(json.dumps(reports, ensure_ascii=False, indent=2))
         return 0
     if args.command == "init":
-        from ramanv2.pipeline.supplement import (
-            SupplementPlan,
-            build_full_init_with_supplements,
-            scan_supplement_plan,
-            validate_supplement_plan,
-        )
+        from ramanv2.pipeline.supplement import build_init_from_shift
 
         shift_root = args.shift_root or spec.shift_dir
         init_root = args.init_root or spec.init_dir
         catalog = _dataset_mapping_for_spec(spec)
-        if spec.is_flat:
-            plan = SupplementPlan(groups=(), errors=(), unbacked_init_folders=())
-        else:
-            plan = scan_supplement_plan(spec.supplement_path, init_root, catalog, hierarchy=spec.hierarchy)
-            errors = validate_supplement_plan(plan)
-            if errors:
-                raise ValueError("补充数据校验失败：" + "；".join(errors))
-        report = build_full_init_with_supplements(
+        report = build_init_from_shift(
             shift_root,
             init_root,
             catalog,
             sorted(state.affine_completed_dates),
-            plan,
+            supplement_root=spec.supplement_path,
             test_root=spec.init_test_dir,
             selected_test_folders=args.test_folders,
             hierarchy=spec.hierarchy,
