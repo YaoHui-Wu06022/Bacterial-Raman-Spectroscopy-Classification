@@ -35,7 +35,10 @@ from ramanv2.ui.read_cache import (
 def render_sample_inference_page(context) -> None:
     """选择实验、层级和 inference_data 日期，执行无标签实际推理。"""
     st.title("样本推理")
-    st.caption("实际推理：使用 inference_data 原始光谱；不依赖标签，不参与测试评估。")
+    st.caption(
+    "实际推理：每个样本按 inference_data 的 raw_data → cosmic_data → shift_data "
+    "现场生成派生数据；不依赖标签，不参与测试评估。"
+)
     profile = context.profile()
     experiment_dirs = _list_experiment_dirs(context, profile)
     if not experiment_dirs:
@@ -83,12 +86,13 @@ def render_sample_inference_page(context) -> None:
             with st.status("正在执行实际推理…", expanded=True) as status:
                 status.write("正在加载模型。")
                 predictor = _get_cached_predictor(experiment_dir, level_name)
-                status.write("正在拟合小球仿射并推理全部光谱。")
+                status.write("正在拟合小球仿射、生成 cosmic/shift 并推理全部光谱。")
                 report = run_unlabeled_inference(
                     experiment_dir,
                     level_name,
                     date_dir,
                     predictor=predictor,
+                    dataset_spec=context.dataset_spec,
                 )
                 status.update(label="实际推理完成", state="complete", expanded=False)
             invalidate_ui_cache(*INVALIDATE_INFERENCE)

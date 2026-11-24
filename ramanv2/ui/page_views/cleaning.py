@@ -925,12 +925,17 @@ def _render_auxiliary_sections(context: PageContext, state: PipelineState, *, in
 
 
 def render_cleaning_page(context: PageContext) -> None:
+    st.title("数据清洗")
+    if not context.data_root.is_dir():
+        st.info(
+            "cosmic_data 尚不存在：请先在顶部切换到「宇宙射线去除」，"
+            "从 raw_data 生成 cosmic_data。"
+        )
+        return
     state = load_page_state(context)
     if reconcile_cleaning_records(context.data_root, state.cleaning):
         write_page_state(context, state)
     try:
-        if not context.data_root.is_dir():
-            raise FileNotFoundError(f"光谱根目录不存在：{context.data_root}")
         dates = list(cached_directory_names(str(context.data_root.resolve()), ui_cache_version("cleaning")))
     except FileNotFoundError as error:
         st.error(str(error))
@@ -938,7 +943,6 @@ def render_cleaning_page(context: PageContext) -> None:
     # 空日期目录（无任何普通子文件夹）不产生审核项，剔除后可避免 _next_pending_date 反复选中同一日期。
     dates = [name for name in dates if _is_review_date_available(context.data_root, name)]
 
-    st.title("数据清洗")
     if st.button("重新扫描", key="cleaning_rescan"):
         _clear_date_cache()
         invalidate_ui_cache(*INVALIDATE_ALL)

@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from functools import lru_cache
 
 import numpy as np
@@ -13,7 +12,6 @@ from scipy.signal import savgol_filter
 from scipy.sparse.linalg import spsolve
 
 from .bad_bands import build_valid_mask, normalize_bad_bands
-from .filters import median_filter_1d, odd_window_points
 
 
 # 基线拟合前只压制单点噪声，避免 airPLS 重加权在相近谱之间跳到不同不动点。
@@ -155,66 +153,6 @@ def polynomial_baseline(
     return baseline.astype(np.float32, copy=False)
 
 
-@dataclass(frozen=True)
-class CosmicRayStats:
-    """记录一条光谱被局部中值替换的宇宙射线尖峰点数。"""
-
-    cosmic_ray: int = 0
-
-
-def _residual_z_score(residual, valid_mask):
-    """使用 MAD 估计残差尺度，生成稳健 z 分数。"""
-    valid_values = residual[valid_mask]
-    valid_values = valid_values[np.isfinite(valid_values)]
-    if valid_values.size == 0:
-        return None
-    center = np.median(valid_values)
-    centered_abs = np.abs(valid_values - center)
-    scale = 1.4826 * np.median(centered_abs)
-    if scale <= 1e-8:
-        scale = float(np.std(valid_values))
-    if scale <= 1e-8:
-        nonzero = centered_abs[centered_abs > 1e-8]
-        if nonzero.size:
-            scale = 1.4826 * float(np.median(nonzero))
-    if scale <= 1e-8:
-        return None
-    return (residual - center) / scale
-
-
-def remove_cosmic_rays(
-    spectrum,
-    window_points: int = 7,
-    threshold: float = 7.0,
-    max_iter: int = 2,
-    valid_mask=None,
-):
-    """使用局部 median/MAD 替换正向宇宙射线尖峰。"""
-    cleaned = np.asarray(spectrum, dtype=np.float32).copy()
-    if cleaned.size < 3 or max_iter <= 0:
-        return cleaned, CosmicRayStats()
-    if valid_mask is None:
-        valid_mask = np.ones(cleaned.shape, dtype=bool)
-    else:
-        valid_mask = np.asarray(valid_mask, dtype=bool)
-        if valid_mask.shape != cleaned.shape:
-            valid_mask = np.ones(cleaned.shape, dtype=bool)
-
-    replaced_mask = np.zeros(cleaned.shape, dtype=bool)
-    window = odd_window_points(window_points)
-    for _ in range(int(max_iter)):
-        local_median = median_filter_1d(cleaned, window)
-        z_score = _residual_z_score(cleaned - local_median, valid_mask)
-        if z_score is None:
-            break
-        spike_mask = valid_mask & (z_score > float(threshold))
-        if not spike_mask.any():
-            break
-        replaced_mask |= spike_mask
-        cleaned[spike_mask] = local_median[spike_mask]
-    return cleaned, CosmicRayStats(cosmic_ray=int(replaced_mask.sum()))
-
-
 def smooth_baseline_input(spectrum):
     """给基线估计提供轻度平滑输入；后续相减仍使用原始拟合段。"""
     values = np.asarray(spectrum, dtype=np.float64)
@@ -263,12 +201,8 @@ def fit_baseline_spectrum(
     baseline_asls_p: float,
     baseline_max_iter: int,
     baseline_method: str = "asls",
-    cosmic_ray_enable: bool = False,
-    cosmic_ray_window_points: int = 7,
-    cosmic_ray_threshold: float = 7.0,
-    cosmic_ray_max_iter: int = 2,
 ):
-    """完成校验、尖峰修复与基线估计，返回拟合区间上的校正谱。"""
+    """完成校验与基线估计，返回拟合区间上的校正谱与基线。"""
     wavenumbers = np.asarray(wavenumbers, dtype=np.float64)
     spectrum = np.asarray(spectrum, dtype=np.float32)
     if wavenumbers.ndim != 1 or spectrum.ndim != 1:
@@ -282,26 +216,15 @@ def fit_baseline_spectrum(
             f"spectrum={spectrum.size}"
         )
     normalized_bands = normalize_bad_bands(bad_bands)
-    cleaned = spectrum
-    cosmic_stats = CosmicRayStats()
-    if cosmic_ray_enable:
-        cleaned, cosmic_stats = remove_cosmic_rays(
-            cleaned,
-            window_points=cosmic_ray_window_points,
-            threshold=cosmic_ray_threshold,
-            max_iter=cosmic_ray_max_iter,
-        )
     fit_mask = (wavenumbers >= baseline_fit_min) & (wavenumbers <= baseline_fit_max)
     fitted_wavenumbers = wavenumbers[fit_mask]
-    fitted_spectrum = cleaned[fit_mask]
+    fitted_spectrum = spectrum[fit_mask]
     valid_fit_mask = build_valid_mask(fitted_wavenumbers, normalized_bands)
     if fitted_wavenumbers.size < 10:
         return (
             fitted_wavenumbers,
             np.asarray([], dtype=np.float64),
-            cleaned,
             np.asarray([], dtype=np.float64),
-            cosmic_stats,
         )
     baseline = estimate_baseline(
         smooth_baseline_input(fitted_spectrum),
@@ -311,7 +234,7 @@ def fit_baseline_spectrum(
         niter=baseline_max_iter,
         valid_mask=valid_fit_mask,
     )
-    return fitted_wavenumbers, fitted_spectrum - baseline, cleaned, baseline, cosmic_stats
+    return fitted_wavenumbers, fitted_spectrum - baseline, baseline
 
 
 def preprocess_single_spectrum(
@@ -327,16 +250,12 @@ def preprocess_single_spectrum(
     baseline_fit_min=None,
     baseline_fit_max=None,
     baseline_method: str = "asls",
-    cosmic_ray_enable: bool = False,
-    cosmic_ray_window_points: int = 7,
-    cosmic_ray_threshold: float = 7.0,
-    cosmic_ray_max_iter: int = 2,
 ):
-    """完成单谱尖峰修复、基线校正、裁剪、坏段删除和插值。"""
+    """完成单谱基线校正、裁剪、坏段删除和插值。"""
     normalized_bands = normalize_bad_bands(bad_bands)
     fit_min = cut_min if baseline_fit_min is None else float(baseline_fit_min)
     fit_max = cut_max if baseline_fit_max is None else float(baseline_fit_max)
-    fitted_wavenumbers, corrected, _cleaned, _baseline, cosmic_stats = fit_baseline_spectrum(
+    fitted_wavenumbers, corrected, _baseline = fit_baseline_spectrum(
         wavenumbers,
         spectrum,
         baseline_fit_min=fit_min,
@@ -346,13 +265,9 @@ def preprocess_single_spectrum(
         baseline_asls_p=baseline_asls_p,
         baseline_max_iter=baseline_max_iter,
         baseline_method=baseline_method,
-        cosmic_ray_enable=cosmic_ray_enable,
-        cosmic_ray_window_points=cosmic_ray_window_points,
-        cosmic_ray_threshold=cosmic_ray_threshold,
-        cosmic_ray_max_iter=cosmic_ray_max_iter,
     )
     if fitted_wavenumbers.size < 10:
-        return None, None, cosmic_stats
+        return None, None
     crop_mask = (fitted_wavenumbers >= cut_min) & (fitted_wavenumbers <= cut_max)
     cropped_wavenumbers = fitted_wavenumbers[crop_mask]
     cropped_spectrum = corrected[crop_mask]
@@ -365,8 +280,8 @@ def preprocess_single_spectrum(
         target_mask = build_valid_mask(target_axis, normalized_bands)
         target_axis = target_axis[target_mask]
     if cropped_wavenumbers.size < 10 or target_axis.size == 0:
-        return None, None, cosmic_stats
+        return None, None
     interpolated = interpolate_valid_bands(
         cropped_wavenumbers, cropped_spectrum, target_axis, normalized_bands,
     )
-    return target_axis, interpolated, cosmic_stats
+    return target_axis, interpolated

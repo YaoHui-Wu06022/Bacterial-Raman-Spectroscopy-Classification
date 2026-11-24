@@ -39,7 +39,6 @@ from ramanv2.spectra.preprocess import preprocess_single_spectrum
 
 INPUT_CONFIG = InputConfig()
 BUILD_CONFIG = DataBuildConfig()
-COSMIC_RAY_OPTIONS = BUILD_CONFIG.build_cosmic_ray_options("")
 REFERENCE_AXIS = build_wn_ref(
     INPUT_CONFIG.cut_min,
     INPUT_CONFIG.cut_max,
@@ -314,7 +313,7 @@ def scan_analysis_folders(
 def preprocess_sample(path: Path) -> np.ndarray | None:
     """按训练同一链路得到 SNV 特征；无效光谱返回 None。"""
     wavenumbers, intensities = read_arc_data(path)
-    axis, corrected, _ = preprocess_single_spectrum(
+    axis, corrected = preprocess_single_spectrum(
         wavenumbers,
         intensities,
         cut_min=INPUT_CONFIG.cut_min,
@@ -327,7 +326,6 @@ def preprocess_sample(path: Path) -> np.ndarray | None:
         baseline_fit_min=BUILD_CONFIG.baseline_fit_min,
         baseline_fit_max=BUILD_CONFIG.baseline_fit_max,
         baseline_method=BUILD_CONFIG.baseline_method,
-        **COSMIC_RAY_OPTIONS,
     )
     if axis is None or corrected is None:
         return None

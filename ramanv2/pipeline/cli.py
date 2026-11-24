@@ -59,6 +59,17 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     db_check.add_argument("--refresh", action="store_true", dest="refresh_fingerprints")
     db_check.set_defaults(run_command=run_command)
 
+    ingest = commands.add_parser("ingest-folder", help="清洗并入库一个文件夹")
+    ingest.add_argument("--dataset", default=DEFAULT_DATASET_ID, help="数据集标识，默认使用默认数据集")
+    ingest.add_argument("--source", help="源文件夹；非 ASCII 路径优先用 --manifest")
+    ingest.add_argument("--date", help="八位日期，例如 20240101")
+    ingest.add_argument("--prefix", help="入库文件夹前缀，例如 SMA01")
+    ingest.add_argument("--bead", action="store_true", dest="bead_enable", help="小球批次：只去文件头，不做宇宙射线去除")
+    ingest.add_argument("--manifest", help="UTF-8 JSON 清单：source_dir/date/prefix")
+    ingest.add_argument("--apply", action="store_true", dest="apply_enable", help="实际生成 cosmic_data；默认只预览")
+    ingest.add_argument("--json", action="store_true", dest="json_enable", help="输出完整 JSON 报告")
+    ingest.set_defaults(run_command=run_command)
+
 
 def _dataset_mapping_for_spec(spec):
     """按 label_source 读取或生成当前数据集的通用前缀映射。"""
@@ -66,6 +77,7 @@ def _dataset_mapping_for_spec(spec):
         spec.label_source,
         spec.directory,
         spec.metadata_dir / MAPPING_FILE_NAME,
+        raw_dir_name=spec.raw_dir.name,
     )
 
 
@@ -75,6 +87,44 @@ def run_command(args: argparse.Namespace) -> int:
         getattr(args, "profile", None),
     )
     spec = selection.spec
+    if args.command == "ingest-folder":
+        from ramanv2.pipeline.folder_ingest import (
+            FolderIngestRequest,
+            format_ingest_summary,
+            load_folder_ingest_manifest,
+            run_folder_ingest,
+        )
+
+        source = args.source
+        date_name = args.date
+        prefix = args.prefix
+        bead = bool(getattr(args, "bead_enable", False))
+        if args.manifest:
+            manifest = load_folder_ingest_manifest(args.manifest)
+            source = source or manifest.get("source_dir") or manifest.get("source")
+            date_name = date_name or manifest.get("date")
+            prefix = prefix or manifest.get("prefix")
+            bead = bead or bool(manifest.get("bead"))
+        if bead:
+            prefix = BEAD_FOLDER_NAME
+        if not source or not date_name or not prefix:
+            raise ValueError("ingest-folder 需要 --source/--date/--prefix，或使用 --manifest")
+        report = run_folder_ingest(FolderIngestRequest(
+            spec=spec,
+            source_dir=source,
+            date_name=str(date_name),
+            prefix=str(prefix),
+            apply=bool(args.apply_enable),
+            bead=bead,
+        ))
+        if args.json_enable:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_ingest_summary(report))
+        return 0
+    if args.command in {"affine", "rebuild-shift", "rebuild-records"} and not spec.cosmic_dir.is_dir():
+        print("cosmic_data 不存在：请先在「宇宙射线去除」页从 raw_data 生成。")
+        return 1
     if args.command == "db-check":
         from ramanv2.pipeline.db import check_database, refresh_fingerprints
 

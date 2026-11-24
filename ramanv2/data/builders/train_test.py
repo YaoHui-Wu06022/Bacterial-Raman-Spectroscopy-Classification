@@ -46,7 +46,6 @@ def _physical_clean_group(
         else _validate_reference_wavenumbers(reference_wavenumbers, input_config)
     )
     options = build_preprocess_kwargs(
-        profile.profile_id,
         input_config,
         build_config,
         reference_axis,
@@ -56,7 +55,7 @@ def _physical_clean_group(
         if not wavenumbers.size or not intensities.size:
             continue
         try:
-            output_axis, output_spectrum, _ = preprocess_single_spectrum(
+            output_axis, output_spectrum = preprocess_single_spectrum(
                 wavenumbers,
                 intensities,
                 **options,

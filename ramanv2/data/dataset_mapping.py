@@ -217,6 +217,8 @@ def ensure_dataset_mapping(
     label_source: Mapping[str, object],
     dataset_dir: Path | str,
     target_path: Path | str,
+    *,
+    raw_dir_name: str | None = None,
 ) -> DatasetMapping:
     """按 label_source 生成或复用本地映射缓存。"""
     dataset_root = Path(dataset_dir).resolve()
@@ -231,6 +233,8 @@ def ensure_dataset_mapping(
             source_missing = True
     elif kind == "folder_prefix":
         source_root = dataset_root / str(label_source.get("root", "cosmic_data")).strip()
+        if not source_root.is_dir() and raw_dir_name:
+            source_root = dataset_root / raw_dir_name
         if not source_root.is_dir():
             source_root = dataset_root / "init"
         if not source_root.is_dir():

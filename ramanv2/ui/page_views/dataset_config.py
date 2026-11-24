@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 import streamlit as st
 
 from ramanv2.data.datasets import write_dataset_config
+from ramanv2.data.folder_cosmic import build_folder_cosmic_payload
 from ramanv2.ui.page_context import PageContext
 from ramanv2.ui.page_state import (
     INVALIDATE_ALL,
@@ -39,8 +41,8 @@ def render_dataset_config_page(context: PageContext) -> None:
     """选择数据集目录并保存显示名、数据集 ID 与坏区。"""
     st.title("数据集配置")
     st.caption(
-        "先把数据放到 dataset/<文件夹>/cosmic_data，再在这里选择文件夹；"
-        "显示名默认使用文件夹名。"
+        "数据可放在 dataset/<文件夹>/cosmic_data，或先放到 raw_data 再由"
+        "「宇宙射线去除」生成 cosmic_data；显示名默认使用文件夹名。"
     )
     if st.button("刷新数据集列表", key="dataset_config_refresh"):
         st.rerun()
@@ -48,7 +50,7 @@ def render_dataset_config_page(context: PageContext) -> None:
     registry = context.registry
     specs = registry.list_datasets()
     if not specs:
-        st.warning("dataset 下没有包含 cosmic_data 的数据集目录。")
+        st.warning("dataset 下没有包含 cosmic_data、raw_data 或 dataset.json 的数据集目录。")
         return
 
     dataset_ids = [spec.dataset_id for spec in specs]
@@ -83,6 +85,14 @@ def render_dataset_config_page(context: PageContext) -> None:
             "数据集 ID（ASCII，用于命令与配置）",
             value=default_dataset_id,
         )
+        cosmic_enable = st.checkbox(
+            "启用文件夹级去宇宙射线",
+            value=spec.cosmic_removal.enable,
+            help=(
+                "启用后可在「宇宙射线去除」页从 raw_data 预览并生成 cosmic_data；"
+                "参数沿用数据集已有配置。"
+            ),
+        )
         bad_bands_text = st.text_input(
             "坏区（多个用逗号分隔，留空表示无）",
             value=default_bands,
@@ -103,6 +113,9 @@ def render_dataset_config_page(context: PageContext) -> None:
                 label_source=spec.label_source,
                 taxonomy_labels=spec.taxonomy_labels,
                 hierarchy=spec.hierarchy_config,
+                cosmic_removal=build_folder_cosmic_payload(
+                    replace(spec.cosmic_removal, enable=bool(cosmic_enable))
+                ),
                 is_default=spec.is_default,
             )
         except UI_ACTION_ERRORS as error:

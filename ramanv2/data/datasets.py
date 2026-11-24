@@ -1,7 +1,8 @@
 """数据集发现与 dataset.json 配置。
 
-数据集就是 ``dataset/<id>/`` 下含 ``cosmic_data`` 的目录；层级由
-``dataset.json`` 的 ``label_source`` 与层级投影配置派生。
+数据集是 ``dataset/<id>/`` 下含 ``cosmic_data`` 或 ``raw_data`` 的目录；
+远程训练包也可以只靠 ``dataset.json`` 识别。层级由 ``dataset.json`` 的
+``label_source`` 与层级投影配置派生。
 """
 
 from __future__ import annotations
@@ -12,9 +13,14 @@ from typing import Any, Mapping
 
 from ramanv2.common.defaults import DEFAULT_BAD_BANDS
 from ramanv2.common.file_ops import read_json, write_json
-from ramanv2.common.naming import ANALYSIS_DELETE_RELATIVE, PIPELINE_DIR_NAME
+from ramanv2.common.naming import ANALYSIS_DELETE_RELATIVE, PIPELINE_DIR_NAME, is_date_name
 from ramanv2.common.paths import DATASET_ROOT
 from ramanv2.data.dataset_mapping import MAPPING_FILE_NAME, ensure_dataset_mapping
+from ramanv2.data.folder_cosmic import (
+    FolderCosmicOptions,
+    build_folder_cosmic_options,
+    build_folder_cosmic_payload,
+)
 from ramanv2.data.hierarchy_spec import (
     HIERARCHY_FILE_NAME,
     HierarchySpec,
@@ -24,8 +30,10 @@ from ramanv2.data.hierarchy_spec import (
 
 DATASET_CONFIG_FILE_NAME = "dataset.json"
 DATASET_CONFIG_VERSION = 1
+DATASET_RAW_DIR_NAME = "raw_data"
 _RESERVED_DATASET_CHILDREN = {
     "cosmic_data",
+    DATASET_RAW_DIR_NAME,
     "shift_data",
     "init",
     "init_test",
@@ -52,6 +60,7 @@ class DatasetSpec:
     label_source: Mapping[str, Any] = field(default_factory=dict)
     taxonomy_labels: Mapping[str, str] = field(default_factory=dict)
     hierarchy_config: Mapping[str, Any] = field(default_factory=dict)
+    cosmic_removal: FolderCosmicOptions = field(default_factory=FolderCosmicOptions)
 
     @property
     def is_flat(self) -> bool:
@@ -64,6 +73,10 @@ class DatasetSpec:
     @property
     def cosmic_dir(self) -> Path:
         return self.dataset_dir / "cosmic_data"
+
+    @property
+    def raw_dir(self) -> Path:
+        return self.dataset_dir / DATASET_RAW_DIR_NAME
 
     @property
     def shift_dir(self) -> Path:
@@ -113,6 +126,19 @@ class DatasetSpec:
         return self.hierarchy.signature()
 
 
+def _has_raw_batches(directory: Path) -> bool:
+    """判断 raw_data 下是否至少有一个日期批次，避免空脚手架被识别。"""
+    raw_dir = directory / DATASET_RAW_DIR_NAME
+    if not raw_dir.is_dir():
+        return False
+    for date_dir in raw_dir.iterdir():
+        if not date_dir.is_dir() or not is_date_name(date_dir.name):
+            continue
+        if any(child.is_dir() and not child.name.startswith(".") for child in date_dir.iterdir()):
+            return True
+    return False
+
+
 @dataclass(frozen=True)
 class DatasetRegistry:
     """扫描 ``dataset`` 目录得到的数据集集合。"""
@@ -131,11 +157,17 @@ class DatasetRegistry:
             for directory in sorted(root.iterdir(), key=lambda path: path.name):
                 if not directory.is_dir():
                     continue
-                # 本地数据集以 cosmic_data 为锚；远程训练包只有配置与 init/init_test。
-                if (directory / "cosmic_data").is_dir() or (directory / DATASET_CONFIG_FILE_NAME).is_file():
+                # 本地数据集以 cosmic_data 或 raw_data 为锚；远程训练包只有配置与 init/init_test。
+                if (
+                    (directory / "cosmic_data").is_dir()
+                    or _has_raw_batches(directory)
+                    or (directory / DATASET_CONFIG_FILE_NAME).is_file()
+                ):
                     specs.append(_build_spec(directory, root))
         if not specs:
-            raise FileNotFoundError(f"dataset 下没有包含 cosmic_data 的数据集：{root}")
+            raise FileNotFoundError(
+                f"dataset 下没有包含 cosmic_data、raw_data 或 dataset.json 的数据集：{root}"
+            )
         default_id = next(
             (spec.dataset_id for spec in specs if spec.is_default),
             specs[0].dataset_id,
@@ -199,6 +231,7 @@ def write_dataset_config(
     label_source: Mapping[str, Any] | None = None,
     taxonomy_labels: Mapping[str, str] | None = None,
     hierarchy: Mapping[str, Any] | None = None,
+    cosmic_removal: Mapping[str, Any] | None = None,
     is_default: bool = False,
 ) -> Path:
     directory = Path(dataset_dir).resolve()
@@ -215,6 +248,10 @@ def write_dataset_config(
         payload["taxonomy_labels"] = dict(taxonomy_labels)
     if hierarchy is not None:
         payload["hierarchy"] = dict(hierarchy)
+    if cosmic_removal is not None:
+        payload["cosmic_removal"] = build_folder_cosmic_payload(
+            build_folder_cosmic_options(cosmic_removal)
+        )
     _validate_bad_bands(payload["bad_bands"])
     path = directory / DATASET_CONFIG_FILE_NAME
     write_json(path, payload)
@@ -232,7 +269,8 @@ def annotate_dataset_build(report: dict[str, Any], spec: DatasetSpec) -> dict[st
 def resolve_project_root_for_dataset_dir(dataset_dir: Path | str) -> Path:
     """从数据集目录向上定位项目根；兼容旧根与 ``dataset/<id>`` 布局。"""
     dataset_root = Path(dataset_dir).resolve()
-    if (dataset_root / "cosmic_data").is_dir() and dataset_root.parent.name == "dataset":
+    has_data_root = (dataset_root / "cosmic_data").is_dir() or (dataset_root / DATASET_RAW_DIR_NAME).is_dir()
+    if has_data_root and dataset_root.parent.name == "dataset":
         return dataset_root.parent.parent
     return dataset_root.parent
 
@@ -267,6 +305,7 @@ def _build_spec(
             label_source,
             directory,
             directory / PIPELINE_DIR_NAME / MAPPING_FILE_NAME,
+            raw_dir_name=DATASET_RAW_DIR_NAME,
         )
         if label_source
         else None
@@ -294,6 +333,7 @@ def _build_spec(
             tuple(str(column) for column in dict(label_source.get("levels") or {}).values()),
         )
     )
+    cosmic_removal = build_folder_cosmic_options(config.get("cosmic_removal"))
     return DatasetSpec(
         dataset_id=dataset_id,
         display_name=str(config.get("display_name", "")).strip() or dataset_id,
@@ -307,6 +347,7 @@ def _build_spec(
         label_source=label_source,
         taxonomy_labels=taxonomy_labels,
         hierarchy_config=hierarchy_config,
+        cosmic_removal=cosmic_removal,
     )
 
 

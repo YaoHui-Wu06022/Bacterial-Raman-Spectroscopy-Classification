@@ -17,16 +17,17 @@ PageRenderer = Callable[[PageContext], None]
 
 PAGE_ALIASES = {"层级训练": "训练配置"}
 PAGE_TARGETS = {
+    "数据集配置": ("ramanv2.ui.page_views.dataset_config", "render_dataset_config_page"),
+    "宇宙射线去除": ("ramanv2.ui.page_views.cosmic_removal", "render_cosmic_removal_page"),
     "数据清洗": ("ramanv2.ui.page_views.cleaning", "render_cleaning_page"),
     "仿射校准": ("ramanv2.ui.page_views.affine_calibration", "render_affine_calibration_page"),
     "数据集获取": ("ramanv2.ui.page_views.dataset_acquisition", "render_dataset_acquisition_page"),
     "训练配置": ("ramanv2.ui.page_views.model_training", "render_training_page"),
     "结果分析": ("ramanv2.ui.page_views.result_analysis", "render_result_analysis_page"),
     "样本推理": ("ramanv2.ui.page_views.sample_inference", "render_sample_inference_page"),
-    "数据集配置": ("ramanv2.ui.page_views.dataset_config", "render_dataset_config_page"),
 }
 PAGE_NAMES = tuple(PAGE_TARGETS)
-_DATASET_SESSION_KEYS = {"dataset_id", "active_page", "dataset_selector"}
+_DATASET_SESSION_KEYS = {"dataset_id", "active_page"}
 
 
 def _load_page_renderer(page_name: str) -> PageRenderer:
@@ -36,21 +37,27 @@ def _load_page_renderer(page_name: str) -> PageRenderer:
 
 
 def _select_dataset_id(registry: DatasetRegistry) -> str:
-    """在页面顶部选择数据集；切换时清理其他数据集的会话状态。"""
-    specs = registry.list_datasets()
+    """在页面顶部选择已配置的数据集；没有 dataset.json 的目录不进入选择。"""
+    specs = [spec for spec in registry.list_datasets() if spec.config_path.is_file()]
+    if not specs:
+        return registry.default_dataset_id
     dataset_ids = [spec.dataset_id for spec in specs]
     labels = {spec.dataset_id: spec.display_name for spec in specs}
-    current = st.session_state.get("dataset_id", registry.default_dataset_id)
-    if current not in dataset_ids:
-        current = registry.default_dataset_id
+    previous = st.session_state.get("dataset_id")
+    current = previous if previous in dataset_ids else None
+    if current is None:
+        current = (
+            registry.default_dataset_id
+            if registry.default_dataset_id in dataset_ids
+            else dataset_ids[0]
+        )
     selected = st.selectbox(
         "数据集",
         dataset_ids,
         index=dataset_ids.index(current),
         format_func=lambda value: labels[value],
-        key="dataset_selector",
     )
-    if selected != current:
+    if selected != previous:
         for key in list(st.session_state.keys()):
             if key not in _DATASET_SESSION_KEYS:
                 del st.session_state[key]

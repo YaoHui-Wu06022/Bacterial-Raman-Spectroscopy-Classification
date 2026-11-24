@@ -55,7 +55,7 @@ def _load_curves(data_dir: Path) -> list[tuple[str, np.ndarray, np.ndarray]]:
         if not files:
             continue
         wavenumbers, raw = read_arc_data(files[0])
-        fitted, corrected, _cleaned, _baseline, _stats = fit_baseline_spectrum(
+        fitted, corrected, _ = fit_baseline_spectrum(
             wavenumbers,
             raw,
             baseline_fit_min=config.baseline_fit_min,

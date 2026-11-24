@@ -35,6 +35,7 @@ class PageContext:
     has_dataset_config: bool
     bad_bands: tuple[tuple[float, float], ...]
     data_root: Path
+    raw_root: Path
     shift_root: Path
     init_root: Path
     init_test_root: Path
@@ -89,6 +90,7 @@ class PageContext:
             self.dataset_spec.label_source,
             self.dataset_spec.dataset_dir,
             self.dataset_mapping_file,
+            raw_dir_name=self.dataset_spec.raw_dir.name,
         )
 
 
@@ -111,6 +113,7 @@ def build_page_context(
         has_dataset_config=spec.config_path.is_file(),
         bad_bands=spec.bad_bands,
         data_root=spec.cosmic_dir,
+        raw_root=spec.raw_dir,
         shift_root=spec.shift_dir,
         init_root=spec.init_dir,
         init_test_root=spec.init_test_dir,

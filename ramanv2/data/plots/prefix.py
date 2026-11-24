@@ -57,7 +57,6 @@ class PrefixPlotConfig:
     input: InputConfig = InputConfig()
     cleaning: DataBuildConfig = DEFAULT_BUILD_CONFIG
     flat: bool = False
-    profile_id: str = ""
 
 
 DEFAULT_PREFIX_PLOT_CONFIG = PrefixPlotConfig()
@@ -233,7 +232,6 @@ def build_folder_median_curves(
     )
     valid_mask = build_valid_mask(reference_axis, input_config.bad_bands)
     options = build_preprocess_kwargs(
-        config.profile_id,
         input_config,
         build_config,
         reference_axis,
@@ -247,7 +245,7 @@ def build_folder_median_curves(
             continue
         if np.any(np.diff(wavenumbers) <= 0):
             continue
-        target_axis, corrected, _ = preprocess_single_spectrum(
+        target_axis, corrected = preprocess_single_spectrum(
             wavenumbers,
             intensities,
             **options,

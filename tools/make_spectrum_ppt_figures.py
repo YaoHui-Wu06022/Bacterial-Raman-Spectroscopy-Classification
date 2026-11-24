@@ -73,10 +73,6 @@ BASELINE_OPTIONS = {
     "baseline_method": "airPLS",
     "baseline_fit_min": 200.0,
     "baseline_fit_max": 2000.0,
-    "cosmic_ray_enable": True,
-    "cosmic_ray_window_points": 7,
-    "cosmic_ray_threshold": 7.0,
-    "cosmic_ray_max_iter": 2,
 }
 
 
@@ -121,13 +117,13 @@ def build_stage_figures(dataset_dir: Path, sample_id: str, out_dir: Path) -> lis
     """生成 00-07 八个阶段图，返回写出路径。"""
     wavenumbers, raw = read_arc_data(dataset_dir / "init" / sample_id)
     bad_bands = _load_bad_bands(dataset_dir)
-    fitted_w, corrected, _cleaned, baseline, _stats = fit_baseline_spectrum(
+    fitted_w, corrected, baseline = fit_baseline_spectrum(
         wavenumbers, raw, bad_bands=bad_bands, **BASELINE_OPTIONS
     )
     # 所选谱在坏段内没有下凹，绘图时不再剔除坏段，避免出现直线过渡的“断口”。
     figure_bad_bands: tuple[tuple[float, float], ...] = ()
     target = np.linspace(CUT_MIN, CUT_MAX, TARGET_POINTS)
-    axis, interpolated, _ = preprocess_single_spectrum(
+    axis, interpolated = preprocess_single_spectrum(
         wavenumbers,
         raw,
         CUT_MIN,
@@ -140,10 +136,6 @@ def build_stage_figures(dataset_dir: Path, sample_id: str, out_dir: Path) -> lis
         baseline_fit_min=BASELINE_OPTIONS["baseline_fit_min"],
         baseline_fit_max=BASELINE_OPTIONS["baseline_fit_max"],
         baseline_method=BASELINE_OPTIONS["baseline_method"],
-        cosmic_ray_enable=BASELINE_OPTIONS["cosmic_ray_enable"],
-        cosmic_ray_window_points=BASELINE_OPTIONS["cosmic_ray_window_points"],
-        cosmic_ray_threshold=BASELINE_OPTIONS["cosmic_ray_threshold"],
-        cosmic_ray_max_iter=BASELINE_OPTIONS["cosmic_ray_max_iter"],
     )
     crop = (fitted_w >= CUT_MIN) & (fitted_w <= CUT_MAX)
     cropped_w, cropped = fitted_w[crop], corrected[crop]

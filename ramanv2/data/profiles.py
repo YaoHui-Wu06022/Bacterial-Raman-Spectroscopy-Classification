@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ramanv2.data.datasets import DatasetRegistry, DatasetSpec
+from ramanv2.data.datasets import DATASET_RAW_DIR_NAME, DatasetRegistry, DatasetSpec
 from ramanv2.data.hierarchy_spec import HierarchySpec
 
 
@@ -48,7 +48,18 @@ class DatasetSelection:
         if train_dir.is_dir():
             return train_dir
         init_dir = self.dataset_dir / self.profile.root_init
-        return init_dir if init_dir.is_dir() else self.dataset_dir
+        if init_dir.is_dir():
+            return init_dir
+        if (self.dataset_dir / DATASET_RAW_DIR_NAME).is_dir():
+            if not self.spec.cosmic_dir.is_dir():
+                raise FileNotFoundError(
+                    "该数据集仅有 raw_data：请先在「宇宙射线去除」生成 cosmic_data，"
+                    "并完成清洗与 init 构建"
+                )
+            raise FileNotFoundError(
+                "该数据集尚无 init/train：请先在「数据集获取」构建 init 与 train"
+            )
+        return self.dataset_dir
 
     @property
     def test_root(self) -> Path:

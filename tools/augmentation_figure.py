@@ -62,7 +62,7 @@ MIXUP_COUNT = 6
 def _preprocess_spectrum(path: Path) -> tuple[np.ndarray, np.ndarray]:
     """按训练口径把一条原始谱处理到 1024 点强度域，供审图叠加使用。"""
     wavenumbers, raw = read_arc_data(path)
-    axis, values, _ = preprocess_single_spectrum(
+    axis, values = preprocess_single_spectrum(
         wavenumbers,
         raw,
         CUT_MIN,
@@ -75,10 +75,6 @@ def _preprocess_spectrum(path: Path) -> tuple[np.ndarray, np.ndarray]:
         baseline_fit_min=200.0,
         baseline_fit_max=2000.0,
         baseline_method="airPLS",
-        cosmic_ray_enable=True,
-        cosmic_ray_window_points=7,
-        cosmic_ray_threshold=7.0,
-        cosmic_ray_max_iter=2,
     )
     return axis, values
 

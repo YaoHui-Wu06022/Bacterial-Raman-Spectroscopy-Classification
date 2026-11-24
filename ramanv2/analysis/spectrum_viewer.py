@@ -11,7 +11,7 @@ import numpy as np
 from ramanv2.common.arc_data import read_arc_data
 from ramanv2.common.naming import build_natural_key
 from ramanv2.core.config import InputConfig
-from ramanv2.data.config import DataBuildConfig, build_cosmic_ray_options, resolve_build_config
+from ramanv2.data.config import DataBuildConfig, resolve_build_config
 from ramanv2.spectra.preprocess import fit_baseline_spectrum
 
 
@@ -22,12 +22,10 @@ class PreparedSpectrum:
     path: Path
     raw_wavenumbers: np.ndarray
     raw_intensity: np.ndarray
-    cleaned_intensity: np.ndarray
     baseline_wavenumbers: np.ndarray
     baseline: np.ndarray
     corrected_wavenumbers: np.ndarray
     corrected_intensity: np.ndarray
-    cosmic_ray_replaced: int
 
 
 def collect_folder_spectra(folder_path: str | Path) -> list[Path]:
@@ -48,18 +46,15 @@ def prepare_single_spectrum(
     spectrum_path: str | Path,
     input_config: InputConfig,
     build_values: DataBuildConfig | None = None,
-    *,
-    profile_id: str,
 ) -> PreparedSpectrum:
-    """完成单谱宇宙射线处理、基线校正与裁切。"""
+    """完成单谱基线校正与裁切。"""
     path = Path(spectrum_path).resolve()
     wavenumbers, raw_intensity = read_arc_data(path)
     if not wavenumbers.size or not raw_intensity.size:
         raise ValueError(f"无法读取光谱：{path}")
 
     build_config_value = resolve_build_config(build_values)
-    cosmic_options = build_cosmic_ray_options(profile_id, build_config_value)
-    baseline_wavenumbers, corrected_all, cleaned_intensity, baseline, cosmic_stats = fit_baseline_spectrum(
+    baseline_wavenumbers, corrected_all, baseline = fit_baseline_spectrum(
         wavenumbers,
         raw_intensity,
         baseline_fit_min=build_config_value.baseline_fit_min,
@@ -69,7 +64,6 @@ def prepare_single_spectrum(
         baseline_asls_p=build_config_value.baseline_asls_p,
         baseline_max_iter=build_config_value.baseline_max_iter,
         baseline_method=build_config_value.baseline_method,
-        **cosmic_options,
     )
     if baseline_wavenumbers.size < 10:
         raise ValueError(f"基线拟合范围内的有效波数点不足：{path}")
@@ -87,12 +81,10 @@ def prepare_single_spectrum(
         path=path,
         raw_wavenumbers=np.asarray(wavenumbers, dtype=np.float32),
         raw_intensity=np.asarray(raw_intensity, dtype=np.float32),
-        cleaned_intensity=cleaned_intensity,
         baseline_wavenumbers=baseline_wavenumbers,
         baseline=np.asarray(baseline, dtype=np.float32),
         corrected_wavenumbers=corrected_wavenumbers,
         corrected_intensity=corrected_intensity,
-        cosmic_ray_replaced=int(cosmic_stats.cosmic_ray),
     )
 
 
@@ -183,7 +175,6 @@ def plot_folder_spectra(
     folder_path: str | Path,
     input_config: InputConfig,
     build_values: DataBuildConfig,
-    profile_id: str,
     xlim: tuple[float, float] | None = None,
 ) -> None:
     """逐图展示文件夹全部原始谱及各自实际扣除的拟合基线。"""
@@ -192,12 +183,7 @@ def plot_folder_spectra(
     folder = Path(folder_path).resolve()
     spectrum_paths = collect_folder_spectra(folder)
     prepared = [
-        prepare_single_spectrum(
-            path,
-            input_config,
-            build_values,
-            profile_id=profile_id,
-        )
+        prepare_single_spectrum(path, input_config, build_values)
         for path in spectrum_paths
     ]
     figure, axes = plt.subplots(

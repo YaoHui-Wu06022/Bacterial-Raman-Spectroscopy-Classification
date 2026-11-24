@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from ramanv2.core.config import InputConfig
-from ramanv2.data.config import DataBuildConfig, build_cosmic_ray_options
+from ramanv2.data.config import DataBuildConfig
 
 
 def build_preprocess_kwargs(
-    profile_id: str,
     input_config: InputConfig,
     build_config: DataBuildConfig,
     reference_axis,
@@ -24,5 +23,4 @@ def build_preprocess_kwargs(
         "baseline_fit_min": build_config.baseline_fit_min,
         "baseline_fit_max": build_config.baseline_fit_max,
         "baseline_method": build_config.baseline_method,
-        **build_cosmic_ray_options(profile_id, build_config),
     }

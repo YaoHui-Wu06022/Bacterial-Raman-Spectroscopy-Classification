@@ -13,16 +13,16 @@ def odd_window_points(points, min_points: int = 3) -> int:
     return value + 1 if value % 2 == 0 else value
 
 
-def median_filter_1d(values, window):
+def median_filter_1d(values, window, dtype=np.float32):
     """使用边缘复制的一维中值滤波，并保持原数组长度。"""
     array = np.asarray(values)
     window = odd_window_points(window)
     if array.size < window:
-        return array.copy()
+        return array.astype(dtype, copy=True)
     padding = window // 2
     padded = np.pad(array, pad_width=padding, mode="edge")
     windows = np.lib.stride_tricks.sliding_window_view(padded, window)
-    return np.median(windows, axis=1).astype(np.float32, copy=False)
+    return np.median(windows, axis=1).astype(dtype, copy=False)
 
 
 def _validate_sg_params(window_length, polyorder, deriv) -> tuple[int, int, int]:

@@ -4,19 +4,25 @@ from __future__ import annotations
 
 import csv
 import shutil
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import numpy as np
-
 from ramanv2.common.arc_data import read_arc_data
 from ramanv2.common.device import resolve_device
-from ramanv2.common.file_ops import publish_directory, write_json
+from ramanv2.common.file_ops import create_temporary_path, publish_directory, write_json
 from ramanv2.common.naming import SPECIAL_FOLDER_NAMES, build_natural_key
-from ramanv2.data.calibration.affine import analyze_date
+from ramanv2.data.calibration.affine import analyze_date, build_corrected_folder
 from ramanv2.data.config import DataBuildConfig
+from ramanv2.data.datasets import DatasetSpec
+from ramanv2.data.folder_cosmic import (
+    FolderCosmicOptions,
+    clean_spectrum_folder,
+    read_spectrum_folder,
+    write_spectrum_folder,
+)
 from ramanv2.data.preprocess import build_preprocess_kwargs
 from ramanv2.inference.spectrum_input import (
     build_inference_preprocessor,
@@ -29,6 +35,9 @@ from ramanv2.spectra.preprocess import preprocess_single_spectrum
 
 INFERENCE_DATA_DIR_NAME = "inference_data"
 UNLABELED_RESULT_DIR_NAME = "result"
+RAW_DATA_DIR_NAME = "raw_data"
+COSMIC_DATA_DIR_NAME = "cosmic_data"
+SHIFT_DATA_DIR_NAME = "shift_data"
 AFFINE_VALID_STATUSES = frozenset({"ready", "limited_replicates"})
 
 
@@ -64,11 +73,13 @@ def run_unlabeled_inference(
     predictor: Predictor | None = None,
     device: str | None = None,
     top_k: int = 3,
+    dataset_spec: DatasetSpec | None = None,
 ) -> dict[str, Any]:
     """对 inference_data 的一个日期执行无标签实际推理。
 
-    日期级仿射由当天小球现场拟合；只接受 ready / limited_replicates。
-    每个 CS 文件夹使用全部光谱，文件夹结果取 top-1 多数票，不做准确率评估。
+    每个 CS 文件夹按 raw_data → cosmic_data → shift_data 现场生成派生数据；
+    raw_data 保持原样。日期级仿射仍由当天小球拟合；只接受 ready /
+    limited_replicates。预测只读取 shift_data，文件夹结果取 top-1 多数票。
     """
     source = Path(date_dir).resolve()
     if not source.is_dir():
@@ -91,6 +102,11 @@ def run_unlabeled_inference(
     offset = affine.get("offset")
     if scale is None or offset is None:
         raise RuntimeError(f"{source.name} 仿射参数缺失")
+    cosmic_options = (
+        replace(dataset_spec.cosmic_removal, enable=True)
+        if dataset_spec is not None
+        else FolderCosmicOptions(enable=True)
+    )
 
     folders = _sample_folders(source)
     if not folders:
@@ -102,7 +118,6 @@ def run_unlabeled_inference(
         input_config.target_points,
     )
     options = build_preprocess_kwargs(
-        predictor.profile_id,
         input_config,
         DataBuildConfig(),
         reference_axis,
@@ -118,10 +133,15 @@ def run_unlabeled_inference(
             shutil.copytree(shift_dir, temporary / "shift")
         folder_reports = []
         for folder in folders:
+            derived_shift_dir = _build_folder_derived(
+                folder,
+                cosmic_options,
+                float(scale),
+                float(offset),
+            )
             report = _predict_folder(
                 folder,
-                scale=float(scale),
-                offset=float(offset),
+                shift_dir=derived_shift_dir,
                 predictor=predictor,
                 preprocessor=preprocessor,
                 options=options,
@@ -174,38 +194,72 @@ def run_unlabeled_inference(
 
 
 def _sample_folders(date_dir: Path) -> list[Path]:
-    """列出日期下含光谱的样本文件夹，跳过小球和流水线保留目录。"""
+    """列出日期下含 raw_data 光谱的样本文件夹，跳过小球和结果目录。"""
     result = []
     for path in sorted(date_dir.iterdir(), key=lambda item: build_natural_key(item.name)):
         if not path.is_dir() or path.name.startswith("."):
             continue
-        if path.name in SPECIAL_FOLDER_NAMES:
+        if path.name in SPECIAL_FOLDER_NAMES or path.name == UNLABELED_RESULT_DIR_NAME:
             continue
-        if not list_spectrum_paths(path):
+        raw_dir = path / RAW_DATA_DIR_NAME
+        if not raw_dir.is_dir() or not list_spectrum_paths(raw_dir):
             continue
         result.append(path)
     return result
 
 
+def _build_folder_derived(
+    folder: Path,
+    cosmic_options: FolderCosmicOptions,
+    scale: float,
+    offset: float,
+) -> Path:
+    """生成样本文件夹的 cosmic_data 与 shift_data，返回 shift_data 路径。"""
+    raw_dir = folder / RAW_DATA_DIR_NAME
+    cosmic_dir = folder / COSMIC_DATA_DIR_NAME
+    shift_dir = folder / SHIFT_DATA_DIR_NAME
+    spectrum_folder = read_spectrum_folder(raw_dir, folder_key=folder.name)
+    cleaned, report = clean_spectrum_folder(spectrum_folder, cosmic_options)
+    if report["status"] != "applied":
+        raise RuntimeError(f"{folder.name} 去宇宙射线未完成：{report['status']}")
+
+    temporary = create_temporary_path(cosmic_dir)
+    temporary.mkdir(parents=True, exist_ok=False)
+    try:
+        write_spectrum_folder(spectrum_folder, cleaned, temporary)
+        publish_directory(temporary, cosmic_dir)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary, ignore_errors=True)
+
+    temporary = create_temporary_path(shift_dir)
+    temporary.mkdir(parents=True, exist_ok=False)
+    try:
+        build_corrected_folder(cosmic_dir, temporary, scale, offset)
+        publish_directory(temporary, shift_dir)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary, ignore_errors=True)
+    return shift_dir
+
+
 def _predict_folder(
     folder: Path,
     *,
-    scale: float,
-    offset: float,
+    shift_dir: Path,
     predictor: Predictor,
     preprocessor,
     options: dict[str, Any],
     top_k: int,
 ) -> dict[str, Any]:
-    """推理一个样本文件夹的全部光谱，并聚合 top-1 多数票。"""
+    """推理一个样本文件夹的 shift_data 全部光谱，并聚合 top-1 多数票。"""
     rows: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
-    for path in list_spectrum_paths(folder):
+    for path in list_spectrum_paths(shift_dir):
         try:
             wavenumbers, intensity = read_arc_data(path)
-            corrected_axis = np.asarray(wavenumbers, dtype=np.float64) * scale + offset
-            output_axis, spectrum, _stats = preprocess_single_spectrum(
-                corrected_axis,
+            output_axis, spectrum = preprocess_single_spectrum(
+                wavenumbers,
                 intensity,
                 **options,
             )

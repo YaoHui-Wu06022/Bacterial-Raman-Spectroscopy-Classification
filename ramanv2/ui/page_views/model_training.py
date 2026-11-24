@@ -30,7 +30,7 @@ from ramanv2.ui.page_state import (
 
 
 BATCH_SIZES = (8, 16, 32, 48, 64, 96, 128)
-WORKER_COUNTS = (-1, 0, 1, 2, 4, 8, 16)
+WORKER_COUNTS = (-1, 1, 2, 4, 8, 16)
 TARGET_POINTS = (256, 512, 896, 1024, 2048)
 LOG_MAX_LINES = 400
 LOG_FLUSH_SECONDS = 0.3
@@ -84,7 +84,11 @@ def render_training_page(context) -> None:
     profile = context.profile()
     profile_id = profile.profile_id
     profile_hierarchy = context.hierarchy
-    train_dir = context.training_dir(profile)
+    try:
+        train_dir = context.training_dir(profile)
+    except FileNotFoundError as error:
+        st.info(str(error))
+        return
     index = cached_dataset_index(
         str(train_dir.resolve()),
         ui_cache_version("training"),
