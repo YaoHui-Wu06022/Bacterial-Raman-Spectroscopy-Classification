@@ -9,7 +9,7 @@ from pathlib import Path
 def _run_zip_command(_args) -> int:
     """执行顶层源码 ZIP 命令。"""
     from ramanv2.common.paths import PROJECT_ROOT
-    from ramanv2.packaging.source_archive import build_package_archive
+    from ramanv2.packaging.archive import build_package_archive
 
     package_dir = Path(__file__).resolve().parents[1]
     archive_path = build_package_archive(package_dir, PROJECT_ROOT / "ramanv2.zip")

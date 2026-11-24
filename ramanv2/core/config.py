@@ -9,8 +9,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, fields
 from typing import Any, Mapping
 
-from ramanv2.common.defaults import DEFAULT_BAD_BANDS
 from ramanv2.common.hierarchy import LABEL_SCHEMA
+
+
+DEFAULT_BAD_BANDS: tuple[tuple[float, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -228,3 +230,24 @@ def _yaml_ready(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _yaml_ready(item) for key, item in value.items()}
     return value
+
+
+@dataclass(frozen=True)
+class DataBuildConfig:
+    """描述常规数据集从 init 到 train/test 的固定清洗参数。"""
+
+    baseline_method: str = "airPLS"
+    baseline_lam: float = 1e5
+    baseline_asls_p: float = 0.01
+    baseline_max_iter: int = 15
+    baseline_fit_min: float = 200.0
+    baseline_fit_max: float = 2000.0
+    min_samples_per_class: int = 8
+
+
+DEFAULT_BUILD_CONFIG = DataBuildConfig()
+
+
+def resolve_build_config(config: DataBuildConfig | None = None) -> DataBuildConfig:
+    """返回调用方配置，缺失时使用默认常规数据构建配置。"""
+    return DEFAULT_BUILD_CONFIG if config is None else config

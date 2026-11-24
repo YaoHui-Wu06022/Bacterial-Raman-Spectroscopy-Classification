@@ -19,7 +19,7 @@ from ramanv2.common.file_ops import (
 from ramanv2.common.paths import PROJECT_ROOT
 from ramanv2.data.dataset_mapping import MAPPING_FILE_NAME
 from ramanv2.data.profiles import DatasetProfile, DatasetSelection, resolve_selection
-from ramanv2.packaging.source_archive import build_package_archive
+from ramanv2.packaging.archive import build_package_archive
 
 
 STAGE_INIT = "init"

@@ -27,7 +27,7 @@ from ramanv2.evaluation.context import (
     resolve_level_name,
 )
 from ramanv2.evaluation.metrics_report import write_model_report
-from ramanv2.evaluation.summary_text import build_result_summary
+from ramanv2.common.result_text import build_result_summary
 from ramanv2.evaluation.independent_test import (
     TEST_SAMPLE_CSV_NAME,
     compute_folder_metrics,

@@ -30,7 +30,7 @@ from ramanv2.core.run_context import (
 from ramanv2.data.hierarchy_spec import HierarchySpec, resolve_hierarchy_from_meta
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.data.profiles import resolve_selection
-from ramanv2.evaluation.summary_text import build_result_summary
+from ramanv2.common.result_text import build_result_summary
 from ramanv2.inference.test_report import (
     plot_folder_spectra,
     write_file_report,

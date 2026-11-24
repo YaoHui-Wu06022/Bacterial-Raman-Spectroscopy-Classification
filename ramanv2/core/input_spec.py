@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ramanv2.core.config import InputConfig
+from ramanv2.core.config import DataBuildConfig, InputConfig
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.bad_bands import build_valid_mask
 
@@ -93,3 +93,23 @@ def _resolve_segment_bounds(
     if not bounds or bounds[-1][1] != point_count:
         raise ValueError("有效段划分与模型输入点数不一致")
     return tuple(bounds)
+
+
+def build_preprocess_kwargs(
+    input_config: InputConfig,
+    build_config: DataBuildConfig,
+    reference_axis,
+) -> dict:
+    """构造 preprocess_single_spectrum 的统一参数，避免各入口漏配字段。"""
+    return {
+        "cut_min": input_config.cut_min,
+        "cut_max": input_config.cut_max,
+        "reference_wavenumbers": reference_axis,
+        "bad_bands": input_config.bad_bands,
+        "baseline_lam": build_config.baseline_lam,
+        "baseline_asls_p": build_config.baseline_asls_p,
+        "baseline_max_iter": build_config.baseline_max_iter,
+        "baseline_fit_min": build_config.baseline_fit_min,
+        "baseline_fit_max": build_config.baseline_fit_max,
+        "baseline_method": build_config.baseline_method,
+    }

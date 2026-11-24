@@ -31,7 +31,7 @@ from ramanv2.pipeline.state import (
     pipeline_state_path_for_spec,
     write_pipeline_state,
 )
-from ramanv2.records.lineage import initialize_folder_lineage, sync_pipeline_state_from_lineage
+from ramanv2.pipeline.lineage import initialize_folder_lineage, sync_pipeline_state_from_lineage
 
 
 _PREFIX_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")

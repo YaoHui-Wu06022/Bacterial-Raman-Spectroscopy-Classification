@@ -13,7 +13,7 @@ from ramanv2.common.device import resolve_device
 from ramanv2.common.file_ops import read_json
 from ramanv2.common.naming import build_natural_key
 from ramanv2.core.run_context import METRICS_FILE_NAME, TEST_RESULT_DIR_NAME
-from ramanv2.data.dataset_io import load_arc_intensity
+from ramanv2.common.arc_data import load_arc_intensity
 from ramanv2.data.profiles import resolve_selection
 from ramanv2.data.runtime.input import InputPreprocessor
 from ramanv2.evaluation.context import (
@@ -22,7 +22,7 @@ from ramanv2.evaluation.context import (
     resolve_run_entry,
 )
 from ramanv2.evaluation.metrics_report import write_model_report
-from ramanv2.evaluation.summary_text import build_result_summary
+from ramanv2.common.result_text import build_result_summary
 from ramanv2.inference.spectrum_input import (
     INFERENCE_SAMPLES_PER_FOLDER,
     build_inference_preprocessor,

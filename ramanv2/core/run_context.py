@@ -9,7 +9,7 @@ from typing import TextIO
 
 from ramanv2.core.config import Config
 
-from ramanv2.core.config_snapshot import (
+from ramanv2.core.snapshot import (
     SHARED_CONFIG_NAME,
     assert_shared_compatible,
     read_yaml_dict,

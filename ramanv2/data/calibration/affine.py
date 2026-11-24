@@ -450,7 +450,7 @@ def _save_calibration_figure(
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
-    payload = {key: value for key, value in payload.items() if key not in {"folder_compensations", "effective_offsets", "operator_input", "compensation_history", "compensated_at", "compensation_record_only", "changed_folders"}}
+    payload = {key: value for key, value in payload.items() if key != "changed_folders"}
     write_json(path, payload)
 
 

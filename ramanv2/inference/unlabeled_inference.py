@@ -15,7 +15,7 @@ from ramanv2.common.device import resolve_device
 from ramanv2.common.file_ops import create_temporary_path, publish_directory, write_json
 from ramanv2.common.naming import SPECIAL_FOLDER_NAMES, build_natural_key
 from ramanv2.data.calibration.affine import analyze_date, build_corrected_folder
-from ramanv2.data.config import DataBuildConfig
+from ramanv2.core.config import DataBuildConfig
 from ramanv2.data.datasets import DatasetSpec
 from ramanv2.data.folder_cosmic import (
     FolderCosmicOptions,
@@ -23,7 +23,7 @@ from ramanv2.data.folder_cosmic import (
     read_spectrum_folder,
     write_spectrum_folder,
 )
-from ramanv2.data.preprocess import build_preprocess_kwargs
+from ramanv2.core.input_spec import build_preprocess_kwargs
 from ramanv2.inference.spectrum_input import (
     build_inference_preprocessor,
     list_spectrum_paths,

@@ -24,7 +24,7 @@ from ramanv2.common.naming import (
 from ramanv2.data.calibration.affine import invalidate_calibration_report
 from ramanv2.data.dataset_mapping import DatasetMapping, build_prefix_to_genus
 from ramanv2.pipeline.cleaning import discard_removed_date
-from ramanv2.records.lineage import (
+from ramanv2.pipeline.lineage import (
     record_purge,
     record_restore,
 )

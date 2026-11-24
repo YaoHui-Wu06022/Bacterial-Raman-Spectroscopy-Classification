@@ -15,7 +15,7 @@ from ramanv2.common.arc_data import (
     read_arc_data,
 )
 from ramanv2.common.naming import CANONICAL_FOLDER_PATTERN, build_natural_key, parse_folder_prefix
-from ramanv2.data.builders.init import build_full_init, build_spectrum_folder
+from ramanv2.pipeline.init_builder import build_full_init, build_spectrum_folder
 from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.data.count import summarize_dataset

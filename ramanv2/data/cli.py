@@ -54,7 +54,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 def run_command(args: argparse.Namespace) -> int:
     """执行一个已解析的 data 子命令。"""
     if args.command == "split":
-        from ramanv2.data.experiment_group import build_experiment_group
+        from ramanv2.training.experiment_group import build_experiment_group
 
         experiment_names = tuple(
             name.strip() for name in str(args.experiments).split(",") if name.strip()

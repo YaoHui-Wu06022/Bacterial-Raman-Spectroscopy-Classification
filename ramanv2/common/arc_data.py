@@ -83,6 +83,23 @@ def iter_arc_data_paths(root: Path | str, *, recursive: bool = False) -> Iterato
                 yield Path(entry.path)
 
 
+def iter_arc_dirs(root_dir: Path | str):
+    """递归返回包含 .arc_data 文件的目录及其排序后的文件名。"""
+    for root, directories, filenames in os.walk(os.fspath(root_dir)):
+        directories[:] = sorted(
+            name for name in directories if not is_hidden_dir_name(name)
+        )
+        arc_files = sorted(name for name in filenames if is_arc_data_name(name))
+        if arc_files:
+            yield Path(root), arc_files
+
+
+def load_arc_intensity(path: Path | str, dtype=np.float32):
+    """读取单个 .arc_data 文件的强度列。"""
+    _wavenumbers, intensities = read_arc_data(path)
+    return np.asarray(intensities, dtype=dtype)
+
+
 def list_arc_data_paths(
     root: Path | str,
     *,
@@ -109,7 +126,9 @@ __all__ = [
     "has_arc_data",
     "is_arc_data_name",
     "iter_arc_data_paths",
+    "iter_arc_dirs",
     "list_arc_data_paths",
+    "load_arc_intensity",
     "parse_raw_arc_data",
     "read_arc_data",
     "read_raw_arc_data",

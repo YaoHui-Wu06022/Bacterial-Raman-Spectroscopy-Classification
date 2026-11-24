@@ -23,12 +23,12 @@ from ramanv2.common.naming import (
     build_natural_key,
     parse_folder_prefix,
 )
-from ramanv2.common.file_ops import create_temporary_path, publish_directory, read_json, rename_directory, _remove_path
+from ramanv2.common.file_ops import create_temporary_path, publish_directory, read_json, rename_directory, remove_path
 from ramanv2.data.count import summarize_dataset
 from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.data.profiles import TEST_ROOT_NAME
 from ramanv2.data.dataset_mapping import DatasetMapping
-from ramanv2.records.lineage import apply_output_path, initialize_folder_lineage, load_folder_lineage, write_folder_lineage
+from ramanv2.pipeline.lineage import apply_output_path, initialize_folder_lineage, load_folder_lineage, write_folder_lineage
 
 
 BuildMode = Literal["full", "incremental", "replace_dates"]
@@ -266,9 +266,9 @@ def build_init_datasets(
     try:
         if mode == "replace_dates":
             for relative in replaced_init_dirs:
-                _remove_path(temporary_roots["__all__"] / relative)
+                remove_path(temporary_roots["__all__"] / relative)
             for name in replaced_test_names:
-                _remove_path(temporary_roots["__test__"] / name)
+                remove_path(temporary_roots["__test__"] / name)
         plans = [(group, _resolve_destinations(group, temporary_roots, hierarchy)) for group in groups]
         with ThreadPoolExecutor(max_workers=_copy_worker_count()) as executor:
             futures = {

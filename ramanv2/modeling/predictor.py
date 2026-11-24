@@ -8,7 +8,7 @@ from typing import Any, Mapping
 
 import torch
 
-from ramanv2.core.run_snapshot import RunSnapshot, load_run_snapshot
+from ramanv2.core.snapshot import RunSnapshot, load_run_snapshot
 from ramanv2.core.config import InputConfig
 from ramanv2.core.run_context import HIERARCHY_META_FILE_NAME, MODEL_FILE_NAME
 from ramanv2.common.hierarchy import load_hierarchy_meta, normalize_level_name, resolve_allowed_indices

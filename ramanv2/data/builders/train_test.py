@@ -17,15 +17,27 @@ from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.preprocess import preprocess_single_spectrum
 
-from ramanv2.data.config import DataBuildConfig, resolve_build_config
-from ramanv2.data.preprocess import build_preprocess_kwargs
-from ramanv2.common.arc_data import write_arc_data
+from ramanv2.core.config import DataBuildConfig, resolve_build_config
+from ramanv2.core.input_spec import build_preprocess_kwargs
+from ramanv2.common.arc_data import iter_arc_dirs, read_arc_data, write_arc_data
 from ramanv2.common.file_ops import create_temporary_path, publish_directory
 
-from ramanv2.data.dataset_io import iter_init_groups
 
 
 MAX_BUILD_WORKERS = 8
+
+
+def _iter_init_groups(input_dir: Path | str):
+    """按叶子目录分组迭代目录形式的 init 数据。"""
+    input_path = Path(input_dir).resolve()
+    if not input_path.is_dir():
+        raise FileNotFoundError(f"Missing init directory: {input_path}")
+    for leaf_dir, filenames in iter_arc_dirs(input_path):
+        samples = [
+            (filename, *read_arc_data(leaf_dir / filename))
+            for filename in filenames
+        ]
+        yield leaf_dir.relative_to(input_path), leaf_dir.name, samples
 
 
 def _physical_clean_group(
@@ -172,7 +184,7 @@ def build_train(
             profile,
             input_config,
             config,
-            iter_init_groups(input_path),
+            _iter_init_groups(input_path),
             reference_wavenumbers,
         ):
             if len(physical_samples) < config.min_samples_per_class:
@@ -236,7 +248,7 @@ def build_test(
     spectra_built = 0
     target_level = hierarchy.level_names[-1]
     try:
-        for relative_dir, leaf_name, raw_samples in iter_init_groups(input_path):
+        for relative_dir, leaf_name, raw_samples in _iter_init_groups(input_path):
             cleaned = _physical_clean_group(
                 profile,
                 input_config,

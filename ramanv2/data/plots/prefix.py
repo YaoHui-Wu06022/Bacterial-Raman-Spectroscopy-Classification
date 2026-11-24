@@ -33,10 +33,10 @@ from ramanv2.common.plotting import (
     save_figure,
 )
 from ramanv2.core.config import InputConfig
-from ramanv2.data.config import DEFAULT_BUILD_CONFIG, DataBuildConfig
+from ramanv2.core.config import DEFAULT_BUILD_CONFIG, DataBuildConfig
 from ramanv2.data.datasets import load_dataset_config
 from ramanv2.data.hierarchy_spec import HierarchySpec
-from ramanv2.data.preprocess import build_preprocess_kwargs
+from ramanv2.core.input_spec import build_preprocess_kwargs
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.bad_bands import build_valid_mask
 from ramanv2.spectra.normalize import normalize_spectrum

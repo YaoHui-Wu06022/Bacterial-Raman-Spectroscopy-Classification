@@ -11,9 +11,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
-from ramanv2.common.defaults import DEFAULT_BAD_BANDS
+from ramanv2.core.config import DEFAULT_BAD_BANDS
 from ramanv2.common.file_ops import read_json, write_json
-from ramanv2.common.naming import ANALYSIS_DELETE_RELATIVE, PIPELINE_DIR_NAME, is_date_name
+from ramanv2.common.naming import PIPELINE_DIR_NAME, is_date_name
 from ramanv2.common.paths import DATASET_ROOT
 from ramanv2.data.dataset_mapping import MAPPING_FILE_NAME, ensure_dataset_mapping
 from ramanv2.data.folder_cosmic import (
@@ -31,19 +31,6 @@ from ramanv2.data.hierarchy_spec import (
 DATASET_CONFIG_FILE_NAME = "dataset.json"
 DATASET_CONFIG_VERSION = 1
 DATASET_RAW_DIR_NAME = "raw_data"
-_RESERVED_DATASET_CHILDREN = {
-    "cosmic_data",
-    DATASET_RAW_DIR_NAME,
-    "shift_data",
-    "init",
-    "init_test",
-    "fig_init",
-    "extra_data",
-    ANALYSIS_DELETE_RELATIVE.name,
-    PIPELINE_DIR_NAME,
-}
-
-
 @dataclass(frozen=True)
 class DatasetSpec:
     """一个可独立维护的数据集及其目录布局。"""

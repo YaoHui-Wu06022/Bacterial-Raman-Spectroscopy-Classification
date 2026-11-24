@@ -10,7 +10,6 @@ from pathlib import Path
 from ramanv2.common.arc_data import has_arc_data, list_arc_data_paths
 from ramanv2.common.file_ops import preserve_paths
 from ramanv2.common.naming import (
-    ANALYSIS_DELETE_RELATIVE,
     FOLDER_DELETE_RELATIVE,
     MANUAL_DELETE_RELATIVE,
     PIPELINE_DIR_NAME,
@@ -23,6 +22,8 @@ from ramanv2.pipeline.db import (
     load_lineage_payload,
     save_lineage_payload,
 )
+from ramanv2.pipeline.state import PipelineState
+
 LINEAGE_VERSION = 1
 
 
@@ -602,7 +603,7 @@ def mark_folders_reviewed(
     return changed
 
 
-def sync_pipeline_state_from_lineage(data_root: Path | str, state: object) -> object:
+def sync_pipeline_state_from_lineage(data_root: Path | str, state: PipelineState) -> PipelineState:
     """只从已有走向文件刷新日期摘要，并按磁盘排除已彻底消失的来源。"""
     root = Path(data_root).resolve()
     payload = load_folder_lineage(root)
@@ -628,12 +629,9 @@ def sync_pipeline_state_from_lineage(data_root: Path | str, state: object) -> ob
             for item in output_records
         ):
             init_dates.add(date_name)
-    if hasattr(state, "cleaning"):
-        state.cleaning.completed_date_names = cleaning_dates
-    if hasattr(state, "affine_completed_dates"):
-        state.affine_completed_dates = affine_dates
-    if hasattr(state, "init_generated_dates"):
-        state.init_generated_dates = init_dates
+    state.cleaning.completed_date_names = cleaning_dates
+    state.affine_completed_dates = affine_dates
+    state.init_generated_dates = init_dates
     return state
 
 
@@ -739,7 +737,6 @@ def _move_folder_contents(source_folder: Path, target_folder: Path) -> list[tupl
 
 
 __all__ = [
-    "ANALYSIS_DELETE_RELATIVE",
     "FOLDER_DELETE_RELATIVE",
     "apply_output_path",
     "clear_test_routes",

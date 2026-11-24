@@ -19,7 +19,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from ramanv2.common.arc_data import read_arc_data  # noqa: E402
 from ramanv2.common.naming import build_natural_key  # noqa: E402
-from ramanv2.data.config import resolve_build_config  # noqa: E402
+from ramanv2.core.config import resolve_build_config  # noqa: E402
 from ramanv2.spectra.preprocess import fit_baseline_spectrum  # noqa: E402
 
 DEFAULT_DATA_DIR = REPO_ROOT / "dataset" / "病原菌" / "init" / "Klebsiella"

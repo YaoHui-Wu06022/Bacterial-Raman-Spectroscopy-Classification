@@ -27,8 +27,8 @@ from ramanv2.data.calibration.affine import (
     build_corrected_folder,
     load_calibration_report,
 )
-from ramanv2.records.lineage import lineage_path, load_folder_lineage, write_folder_lineage, record_affine_approval, record_output_path
-from ramanv2.data.builders.init import build_test_folder, build_spectrum_folder
+from ramanv2.pipeline.lineage import lineage_path, load_folder_lineage, write_folder_lineage, record_affine_approval, record_output_path
+from ramanv2.pipeline.init_builder import build_test_folder, build_spectrum_folder
 from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.data.plots.prefix import build_prefix_plots_for_groups
 from ramanv2.data.profiles import TEST_ROOT_NAME

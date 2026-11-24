@@ -8,10 +8,10 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from ramanv2.core.config import Config, build_config
-from ramanv2.core.config_snapshot import SHARED_CONFIG_NAME, read_yaml_dict
+from ramanv2.core.config import Config
+from ramanv2.core.snapshot import SHARED_CONFIG_NAME, load_run_snapshot
 from ramanv2.core.run_context import HIERARCHY_META_FILE_NAME
-from ramanv2.common.hierarchy import assert_hierarchy_compatible, load_hierarchy_meta, validate_label_schema
+from ramanv2.common.hierarchy import assert_hierarchy_compatible, load_hierarchy_meta
 from ramanv2.core.input_spec import InputSpec, build_input_spec
 from ramanv2.common.paths import find_ancestor_dir
 from ramanv2.data.runtime.index import DatasetIndex
@@ -55,13 +55,12 @@ def load_evaluation_context(
     传入时不再通过注册表解析数据集。
     """
     source_path = Path(source_dir).resolve()
-    experiment_dir = resolve_experiment_dir(source_path)
-    shared_values = read_yaml_dict(experiment_dir / SHARED_CONFIG_NAME)
-    validate_label_schema(shared_values)
+    snapshot = load_run_snapshot(source_path)
+    experiment_dir = snapshot.experiment_dir
+    config = snapshot.config
     meta = load_hierarchy_meta(experiment_dir / HIERARCHY_META_FILE_NAME)
     if meta is None:
         raise FileNotFoundError(f"缺少 {HIERARCHY_META_FILE_NAME}：{experiment_dir}")
-    config = build_config(shared_values)
     if train_dir is None:
         selection = resolve_selection(
             config.dataset.dataset_id,

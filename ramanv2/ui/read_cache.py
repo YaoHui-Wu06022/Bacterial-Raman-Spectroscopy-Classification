@@ -9,7 +9,7 @@ import streamlit as st
 
 from ramanv2.common.file_ops import read_json
 from ramanv2.common.naming import build_natural_key
-from ramanv2.core.config_snapshot import SHARED_CONFIG_NAME
+from ramanv2.core.snapshot import SHARED_CONFIG_NAME
 from ramanv2.core.run_context import (
     HIERARCHY_META_FILE_NAME,
     TRAIN_SPLIT_FILE_NAME,

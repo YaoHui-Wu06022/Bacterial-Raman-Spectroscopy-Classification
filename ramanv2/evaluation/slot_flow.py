@@ -10,7 +10,7 @@ from typing import Any
 from ramanv2.evaluation.context import resolve_slot_target
 from ramanv2.evaluation.model_eval import evaluate_model_run
 from ramanv2.evaluation.pca_svm import BaselineSpec, evaluate_baseline_run
-from ramanv2.evaluation.summary_text import build_result_summary
+from ramanv2.common.result_text import build_result_summary
 
 
 @dataclass(frozen=True)

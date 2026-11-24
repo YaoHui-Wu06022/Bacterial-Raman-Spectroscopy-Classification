@@ -1,9 +1,10 @@
-"""BID 论文风格的物种混淆矩阵。"""
+"""BID 论文风格混淆矩阵与评估入口。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,6 +13,8 @@ from matplotlib.patches import Rectangle
 from ramanv2.common.file_ops import read_json
 from ramanv2.common.plotting import configure_matplotlib_fonts
 from ramanv2.core.run_context import CONFUSION_MATRIX_FILE_NAME, METRICS_FILE_NAME
+from ramanv2.evaluation.independent_test import evaluate_test_set
+from ramanv2.evaluation.model_eval import evaluate_model_run
 
 
 @dataclass(frozen=True)
@@ -109,6 +112,46 @@ BID_CONFUSION_STYLE = BidConfusionStyle(
     ),
     blocks=(),
 )
+
+
+def evaluate_bid_model_run(
+    source_dir: Path | str,
+    level_name: str,
+    device: str | None = None,
+    train_dir: Path | str | None = None,
+    style: BidConfusionStyle = BID_CONFUSION_STYLE,
+) -> Path:
+    """评估 BID 验证集并重绘混淆矩阵。"""
+    result_dir = evaluate_model_run(
+        source_dir,
+        level_name,
+        device,
+        train_dir=train_dir,
+    )
+    write_bid_confusion_matrix(result_dir, style)
+    return result_dir
+
+
+def evaluate_bid_test_set(
+    source_dir: Path | str,
+    device: str | None = None,
+    test_dir: Path | str | None = None,
+    sample_limit: int | None = None,
+    train_dir: Path | str | None = None,
+    style: BidConfusionStyle = BID_CONFUSION_STYLE,
+    level_inference_enable: bool = False,
+) -> dict[str, Any]:
+    """评估 BID 独立测试集并重绘混淆矩阵。"""
+    report = evaluate_test_set(
+        source_dir,
+        device,
+        test_dir,
+        sample_limit,
+        train_dir=train_dir,
+        level_inference_enable=level_inference_enable,
+    )
+    write_bid_confusion_matrix(report["result_dir"], style)
+    return report
 
 
 def write_bid_confusion_matrix(
@@ -410,3 +453,14 @@ def _hex_to_rgb(color: str) -> tuple[int, int, int]:
     """把 #RRGGBB 转为 RGB 三元组。"""
     text = color.lstrip("#")
     return int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)
+
+
+__all__ = [
+    "BID_CONFUSION_STYLE",
+    "BidClassBand",
+    "BidConfusionStyle",
+    "BidHighlightBlock",
+    "evaluate_bid_model_run",
+    "evaluate_bid_test_set",
+    "write_bid_confusion_matrix",
+]

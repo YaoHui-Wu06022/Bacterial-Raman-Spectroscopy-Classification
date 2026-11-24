@@ -30,7 +30,8 @@ from ramanv2.common.naming import (
 )
 from ramanv2.core.config import InputConfig
 from ramanv2.data.dataset_mapping import DatasetMapping, build_prefix_to_genus
-from ramanv2.data.config import DataBuildConfig
+from ramanv2.core.config import DataBuildConfig
+from ramanv2.core.input_spec import build_preprocess_kwargs
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.bad_bands import build_valid_mask
 from ramanv2.spectra.normalize import normalize_spectrum
@@ -316,16 +317,7 @@ def preprocess_sample(path: Path) -> np.ndarray | None:
     axis, corrected = preprocess_single_spectrum(
         wavenumbers,
         intensities,
-        cut_min=INPUT_CONFIG.cut_min,
-        cut_max=INPUT_CONFIG.cut_max,
-        reference_wavenumbers=REFERENCE_AXIS,
-        bad_bands=INPUT_CONFIG.bad_bands,
-        baseline_lam=BUILD_CONFIG.baseline_lam,
-        baseline_asls_p=BUILD_CONFIG.baseline_asls_p,
-        baseline_max_iter=BUILD_CONFIG.baseline_max_iter,
-        baseline_fit_min=BUILD_CONFIG.baseline_fit_min,
-        baseline_fit_max=BUILD_CONFIG.baseline_fit_max,
-        baseline_method=BUILD_CONFIG.baseline_method,
+        **build_preprocess_kwargs(INPUT_CONFIG, BUILD_CONFIG, REFERENCE_AXIS),
     )
     if axis is None or corrected is None:
         return None

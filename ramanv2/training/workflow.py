@@ -14,7 +14,7 @@ import torch
 from torch.utils.data import Subset
 
 from ramanv2.core.config import Config
-from ramanv2.core.run_snapshot import load_run_snapshot
+from ramanv2.core.snapshot import load_run_snapshot
 from ramanv2.common.hierarchy import (
     assert_hierarchy_compatible,
     build_hierarchy_entry,

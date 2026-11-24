@@ -17,7 +17,7 @@ from ramanv2.pipeline.calibration import (
 )
 from ramanv2.pipeline.cleaning import commit_date_items, reconcile_cleaning_records, scan_review_folders
 from ramanv2.pipeline.state import invalidate_downstream
-from ramanv2.records.lineage import has_active_source_folders, lineage_path, load_folder_lineage
+from ramanv2.pipeline.lineage import has_active_source_folders, lineage_path, load_folder_lineage
 from ramanv2.ui.formatting import progress_ratio
 from ramanv2.ui.read_cache import cached_calibration_reports
 from ramanv2.ui.page_context import PageContext

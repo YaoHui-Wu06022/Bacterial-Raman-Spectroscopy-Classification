@@ -13,7 +13,7 @@ from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.data.datasets import resolve_project_root_for_dataset_dir
 from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.data.profiles import resolve_selection
-from ramanv2.records.lineage import (
+from ramanv2.pipeline.lineage import (
     initialize_folder_lineage,
     lineage_path,
     write_folder_lineage,

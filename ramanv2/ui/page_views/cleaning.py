@@ -13,7 +13,7 @@ from matplotlib import pyplot as plt
 import pandas as pd
 import streamlit as st
 
-from ramanv2.audit.heterogeneity import (
+from ramanv2.data.heterogeneity import (
     AUTO_MIN_SEPARATION,
     HeterogeneityReport,
     analyze_library,
@@ -55,7 +55,7 @@ from ramanv2.pipeline.deleted_data import (
     scan_deleted_spectra,
 )
 from ramanv2.pipeline.state import PipelineState
-from ramanv2.records.lineage import mark_folders_reviewed
+from ramanv2.pipeline.lineage import mark_folders_reviewed
 from ramanv2.ui.components.spectrum_grid import render_spectrum_grid
 from ramanv2.ui.formatting import progress_ratio
 from ramanv2.ui.read_cache import cached_directory_names

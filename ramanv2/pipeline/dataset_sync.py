@@ -22,15 +22,15 @@ from ramanv2.common.naming import (
     is_date_name,
     parse_folder_prefix,
 )
-from ramanv2.common.file_ops import preserve_paths, publish_file, rename_directory, _remove_path
-from ramanv2.data.builders.init import build_init_datasets
+from ramanv2.common.file_ops import preserve_paths, publish_file, rename_directory, remove_path
+from ramanv2.pipeline.init_builder import build_init_datasets
 from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.data.count import summarize_dataset
 from ramanv2.data.plots.prefix import build_prefix_plots, build_prefix_plots_for_groups
 from ramanv2.data.profiles import TEST_ROOT_NAME
-from ramanv2.records.lineage import lineage_path, load_folder_lineage, write_folder_lineage
+from ramanv2.pipeline.lineage import lineage_path, load_folder_lineage, write_folder_lineage
 from ramanv2.pipeline.calibration import load_date_affine_parameters
 from ramanv2.pipeline.state import PipelineState, write_pipeline_state
 
@@ -200,7 +200,7 @@ def _run_dataset_transfer(
             if plots:
                 publish_file(plots[0], plot_path)
             elif to_test_enable:
-                _remove_path(plot_path)
+                remove_path(plot_path)
             else:
                 raise RuntimeError("对应前缀图未生成")
         outputs["init"] = None if to_test_enable else str(target)

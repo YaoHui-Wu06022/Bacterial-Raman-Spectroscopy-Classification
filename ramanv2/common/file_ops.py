@@ -25,7 +25,7 @@ def _remove_readonly(function, path, error) -> None:
     function(path)
 
 
-def _remove_path(path: Path) -> None:
+def remove_path(path: Path) -> None:
     if path.is_dir():
         shutil.rmtree(path, onerror=_remove_readonly)
     else:
@@ -145,7 +145,7 @@ def publish_directory(temp_path: Path | str, target_path: Path | str) -> Path:
     except Exception:
         if backup.exists():
             if target.exists():
-                _remove_path(target)
+                remove_path(target)
             try:
                 rename_directory(backup, target)
             except Exception:
@@ -154,9 +154,9 @@ def publish_directory(temp_path: Path | str, target_path: Path | str) -> Path:
         raise
     finally:
         if backup.exists() and not rollback_failed:
-            _remove_path(backup)
+            remove_path(backup)
         if temporary.exists():
-            _remove_path(temporary)
+            remove_path(temporary)
     return target
 
 
@@ -185,7 +185,7 @@ def preserve_paths(paths: list[Path]):
             try:
                 for target, backup, existed in reversed(snapshots):
                     if target.exists():
-                        _remove_path(target)
+                        remove_path(target)
                     if existed:
                         target.parent.mkdir(parents=True, exist_ok=True)
                         os.replace(backup, target)
@@ -197,7 +197,7 @@ def preserve_paths(paths: list[Path]):
         if not rollback_failed:
             for _, backup, _ in snapshots:
                 if backup.exists():
-                    _remove_path(backup)
+                    remove_path(backup)
 
 
 def publish_files(files: dict[Path | str, Path | str]) -> None:
@@ -286,6 +286,7 @@ __all__ = [
     "move_files",
     "read_json",
     "remove_empty_parent_directories",
+    "remove_path",
     "rename_directory",
     "write_json",
     "write_text_atomic",
