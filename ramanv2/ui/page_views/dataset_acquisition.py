@@ -70,9 +70,9 @@ def _render_taxon_counts(init_root: Path, hierarchy) -> None:
         rows = counts["rows"]
         levels = counts["levels"]
         if not rows:
-            st.info("当前 init 中没有可统计的光谱。")
+            st.info("init 中没有可统计的光谱")
             return
-        st.caption("仅统计当前 init；按层级分组，同一类别跨日期合并。init_test 不计入。")
+        st.caption("仅统计 init，按层级分组，不含 init_test")
         detail_label = levels[-1]
         summary_label = levels[-2] if len(levels) >= 2 else "层级"
         summary_tab, detail_tab = st.tabs([f"各{summary_label}汇总", f"各{detail_label}明细"])
@@ -136,13 +136,13 @@ def _render_prefix_plot_section(
                     )
                     progress.progress(1.0, text=f"已更新 {len(outputs)} 张 prefix-plot")
                     status.update(label="prefix-plot 更新完成", state="complete", expanded=False)
-                st.success(f"已更新 {len(outputs)} 张 prefix-plot。")
+                st.success(f"已更新 {len(outputs)} 张 prefix-plot")
             except UI_ACTION_ERRORS as error:
                 render_action_error("prefix-plot 更新", error)
         if not st.session_state.get(f"{key}_show", False):
             return
         if not figure_root.is_dir():
-            st.info("当前还没有 prefix-plot，请点击“更新图信息”。")
+            st.info("暂无 prefix-plot，请点击“更新图信息”")
             return
         group_paths: dict[str, list[Path]] = {}
         for path in figure_root.rglob("*.png"):
@@ -152,7 +152,7 @@ def _render_prefix_plot_section(
         for paths in group_paths.values():
             paths.sort(key=lambda item: build_natural_key(item.name))
         if not group_paths:
-            st.info("当前没有可查看的 prefix-plot。")
+            st.info("暂无可查看的 prefix-plot")
             return
         group_name = st.selectbox(
             "选择查看的类别" if flat else "选择查看的层级分组",
@@ -177,7 +177,7 @@ def _render_supplement_plan(plan: SupplementPlan | None, supplement_root: Path) 
     if plan is None:
         return
     st.markdown("**补充数据**")
-    st.caption(f"来源目录：{supplement_root}；重建后按层级写入 dataset/init。")
+    st.caption(f"来源目录：{supplement_root}；重建写入 dataset/init")
     if plan.groups:
         st.dataframe(
             [
@@ -188,12 +188,12 @@ def _render_supplement_plan(plan: SupplementPlan | None, supplement_root: Path) 
             width="stretch",
         )
     elif not plan.errors:
-        st.info("未发现可写入的补充文件夹。")
+        st.info("没有可写入的补充文件夹")
     for error in plan.errors:
         st.error(error)
     if plan.unbacked_init_folders:
         st.warning(
-            "以下 init 直放组在补充数据中没有对应文件夹，重建后会被移除："
+            "以下 init 直放组无补充来源，重建后会被移除："
             + "、".join(plan.unbacked_init_folders)
         )
 
@@ -272,13 +272,12 @@ def _render_stale_test_routes(context: PageContext) -> None:
         return
     with st.expander(f"发现 {len(stale)} 个陈旧 test 分流（目录不存在）", expanded=False):
         st.caption(
-            "这些文件夹仍登记为 init_test，但测试目录已不存在，导致日期检测一直显示待更新。"
-            "清理只改分流记录，不删除 init 数据。"
+            "这些文件夹仍登记为 init_test，但测试目录已不存在；清理只改分流记录"
         )
         for source_id, target in stale[:20]:
             st.write(f"- {source_id} → `{target}`")
         if len(stale) > 20:
-            st.caption(f"另有 {len(stale) - 20} 个未显示。")
+            st.caption(f"另有 {len(stale) - 20} 个未显示")
         confirmed = st.checkbox(
             "我确认清除这些 test 分流",
             key="stale_test_route_confirm",
@@ -294,7 +293,7 @@ def _render_stale_test_routes(context: PageContext) -> None:
                 [source_id for source_id, _target in stale],
             )
             invalidate_ui_cache(*INVALIDATE_DATASET)
-            set_flash("dataset", f"已清除 {result['count']} 个 test 分流；init 数据未改动。")
+            set_flash("dataset", f"已清除 {result['count']} 个 test 分流，init 未改动")
             st.rerun()
 
 
@@ -315,12 +314,11 @@ def _render_date_dataset_update(context: PageContext, state, catalog: DatasetMap
             ui_cache_version("dataset"),
         )
         if not candidates:
-            st.info("当前没有可更新的日期：请先完成日期仿射校正并生成 shift_data。")
+            st.info("没有可更新的日期：请先完成仿射并生成 shift")
             return
         st.caption(
-            "自动检测新增、待同步和 shift 文件变化的日期并默认勾选；已有日期沿用原 init/init_test 分流，"
-            "同时重建两处产物；新增日期可在下方选择进入 init_test 的文件夹，其余进入 init。"
-            "其他日期编号保持不变。"
+            "自动检测新增、待同步和 shift 变化的日期；已有日期沿用原分流，"
+            "新增日期可选择进入 init_test"
         )
         st.dataframe(
             [
@@ -445,17 +443,17 @@ def _render_dataset_transfer(context: PageContext, state, catalog: DatasetMappin
         else:
             sources = {source: source for source in collect_test_return_sources(context.init_root, state)}
         if not sources:
-            st.info(f"当前没有带来源记录、可迁移的 {'init' if to_test_enable else 'init_test'} 文件夹。")
+            st.info(f"没有可迁移的 {'init' if to_test_enable else 'init_test'} 文件夹")
             return
         selected = st.selectbox("选择移入 init_test 的 init 文件夹" if to_test_enable else "选择移回的 init_test 文件夹",
                                 list(sources), format_func=lambda value: sources[value], key=f"{key}_source")
         prefix = parse_folder_prefix(selected.rsplit("/", 1)[-1], uppercase_enable=True)
         genus = next((name for name, prefixes in catalog.genera.items() if prefix in prefixes), None) if catalog is not None else None
         if genus is None:
-            st.info(f"种前缀 {prefix} 未映射到属，请先补充分类名单。")
+            st.info(f"种前缀 {prefix} 未映射到属，请补充分类名单")
         else:
             caption = "整夹移入 init_test；普通来源保留现有文件夹名。" if to_test_enable else f"整夹移回 init 对应层级目录，按 {prefix} 和采集日期追加编号。"
-            st.caption(caption + "仅更新对应审核图。")
+            st.caption(caption + "仅更新对应审核图")
         label = "将所选 init 直接移入 init_test" if to_test_enable else "将所选 init_test 直接移回 init"
         if not st.button(label, key=f"{key}_confirm", disabled=genus is None, width="stretch"):
             return
@@ -476,7 +474,7 @@ def _render_dataset_transfer(context: PageContext, state, catalog: DatasetMappin
             set_flash(
                 key,
                 f"{selected} 已直接{'移入' if to_test_enable else '移回'} {destination}"
-                f"（{result['spectrum_count']} 条）：{Path(result['target_dir']).name}。",
+                f"（{result['spectrum_count']} 条）：{Path(result['target_dir']).name}",
             )
             st.rerun()
         except UI_ACTION_ERRORS as error:
@@ -501,7 +499,7 @@ def _render_affine_compensation(context: PageContext, state, catalog: DatasetMap
         )
     )
     if not folders or not context.init_root.is_dir():
-        st.info("请先完成仿射校正并生成全量 init。")
+        st.info("请先完成仿射并生成 init")
         return
     selected = st.selectbox("选择文件夹", folders, key="folder_offset_source")
     if st.session_state.get("folder_offset_previous_source") != selected:
@@ -522,12 +520,12 @@ def _render_affine_compensation(context: PageContext, state, catalog: DatasetMap
                 context.fig_root,
             )
             if not result["changed_folders"]:
-                st.info("本次频移量为 0，未改动光谱。")
+                st.info("频移量为 0，未改动")
                 return
             invalidate_ui_cache(*INVALIDATE_SPECTRA)
             st.session_state["folder_offset_reset"] = True
             destination = "对应 init_test 文件夹" if result.get("test_updated") else "对应 init 文件夹及审核图"
-            set_flash("folder_offset", f"{selected} 已同步平移活动谱及归档谱，并更新{destination}。")
+            set_flash("folder_offset", f"{selected} 已平移并更新{destination}")
             st.rerun()
         except UI_ACTION_ERRORS as error:
             render_action_error("频移补偿", error)
@@ -647,7 +645,7 @@ def _render_default_test_selection_button(
     if not st.button(
         "恢复默认选择",
         key=f"{selection_key}_reset_defaults",
-        help="按 SQLite 中保存的推荐默认名单重新选择。",
+        help="按 SQLite 中保存的推荐默认名单重新选择",
     ):
         return
     defaults = _default_test_sources(context, candidates)
@@ -820,8 +818,8 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
             if context.hierarchy.is_flat:
                 set_flash(
                     "dataset",
-                    f"全量 init 生成完成：{report['count']['file_count']} 条光谱，"
-                    f"{report['test_folder_count']} 个测试组。",
+                    f"init 生成完成：{report['count']['file_count']} 条光谱，"
+                    f"{report['test_folder_count']} 个测试组",
                 )
             else:
                 supplement = report["supplement"]
@@ -832,7 +830,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                 )
                 set_flash(
                     "dataset",
-                    f"全量 init 生成完成，{supplement_note}。",
+                    f"init 生成完成，{supplement_note}",
                 )
             st.rerun()
         except UI_ACTION_ERRORS as error:
@@ -843,7 +841,7 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     _render_dataset_transfer(context, state, catalog, True)
 
     if catalog is None:
-        st.info("请先修复本地分类 Excel 文件。")
+        st.info("请先修复分类 Excel")
         return
 
     _render_prefix_plot_section(

@@ -79,7 +79,7 @@ def render_training_page(context) -> None:
     if isinstance(report, dict):
         signature = report.get("hierarchy_signature")
         if signature is not None and signature != context.dataset_spec.hierarchy_signature():
-            st.warning("层级配置已变化，请先在「数据集获取」重建 init 和 train。")
+            st.warning("层级配置已变化，请先在「数据集获取」重建 init 和 train")
             return
     profile = context.profile()
     profile_id = profile.profile_id
@@ -124,8 +124,8 @@ def render_training_page(context) -> None:
                 stream.flush()
                 status.update(label="训练完成", state="complete", expanded=False)
             invalidate_ui_cache(*INVALIDATE_TRAINING)
-            st.success("本地训练完成。")
-            st.caption("训练结果和层级元数据已保存到自动生成的实验目录。")
+            st.success("本地训练完成")
+            st.caption("结果和层级元数据已保存到实验目录")
         except UI_ACTION_ERRORS as error:
             render_action_error("本地训练", error)
 
@@ -145,11 +145,11 @@ def _render_dataset_summary(index: DatasetIndex, train_dir: Path, *, flat: bool 
     for number, level_name in enumerate(index.level_names, 1):
         metrics[number + 1].metric(f"第{number}层总类别数", f"{class_counts[level_name]} 个")
     if flat:
-        st.caption("第1层按类别统计；同一类别的不同日期、批次合并计数。")
+        st.caption("第1层按类别统计，同类别跨日期合并")
     elif len(index.level_names) == 2:
-        st.caption("第1层按属统计，第2层按规范种前缀去重；同一种的不同日期、批次合并计数。")
+        st.caption("第1层按属、第2层按种统计，跨日期合并")
     else:
-        st.caption("按层级依次统计；同一类别的不同日期、批次合并计数。")
+        st.caption("按层级统计，同类别跨日期合并")
 
 
 def _render_training_scope(index: DatasetIndex | None) -> dict[str, object]:
@@ -167,12 +167,12 @@ def _render_training_scope(index: DatasetIndex | None) -> dict[str, object]:
             key="training_global_head",
         )
         if global_head_enable:
-            st.caption("本次训练该层全部类别的全局模型，不再选择父类。")
+            st.caption("训练该层全局模型，不选父类")
         else:
             parent_names = index.get_class_names(parent_level)
             parent_name = st.selectbox("训练父类", parent_names, key="training_parent")
     else:
-        st.caption("当前层级没有父类，将训练全局模型。")
+        st.caption("当前层级无父类，训练全局模型")
     return {
         "level_name": level_name,
         "parent_name": parent_name,
@@ -211,7 +211,7 @@ def _render_config_controls(profile_id: str, context, hierarchy) -> dict[str, An
     if use_gpu and torch.cuda.is_available():
         st.caption(f"GPU：{torch.cuda.get_device_name(0)}（CUDA {torch.version.cuda}）")
     elif use_gpu:
-        st.warning("当前 Python 环境未检测到 CUDA；点击训练时会提示启动项目虚拟环境。")
+        st.warning("未检测到 CUDA；训练时会提示启动虚拟环境")
     values: dict[str, Any] = {
         "dataset_id": context.dataset_id,
         "label_schema": hierarchy.label_schema,
@@ -314,7 +314,7 @@ def _render_platform_export(profile_id: str, display_name: str, bundle_root: Pat
         try:
             with st.spinner("正在生成数据包…"):
                 report = build_platform_bundle(profile_id, output_dir)
-            st.success("数据包生成完成。")
+            st.success("数据包生成完成")
             data_report = report.get("data_archive", {})
             package_report = report.get("package_archive", {})
             if isinstance(data_report, dict) and isinstance(package_report, dict):

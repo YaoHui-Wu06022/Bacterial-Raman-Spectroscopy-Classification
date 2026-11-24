@@ -28,16 +28,18 @@ def run_command(args: argparse.Namespace) -> int:
         )
         print(report["level_summary_dir"])
         return 0
-    if args.target == "model":
-        from ramanv2.evaluation.model_eval import evaluate_model_run
+    from ramanv2.evaluation.slot_flow import evaluate_slot_bundle
 
-        result_dir = evaluate_model_run(
+    if args.target == "model":
+        result_dir = evaluate_slot_bundle(
             args.source_dir,
-            args.level,
-            "cpu" if args.cpu else None,
-        )
+            level_name=args.level,
+            device="cpu" if args.cpu else None,
+            include_model=True,
+            include_baseline=False,
+        ).model_result_dir
     else:
-        from ramanv2.evaluation.pca_svm import BaselineSpec, evaluate_baseline_run
+        from ramanv2.evaluation.pca_svm import BaselineSpec
 
         spec = BaselineSpec(
             all_channels_enable=args.all_channels_enable,
@@ -47,7 +49,13 @@ def run_command(args: argparse.Namespace) -> int:
             svm_gamma=args.svm_gamma,
             random_state=args.random_state,
         )
-        result_dir = evaluate_baseline_run(args.source_dir, args.level, spec)
+        result_dir = evaluate_slot_bundle(
+            args.source_dir,
+            level_name=args.level,
+            include_model=False,
+            include_baseline=True,
+            baseline_spec=spec,
+        ).baseline_result_dir
     print(result_dir)
     return 0
 

@@ -28,6 +28,7 @@ from ramanv2.inference.spectrum_input import (
     build_inference_preprocessor,
     list_spectrum_paths,
 )
+from ramanv2.inference.test_labels import aggregate_top1_votes
 from ramanv2.modeling.predictor import Predictor, load_predictor
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.preprocess import preprocess_single_spectrum
@@ -283,25 +284,14 @@ def _predict_folder(
         except Exception as error:
             failures.append({"file": path.name, "error": str(error)})
 
-    votes: dict[str, dict[str, float | int]] = {}
-    for row in rows:
-        top = row["predictions"][0]
-        item = votes.setdefault(
-            top["label"],
-            {"count": 0, "probability_sum": 0.0},
-        )
-        item["count"] = int(item["count"]) + 1
-        item["probability_sum"] = float(item["probability_sum"]) + top["probability"]
+    top_labels = [str(row["predictions"][0]["label"]) for row in rows]
+    top_probabilities = [float(row["predictions"][0]["probability"]) for row in rows]
     ranked = sorted(
-        votes.items(),
-        key=lambda item: (
-            -int(item[1]["count"]),
-            -float(item[1]["probability_sum"]) / int(item[1]["count"]),
-            item[0],
-        ),
+        aggregate_top1_votes(top_labels, top_probabilities),
+        key=lambda item: (-item[1], -item[2], item[0]),
     )
     predicted_label = ranked[0][0] if ranked else ""
-    majority_count = int(ranked[0][1]["count"]) if ranked else 0
+    majority_count = int(ranked[0][1]) if ranked else 0
     total_count = len(rows)
     mean_probability = (
         sum(row["predictions"][0]["probability"] for row in rows) / total_count
@@ -320,10 +310,10 @@ def _predict_folder(
         "label_votes": [
             {
                 "label": label,
-                "count": int(item["count"]),
-                "mean_probability": float(item["probability_sum"]) / int(item["count"]),
+                "count": int(count),
+                "mean_probability": float(mean),
             }
-            for label, item in ranked
+            for label, count, mean in ranked
         ],
         "rows": rows,
         "failures": failures,

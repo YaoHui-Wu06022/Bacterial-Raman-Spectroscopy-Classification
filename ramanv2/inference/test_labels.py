@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import Counter
+from collections.abc import Sequence
 from typing import Any, Mapping
 
 from ramanv2.common.naming import parse_folder_prefix
@@ -72,6 +72,31 @@ def build_test_folder_labels(
     return labels, rows
 
 
+def aggregate_top1_votes(
+    labels: Sequence[str],
+    probabilities: Sequence[float] | None = None,
+) -> list[tuple[str, int, float]]:
+    """按首次出现顺序返回 (label, count, mean_probability)。"""
+    order: list[str] = []
+    stats: dict[str, list[float]] = {}
+    for index, label in enumerate(labels):
+        key = str(label)
+        if key not in stats:
+            order.append(key)
+            stats[key] = [0, 0.0]
+        stats[key][0] += 1
+        if probabilities is not None:
+            stats[key][1] += float(probabilities[index])
+    return [
+        (
+            key,
+            int(stats[key][0]),
+            float(stats[key][1]) / int(stats[key][0]) if probabilities is not None else 0.0,
+        )
+        for key in order
+    ]
+
+
 def build_folder_summary(
     folder_name: str,
     expected_label: str | None,
@@ -79,8 +104,8 @@ def build_folder_summary(
     predictions: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """汇总文件夹投票，直接取票数最多的标签作为文件夹输出。"""
-    counter = Counter(item["top1_label"] for item in predictions)
-    majority_label, majority_count = counter.most_common(1)[0] if counter else ("unknown", 0)
+    votes = aggregate_top1_votes([str(item["top1_label"]) for item in predictions])
+    majority_label, majority_count, _ = max(votes, key=lambda item: item[1]) if votes else ("unknown", 0, 0.0)
     total_count = len(predictions)
     expected_in_model = expected_label in set(class_names)
     correct_count = (

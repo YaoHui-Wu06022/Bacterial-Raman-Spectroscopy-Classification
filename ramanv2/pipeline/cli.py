@@ -89,7 +89,7 @@ def run_command(args: argparse.Namespace) -> int:
     spec = selection.spec
     if args.command == "ingest-folder":
         from ramanv2.pipeline.folder_ingest import (
-            FolderIngestRequest,
+            build_folder_ingest_request,
             format_ingest_summary,
             load_folder_ingest_manifest,
             run_folder_ingest,
@@ -105,15 +105,13 @@ def run_command(args: argparse.Namespace) -> int:
             date_name = date_name or manifest.get("date")
             prefix = prefix or manifest.get("prefix")
             bead = bead or bool(manifest.get("bead"))
-        if bead:
-            prefix = BEAD_FOLDER_NAME
-        if not source or not date_name or not prefix:
+        if not source or not date_name or (not bead and not prefix):
             raise ValueError("ingest-folder 需要 --source/--date/--prefix，或使用 --manifest")
-        report = run_folder_ingest(FolderIngestRequest(
-            spec=spec,
-            source_dir=source,
-            date_name=str(date_name),
-            prefix=str(prefix),
+        report = run_folder_ingest(build_folder_ingest_request(
+            spec,
+            source,
+            str(date_name),
+            prefix,
             apply=bool(args.apply_enable),
             bead=bead,
         ))

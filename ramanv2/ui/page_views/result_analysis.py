@@ -23,8 +23,8 @@ from ramanv2.core.run_context import (
     UMAP_FIGURE_NAME,
     VAL_RESULT_DIR_NAME,
 )
-from ramanv2.evaluation.model_eval import evaluate_model_run
-from ramanv2.evaluation.pca_svm import BaselineSpec, evaluate_baseline_run
+from ramanv2.evaluation.pca_svm import BaselineSpec
+from ramanv2.evaluation.slot_flow import evaluate_slot_bundle
 from ramanv2.evaluation.level_summary import (
     LEVEL_SUMMARY_DIR_NAME,
     summarize_level_results,
@@ -74,7 +74,7 @@ def render_result_analysis_page(context) -> None:
     st.title("结果分析")
     experiments = _list_experiment_dirs(context)
     if not experiments:
-        st.info("当前数据集尚未发现包含完整切分和层级元数据的实验目录。")
+        st.info("未发现包含完整切分和层级元数据的实验")
         return
     experiment_labels = [relative_label(path, context.project_root) for path in experiments]
     experiment_label = st.selectbox(
@@ -86,7 +86,7 @@ def render_result_analysis_page(context) -> None:
     st.session_state["result_analysis_experiment"] = experiment_label
     levels = _find_level_dirs(experiment_dir)
     if not levels:
-        st.warning("实验目录中没有可用的 level_X。")
+        st.warning("实验目录中没有可用层级")
         return
     level_names = [path.name for path in levels]
     level_name = st.selectbox(
@@ -101,7 +101,7 @@ def render_result_analysis_page(context) -> None:
     if run_dirs and not has_model_path(global_entry):
         _render_level_summary(experiment_dir, level_name)
     if not run_dirs:
-        st.warning("当前层级没有可用的模型。")
+        st.warning("当前层级没有可用模型")
         return
     run_labels = [str(path.relative_to(experiment_dir)) for path in run_dirs]
     run_label = st.selectbox(
@@ -161,7 +161,7 @@ def _render_level_summary(experiment_dir: Path, level_name: str) -> None:
             with st.spinner("正在拼接两种模式的验证与测试结果…"):
                 summarize_level_results(experiment_dir, level_name)
             invalidate_ui_cache(*INVALIDATE_ANALYSIS)
-            st.success("层级汇总已更新。")
+            st.success("层级汇总已更新")
         except UI_ACTION_ERRORS as error:
             render_action_error("层级汇总", error)
     mode_labels = {
@@ -180,7 +180,7 @@ def _render_level_summary(experiment_dir: Path, level_name: str) -> None:
         with tab:
             result_dir = mode_root / output_name
             if not (result_dir / METRICS_FILE_NAME).is_file():
-                st.info("尚未生成该模式的层级汇总。")
+                st.info("尚未生成层级汇总")
                 continue
             _render_confusion(Path(experiment_dir) / level_name, result_dir)
 
@@ -259,7 +259,7 @@ def _render_umap(run_dir: Path, image_path: Path) -> None:
 def _render_figures(figure_dir: Path, caption: str) -> None:
     figures = sorted(path for path in figure_dir.glob("*.png") if path.name != UMAP_FIGURE_NAME) if figure_dir.is_dir() else []
     if not figures:
-        st.info(f"尚无{caption}。")
+        st.info(f"尚无{caption}")
         return
     names = [path.name for path in figures]
     selected = st.selectbox(caption, names, key=f"result_analysis_figure_{caption}")
@@ -277,7 +277,12 @@ _RESULT_SECTIONS = (
         title="混淆矩阵",
         read_label="读取已有混淆矩阵",
         compute_label="重新计算混淆矩阵",
-        compute=evaluate_model_run,
+        compute=lambda run_dir, level_name: evaluate_slot_bundle(
+            run_dir,
+            level_name=level_name,
+            include_model=True,
+            include_baseline=False,
+        ).model_result_dir,
         result_path=lambda run_dir: run_dir / VAL_RESULT_DIR_NAME,
         exists=Path.is_dir,
         missing_message="尚无评估结果，请点击重新计算。",
@@ -291,7 +296,13 @@ _RESULT_SECTIONS = (
         title="PCA-SVM 基线",
         read_label="读取已有基线结果",
         compute_label="重新计算基线结果",
-        compute=lambda run_dir, level_name: evaluate_baseline_run(run_dir, level_name, BaselineSpec()),
+        compute=lambda run_dir, level_name: evaluate_slot_bundle(
+            run_dir,
+            level_name=level_name,
+            include_model=False,
+            include_baseline=True,
+            baseline_spec=BaselineSpec(),
+        ).baseline_result_dir,
         result_path=lambda run_dir: run_dir / BASELINE_VAL_RESULT_DIR_NAME,
         exists=Path.is_dir,
         missing_message="尚无 PCA-SVM 基线结果，请点击重新计算。",

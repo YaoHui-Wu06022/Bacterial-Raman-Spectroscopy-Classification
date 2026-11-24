@@ -36,13 +36,12 @@ def render_sample_inference_page(context) -> None:
     """选择实验、层级和 inference_data 日期，执行无标签实际推理。"""
     st.title("样本推理")
     st.caption(
-    "实际推理：每个样本按 inference_data 的 raw_data → cosmic_data → shift_data "
-    "现场生成派生数据；不依赖标签，不参与测试评估。"
+    "实际推理：raw_data → cosmic_data → shift_data，现场生成，不使用标签"
 )
     profile = context.profile()
     experiment_dirs = _list_experiment_dirs(context, profile)
     if not experiment_dirs:
-        st.info(f"没有找到 {context.dataset_spec.display_name} 的有效实验目录。")
+        st.info(f"没有找到 {context.dataset_spec.display_name} 的实验目录")
         return
     experiment_labels = [relative_label(path, context.project_root) for path in experiment_dirs]
     selected_label = st.selectbox("选择实验目录", experiment_labels, key="inference_experiment")
@@ -51,11 +50,11 @@ def render_sample_inference_page(context) -> None:
     meta_stat = meta_path.stat()
     meta = cached_json_file(str(meta_path.resolve()), meta_stat.st_mtime_ns, meta_stat.st_size)
     if not isinstance(meta, dict):
-        st.error("实验目录缺少有效的 hierarchy_meta.json。")
+        st.error("实验目录缺少 hierarchy_meta.json")
         return
     level_names = _predict_level_names(meta)
     if not level_names:
-        st.error("实验元数据中没有训练完成的预测层级。")
+        st.error("没有训练完成的预测层级")
         return
     level_display = _level_display_names(meta)
     level_name = st.selectbox(
@@ -74,7 +73,7 @@ def render_sample_inference_page(context) -> None:
     metrics[1].metric("预测层级", level_display.get(level_name, level_name))
     metrics[2].metric("模型类别数", len(target_labels))
     if not date_dirs:
-        st.info(f"{inference_root} 下没有推理日期目录。")
+        st.info(f"{inference_root} 下没有推理日期")
         return
     date_labels = [relative_label(path, context.project_root) for path in date_dirs]
     date_label = st.selectbox("选择推理日期", date_labels, key="inference_date")
@@ -98,9 +97,9 @@ def render_sample_inference_page(context) -> None:
             invalidate_ui_cache(*INVALIDATE_INFERENCE)
             st.success(
                 f"完成：{report['folder_count']} 个文件夹，"
-                f"成功 {report['succeeded_folder_count']} 个，"
-                f"失败 {report['failed_folder_count']} 个；"
-                f"结果已保存到 {report['result_dir']}。"
+                f"成功 {report['succeeded_folder_count']}，"
+                f"失败 {report['failed_folder_count']}；"
+                f"结果保存到 {report['result_dir']}"
             )
         except UI_ACTION_ERRORS as error:
             render_action_error("样本推理", error)
@@ -172,7 +171,7 @@ def _render_unlabeled_result(date_dir: Path, level_display: dict[str, str]) -> N
     except OSError:
         payload = None
     if not isinstance(payload, dict):
-        st.warning("已有推理结果无法读取。")
+        st.warning("推理结果无法读取")
         return
     st.subheader("最近一次实际推理结果")
     metrics = st.columns(5)
@@ -189,7 +188,7 @@ def _render_unlabeled_result(date_dir: Path, level_display: dict[str, str]) -> N
     )
     folders = payload.get("folders") or []
     if not isinstance(folders, list) or not folders:
-        st.info("该日期没有可展示的样本文件夹结果。")
+        st.info("该日期没有样本结果")
         return
     st.dataframe(
         [

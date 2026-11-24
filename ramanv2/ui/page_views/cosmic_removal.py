@@ -12,8 +12,6 @@ from matplotlib import pyplot as plt
 import pandas as pd
 import streamlit as st
 
-from ramanv2.common.arc_data import count_arc_data
-from ramanv2.common.naming import BEAD_FOLDER_NAME, is_date_name
 from ramanv2.common.plotting import configure_matplotlib_fonts
 from ramanv2.data.folder_cosmic import (
     build_folder_cosmic_options,
@@ -22,9 +20,18 @@ from ramanv2.data.folder_cosmic import (
     read_spectrum_folder,
 )
 from ramanv2.pipeline.folder_ingest import (
-    FolderIngestRequest,
-    is_valid_prefix,
+    RAW_BATCH_BLOCKED_EMPTY,
+    RAW_BATCH_BLOCKED_NESTED,
+    RAW_BATCH_DISABLED,
+    RAW_BATCH_GENERATED,
+    RAW_BATCH_GENERATED_BEAD,
+    RAW_BATCH_PENDING,
+    RAW_BATCH_PENDING_BEAD,
+    WARNING_INVALID_DATE,
+    WARNING_INVALID_PREFIX,
+    build_folder_ingest_request,
     run_folder_ingest,
+    scan_raw_batches,
 )
 from ramanv2.ui.formatting import progress_ratio
 from ramanv2.ui.page_context import PageContext
@@ -41,54 +48,48 @@ from ramanv2.ui.page_state import (
 configure_matplotlib_fonts()
 
 
-def _scan_raw_batches(raw_root: Path, cosmic_root: Path, enabled: bool) -> tuple[list[dict], list[str]]:
-    """扫描 raw_data/<日期>/<前缀>，返回批次状态与需展示的警告。"""
-    batches: list[dict] = []
-    warnings: list[str] = []
-    if not raw_root.is_dir():
-        return batches, warnings
-    for date_dir in sorted(raw_root.iterdir(), key=lambda path: path.name):
-        if not date_dir.is_dir() or date_dir.name.startswith("."):
-            continue
-        if not is_date_name(date_dir.name):
-            warnings.append(f"忽略非日期目录：{date_dir.name}")
-            continue
-        for folder in sorted(date_dir.iterdir(), key=lambda path: path.name):
-            if not folder.is_dir() or folder.name.startswith("."):
-                continue
-            is_bead = folder.name == BEAD_FOLDER_NAME
-            if not is_bead and not is_valid_prefix(folder.name):
-                warnings.append(f"忽略无效批次：{date_dir.name}/{folder.name}")
-                continue
-            direct_count = count_arc_data(folder)
-            nested_count = count_arc_data(folder, recursive=True)
-            target = cosmic_root / date_dir.name / folder.name
-            target_exists = target.is_dir()
-            if target_exists:
-                status = "已生成（只去文件头）" if is_bead else "已生成（不覆盖）"
-            elif nested_count != direct_count:
-                status = "阻止：含子目录光谱"
-            elif direct_count == 0:
-                status = "阻止：无光谱"
-            elif is_bead:
-                status = "待生成（只去文件头）"
-            elif not enabled:
-                status = "未启用"
-            else:
-                status = "待生成"
-            batches.append({
-                "key": f"{date_dir.name}/{folder.name}",
-                "date": date_dir.name,
-                "prefix": folder.name,
-                "source_dir": str(folder),
-                "file_count": int(direct_count),
-                "nested_count": int(nested_count),
-                "target_exists": bool(target_exists),
-                "is_bead": bool(is_bead),
-                "status": status,
-                "blocked": status.startswith("阻止"),
-                "pending": status.startswith("待生成"),
-            })
+def _batch_status_label(status: str) -> str:
+    """把领域状态码映射为页面中文文案。"""
+    return {
+        RAW_BATCH_GENERATED: "已生成（不覆盖）",
+        RAW_BATCH_GENERATED_BEAD: "已生成（只去文件头）",
+        RAW_BATCH_BLOCKED_NESTED: "阻止：含子目录光谱",
+        RAW_BATCH_BLOCKED_EMPTY: "阻止：无光谱",
+        RAW_BATCH_PENDING_BEAD: "待生成（只去文件头）",
+        RAW_BATCH_DISABLED: "未启用",
+        RAW_BATCH_PENDING: "待生成",
+    }.get(status, status)
+
+
+def _warning_label(code: str, name: str) -> str:
+    """把扫描警告码映射为页面中文文案。"""
+    if code == WARNING_INVALID_DATE:
+        return f"忽略非日期目录：{name}"
+    if code == WARNING_INVALID_PREFIX:
+        return f"忽略无效批次：{name}"
+    return name
+
+
+def _batch_rows(raw_root: Path, cosmic_root: Path, enabled: bool) -> tuple[list[dict], list[str]]:
+    """调用领域扫描并转换成页面渲染所需的批次行。"""
+    scan = scan_raw_batches(raw_root, cosmic_root, enabled)
+    batches = [
+        {
+            "key": batch.key,
+            "date": batch.date,
+            "prefix": batch.prefix,
+            "source_dir": str(batch.source_dir),
+            "file_count": batch.file_count,
+            "nested_count": batch.nested_count,
+            "target_exists": batch.target_exists,
+            "is_bead": batch.is_bead,
+            "status": _batch_status_label(batch.status),
+            "blocked": batch.blocked,
+            "pending": batch.pending,
+        }
+        for batch in scan.batches
+    ]
+    warnings = [_warning_label(code, name) for code, name in scan.warnings]
     return batches, warnings
 
 
@@ -128,7 +129,7 @@ def _render_preview(report: dict) -> None:
     metrics[2].metric("涉及谱", report.get("removed_spectra", 0))
     metrics[3].metric("保护峰位", report.get("guard_peak_count", 0))
     if report.get("bead"):
-        st.info("小球批次：只去文件头，不做宇宙射线去除。")
+        st.info("小球批次只去文件头")
         return
     if report.get("blocked_reason"):
         st.warning(report["blocked_reason"])
@@ -168,11 +169,11 @@ def _generate_batches(context: PageContext, batches: list[dict]) -> list[str]:
         for index, batch in enumerate(batches, start=1):
             status.write(f"[{index}/{total}] {batch['key']}")
             try:
-                run_folder_ingest(FolderIngestRequest(
-                    spec=context.dataset_spec,
-                    source_dir=batch["source_dir"],
-                    date_name=batch["date"],
-                    prefix=batch["prefix"],
+                run_folder_ingest(build_folder_ingest_request(
+                    context.dataset_spec,
+                    batch["source_dir"],
+                    batch["date"],
+                    batch["prefix"],
                     apply=True,
                     bead=batch["is_bead"],
                 ))
@@ -192,27 +193,26 @@ def render_cosmic_removal_page(context: PageContext) -> None:
     st.title("宇宙射线去除")
     render_flash("cosmic_removal")
     st.caption(
-        "把未去宇宙射线的文件夹放在 "
-        f"dataset/{context.dataset_spec.directory.name}/raw_data/<日期>/<前缀>/；"
-        "小球谱放在 raw_data/<日期>/小球/。"
+        "原始数据放 "
+        f"dataset/{context.dataset_spec.directory.name}/raw_data/<日期>/<前缀>/，"
+        "小球放 raw_data/<日期>/小球/"
     )
     enabled = context.dataset_spec.cosmic_removal.enable
     if not enabled:
         st.info(
-            "当前数据集未启用宇宙射线去除：普通批次需启用后才能预览/生成；"
-            "小球批次只去文件头，可直接预览/生成。普通批次请到"
-            "「数据集配置」勾选「启用文件夹级去宇宙射线」。"
+            "未启用去宇宙射线：普通批次需在「数据集配置」启用；"
+            "小球批次可直接生成"
         )
 
-    batches, warnings = _scan_raw_batches(context.raw_root, context.data_root, enabled)
+    batches, warnings = _batch_rows(context.raw_root, context.data_root, enabled)
     if warnings:
         with st.expander("raw_data 中的忽略项", expanded=False):
             for warning in warnings:
                 st.warning(warning)
     if not batches:
         st.info(
-            "raw_data 下还没有可识别的批次。请按 "
-            "raw_data/<八位日期>/<ASCII 前缀>/ 放入 .arc_data 文件"
+            "raw_data 下没有可识别批次，请按 "
+            "raw_data/<日期>/<前缀>/ 放入 .arc_data"
         )
         return
 
@@ -225,7 +225,7 @@ def render_cosmic_removal_page(context: PageContext) -> None:
         summary.append(f"未启用 {idle_count}")
     if blocked_count:
         summary.append(f"阻止 {blocked_count}")
-    st.caption(f"共 {len(batches)} 个批次：" + "，".join(summary) + "。")
+    st.caption(f"共 {len(batches)} 个批次：" + "，".join(summary) + "")
 
     selected_batch = None
     selected_date = None
@@ -234,7 +234,7 @@ def render_cosmic_removal_page(context: PageContext) -> None:
     batch_tab, all_tab = st.tabs(["单个日期更新", "全部生成"])
     with batch_tab:
         if not pending_batches:
-            st.caption("没有待生成的批次。")
+            st.caption("没有待生成的批次")
         else:
             date_counts = Counter(batch["date"] for batch in pending_batches)
             dates = sorted(date_counts)
@@ -259,7 +259,7 @@ def render_cosmic_removal_page(context: PageContext) -> None:
                 width="stretch",
             )
     with all_tab:
-        st.caption("一次生成 raw_data 下所有待生成批次；已生成的批次不覆盖。")
+        st.caption("生成全部待生成批次，已生成的不覆盖")
         generate_all_clicked = st.button(
             f"生成全部待生成批次（{len(pending_batches)}）",
             key="cosmic_removal_generate_all",
@@ -271,11 +271,11 @@ def render_cosmic_removal_page(context: PageContext) -> None:
     if preview_clicked and selected_batch is not None:
         try:
             with st.spinner("正在读取并清洗 raw_data 批次…"):
-                report = run_folder_ingest(FolderIngestRequest(
-                    spec=context.dataset_spec,
-                    source_dir=selected_batch["source_dir"],
-                    date_name=selected_batch["date"],
-                    prefix=selected_batch["prefix"],
+                report = run_folder_ingest(build_folder_ingest_request(
+                    context.dataset_spec,
+                    selected_batch["source_dir"],
+                    selected_batch["date"],
+                    selected_batch["prefix"],
                     apply=False,
                     bead=selected_batch["is_bead"],
                 ))
@@ -301,7 +301,7 @@ def render_cosmic_removal_page(context: PageContext) -> None:
                 kind="warning",
             )
         else:
-            set_flash("cosmic_removal", f"已生成 {done_count} 个批次。")
+            set_flash("cosmic_removal", f"已生成 {done_count} 个批次")
         invalidate_ui_cache(*INVALIDATE_ALL)
         st.rerun()
 

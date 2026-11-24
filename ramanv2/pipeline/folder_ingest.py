@@ -13,7 +13,7 @@ from typing import Callable, Mapping
 
 import numpy as np
 
-from ramanv2.common.arc_data import read_arc_data
+from ramanv2.common.arc_data import count_arc_data, read_arc_data
 from ramanv2.common.file_ops import create_temporary_path, rename_directory, write_json
 from ramanv2.common.naming import BEAD_FOLDER_NAME, is_date_name
 from ramanv2.data.datasets import DATASET_RAW_DIR_NAME, DatasetSpec
@@ -37,6 +37,47 @@ from ramanv2.pipeline.lineage import initialize_folder_lineage, sync_pipeline_st
 _PREFIX_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 _REPORT_NAME = "cosmic_ingest_report.json"
 ProgressCallback = Callable[[str, int, int], None]
+
+RAW_BATCH_GENERATED = "generated"
+RAW_BATCH_GENERATED_BEAD = "generated_bead"
+RAW_BATCH_PENDING = "pending"
+RAW_BATCH_PENDING_BEAD = "pending_bead"
+RAW_BATCH_DISABLED = "disabled"
+RAW_BATCH_BLOCKED_NESTED = "blocked_nested"
+RAW_BATCH_BLOCKED_EMPTY = "blocked_empty"
+WARNING_INVALID_DATE = "invalid_date"
+WARNING_INVALID_PREFIX = "invalid_prefix"
+
+
+@dataclass(frozen=True)
+class RawBatch:
+    """一个 raw_data 批次及其入库状态。"""
+
+    key: str
+    date: str
+    prefix: str
+    source_dir: Path
+    file_count: int
+    nested_count: int
+    target_exists: bool
+    is_bead: bool
+    status: str
+
+    @property
+    def pending(self) -> bool:
+        return self.status in {RAW_BATCH_PENDING, RAW_BATCH_PENDING_BEAD}
+
+    @property
+    def blocked(self) -> bool:
+        return self.status in {RAW_BATCH_BLOCKED_NESTED, RAW_BATCH_BLOCKED_EMPTY}
+
+
+@dataclass(frozen=True)
+class RawBatchScan:
+    """一次 raw_data 扫描的批次与忽略项。"""
+
+    batches: tuple[RawBatch, ...]
+    warnings: tuple[tuple[str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -82,6 +123,85 @@ def resolve_batch_names(date_name: str, prefix: str, *, bead: bool = False) -> t
     if not is_valid_prefix(prefix_text):
         raise ValueError("前缀只能包含字母、数字、下划线或短横线，且以字母开头")
     return date_text, prefix_text
+
+
+def scan_raw_batches(
+    raw_root: Path | str,
+    cosmic_root: Path | str,
+    enabled: bool,
+) -> RawBatchScan:
+    """扫描 raw_data/<日期>/<前缀> 并返回批次状态；不写任何文件。"""
+    batches: list[RawBatch] = []
+    warnings: list[tuple[str, str]] = []
+    raw = Path(raw_root)
+    cosmic = Path(cosmic_root)
+    if not raw.is_dir():
+        return RawBatchScan((), ())
+    for date_dir in sorted(raw.iterdir(), key=lambda path: path.name):
+        if not date_dir.is_dir() or date_dir.name.startswith("."):
+            continue
+        if not is_date_name(date_dir.name):
+            warnings.append((WARNING_INVALID_DATE, date_dir.name))
+            continue
+        for folder in sorted(date_dir.iterdir(), key=lambda path: path.name):
+            if not folder.is_dir() or folder.name.startswith("."):
+                continue
+            is_bead = folder.name == BEAD_FOLDER_NAME
+            if not is_bead and not is_valid_prefix(folder.name):
+                warnings.append((WARNING_INVALID_PREFIX, f"{date_dir.name}/{folder.name}"))
+                continue
+            direct_count = count_arc_data(folder)
+            nested_count = count_arc_data(folder, recursive=True)
+            target_exists = (cosmic / date_dir.name / folder.name).is_dir()
+            if target_exists:
+                status = RAW_BATCH_GENERATED_BEAD if is_bead else RAW_BATCH_GENERATED
+            elif nested_count != direct_count:
+                status = RAW_BATCH_BLOCKED_NESTED
+            elif direct_count == 0:
+                status = RAW_BATCH_BLOCKED_EMPTY
+            elif is_bead:
+                status = RAW_BATCH_PENDING_BEAD
+            elif not enabled:
+                status = RAW_BATCH_DISABLED
+            else:
+                status = RAW_BATCH_PENDING
+            batches.append(
+                RawBatch(
+                    key=f"{date_dir.name}/{folder.name}",
+                    date=date_dir.name,
+                    prefix=folder.name,
+                    source_dir=folder,
+                    file_count=int(direct_count),
+                    nested_count=int(nested_count),
+                    target_exists=bool(target_exists),
+                    is_bead=bool(is_bead),
+                    status=status,
+                )
+            )
+    return RawBatchScan(tuple(batches), tuple(warnings))
+
+
+def build_folder_ingest_request(
+    spec: DatasetSpec,
+    source_dir: Path | str,
+    date_name: str,
+    prefix: str | None,
+    *,
+    apply: bool = False,
+    bead: bool = False,
+    progress_callback: ProgressCallback | None = None,
+) -> FolderIngestRequest:
+    """构造单文件夹入库请求；bead 时前缀固定为小球。"""
+    date_text, prefix_text = resolve_batch_names(date_name, prefix or "", bead=bead)
+    return FolderIngestRequest(
+        spec=spec,
+        source_dir=source_dir,
+        date_name=date_text,
+        prefix=prefix_text,
+        apply=apply,
+        bead=bead,
+        progress_callback=progress_callback,
+    )
 
 
 def _resolve_source(

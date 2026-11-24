@@ -87,14 +87,11 @@ def _render_analyze_reports(reports: dict[str, list[dict[str, object]]] | None) 
     rebuilt = [item for item in rebuild if item.get("status") == "rebuilt"]
     spectra = sum(int(item.get("spectrum_count", 0) or 0) for item in rebuilt)
     if approved:
-        st.success(f"已分析并发布 {len(approved)} 个日期的小球仿射参数。")
+        st.success(f"已分析并发布 {len(approved)} 个日期的小球仿射参数")
     if rebuilt:
-        st.success(
-            f"已复用已有参数、从 cosmic_data 重建 {len(rebuilt)} 个日期的 shift"
-            f"（{spectra} 条光谱）。"
-        )
+        st.success(f"已重建 {len(rebuilt)} 个日期的 shift（{spectra} 条光谱）")
     if approved or rebuilt:
-        st.info("shift 数据已生成，可直接到数据集获取页建立 init。")
+        st.info("shift 已生成，可到「数据集获取」建立 init")
     for item in rejected:
         detail = item.get("error") or "；".join(str(error) for error in item.get("errors") or [])
         st.error(f"{item.get('date')}：{item.get('status')}{' · ' + str(detail) if detail else ''}")
@@ -208,7 +205,7 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
             and has_arc_data(context.data_root / date_name / BEAD_FOLDER_NAME)
         ]
         if compute_candidates:
-            st.caption("清洗完成、尚无仿射参数的日期可先计算单日仿射系数。")
+            st.caption("清洗完成且尚无仿射参数的日期可先计算仿射")
             compute_target = st.selectbox(
                 "选择待计算仿射系数的日期",
                 compute_candidates,
@@ -230,7 +227,7 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
                         write_page_state(context, state)
                         set_flash(
                             "affine_date_rebuild",
-                            f"{compute_target} 的仿射系数已计算并发布，shift 数据已生成。",
+                            f"{compute_target} 仿射已发布，shift 已生成",
                         )
                     else:
                         detail = compute_report.get("error") or "；".join(
@@ -247,7 +244,7 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
                 except UI_ACTION_ERRORS as error:
                     render_action_error("仿射系数计算", error)
         else:
-            st.caption("当前没有待计算仿射系数的日期。")
+            st.caption("没有待计算的日期")
         lineage_file = lineage_path(context.data_root)
         changes = _collect_folder_changes(
             str(context.data_root.resolve()),
@@ -269,7 +266,7 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
                 for row in changes
             ], hide_index=True, width="stretch")
         else:
-            st.caption("暂无删除/恢复操作记录。")
+            st.caption("暂无删除/恢复记录")
         update_targets = [date_name for date_name in pending if date_name in dates]
         identity_targets = [
             date_name for date_name in pending
@@ -283,7 +280,7 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
         ]
         if identity_targets:
             st.caption(
-                "以下日期没有可用小球，可发布 identity 校准（scale=1/offset=0）后更新 shift："
+                "以下日期无小球，可发布 identity 校准（scale=1/offset=0）后更新 shift："
                 + "、".join(identity_targets)
             )
             if st.button(
@@ -313,15 +310,15 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
                 invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
                 set_flash(
                     "affine_date_rebuild",
-                    f"已发布 {len(changed)} 个日期的 identity 校准并更新 shift_data；"
-                    "init/init_test 可到「数据集获取」页按日期更新。"
+                    f"已发布 {len(changed)} 个日期的 identity；"
+                    "init 可到「数据集获取」更新"
                     + (f"；失败：{'；'.join(failures)}" if failures else ""),
                 )
                 st.rerun()
         if not dates:
-            st.info("当前没有可复用仿射参数的日期。")
+            st.info("没有可复用的日期")
             return
-        st.caption("复用已有仿射参数，从 cosmic_data 更新所选日期的 shift_data。")
+        st.caption("复用已有参数，更新所选日期的 shift")
         if skipped_targets:
             st.caption("缺少 cosmic 数据，暂无法更新：" + "、".join(skipped_targets))
         if update_targets and st.button(
@@ -363,8 +360,8 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
             invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
             set_flash(
                 "affine_date_rebuild",
-                f"已更新 {len(rebuilt_dates)} 个日期的 shift_data（{spectrum_total} 条光谱）。"
-                "init/init_test 可到「数据集获取」页按日期更新。",
+                f"已更新 {len(rebuilt_dates)} 个日期的 shift（{spectrum_total} 条光谱）；"
+                "init 可到「数据集获取」更新",
             )
             if failures:
                 set_flash(
@@ -382,8 +379,8 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
             invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
             set_flash(
                 "affine_date_rebuild",
-                f"{selected} 的 shift_data 已更新（{result['spectrum_count']} 条光谱）。"
-                "init/init_test 可到「数据集获取」页按日期更新。",
+                f"{selected} 的 shift 已更新（{result['spectrum_count']} 条光谱）；"
+                "init 可到「数据集获取」更新",
             )
             st.rerun()
         except UI_ACTION_ERRORS as error:
@@ -453,7 +450,7 @@ def _render_identity_affine_page(context: PageContext, state) -> None:
         st.rerun()
 
     if not eligible_dates:
-        st.info("当前没有可校准的日期。")
+        st.info("没有可校准的日期")
         return
     rows = [
         {
@@ -550,11 +547,11 @@ def render_affine_calibration_page(context: PageContext) -> None:
     _render_date_rebuild_section(context, state)
 
     if not eligible_dates:
-        st.info("当前没有满足清洗完成和小球数据门禁的日期。")
+        st.info("没有满足清洗和小球门禁的日期")
         return
 
     if not pending_dates:
-        st.success("所有可用日期都已完成仿射校准，可直接建立 init。")
+        st.success("所有日期已校准，可建立 init")
         return
 
     for date_name in pending_dates:
@@ -580,7 +577,7 @@ def render_affine_calibration_page(context: PageContext) -> None:
             if report.get("errors"):
                 st.warning("；".join(str(error) for error in report["errors"]))
             if status in {"needs_review", "error"}:
-                st.error("该日期无法通过仿射校准，不能进入后续数据流程。")
+                st.error("该日期未通过校准，不能进入后续流程")
                 if st.button("整日期移除", key=f"remove-failed-calibration-{date_name}", width="stretch"):
                     folders = scan_review_folders(context.data_root, [date_name])
                     with st.spinner(f"正在移除失败日期 {date_name} 的全部原始光谱……"):
@@ -596,14 +593,14 @@ def render_affine_calibration_page(context: PageContext) -> None:
                     if result.missing_paths:
                         set_flash(
                             "affine_date_rebuild",
-                            f"有 {len(result.missing_paths)} 条光谱已经不存在，其余数据已移除。",
+                            f"{len(result.missing_paths)} 条光谱已不存在，其余已移除",
                             kind="warning",
                         )
                     else:
                         set_flash(
                             "affine_date_rebuild",
                             f"已移除 {date_name} 的 {len(result.moved_paths)} 条原始光谱"
-                            "（小球谱直接删除，其余进入人工删除目录）。",
+                            "（小球直删，其余移入人工删除）",
                         )
                     st.rerun()
             _render_images(report)
