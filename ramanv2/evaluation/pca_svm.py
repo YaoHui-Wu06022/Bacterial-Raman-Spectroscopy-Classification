@@ -11,11 +11,11 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
-from ramanv2.core.run_context import BASELINE_VAL_RESULT_DIR_NAME
+from ramanv2.experiments.run_context import BASELINE_VAL_RESULT_DIR_NAME
 from ramanv2.data.runtime.input import InputPreprocessor
-from ramanv2.evaluation.context import (
-    EvaluationContext,
-    load_evaluation_context,
+from ramanv2.experiments.data_context import (
+    ExperimentDataContext,
+    load_experiment_data_context,
     resolve_level_name,
     resolve_run_class_ids,
     resolve_run_entry,
@@ -41,14 +41,14 @@ def evaluate_baseline_run(
     spec: BaselineSpec = BaselineSpec(),
 ) -> Path:
     """在一个模型槽位的类别空间中拟合并评估 PCA-SVM。"""
-    context = load_evaluation_context(source_dir)
+    context = load_experiment_data_context(source_dir)
     run_entry = resolve_run_entry(context)
     level_name = resolve_level_name(context, level_name)
     if run_entry.level_name != level_name:
         raise ValueError(
             f"模型槽位属于 {run_entry.level_name}，不能按 {level_name} 评估"
         )
-    class_ids = resolve_run_class_ids(context.dataset_index, run_entry)
+    class_ids = resolve_run_class_ids(context, run_entry)
     train_indices = _select_class_indices(context, context.train_indices, level_name, class_ids)
     validation_indices = _select_class_indices(context, context.validation_indices, level_name, class_ids)
     class_names = [context.dataset_index.get_class_names(level_name)[index] for index in class_ids]
@@ -68,7 +68,7 @@ def evaluate_baseline_run(
 
 
 def _fit_predict(
-    context: EvaluationContext,
+    context: ExperimentDataContext,
     level_name: str,
     train_indices: np.ndarray,
     validation_indices: np.ndarray,
@@ -102,7 +102,7 @@ def _fit_predict(
 
 
 def _extract_features(
-    context: EvaluationContext,
+    context: ExperimentDataContext,
     indices: np.ndarray,
     level_name: str,
     class_ids: Sequence[int],
@@ -129,7 +129,7 @@ def _extract_features(
 
 
 def _select_class_indices(
-    context: EvaluationContext,
+    context: ExperimentDataContext,
     indices: np.ndarray,
     level_name: str,
     class_ids: Sequence[int],

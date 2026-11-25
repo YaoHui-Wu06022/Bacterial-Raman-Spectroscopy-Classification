@@ -7,15 +7,12 @@ from pathlib import Path
 
 from ramanv2.common.file_ops import file_sha256
 from ramanv2.core.config import Config, build_config
-from ramanv2.core.run_context import open_experiment_context
+from ramanv2.experiments.run_context import open_experiment_context
 from ramanv2.common.paths import PROJECT_ROOT
 from ramanv2.data.profiles import resolve_selection
 from ramanv2.data.runtime.index import DatasetIndex
-from ramanv2.training.split import (
-    build_split_indices,
-    load_split_files,
-    save_split_files,
-)
+from ramanv2.experiments.split import load_split_files, save_split_files
+from ramanv2.training.split import build_split_indices
 
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
@@ -98,13 +95,13 @@ def build_experiment_group(
         targets.append((name, experiment_dir, reused))
 
     for name, experiment_dir, reused in targets:
-        open_experiment_context(experiment_dir, config)
+        context = open_experiment_context(experiment_dir, config)
         save_split_files(dataset, train_indices, val_indices, experiment_dir)
         experiments[name] = {
             "experiment_dir": str(experiment_dir),
             "split_reused": reused,
-            "train_split_sha256": file_sha256(experiment_dir / "train_split.json"),
-            "val_split_sha256": file_sha256(experiment_dir / "val_split.json"),
+            "train_split_sha256": file_sha256(context.train_split_path),
+            "val_split_sha256": file_sha256(context.validation_split_path),
         }
 
     return {

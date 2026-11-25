@@ -13,7 +13,7 @@ from sklearn.metrics import classification_report, confusion_matrix
 
 from ramanv2.common.file_ops import write_json
 from ramanv2.common.metrics import compute_classification_metrics
-from ramanv2.core.run_context import CONFUSION_MATRIX_FILE_NAME, METRICS_FILE_NAME
+from ramanv2.experiments.run_context import CONFUSION_MATRIX_FILE_NAME, METRICS_FILE_NAME
 from ramanv2.common.plotting import (
     configure_matplotlib_fonts,
     resolve_confusion_matrix_figsize,

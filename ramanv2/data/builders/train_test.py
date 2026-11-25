@@ -19,7 +19,7 @@ from ramanv2.spectra.preprocess import preprocess_single_spectrum
 
 from ramanv2.core.config import DataBuildConfig, resolve_build_config
 from ramanv2.core.input_spec import build_preprocess_kwargs
-from ramanv2.common.arc_data import iter_arc_dirs, read_arc_data, write_arc_data
+from ramanv2.data.arc_data import iter_arc_dirs, read_arc_data, write_arc_data
 from ramanv2.common.file_ops import create_temporary_path, publish_directory
 
 
@@ -143,6 +143,14 @@ def _ensure_name_prefix(prefix: str, filename: str) -> str:
     return filename if filename.startswith(marker) else f"{marker}{filename}"
 
 
+def _prefix_spectra(prefix: str, samples):
+    """为训练和测试的合并光谱保留来源文件夹标识。"""
+    return [
+        (_ensure_name_prefix(prefix, filename), wavenumbers, intensity)
+        for filename, wavenumbers, intensity in samples
+    ]
+
+
 def _write_group(output_root: Path, relative_dir: Path, samples):
     """将完成清洗的同一类别光谱写入临时构建目录。"""
     target_dir = output_root / relative_dir
@@ -191,10 +199,7 @@ def build_train(
                 skipped_sources += 1
                 continue
             target_relative = hierarchy.init_class_relative(relative_dir, leaf_name)
-            renamed_samples = [
-                (_ensure_name_prefix(leaf_name, filename), wavenumbers, intensities)
-                for filename, wavenumbers, intensities in physical_samples
-            ]
+            renamed_samples = _prefix_spectra(leaf_name, physical_samples)
             merged.setdefault(target_relative.as_posix(), []).extend(renamed_samples)
 
         built_groups = 0
@@ -259,10 +264,7 @@ def build_test(
             if not cleaned:
                 continue
             class_name = hierarchy.resolve_values(leaf_name)[target_level]
-            renamed = [
-                (_ensure_name_prefix(leaf_name, filename), wavenumbers, intensities)
-                for filename, wavenumbers, intensities in cleaned
-            ]
+            renamed = _prefix_spectra(leaf_name, cleaned)
             _write_group(temp_output, Path(class_name), renamed)
             groups_built += 1
             spectra_built += len(renamed)

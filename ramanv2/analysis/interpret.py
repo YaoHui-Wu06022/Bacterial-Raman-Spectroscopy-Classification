@@ -20,18 +20,18 @@ from ramanv2.analysis.layer_attribution import (
     compute_layer_attribution,
     merge_layer_attribution_scores,
 )
-from ramanv2.core.run_context import (
+from ramanv2.experiments.run_context import (
     ANALYSIS_LOG_FILE_NAME,
     ANALYSIS_RESULT_DIR_NAME,
     UMAP_FIGURE_NAME,
 )
-from ramanv2.evaluation.context import (
-    EvaluationContext,
-    load_evaluation_context,
+from ramanv2.experiments.data_context import (
+    ExperimentDataContext,
+    load_experiment_data_context,
     resolve_level_name,
     resolve_run_entry,
 )
-from ramanv2.modeling.predictor import load_predictor
+from ramanv2.inference.predictor import load_predictor
 from ramanv2.spectra.axis import expected_wavenumbers
 
 
@@ -62,7 +62,7 @@ def interpret_slot(
     ``train_dir`` 用于未注册数据集（如 BID）：数据索引与切分需显式指向训练根，
     缺省时按注册表解析。
     """
-    context = load_evaluation_context(source_dir, train_dir=train_dir)
+    context = load_experiment_data_context(source_dir, train_dir=train_dir)
     level = resolve_level_name(context, level_name)
     task = build_slot_task(context, level)
     return _run_slot_analysis(
@@ -80,7 +80,7 @@ def umap_slot(
     device: str | None = None,
 ) -> Path:
     """只为一个模型槽位重新生成 Train/Val 联合 UMAP。"""
-    context = load_evaluation_context(source_dir)
+    context = load_experiment_data_context(source_dir)
     level = resolve_level_name(context, level_name)
     task = build_slot_task(context, level)
     target_device = _resolve_device(device)
@@ -97,7 +97,7 @@ def umap_slot(
     return output_path
 
 
-def build_slot_task(context: EvaluationContext, level_name: str) -> AnalysisTask:
+def build_slot_task(context: ExperimentDataContext, level_name: str) -> AnalysisTask:
     """从明确模型槽位构建唯一的分析任务。"""
     run_entry = resolve_run_entry(context)
     if run_entry.level_name != level_name:

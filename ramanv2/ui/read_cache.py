@@ -8,37 +8,12 @@ from pathlib import Path
 import streamlit as st
 
 from ramanv2.common.file_ops import read_json
-from ramanv2.common.naming import build_natural_key
-from ramanv2.core.snapshot import SHARED_CONFIG_NAME
-from ramanv2.core.run_context import (
-    HIERARCHY_META_FILE_NAME,
-    TRAIN_SPLIT_FILE_NAME,
-    VALIDATION_SPLIT_FILE_NAME,
-)
 from ramanv2.data.calibration.affine import load_calibration_report
 from ramanv2.data.count import collect_taxon_counts, summarize_dataset, summarize_dataset_hierarchy
 from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.data.runtime.index import DatasetIndex
-from ramanv2.modeling.run_manifest import LEVEL_DIR_PATTERN, find_model_slot_dirs
+from ramanv2.experiments.run_manifest import find_experiment_dirs, find_model_slot_dirs
 from ramanv2.pipeline.cleaning import scan_date_names
-
-
-_EXPERIMENT_MARKERS = (
-    SHARED_CONFIG_NAME,
-    TRAIN_SPLIT_FILE_NAME,
-    VALIDATION_SPLIT_FILE_NAME,
-    HIERARCHY_META_FILE_NAME,
-)
-_EXPERIMENT_MIN_MARKERS = (HIERARCHY_META_FILE_NAME,)
-
-
-def _has_model_slot(experiment_dir: Path) -> bool:
-    """判断实验根下是否至少存在一个已完成训练的模型槽位。"""
-    return any(
-        find_model_slot_dirs(path)
-        for path in experiment_dir.iterdir()
-        if path.is_dir() and LEVEL_DIR_PATTERN.match(path.name)
-    )
 
 
 @st.cache_data(show_spinner=False)
@@ -160,19 +135,4 @@ def cached_experiment_dirs(
 ) -> tuple[str, ...]:
     """缓存一个输出命名空间下的实验目录；完整模式要求切分与配置快照齐全。"""
     del version
-    root = Path(experiment_parent)
-    if not root.is_dir():
-        return ()
-    markers = _EXPERIMENT_MARKERS if require_complete else _EXPERIMENT_MIN_MARKERS
-    result = [
-        path.resolve()
-        for path in root.iterdir()
-        if path.is_dir()
-        and all((path / marker).is_file() for marker in markers)
-        and _has_model_slot(path)
-    ]
-    return tuple(
-        str(path)
-        for path in sorted(result, key=lambda item: build_natural_key(item.name), reverse=True)
-    )
-
+    return tuple(str(path) for path in find_experiment_dirs(experiment_parent, require_complete=require_complete))

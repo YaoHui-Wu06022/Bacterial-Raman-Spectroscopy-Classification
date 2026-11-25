@@ -9,8 +9,8 @@ import streamlit as st
 
 from ramanv2.common.paths import DATASET_ROOT
 from ramanv2.data.datasets import DatasetRegistry, load_dataset_registry
+from ramanv2.pipeline.state import load_pipeline_state
 from ramanv2.ui.page_context import PageContext, build_page_context
-from ramanv2.ui.page_state import load_page_state, write_page_state
 
 
 PageRenderer = Callable[[PageContext], None]
@@ -73,9 +73,10 @@ def main() -> None:
     if not context.has_dataset_config:
         _load_page_renderer("数据集配置")(context)
         return
-    # 状态文件是跨页面和跨浏览器会话的唯一来源，避免使用旧会话对象覆盖新状态。
-    state = load_page_state(context)
-    current = st.session_state.get("active_page", state.active_page)
+    # 只在新会话读取上次入口，后续导航留在会话内。
+    current = st.session_state.get("active_page")
+    if current is None:
+        current = load_pipeline_state(context.state_file).active_page
     current = PAGE_ALIASES.get(current, current)
     if current not in PAGE_NAMES:
         current = PAGE_NAMES[0]
@@ -88,8 +89,5 @@ def main() -> None:
         key="active_page_control",
     ) or current
     st.session_state["active_page"] = page_name
-    if state.active_page != page_name:
-        state.active_page = page_name
-        write_page_state(context, state)
     renderer = _load_page_renderer(page_name)
     renderer(context)

@@ -6,17 +6,12 @@ import json
 from pathlib import Path
 import streamlit as st
 
-from ramanv2.common.arc_data import count_arc_data, has_arc_data
+from ramanv2.data.arc_data import count_arc_data, has_arc_data
 from ramanv2.core.config import InputConfig
-from ramanv2.common.naming import (
-    CANONICAL_FOLDER_PATTERN,
-    SPECIAL_FOLDER_NAMES,
-    build_natural_key,
-    parse_folder_prefix,
-)
+from ramanv2.data.naming import CANONICAL_FOLDER_PATTERN, SPECIAL_FOLDER_NAMES, parse_folder_prefix
+from ramanv2.common.paths import build_natural_key
 from ramanv2.data.plots.prefix import PrefixPlotConfig, build_prefix_plots
 from ramanv2.pipeline.calibration import run_folder_offset
-from ramanv2.data.datasets import annotate_dataset_build
 from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.pipeline.dataset_sync import (
     collect_date_update_candidates,
@@ -29,7 +24,7 @@ from ramanv2.pipeline.dataset_sync import (
 from ramanv2.pipeline.lineage import clear_test_routes, lineage_path, load_folder_lineage
 from ramanv2.pipeline.supplement import (
     SupplementPlan,
-    build_init_from_shift,
+    run_full_init,
     prepare_supplement_plan,
 )
 from ramanv2.pipeline.state import PipelineState
@@ -57,6 +52,9 @@ from ramanv2.ui.page_state import (
 
 # 候选源文件夹：流水线保留目录与校准球都不作为普通来源。
 SOURCE_RESERVED_NAMES = SPECIAL_FOLDER_NAMES
+SUPPLEMENT_PREVIEW_KEY = "full_init_supplement_preview"
+SUPPLEMENT_CONFIRM_KEY = "full_init_supplement_confirm"
+SUPPLEMENT_RECONFIRM_KEY = "full_init_supplement_reconfirm"
 
 
 def _render_taxon_counts(init_root: Path, hierarchy) -> None:
@@ -667,6 +665,8 @@ def _render_flat_label_counts(context: PageContext) -> None:
     """按层级一级类别汇总 init 的组数与光谱数。"""
     if not context.init_root.is_dir():
         return
+    if not st.checkbox("查看类别数量统计", key="show_flat_label_counts"):
+        return
     counts: dict[str, list[int]] = {}
     for folder in sorted(context.init_root.rglob("*"), key=lambda path: build_natural_key(path.as_posix())):
         if not folder.is_dir() or not CANONICAL_FOLDER_PATTERN.fullmatch(folder.name):
@@ -682,8 +682,37 @@ def _render_flat_label_counts(context: PageContext) -> None:
         {"类别": label, "来源组数": values[0], "光谱数": values[1]}
         for label, values in sorted(counts.items(), key=lambda item: build_natural_key(item[0]))
     ]
-    with st.expander("类别数量统计", expanded=False):
-        st.dataframe(rows, hide_index=True, width="stretch")
+    st.dataframe(rows, hide_index=True, width="stretch")
+
+
+def _render_supplement_preflight(
+    context: PageContext, catalog: DatasetMapping | None,
+) -> tuple[tuple[str, str, str], SupplementPlan | None, bool]:
+    """保留本数据集的预检结果，只有显式操作才读取目录。"""
+    scope = (str(context.init_root), str(context.supplement_root), context.hierarchy.signature())
+    preview_scope, plan = st.session_state.get(SUPPLEMENT_PREVIEW_KEY, (None, None))
+    if st.session_state.pop(SUPPLEMENT_RECONFIRM_KEY, False) or preview_scope != scope:
+        st.session_state.pop(SUPPLEMENT_CONFIRM_KEY, None)
+    if preview_scope != scope:
+        plan = None
+    if st.button("检查补充数据", disabled=catalog is None, key="check_supplement_plan"):
+        st.session_state.pop(SUPPLEMENT_CONFIRM_KEY, None)
+        try:
+            plan = prepare_supplement_plan(context.supplement_root, context.init_root, catalog, context.hierarchy)
+        except UI_ACTION_ERRORS as error:
+            plan = None
+            render_action_error("补充数据预检", error)
+        st.session_state[SUPPLEMENT_PREVIEW_KEY] = (scope, plan)
+    if plan is None:
+        st.caption("全量重建前，请先检查并确认补充数据。")
+    else:
+        _render_supplement_plan(plan, context.supplement_root)
+    confirmed = st.checkbox(
+        "我确认按上述补充数据重建全量 init",
+        key=SUPPLEMENT_CONFIRM_KEY,
+        disabled=catalog is None or plan is None or bool(plan.errors),
+    )
+    return scope, plan, confirmed
 
 
 def render_dataset_acquisition_page(context: PageContext) -> None:
@@ -739,14 +768,6 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
     else:
         _render_taxon_counts(context.init_root, context.hierarchy)
     eligible_dates = sorted(state.affine_completed_dates, key=build_natural_key)
-    supplement_plan = (
-        prepare_supplement_plan(context.supplement_root, context.init_root, catalog, context.hierarchy)
-        if catalog is not None
-        else None
-    )
-    supplement_ready = context.hierarchy.is_flat or (
-        supplement_plan is not None and not supplement_plan.errors
-    )
     test_candidates = _list_test_sources(context, eligible_dates)
     test_selection_key = "full_init_test_selection"
     initialized_key = "full_init_test_selection_initialized"
@@ -773,20 +794,29 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
         format_func=lambda value: value.replace("/", " / "),
         key=test_selection_key,
     )
-    confirm_supplement = True
+    supplement_plan = None
+    supplement_ready = context.hierarchy.is_flat
     if not context.hierarchy.is_flat:
-        _render_supplement_plan(supplement_plan, context.supplement_root)
-        confirm_supplement = st.checkbox(
-            "我确认按上述补充数据重建全量 init",
-            key="full_init_supplement_confirm",
-            disabled=not supplement_ready,
+        scope, supplement_plan, confirmed = _render_supplement_preflight(context, catalog)
+        supplement_ready = (
+            catalog is not None and supplement_plan is not None and not supplement_plan.errors and confirmed
         )
     if st.button(
         "从 shift_data 重建全量 init",
-        disabled=not supplement_ready or not confirm_supplement,
+        disabled=not supplement_ready,
         width="stretch",
+        key="rebuild_full_init",
     ):
         try:
+            if supplement_plan is not None:
+                current_plan = prepare_supplement_plan(
+                    context.supplement_root, context.init_root, catalog, context.hierarchy,
+                )
+                if current_plan != supplement_plan:
+                    st.session_state[SUPPLEMENT_PREVIEW_KEY] = (scope, current_plan)
+                    st.session_state[SUPPLEMENT_RECONFIRM_KEY] = True
+                    set_flash("dataset", "补充数据计划已变化，请核对后重新确认。", kind="warning")
+                    st.rerun()
             with st.status("正在重建全量 init…", expanded=True) as status:
                 progress = st.progress(0.0, text="正在校验日期门禁并收集来源文件夹…")
 
@@ -797,24 +827,20 @@ def render_dataset_acquisition_page(context: PageContext) -> None:
                         text=f"[{processed}/{total} 条光谱] 正在处理 {date_name}…",
                     )
 
-                report = build_init_from_shift(
-                    context.shift_root,
-                    context.init_root,
+                report = run_full_init(
+                    context.dataset_spec,
+                    state,
+                    context.state_file,
                     catalog,
-                    eligible_dates,
-                    supplement_root=context.supplement_root,
-                    test_root=context.init_test_root,
                     selected_test_folders=selected_test,
-                    hierarchy=context.hierarchy,
                     plan=supplement_plan,
                     progress_callback=report_copy_progress,
                 )
                 progress.progress(1.0, text="全量 init 写入完成")
                 status.update(label="全量 init 重建完成", state="complete", expanded=False)
-            state.dataset_builds["full_init"] = annotate_dataset_build(report, context.dataset_spec)
             invalidate_ui_cache(*INVALIDATE_DATASET)
-            write_page_state(context, state)
-            st.session_state.pop("full_init_supplement_confirm", None)
+            st.session_state.pop(SUPPLEMENT_PREVIEW_KEY, None)
+            st.session_state.pop(SUPPLEMENT_CONFIRM_KEY, None)
             if context.hierarchy.is_flat:
                 set_flash(
                     "dataset",

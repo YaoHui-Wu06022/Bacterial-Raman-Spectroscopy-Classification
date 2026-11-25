@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ramanv2.common.arc_data import list_arc_data_paths, read_arc_data
-from ramanv2.common.naming import build_natural_key
+from ramanv2.data.arc_data import list_arc_data_paths, read_arc_data
+from ramanv2.common.paths import build_natural_key
 from ramanv2.core.input_spec import InputSpec
 from ramanv2.data.runtime.input import InputPreprocessor
 from ramanv2.spectra.bad_bands import build_valid_mask

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import json
 import random
 import shutil
 from collections import defaultdict
@@ -16,29 +15,26 @@ import torch
 
 from ramanv2.common.device import resolve_device
 from ramanv2.common.file_ops import publish_directory
-from ramanv2.common.hierarchy import load_hierarchy_meta
+from ramanv2.experiments.run_manifest import load_hierarchy_meta
 from ramanv2.common.paths import find_ancestor_dir
-from ramanv2.core.run_context import (
+from ramanv2.experiments.run_context import (
     CASCADE_MODE_DIR_NAME,
     HIERARCHY_META_FILE_NAME,
     INFERENCE_RESULT_DIR_NAME,
     LEVEL_SUMMARY_DIR_NAME,
-    METRICS_FILE_NAME,
-    MODEL_FILE_NAME,
     TEST_RESULT_DIR_NAME,
 )
 from ramanv2.data.hierarchy_spec import HierarchySpec, resolve_hierarchy_from_meta
 from ramanv2.data.runtime.index import DatasetIndex
 from ramanv2.data.profiles import resolve_selection
-from ramanv2.common.result_text import build_result_summary
-from ramanv2.inference.test_report import (
+from ramanv2.inference.cascade_report import (
     plot_folder_spectra,
     write_file_report,
     write_summary_json,
     write_summary_report,
 )
-from ramanv2.modeling.predictor import Predictor, load_predictor
-from ramanv2.modeling.run_manifest import has_model_path, resolve_entry_path
+from ramanv2.inference.predictor import Predictor, load_predictor, predict_spectrum
+from ramanv2.experiments.run_manifest import entry_model_exists, has_model_path
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.bad_bands import build_valid_mask
 from ramanv2.inference.spectrum_input import (
@@ -48,7 +44,7 @@ from ramanv2.inference.spectrum_input import (
     resolve_input_dirs,
     sample_folder_spectra,
 )
-from ramanv2.inference.test_labels import (
+from ramanv2.inference.folder_labels import (
     build_folder_summary,
     build_test_input_selection,
 )
@@ -122,11 +118,6 @@ def run_independent_inference(
         summary = write_summary_report(temp_dir / SUMMARY_TEXT_NAME, rows, evaluate_enable)
         write_summary_json(temp_dir / SUMMARY_JSON_NAME, summary)
         publish_directory(temp_dir, target_dir)
-        merge_level_test_inference_summary(
-            predictor.experiment_dir,
-            predictor.meta,
-            predictor.predict_level,
-        )
     except Exception:
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise
@@ -189,7 +180,7 @@ def _level_models_ready(
     """判断一个层级的全局模型或全部多子类父模型是否已落盘。"""
     global_entry = (meta.get("level_models") or {}).get(level_name)
     if has_model_path(global_entry):
-        return _entry_model_exists(experiment_dir, global_entry)
+        return entry_model_exists(experiment_dir, global_entry)
     parent_map = (meta.get("parent_to_children") or {}).get(level_name) or {}
     parent_models = (meta.get("parent_models") or {}).get(level_name) or {}
     if not parent_map:
@@ -200,7 +191,7 @@ def _level_models_ready(
         entry = parent_models.get(str(parent_text))
         if not has_model_path(entry):
             return False
-        if not _entry_model_exists(experiment_dir, entry):
+        if not entry_model_exists(experiment_dir, entry):
             return False
     return True
 
@@ -215,11 +206,6 @@ def _is_direct_pass_level(meta: dict[str, Any], level_name: str) -> bool:
         return False
     parent_entries = (meta.get("parent_models") or {}).get(level_name) or {}
     return not any(has_model_path(entry) for entry in parent_entries.values())
-
-
-def _entry_model_exists(experiment_dir: Path, entry: Any) -> bool:
-    slot_dir = resolve_entry_path(experiment_dir, entry, "run_dir")
-    return (slot_dir / MODEL_FILE_NAME).is_file()
 
 
 def _run_folder_predictions(
@@ -306,21 +292,9 @@ def _run_single_folder(
                 preprocessor,
                 predictor.input_config.bad_bands,
             )
-        top_predictions = predictor.predict_tensor(inputs, top_k)
-        predictions.append(
-            {
-                "file": file_name,
-                "predictions": [
-                    {
-                        "label": item.label,
-                        "probability": item.probability,
-                        "class_id": item.class_id,
-                    }
-                    for item in top_predictions
-                ],
-                "top1_label": top_predictions[0].label,
-            }
-        )
+        prediction = predict_spectrum(predictor, inputs, file_name, top_k)
+        prediction["top1_label"] = prediction["predictions"][0]["label"]
+        predictions.append(prediction)
         signals.append(inputs[0, 0].detach().cpu().numpy().astype(np.float32, copy=False))
     if not predictions:
         return None
@@ -394,36 +368,6 @@ def resolve_level_inference_dir(
     return resolve_cascade_test_result_dir(experiment_dir, meta, level_name) / INFERENCE_RESULT_DIR_NAME
 
 
-def merge_level_test_inference_summary(
-    experiment_dir: Path | str,
-    meta: dict[str, Any],
-    level_name: str,
-) -> None:
-    """把模型测试指标与级联文件夹表合并为外层 test_result/summary.txt。"""
-    test_result_dir = resolve_cascade_test_result_dir(experiment_dir, meta, level_name)
-    metrics_path = test_result_dir / METRICS_FILE_NAME
-    if not metrics_path.is_file():
-        return
-    inference_dir = resolve_level_inference_dir(experiment_dir, meta, level_name)
-    summary_json = inference_dir / SUMMARY_JSON_NAME
-    if not summary_json.is_file():
-        return
-    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-    payload = json.loads(summary_json.read_text(encoding="utf-8"))
-    global_entry = (meta.get("level_models") or {}).get(level_name)
-    mode = "model" if has_model_path(global_entry) else CASCADE_MODE_DIR_NAME
-    (test_result_dir / SUMMARY_TEXT_NAME).write_text(
-        build_result_summary(
-            metrics,
-            level_name,
-            mode,
-            inference_payload=payload,
-        ),
-        encoding="utf-8",
-    )
-    (inference_dir / SUMMARY_TEXT_NAME).unlink(missing_ok=True)
-
-
 def _resolve_result_dir(predictor: Predictor) -> Path:
     """返回层级级联推理结果目录。"""
     return resolve_level_inference_dir(
@@ -465,7 +409,6 @@ def _build_train_mean_bank(predictor: Predictor, preprocessor) -> dict[str, np.n
 
 
 __all__ = [
-    "merge_level_test_inference_summary",
     "resolve_cascade_test_result_dir",
     "resolve_level_inference_dir",
     "run_experiment_inference",

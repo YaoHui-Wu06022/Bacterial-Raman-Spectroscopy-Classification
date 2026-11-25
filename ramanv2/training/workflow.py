@@ -14,8 +14,8 @@ import torch
 from torch.utils.data import Subset
 
 from ramanv2.core.config import Config
-from ramanv2.core.snapshot import load_run_snapshot
-from ramanv2.common.hierarchy import (
+from ramanv2.experiments.snapshot import load_run_snapshot
+from ramanv2.experiments.run_manifest import (
     assert_hierarchy_compatible,
     build_hierarchy_entry,
     build_hierarchy_meta,
@@ -25,12 +25,11 @@ from ramanv2.common.hierarchy import (
 )
 from ramanv2.core.input_spec import build_input_spec
 from ramanv2.common.paths import PROJECT_ROOT, relpath, resolve_path
-from ramanv2.core.run_context import (
+from ramanv2.experiments.run_context import (
     CHECKPOINT_FILE_NAME,
+    HIERARCHY_META_FILE_NAME,
     ExperimentContext,
-    RunContext,
     open_experiment_context,
-    open_run_context,
     resolve_run_dir,
 )
 from ramanv2.data.runtime.augmentation import build_augmentation_spec
@@ -41,6 +40,7 @@ from ramanv2.modeling.factory import build_model, validate_model_input
 from ramanv2.modeling.model_spec import ModelSpec, build_model_spec
 from ramanv2.training.loop import TrainArtifacts, TrainResult, run_train_loop
 from ramanv2.training.optimizer import build_loader
+from ramanv2.training.run_context import RunContext, open_run_context
 from ramanv2.training.snapshot import save_or_validate_train_archive
 from ramanv2.training.split import (
     TrainTask,
@@ -92,7 +92,7 @@ def run_training(request: TrainRequest) -> dict[str, Any]:
         config.dataset.profile_id,
     )
     experiment_dir = _resolve_experiment_dir(request, selection)
-    existing_meta = load_hierarchy_meta(experiment_dir / "hierarchy_meta.json")
+    existing_meta = load_hierarchy_meta(experiment_dir / HIERARCHY_META_FILE_NAME)
     if request.resume_run_dir is not None:
         load_run_snapshot(request.resume_run_dir)
     dataset_index = DatasetIndex(

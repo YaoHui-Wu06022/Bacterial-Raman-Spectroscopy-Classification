@@ -22,33 +22,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m ramanv2", description="Raman 光谱分类工具")
     domains = parser.add_subparsers(dest="domain", required=True)
 
-    import ramanv2.analysis.cli
-    import ramanv2.data.cli
-    import ramanv2.evaluation.cli
-    import ramanv2.inference.test_cli
-    import ramanv2.pipeline.cli
-    import ramanv2.training.cli
+    import ramanv2.cli.analyze
+    import ramanv2.cli.data
+    import ramanv2.cli.evaluate
+    import ramanv2.cli.infer
+    import ramanv2.cli.pipeline
+    import ramanv2.cli.train
 
     pipeline_parser = domains.add_parser("pipeline", help="执行前置数据流水线")
-    ramanv2.pipeline.cli.configure_parser(pipeline_parser)
+    ramanv2.cli.pipeline.configure_parser(pipeline_parser)
 
     data_parser = domains.add_parser("data", help="构建、打包和检查常规数据集")
-    ramanv2.data.cli.configure_parser(data_parser)
+    ramanv2.cli.data.configure_parser(data_parser)
 
     train_parser = domains.add_parser("train", help="训练层级分类模型")
-    ramanv2.training.cli.configure_parser(train_parser)
+    ramanv2.cli.train.configure_parser(train_parser)
 
     infer_parser = domains.add_parser("infer", help="执行独立推理")
     infer_commands = infer_parser.add_subparsers(dest="command", required=True)
     test_parser = infer_commands.add_parser("test", help="推理测试文件夹")
-    ramanv2.inference.test_cli.configure_parser(test_parser)
-    test_parser.set_defaults(run_command=ramanv2.inference.test_cli.run_command)
+    ramanv2.cli.infer.configure_parser(test_parser)
+    test_parser.set_defaults(run_command=ramanv2.cli.infer.run_command)
 
     evaluation_parser = domains.add_parser("evaluate", help="评估模型或 PCA-SVM baseline")
-    ramanv2.evaluation.cli.configure_parser(evaluation_parser)
+    ramanv2.cli.evaluate.configure_parser(evaluation_parser)
 
     analysis_parser = domains.add_parser("analyze", help="运行模型可解释性分析")
-    ramanv2.analysis.cli.configure_parser(analysis_parser)
+    ramanv2.cli.analyze.configure_parser(analysis_parser)
 
     zip_parser = domains.add_parser("zip", help="仅打包 ramanv2，不包含数据集")
     zip_parser.set_defaults(run_command=_run_zip_command)

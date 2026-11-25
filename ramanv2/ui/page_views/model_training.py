@@ -30,7 +30,7 @@ from ramanv2.ui.page_state import (
 
 
 BATCH_SIZES = (8, 16, 32, 48, 64, 96, 128)
-WORKER_COUNTS = (-1, 1, 2, 4, 8, 16)
+WORKER_COUNTS = (-1, 0, 1, 2, 4, 8, 16)
 TARGET_POINTS = (256, 512, 896, 1024, 2048)
 LOG_MAX_LINES = 400
 LOG_FLUSH_SECONDS = 0.3
@@ -180,6 +180,18 @@ def _render_training_scope(index: DatasetIndex | None) -> dict[str, object]:
     }
 
 
+def _select_loader_worker_count(label: str, configured: int, *, key: str) -> int:
+    # Windows 的 Streamlit 训练默认在当前进程加载，避免自动启动 spawn worker。
+    default = max(0, configured) if os.name == "nt" else max(-1, configured)
+    options = sorted({*WORKER_COUNTS, default})
+    return st.selectbox(
+        f"{label}（-1=按 CPU 自动，0=当前进程）",
+        options,
+        index=options.index(default),
+        key=key,
+    )
+
+
 def _render_config_controls(profile_id: str, context, hierarchy) -> dict[str, Any]:
     """用中文点击控件生成现有 build_config 所需的局部覆盖值。"""
     defaults = build_config(
@@ -198,12 +210,6 @@ def _render_config_controls(profile_id: str, context, hierarchy) -> dict[str, An
     patience_default = int(training.patience)
     split_default = float(training.train_split)
     batch_default = int(training.batch_size)
-    worker_default = int(training.train_loader_num_workers)
-    # Streamlit 在 Windows 下由运行器管理进程；DataLoader 继承多个 spawn
-    # worker 容易在点击按钮后重新执行页面，导致训练无法启动。GPU 训练仍
-    # 使用 pin_memory，只把数据读取退回当前进程以保证本地 UI 稳定。
-    if os.name == "nt" and worker_default < 0:
-        worker_default = 0
     persistent_default = bool(training.loader_persistent_workers)
     amp_default = bool(execution.use_amp)
 
@@ -231,8 +237,12 @@ def _render_config_controls(profile_id: str, context, hierarchy) -> dict[str, An
         ),
         "learning_rate": st.selectbox("学习率", (1e-5, 5e-5, 1e-4, 2e-4, 4e-4, 1e-3), index=4, key="training_lr"),
         "weight_decay": st.selectbox("权重衰减", (0.0, 1e-5, 1e-4, 1e-3), index=2, key="training_decay"),
-        "train_loader_num_workers": st.selectbox("数据加载进程数（-1=按 CPU 自动）", WORKER_COUNTS, index=WORKER_COUNTS.index(worker_default), key="training_workers"),
-        "val_loader_num_workers": st.selectbox("验证加载进程数（-1=按 CPU 自动）", WORKER_COUNTS, index=WORKER_COUNTS.index(worker_default), key="validation_workers"),
+        "train_loader_num_workers": _select_loader_worker_count(
+            "数据加载进程数", training.train_loader_num_workers, key="training_workers",
+        ),
+        "val_loader_num_workers": _select_loader_worker_count(
+            "验证加载进程数", training.val_loader_num_workers, key="validation_workers",
+        ),
         "use_gpu": use_gpu,
         "use_amp": st.checkbox("使用混合精度", value=amp_default, key="training_amp"),
         "deterministic": st.checkbox("启用确定性训练", value=execution.deterministic, key="training_deterministic"),

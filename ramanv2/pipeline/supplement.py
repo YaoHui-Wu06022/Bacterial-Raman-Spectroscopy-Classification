@@ -8,17 +8,19 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from ramanv2.common.arc_data import (
+from ramanv2.data.arc_data import (
     count_arc_data,
     is_arc_data_name,
     list_arc_data_paths,
     read_arc_data,
 )
-from ramanv2.common.naming import CANONICAL_FOLDER_PATTERN, build_natural_key, parse_folder_prefix
-from ramanv2.pipeline.init_builder import build_full_init, build_spectrum_folder
+from ramanv2.data.naming import CANONICAL_FOLDER_PATTERN, parse_folder_prefix
+from ramanv2.common.paths import build_natural_key
+from ramanv2.pipeline.init_builder import build_full_init
 from ramanv2.data.dataset_mapping import DatasetMapping
 from ramanv2.data.hierarchy_spec import HierarchySpec
-from ramanv2.data.count import summarize_dataset
+from ramanv2.data.datasets import DatasetSpec, annotate_dataset_build
+from ramanv2.pipeline.state import PipelineState, write_pipeline_state
 
 
 @dataclass(frozen=True)
@@ -104,24 +106,18 @@ def scan_supplement_plan(
     planned_targets = {group.target_relative.as_posix() for group in groups}
     unbacked: list[str] = []
     if init.is_dir():
-        if hierarchy is not None:
-            leaf_depth = max(hierarchy.directory_depth, 1) + 1
-            for path in sorted(init.rglob("*"), key=lambda item: build_natural_key(item.as_posix())):
-                relative = path.relative_to(init)
-                if not path.is_dir() or len(relative.parts) != leaf_depth:
-                    continue
-                if CANONICAL_FOLDER_PATTERN.fullmatch(path.name):
-                    continue
-                if relative.as_posix() not in planned_targets:
-                    unbacked.append(relative.as_posix())
-        else:
-            for genus_dir in sorted((path for path in init.iterdir() if path.is_dir()), key=lambda path: build_natural_key(path.name)):
-                for folder in sorted((path for path in genus_dir.iterdir() if path.is_dir()), key=lambda path: build_natural_key(path.name)):
-                    if CANONICAL_FOLDER_PATTERN.fullmatch(folder.name):
-                        continue
-                    relative = f"{genus_dir.name}/{folder.name}"
+        parent_depth = max(hierarchy.directory_depth, 1) if hierarchy is not None else 1
+        for directory, children, _ in os.walk(init, followlinks=hierarchy is None):
+            parent = Path(directory).relative_to(init)
+            if len(parent.parts) != parent_depth:
+                continue
+            # 只核对来源组名称，走到组所在层就停止遍历。
+            for name in children:
+                if not CANONICAL_FOLDER_PATTERN.fullmatch(name):
+                    relative = (parent / name).as_posix()
                     if relative not in planned_targets:
                         unbacked.append(relative)
+            children.clear()
     if unbacked and not root.is_dir():
         errors.append(f"补充数据目录不存在，且 init 中有无来源直放组：{'、'.join(unbacked)}")
     return SupplementPlan(
@@ -148,58 +144,6 @@ def validate_supplement_plan(plan: SupplementPlan) -> tuple[str, ...]:
     return tuple(errors)
 
 
-def apply_supplement_plan(init_root: Path | str, plan: SupplementPlan) -> dict[str, object]:
-    """把补充文件夹写入 init；逐组原子发布，失败时源文件保持不变。"""
-    if plan.errors:
-        raise ValueError("补充数据计划有错误：" + "；".join(plan.errors))
-    targets: list[str] = []
-    file_count = 0
-    for group in plan.groups:
-        target = Path(init_root) / group.target_relative
-        file_count += build_spectrum_folder(group.source_dir, target)
-        targets.append(group.target_relative.as_posix())
-    return {
-        "status": "ready",
-        "folder_count": len(plan.groups),
-        "file_count": file_count,
-        "targets": targets,
-    }
-
-
-def build_full_init_with_supplements(
-    shift_root: Path | str,
-    init_root: Path | str,
-    mapping: DatasetMapping | None,
-    completed_dates: list[str] | set[str] | tuple[str, ...],
-    plan: SupplementPlan,
-    *,
-    test_root: Path | str | None = None,
-    selected_test_folders: list[str] | set[str] | tuple[str, ...] | None = None,
-    hierarchy: HierarchySpec,
-    progress_callback: Callable[[str, int, int], None] | None = None,
-) -> dict[str, object]:
-    """按页面流程生成全量 init：先构建 shift 数据，再写入补充文件夹。
-
-    ``plan`` 需由调用方预先扫描并校验；构建完成后用包含补充数据的目录重新统计。
-    """
-    if plan.errors:
-        raise ValueError("补充数据计划有错误：" + "；".join(plan.errors))
-    report = build_full_init(
-        shift_root,
-        init_root,
-        mapping,
-        completed_dates,
-        test_root=test_root,
-        selected_test_folders=selected_test_folders,
-        hierarchy=hierarchy,
-        progress_callback=progress_callback,
-    )
-    supplement = apply_supplement_plan(init_root, plan)
-    report["supplement"] = supplement
-    report["count"] = summarize_dataset(Path(init_root).resolve())
-    return report
-
-
 def prepare_supplement_plan(
     supplement_root: Path | str | None,
     init_root: Path | str,
@@ -216,62 +160,46 @@ def prepare_supplement_plan(
     return scan_supplement_plan(supplement_root, init_root, mapping, hierarchy=hierarchy)
 
 
-def build_init_from_shift(
-    shift_root: Path | str,
-    init_root: Path | str,
+def run_full_init(
+    spec: DatasetSpec,
+    state: PipelineState,
+    state_path: Path,
     mapping: DatasetMapping | None,
-    completed_dates: list[str] | set[str] | tuple[str, ...],
     *,
-    supplement_root: Path | str | None,
-    test_root: Path | str | None,
-    selected_test_folders: Sequence[str] | None,
-    hierarchy: HierarchySpec,
+    shift_root: Path | str | None = None,
+    init_root: Path | str | None = None,
+    selected_test_folders: Sequence[str] | None = None,
     plan: SupplementPlan | None = None,
-    validate_plan: bool = True,
     progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, object]:
-    """按数据集层级构建全量 init；扁平直建，层级数据先走补充计划。"""
-    if hierarchy.is_flat:
-        return build_full_init(
-            shift_root,
-            init_root,
-            mapping,
-            completed_dates,
-            test_root=test_root,
-            selected_test_folders=selected_test_folders,
-            hierarchy=hierarchy,
-            progress_callback=progress_callback,
-        )
-    resolved_plan = plan or prepare_supplement_plan(
-        supplement_root,
-        init_root,
-        mapping,
-        hierarchy,
-    )
-    if validate_plan:
-        errors = validate_supplement_plan(resolved_plan)
+    """按当前门禁构建全量 init，并在同一次发布中登记构建报告。"""
+    target = Path(init_root) if init_root is not None else spec.init_dir
+    supplement_groups = None
+    if not spec.hierarchy.is_flat:
+        plan = plan or prepare_supplement_plan(spec.supplement_path, target, mapping, spec.hierarchy)
+        errors = validate_supplement_plan(plan)
         if errors:
             raise ValueError("补充数据校验失败：" + "；".join(errors))
-    return build_full_init_with_supplements(
-        shift_root,
-        init_root,
+        supplement_groups = tuple((group.source_dir, group.target_relative) for group in plan.groups)
+
+    working = PipelineState.from_payload(state.to_payload())
+
+    def record_report(report: dict[str, object]) -> None:
+        working.dataset_builds["full_init"] = annotate_dataset_build(report, spec)
+        write_pipeline_state(state_path, working)
+
+    report = build_full_init(
+        shift_root if shift_root is not None else spec.shift_dir,
+        target,
         mapping,
-        completed_dates,
-        resolved_plan,
-        test_root=test_root,
-        selected_test_folders=selected_test_folders,
-        hierarchy=hierarchy,
+        state.affine_completed_dates,
+        test_root=spec.init_test_dir,
+        selected_test_folders=tuple(selected_test_folders) if selected_test_folders is not None else None,
+        hierarchy=spec.hierarchy,
         progress_callback=progress_callback,
+        supplement_groups=supplement_groups,
+        record_report=record_report,
+        state_path=state_path,
     )
-
-
-__all__ = [
-    "SupplementGroup",
-    "SupplementPlan",
-    "apply_supplement_plan",
-    "build_init_from_shift",
-    "prepare_supplement_plan",
-    "build_full_init_with_supplements",
-    "scan_supplement_plan",
-    "validate_supplement_plan",
-]
+    state.dataset_builds = working.dataset_builds
+    return report

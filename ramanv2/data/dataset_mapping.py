@@ -10,7 +10,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from ramanv2.common.file_ops import create_temporary_path, publish_file, read_json, write_json
-from ramanv2.common.naming import SPECIAL_FOLDER_NAMES, parse_folder_prefix
+from ramanv2.data.naming import SPECIAL_FOLDER_NAMES, parse_folder_prefix
 
 
 MAPPING_VERSION = 3

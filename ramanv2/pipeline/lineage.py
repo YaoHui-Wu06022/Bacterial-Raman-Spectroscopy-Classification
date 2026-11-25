@@ -7,22 +7,16 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ramanv2.common.arc_data import has_arc_data, list_arc_data_paths
+from ramanv2.data.arc_data import has_arc_data, list_arc_data_paths
 from ramanv2.common.file_ops import preserve_paths
-from ramanv2.common.naming import (
-    FOLDER_DELETE_RELATIVE,
-    MANUAL_DELETE_RELATIVE,
-    PIPELINE_DIR_NAME,
-    SPECIAL_FOLDER_NAMES,
-    build_natural_key,
-    parse_folder_prefix,
-)
+from ramanv2.data.naming import FOLDER_DELETE_RELATIVE, MANUAL_DELETE_RELATIVE, PIPELINE_DIR_NAME, SPECIAL_FOLDER_NAMES, parse_folder_prefix
+from ramanv2.common.paths import build_natural_key
 from ramanv2.pipeline.db import (
     DATABASE_FILE_NAME,
     load_lineage_payload,
     save_lineage_payload,
 )
-from ramanv2.pipeline.state import PipelineState
+from ramanv2.pipeline.state import PipelineState, load_pipeline_state
 
 LINEAGE_VERSION = 1
 
@@ -601,6 +595,20 @@ def mark_folders_reviewed(
     if changed:
         write_folder_lineage(data_root, payload)
     return changed
+
+
+def load_pipeline_progress(
+    data_root: Path | str, state_path: Path | str, *, initialize_enable: bool = False,
+) -> PipelineState:
+    """读取持久化状态，并使用来源记录刷新清洗、仿射与建集日期。"""
+    state = load_pipeline_state(state_path)
+    root = Path(data_root)
+    if root.is_dir():
+        if initialize_enable:
+            initialize_folder_lineage(root)
+        if lineage_path(root).is_file():
+            sync_pipeline_state_from_lineage(root, state)
+    return state
 
 
 def sync_pipeline_state_from_lineage(data_root: Path | str, state: PipelineState) -> PipelineState:

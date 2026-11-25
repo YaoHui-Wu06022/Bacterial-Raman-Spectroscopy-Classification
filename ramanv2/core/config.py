@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, fields
 from typing import Any, Mapping
 
-from ramanv2.common.hierarchy import LABEL_SCHEMA
+from ramanv2.core.label_schema import HIERARCHY_LABEL_SCHEMA
 
 
 DEFAULT_BAD_BANDS: tuple[tuple[float, float], ...] = ()
@@ -21,7 +21,7 @@ class DatasetConfig:
 
     dataset_id: str = ""
     profile_id: str = ""
-    label_schema: str = LABEL_SCHEMA
+    label_schema: str = HIERARCHY_LABEL_SCHEMA
 
 
 @dataclass(frozen=True)

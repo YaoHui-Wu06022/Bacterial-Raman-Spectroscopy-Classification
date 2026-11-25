@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from ramanv2.common.file_ops import read_json, write_text_atomic
+from ramanv2.experiments.run_context import CASCADE_MODE_DIR_NAME, METRICS_FILE_NAME
+from ramanv2.inference.cascade import SUMMARY_JSON_NAME, SUMMARY_TEXT_NAME
+
 from collections.abc import Mapping
 from typing import Any
 
@@ -91,4 +97,18 @@ def build_folder_table(payload: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["build_result_summary", "build_folder_table"]
+def merge_level_test_inference_summary(inference_dir: Path, level_name: str) -> None:
+    """合并评估指标与已发布的级联推理明细。"""
+    test_result_dir = inference_dir.parent
+    metrics_path = test_result_dir / METRICS_FILE_NAME
+    summary_path = inference_dir / SUMMARY_JSON_NAME
+    if not metrics_path.is_file() or not summary_path.is_file():
+        return
+    mode = CASCADE_MODE_DIR_NAME if test_result_dir.parent.name == CASCADE_MODE_DIR_NAME else "model"
+    write_text_atomic(
+        test_result_dir / SUMMARY_TEXT_NAME,
+        build_result_summary(
+            read_json(metrics_path), level_name, mode, inference_payload=read_json(summary_path)
+        ),
+    )
+    (inference_dir / SUMMARY_TEXT_NAME).unlink(missing_ok=True)

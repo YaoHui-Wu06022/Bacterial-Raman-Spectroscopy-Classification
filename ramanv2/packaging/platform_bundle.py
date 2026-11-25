@@ -9,12 +9,11 @@ from zipfile import BadZipFile
 
 import numpy as np
 
-from ramanv2.common.arc_data import list_arc_data_paths, read_arc_data, write_arc_data
+from ramanv2.data.arc_data import list_arc_data_paths, read_arc_data, write_arc_data
 from ramanv2.common.file_ops import (
     create_temporary_path,
-    publish_directory,
+    publish_directories,
     publish_files,
-    write_text_atomic,
 )
 from ramanv2.common.paths import PROJECT_ROOT
 from ramanv2.data.dataset_mapping import MAPPING_FILE_NAME
@@ -118,7 +117,11 @@ def restore_data_archive(
     if wavenumbers.size != intensities.size:
         raise ValueError(f"数据包波数与强度长度不一致：{source_path}")
 
+    if len(config_paths) != len(config_contents):
+        raise ValueError(f"数据包配置索引长度不一致：{source_path}")
+
     temporary_dirs: dict[int, tuple[Path, Path]] = {}
+    temporary_configs: dict[Path, Path] = {}
     try:
         for stage_index, stage_root in enumerate(stage_roots):
             target_dir = _resolve_archive_path(root_dir, stage_root)
@@ -138,11 +141,17 @@ def restore_data_archive(
                 intensities[start:end],
                 fmt="%.8f",
             )
-        for temporary_dir, target_dir in temporary_dirs.values():
-            publish_directory(temporary_dir, target_dir)
         for config_path, content in zip(config_paths, config_contents):
-            write_text_atomic(_resolve_archive_path(root_dir, config_path), content)
+            target = _resolve_archive_path(root_dir, config_path)
+            if target in temporary_configs:
+                raise ValueError(f"数据包配置路径重复：{config_path}")
+            temporary_configs[target] = create_temporary_path(target)
+            temporary_configs[target].write_text(content, encoding="utf-8", newline="")
+        with publish_directories({target: temporary for temporary, target in temporary_dirs.values()}):
+            publish_files(temporary_configs)
     finally:
+        for temporary in temporary_configs.values():
+            temporary.unlink(missing_ok=True)
         for temporary_dir, _target_dir in temporary_dirs.values():
             if temporary_dir.exists():
                 shutil.rmtree(temporary_dir, ignore_errors=True)

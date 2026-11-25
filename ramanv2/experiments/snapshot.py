@@ -10,7 +10,7 @@ from typing import Any, Mapping
 
 import yaml
 
-from ramanv2.common.hierarchy import validate_label_schema
+from ramanv2.core.label_schema import validate_label_schema
 from ramanv2.common.paths import find_ancestor_dir
 from ramanv2.core.config import Config, build_config
 
@@ -83,7 +83,7 @@ def load_run_snapshot(
 ) -> RunSnapshot:
     """读取模型槽位所属实验的完整配置快照。"""
     run_path = Path(run_dir).resolve()
-    experiment_path = _resolve_experiment_dir(run_path, experiment_dir)
+    experiment_path = resolve_experiment_dir(run_path, experiment_dir)
     shared_path = experiment_path / SHARED_CONFIG_NAME
     if not shared_path.is_file():
         raise FileNotFoundError(f"缺少实验配置快照：{shared_path}")
@@ -92,11 +92,13 @@ def load_run_snapshot(
     return RunSnapshot(build_config(values), experiment_path, run_path)
 
 
-def _resolve_experiment_dir(run_path: Path, experiment_dir: Path | str | None) -> Path:
+def resolve_experiment_dir(
+    source_dir: Path | str, experiment_dir: Path | str | None = None,
+) -> Path:
     """从显式路径或父目录链中定位 shared_config.yaml。"""
     if experiment_dir is not None:
         return Path(experiment_dir).resolve()
-    return find_ancestor_dir(run_path, SHARED_CONFIG_NAME)
+    return find_ancestor_dir(source_dir, SHARED_CONFIG_NAME)
 
 
 def _assert_yaml_ready(data: Mapping[str, Any]) -> None:
@@ -112,6 +114,7 @@ __all__ = [
     "SHARED_CONFIG_NAME",
     "assert_shared_compatible",
     "load_run_snapshot",
+    "resolve_experiment_dir",
     "read_yaml_dict",
     "write_shared_config",
     "write_yaml_dict",

@@ -5,18 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 
 from ramanv2.common.device import resolve_device
-from ramanv2.core.run_context import VAL_RESULT_DIR_NAME
+from ramanv2.experiments.run_context import VAL_RESULT_DIR_NAME
 from ramanv2.data.runtime.input import InputPreprocessor
-from ramanv2.evaluation.context import (
-    EvaluationContext,
+from ramanv2.experiments.data_context import (
+    ExperimentDataContext,
     RunEntry,
-    load_evaluation_context,
+    load_experiment_data_context,
     resolve_level_name,
     resolve_run_class_ids,
     resolve_run_entry,
 )
 from ramanv2.evaluation.metrics_report import write_model_report
-from ramanv2.modeling.predictor import Predictor, load_predictor
+from ramanv2.inference.predictor import Predictor, load_predictor
 
 
 def evaluate_model_run(
@@ -26,7 +26,7 @@ def evaluate_model_run(
     train_dir: Path | str | None = None,
 ) -> Path:
     """评估一个模型槽位在其类别范围内的验证集表现。"""
-    context = load_evaluation_context(source_dir, train_dir)
+    context = load_experiment_data_context(source_dir, train_dir)
     run_entry = resolve_run_entry(context)
     level_name = resolve_level_name(context, level_name)
     if run_entry.level_name != level_name:
@@ -41,7 +41,7 @@ def evaluate_model_run(
 
 
 def _predict_run(
-    context: EvaluationContext,
+    context: ExperimentDataContext,
     predictor: Predictor,
     run_entry: RunEntry,
 ) -> tuple[list[str], list[str], list[int], list[int]]:
@@ -49,7 +49,7 @@ def _predict_run(
     dataset_index = context.dataset_index
     level_index = dataset_index.head_name_to_idx[run_entry.level_name]
     class_names = predictor.resolve_target_class_names()
-    class_ids = resolve_run_class_ids(dataset_index, run_entry)
+    class_ids = resolve_run_class_ids(context, run_entry)
     local_by_global = {class_id: local_id for local_id, class_id in enumerate(class_ids)}
     preprocessor = InputPreprocessor(context.input_spec, predictor.device)
     paths: list[str] = []

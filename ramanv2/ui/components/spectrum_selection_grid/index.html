@@ -25,7 +25,7 @@
     const grid = document.getElementById("grid");
     let args = {cards: [], selected_paths: [], marked_paths: []};
     let selected = new Set();
-    let lastRenderSignature = "";
+    let lastCardsSignature = "";
     let eventCounter = 0;
 
     function send(event, payload) {
@@ -41,36 +41,47 @@
       window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: document.body.scrollHeight + 4}, "*");
     }
 
+    function renderSelection(marked) {
+      for (const card of grid.children) {
+        const path = card.dataset.path;
+        const chosen = selected.has(path);
+        card.classList.toggle("selected", chosen);
+        card.classList.toggle("marked", marked.has(path));
+        card.querySelector("input").checked = chosen;
+        card.querySelector(".status").hidden = !marked.has(path);
+      }
+    }
+
     function toggle(path) {
       if (selected.has(path)) selected.delete(path); else selected.add(path);
       // 点击先在本地反馈，不等待 Python 保存，也不重建光谱图片。
-      for (const card of grid.children) {
-        const chosen = selected.has(card.dataset.path);
-        card.classList.toggle("selected", chosen);
-        card.classList.toggle("marked", chosen);
-        card.querySelector("input").checked = chosen;
-        card.querySelector(".status").hidden = !chosen;
-      }
+      renderSelection(selected);
       send("selection", {selected_paths: Array.from(selected)});
     }
 
     function render() {
-      const signature = JSON.stringify([args.cards, args.selected_paths, args.marked_paths]);
-      if (signature === lastRenderSignature) return;
-      lastRenderSignature = signature;
+      const cards = args.cards || [];
+      const signature = JSON.stringify(cards);
       selected = new Set(args.selected_paths || []);
+      const marked = new Set(args.marked_paths || []);
+      if (signature !== lastCardsSignature) {
+        lastCardsSignature = signature;
+        renderCards(cards);
+      }
+      renderSelection(marked);
+      resize();
+    }
+
+    function renderCards(cards) {
       grid.replaceChildren();
-      (args.cards || []).forEach((card) => {
-        const marked = (args.marked_paths || []).includes(card.relative_path);
-        const chosen = selected.has(card.relative_path);
+      cards.forEach((card) => {
         const wrapper = document.createElement("div");
         wrapper.dataset.path = card.relative_path;
-        wrapper.className = "card" + (chosen ? " selected" : "") + (marked ? " marked" : "") + (card.error ? " error" : "");
+        wrapper.className = card.error ? "card error" : "card";
         const head = document.createElement("div");
         head.className = "card-head";
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
-        checkbox.checked = chosen;
         checkbox.disabled = Boolean(card.error);
         checkbox.addEventListener("click", (event) => { event.stopPropagation(); if (!card.error) toggle(card.relative_path); });
         const label = document.createElement("div");
@@ -81,7 +92,6 @@
         const status = document.createElement("span");
         status.className = "status";
         status.textContent = card.status_text || "待移除";
-        status.hidden = !marked;
         head.appendChild(status);
         wrapper.appendChild(head);
         if (card.error) {
@@ -99,7 +109,6 @@
         if (!card.error) wrapper.addEventListener("click", () => toggle(card.relative_path));
         grid.appendChild(wrapper);
       });
-      resize();
     }
 
     window.addEventListener("message", (event) => {

@@ -9,29 +9,26 @@ from pathlib import Path
 import streamlit as st
 
 from ramanv2.analysis.interpret import interpret_slot, umap_slot
-from ramanv2.common.hierarchy import load_hierarchy_meta
-from ramanv2.common.naming import build_natural_key
-from ramanv2.core.run_context import (
+from ramanv2.common.paths import build_natural_key
+from ramanv2.experiments.run_context import (
     ANALYSIS_LOG_FILE_NAME,
     ANALYSIS_RESULT_DIR_NAME,
     BASELINE_VAL_RESULT_DIR_NAME,
     CASCADE_MODE_DIR_NAME,
     CONFUSION_MATRIX_FILE_NAME,
     HIERARCHY_META_FILE_NAME,
+    LEVEL_SUMMARY_DIR_NAME,
     METRICS_FILE_NAME,
     PARENT_KNOWN_MODE_DIR_NAME,
+    TEST_RESULT_DIR_NAME,
     UMAP_FIGURE_NAME,
     VAL_RESULT_DIR_NAME,
 )
 from ramanv2.evaluation.pca_svm import BaselineSpec
 from ramanv2.evaluation.slot_flow import evaluate_slot_bundle
-from ramanv2.evaluation.level_summary import (
-    LEVEL_SUMMARY_DIR_NAME,
-    summarize_level_results,
-)
-from ramanv2.modeling.run_manifest import has_model_path
+from ramanv2.evaluation.level_summary import summarize_level_results
+from ramanv2.experiments.run_manifest import find_level_dirs, has_model_path, load_hierarchy_meta
 from ramanv2.ui.read_cache import (
-    LEVEL_DIR_PATTERN,
     cached_experiment_dirs,
     cached_json_file,
     cached_run_dirs,
@@ -84,7 +81,7 @@ def render_result_analysis_page(context) -> None:
     )
     experiment_dir = experiments[experiment_labels.index(experiment_label)]
     st.session_state["result_analysis_experiment"] = experiment_label
-    levels = _find_level_dirs(experiment_dir)
+    levels = find_level_dirs(experiment_dir)
     if not levels:
         st.warning("实验目录中没有可用层级")
         return
@@ -130,15 +127,6 @@ def _list_experiment_dirs(context) -> list[Path]:
     return [Path(path) for path in sorted(set(paths), key=build_natural_key, reverse=True)]
 
 
-def _find_level_dirs(experiment_dir: Path | str) -> list[Path]:
-    """列出实验根下的业务层级目录。"""
-    root = Path(experiment_dir)
-    return sorted(
-        (path for path in root.iterdir() if path.is_dir() and LEVEL_DIR_PATTERN.match(path.name)),
-        key=lambda path: build_natural_key(path.name),
-    )
-
-
 def _find_run_dirs(level_dir: Path | str) -> list[Path]:
     """发现全局模型和父类子模型的槽位目录。"""
     root = Path(level_dir)
@@ -174,15 +162,19 @@ def _render_level_summary(experiment_dir: Path, level_name: str) -> None:
         format_func=lambda value: mode_labels[value],
         key=f"level_summary_mode_{level_name}",
     )
-    mode_root = summary_root / mode
-    tabs = st.tabs(["验证结果", "测试结果"])
-    for tab, output_name in zip(tabs, ("val_result", "test_result")):
-        with tab:
-            result_dir = mode_root / output_name
-            if not (result_dir / METRICS_FILE_NAME).is_file():
-                st.info("尚未生成层级汇总")
-                continue
-            _render_confusion(Path(experiment_dir) / level_name, result_dir)
+    result_labels = {VAL_RESULT_DIR_NAME: "验证结果", TEST_RESULT_DIR_NAME: "测试结果"}
+    output_name = st.radio(
+        "数据划分",
+        list(result_labels),
+        format_func=result_labels.__getitem__,
+        horizontal=True,
+        key=f"level_summary_result_{level_name}",
+    )
+    result_dir = summary_root / mode / output_name
+    if not (result_dir / METRICS_FILE_NAME).is_file():
+        st.info("尚未生成层级汇总")
+        return
+    _render_confusion(Path(experiment_dir) / level_name, result_dir)
 
 
 def _render_result_section(run_dir: Path, level_name: str, section: ResultSection) -> None:

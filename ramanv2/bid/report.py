@@ -12,7 +12,7 @@ from matplotlib.patches import Rectangle
 
 from ramanv2.common.file_ops import read_json
 from ramanv2.common.plotting import configure_matplotlib_fonts
-from ramanv2.core.run_context import CONFUSION_MATRIX_FILE_NAME, METRICS_FILE_NAME
+from ramanv2.experiments.run_context import CONFUSION_MATRIX_FILE_NAME, METRICS_FILE_NAME
 from ramanv2.evaluation.independent_test import evaluate_test_set
 from ramanv2.evaluation.model_eval import evaluate_model_run
 

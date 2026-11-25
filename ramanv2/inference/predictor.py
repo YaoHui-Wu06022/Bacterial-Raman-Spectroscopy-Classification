@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
 import torch
 
-from ramanv2.core.snapshot import RunSnapshot, load_run_snapshot
+from ramanv2.experiments.snapshot import RunSnapshot, load_run_snapshot
 from ramanv2.core.config import InputConfig
-from ramanv2.core.run_context import HIERARCHY_META_FILE_NAME, MODEL_FILE_NAME
-from ramanv2.common.hierarchy import load_hierarchy_meta, normalize_level_name, resolve_allowed_indices
+from ramanv2.experiments.run_context import HIERARCHY_META_FILE_NAME, MODEL_FILE_NAME
+from ramanv2.experiments.run_manifest import load_hierarchy_meta
+from ramanv2.data.labels import normalize_level_name, resolve_allowed_indices
 from ramanv2.core.input_spec import InputSpec, build_input_spec
 from ramanv2.common.paths import find_ancestor_dir
 from ramanv2.modeling.factory import build_model, validate_model_input
 from ramanv2.modeling.model_spec import build_model_spec
-from ramanv2.modeling.run_manifest import has_model_path, resolve_entry_path
+from ramanv2.experiments.run_manifest import find_run_entry, has_model_path, resolve_entry_path, resolve_slot_class_ids
 
 
 @dataclass(frozen=True)
@@ -57,11 +58,8 @@ class Predictor:
         """返回当前预测入口实际可输出的类别名称。"""
         if self.run_dir is None:
             return self.class_names_by_level[self.predict_level]
-        entry, parent_id = _find_run_entry(
-            self.meta,
-            self.experiment_dir,
-            self.run_dir,
-        )
+        slot = find_run_entry(self.experiment_dir, self.meta, self.run_dir)
+        entry, parent_id = slot.values, slot.parent_id
         _class_ids, names = _resolve_entry_classes(
             self.meta,
             self.predict_level,
@@ -78,11 +76,8 @@ class Predictor:
     ) -> list[Prediction]:
         """对单条输入张量执行层级级联或指定 run 预测。"""
         if self.run_dir is not None:
-            entry, parent_id = _find_run_entry(
-                self.meta,
-                self.experiment_dir,
-                self.run_dir,
-            )
+            slot = find_run_entry(self.experiment_dir, self.meta, self.run_dir)
+            entry, parent_id = slot.values, slot.parent_id
             return self._predict_entry(
                 values,
                 self.predict_level,
@@ -139,7 +134,7 @@ class Predictor:
             self._snapshots[run_path] = snapshot
         model_spec = build_model_spec(snapshot.config.model, self.input_spec)
         validate_model_input(model_spec, self.input_spec)
-        class_count = _resolve_class_count(self.meta, level_name, parent_id, entry)
+        class_count = len(resolve_slot_class_ids(self.meta, level_name, parent_id, entry))
         model = build_model(class_count, model_spec).to(self.device)
         state = torch.load(model_path, map_location=self.device)
         model.load_state_dict(state, strict=True)
@@ -186,7 +181,8 @@ class Predictor:
         """单 run 路径下对一批 ``[B, C, L]`` 输入返回逐行 top-1 全局类别 id。"""
         if self.run_dir is None:
             raise ValueError("批量预测仅支持指定 run_dir 的单模型路径")
-        entry, parent_id = _find_run_entry(self.meta, self.experiment_dir, self.run_dir)
+        slot = find_run_entry(self.experiment_dir, self.meta, self.run_dir)
+        entry, parent_id = slot.values, slot.parent_id
         model = self.load_model(self.predict_level, entry, parent_id)
         with torch.no_grad():
             probabilities = torch.softmax(model(values.to(self.device)), dim=1)
@@ -194,6 +190,14 @@ class Predictor:
             self.meta, self.predict_level, parent_id, entry
         )
         return [int(class_ids[index]) for index in probabilities.argmax(dim=1).tolist()]
+
+def predict_spectrum(predictor: Predictor, inputs: torch.Tensor, filename: str, top_k: int) -> dict[str, Any]:
+    """返回单谱的文件名和可写入报告的候选标签。"""
+    return {
+        "file": filename,
+        "predictions": [asdict(item) for item in predictor.predict_tensor(inputs, top_k)],
+    }
+
 
 def load_predictor(
     source_dir: Path | str,
@@ -249,8 +253,7 @@ def _resolve_input_entry(
 ) -> Mapping[str, Any]:
     """选择用于确定输入规格的模型条目。"""
     if run_dir is not None:
-        entry, _ = _find_run_entry(meta, experiment_dir, run_dir)
-        return entry
+        return find_run_entry(experiment_dir, meta, run_dir).values
     for current_level in meta.get("head_names") or []:
         global_entry = (meta.get("level_models") or {}).get(current_level)
         if global_entry and has_model_path(global_entry):
@@ -320,35 +323,6 @@ def _resolve_source_run_dir(
     raise ValueError(f"不是有效的模型槽位目录：{source_path}")
 
 
-def _find_run_entry(
-    meta: Mapping[str, Any],
-    experiment_dir: Path,
-    run_dir: Path,
-) -> tuple[Mapping[str, Any], int | None]:
-    """在元数据中定位模型槽位条目。"""
-    target = run_dir.resolve()
-    for _level_name, entry in (meta.get("level_models") or {}).items():
-        if resolve_entry_path(experiment_dir, entry, "run_dir") == target:
-            return entry, None
-    for _level_name, entries in (meta.get("parent_models") or {}).items():
-        for parent_text, entry in entries.items():
-            if resolve_entry_path(experiment_dir, entry, "run_dir") == target:
-                return entry, int(parent_text)
-    raise FileNotFoundError(f"{HIERARCHY_META_FILE_NAME} 未记录模型槽位：{run_dir}")
-
-
-def _resolve_class_count(
-    meta: Mapping[str, Any],
-    level_name: str,
-    parent_id: int | None,
-    entry: Mapping[str, Any],
-) -> int:
-    """计算模型分类头输出数量。"""
-    if parent_id is not None:
-        return len(entry.get("child_ids") or [])
-    return len((meta.get("class_names_by_level") or {}).get(level_name) or [])
-
-
 def _resolve_entry_classes(
     meta: Mapping[str, Any],
     level_name: str,
@@ -357,9 +331,7 @@ def _resolve_entry_classes(
 ) -> tuple[list[int], list[str]]:
     """返回当前模型输出位置对应的全局类别标识和名称。"""
     names = list((meta.get("class_names_by_level") or {}).get(level_name) or [])
-    if parent_id is None:
-        return list(range(len(names))), names
-    child_ids = [int(item) for item in (entry.get("child_ids") or [])]
-    return child_ids, [names[index] for index in child_ids]
+    class_ids = resolve_slot_class_ids(meta, level_name, parent_id, entry)
+    return class_ids, [names[index] for index in class_ids]
 
 

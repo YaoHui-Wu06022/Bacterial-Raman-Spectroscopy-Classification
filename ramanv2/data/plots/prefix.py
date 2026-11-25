@@ -17,12 +17,9 @@ import numpy as np
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
-from ramanv2.common.naming import (
-    SPECIAL_FOLDER_NAMES,
-    build_natural_key,
-    parse_folder_prefix,
-)
-from ramanv2.common.arc_data import is_arc_data_name, list_arc_data_paths, read_raw_arc_data
+from ramanv2.data.naming import SPECIAL_FOLDER_NAMES, parse_folder_prefix
+from ramanv2.common.paths import build_natural_key
+from ramanv2.data.arc_data import is_arc_data_name, list_arc_data_paths, read_raw_arc_data
 from ramanv2.common.plotting import (
     CATEGORICAL_PALETTE,
     FIGURE_DPI_PREFIX,

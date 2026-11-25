@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Mapping
 
-from ramanv2.common.naming import parse_folder_prefix
+from ramanv2.data.naming import parse_folder_prefix
 from ramanv2.data.hierarchy_spec import resolve_hierarchy_from_meta
+from ramanv2.inference.votes import aggregate_top1_votes
 
 
 def build_test_input_selection(
@@ -70,31 +71,6 @@ def build_test_folder_labels(
         for row in rows
     }
     return labels, rows
-
-
-def aggregate_top1_votes(
-    labels: Sequence[str],
-    probabilities: Sequence[float] | None = None,
-) -> list[tuple[str, int, float]]:
-    """按首次出现顺序返回 (label, count, mean_probability)。"""
-    order: list[str] = []
-    stats: dict[str, list[float]] = {}
-    for index, label in enumerate(labels):
-        key = str(label)
-        if key not in stats:
-            order.append(key)
-            stats[key] = [0, 0.0]
-        stats[key][0] += 1
-        if probabilities is not None:
-            stats[key][1] += float(probabilities[index])
-    return [
-        (
-            key,
-            int(stats[key][0]),
-            float(stats[key][1]) / int(stats[key][0]) if probabilities is not None else 0.0,
-        )
-        for key in order
-    ]
 
 
 def build_folder_summary(

@@ -16,7 +16,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from ramanv2.common.arc_data import read_arc_data  # noqa: E402
+from ramanv2.data.arc_data import read_arc_data  # noqa: E402
 from ramanv2.common.plotting import (  # noqa: E402
     add_bad_band_spans,
     apply_canvas,

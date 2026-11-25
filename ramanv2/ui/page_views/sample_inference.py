@@ -15,8 +15,9 @@ from ramanv2.inference.unlabeled_inference import (
     list_inference_dates,
     run_unlabeled_inference,
 )
-from ramanv2.modeling.predictor import load_predictor
-from ramanv2.modeling.run_manifest import has_model_path
+from ramanv2.inference.predictor import load_predictor
+from ramanv2.experiments.run_context import HIERARCHY_META_FILE_NAME
+from ramanv2.experiments.run_manifest import has_model_path
 from ramanv2.ui.formatting import relative_label
 from ramanv2.ui.page_state import (
     INVALIDATE_INFERENCE,
@@ -46,7 +47,7 @@ def render_sample_inference_page(context) -> None:
     experiment_labels = [relative_label(path, context.project_root) for path in experiment_dirs]
     selected_label = st.selectbox("选择实验目录", experiment_labels, key="inference_experiment")
     experiment_dir = experiment_dirs[experiment_labels.index(selected_label)]
-    meta_path = experiment_dir / "hierarchy_meta.json"
+    meta_path = experiment_dir / HIERARCHY_META_FILE_NAME
     meta_stat = meta_path.stat()
     meta = cached_json_file(str(meta_path.resolve()), meta_stat.st_mtime_ns, meta_stat.st_size)
     if not isinstance(meta, dict):
@@ -125,7 +126,7 @@ def _load_cached_predictor(experiment_dir: str, level_name: str, meta_modified_n
 
 
 def _get_cached_predictor(experiment_dir: Path, level_name: str):
-    meta_path = experiment_dir / "hierarchy_meta.json"
+    meta_path = experiment_dir / HIERARCHY_META_FILE_NAME
     return _load_cached_predictor(str(experiment_dir.resolve()), level_name, meta_path.stat().st_mtime_ns)
 
 
@@ -207,32 +208,32 @@ def _render_unlabeled_result(date_dir: Path, level_display: dict[str, str]) -> N
         width="stretch",
         hide_index=True,
     )
-    for folder in folders:
-        if not isinstance(folder, dict):
-            continue
-        folder_name = str(folder.get("folder", ""))
-        if not folder_name:
-            continue
-        with st.expander(
-            f"查看 {folder_name} 的逐谱结果（{folder.get('predicted_label', '')}）",
-            expanded=False,
-        ):
-            predictions_path = result_dir / folder_name / "predictions.csv"
+    folder_labels = {
+        str(folder["folder"]): str(folder.get("predicted_label", ""))
+        for folder in folders
+        if isinstance(folder, dict) and folder.get("folder")
+    }
+    if folder_labels:
+        folder_name = st.selectbox(
+            "查看逐谱结果",
+            list(folder_labels),
+            index=None,
+            format_func=lambda name: f"{name}（{folder_labels[name]}）",
+            key=f"inference_detail_{date_dir}",
+        )
+        if folder_name is not None:
+            detail_dir = result_dir / folder_name
+            predictions_path = detail_dir / "predictions.csv"
             if predictions_path.is_file():
                 st.dataframe(pd.read_csv(predictions_path), width="stretch", hide_index=True)
-            summary_text_path = result_dir / folder_name / "summary.txt"
-            if summary_text_path.is_file():
-                stat = summary_text_path.stat()
-                st.code(
-                    cached_text_file(str(summary_text_path.resolve()), stat.st_mtime_ns, stat.st_size),
-                    language="text",
-                )
-    with st.expander("查看结果目录", expanded=False):
+            _render_summary_text(detail_dir / "summary.txt")
+    if st.checkbox("查看结果目录和文本摘要", key=f"inference_summary_{date_dir}"):
         st.write(str(result_dir))
-        summary_text_path = result_dir / "summary.txt"
-        if summary_text_path.is_file():
-            stat = summary_text_path.stat()
-            st.code(
-                cached_text_file(str(summary_text_path.resolve()), stat.st_mtime_ns, stat.st_size),
-                language="text",
-            )
+        _render_summary_text(result_dir / "summary.txt")
+
+
+def _render_summary_text(path: Path) -> None:
+    """显示当前选中的目录摘要。"""
+    if path.is_file():
+        stat = path.stat()
+        st.code(cached_text_file(str(path.resolve()), stat.st_mtime_ns, stat.st_size), language="text")

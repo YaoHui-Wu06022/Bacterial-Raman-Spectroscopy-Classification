@@ -8,8 +8,8 @@ from typing import Any
 
 import numpy as np
 
-from ramanv2.common.arc_data import read_arc_data
-from ramanv2.common.naming import build_natural_key
+from ramanv2.data.arc_data import read_arc_data
+from ramanv2.common.paths import build_natural_key
 from ramanv2.core.config import InputConfig
 from ramanv2.core.config import DataBuildConfig, resolve_build_config
 from ramanv2.spectra.preprocess import fit_baseline_spectrum

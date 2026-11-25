@@ -10,15 +10,16 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from ramanv2.common.arc_data import read_arc_data
+from ramanv2.data.arc_data import read_arc_data
 from ramanv2.common.device import resolve_device
 from ramanv2.common.file_ops import create_temporary_path, publish_directory, write_json
-from ramanv2.common.naming import SPECIAL_FOLDER_NAMES, build_natural_key
+from ramanv2.data.naming import SPECIAL_FOLDER_NAMES
+from ramanv2.common.paths import build_natural_key
 from ramanv2.data.calibration.affine import analyze_date, build_corrected_folder
 from ramanv2.core.config import DataBuildConfig
 from ramanv2.data.datasets import DatasetSpec
+from ramanv2.spectra.cosmic import FolderCosmicOptions
 from ramanv2.data.folder_cosmic import (
-    FolderCosmicOptions,
     clean_spectrum_folder,
     read_spectrum_folder,
     write_spectrum_folder,
@@ -28,8 +29,8 @@ from ramanv2.inference.spectrum_input import (
     build_inference_preprocessor,
     list_spectrum_paths,
 )
-from ramanv2.inference.test_labels import aggregate_top1_votes
-from ramanv2.modeling.predictor import Predictor, load_predictor
+from ramanv2.inference.votes import aggregate_top1_votes
+from ramanv2.inference.predictor import Predictor, load_predictor, predict_spectrum
 from ramanv2.spectra.axis import build_wn_ref
 from ramanv2.spectra.preprocess import preprocess_single_spectrum
 
@@ -267,20 +268,7 @@ def _predict_folder(
             if output_axis is None or spectrum is None:
                 raise ValueError("预处理未产生有效光谱")
             inputs = preprocessor.preprocess_intensity(spectrum)
-            predictions = predictor.predict_tensor(inputs, top_k=top_k)
-            rows.append(
-                {
-                    "file": path.name,
-                    "predictions": [
-                        {
-                            "label": prediction.label,
-                            "probability": float(prediction.probability),
-                            "class_id": int(prediction.class_id),
-                        }
-                        for prediction in predictions
-                    ],
-                }
-            )
+            rows.append(predict_spectrum(predictor, inputs, path.name, top_k))
         except Exception as error:
             failures.append({"file": path.name, "error": str(error)})
 

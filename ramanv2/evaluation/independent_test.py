@@ -11,26 +11,26 @@ import torch
 
 from ramanv2.common.device import resolve_device
 from ramanv2.common.file_ops import read_json
-from ramanv2.common.naming import build_natural_key
-from ramanv2.core.run_context import METRICS_FILE_NAME, TEST_RESULT_DIR_NAME
-from ramanv2.common.arc_data import load_arc_intensity
+from ramanv2.common.paths import build_natural_key
+from ramanv2.experiments.run_context import METRICS_FILE_NAME, TEST_RESULT_DIR_NAME
+from ramanv2.data.arc_data import load_arc_intensity
 from ramanv2.data.profiles import resolve_selection
 from ramanv2.data.runtime.input import InputPreprocessor
-from ramanv2.evaluation.context import (
-    load_evaluation_context,
+from ramanv2.experiments.data_context import (
+    load_experiment_data_context,
     resolve_run_class_ids,
     resolve_run_entry,
 )
 from ramanv2.evaluation.metrics_report import write_model_report
-from ramanv2.common.result_text import build_result_summary
+from ramanv2.evaluation.result_text import build_result_summary, merge_level_test_inference_summary
 from ramanv2.inference.spectrum_input import (
     INFERENCE_SAMPLES_PER_FOLDER,
     build_inference_preprocessor,
     list_spectrum_paths,
     sample_folder_spectra,
 )
-from ramanv2.inference.test_labels import build_folder_summary, build_test_folder_labels
-from ramanv2.modeling.predictor import Predictor, load_predictor
+from ramanv2.inference.folder_labels import build_folder_summary, build_test_folder_labels
+from ramanv2.inference.predictor import Predictor, load_predictor
 
 
 TEST_SAMPLE_CSV_NAME = "test_eval_results.csv"
@@ -61,7 +61,7 @@ def evaluate_test_set(
     ``train_dir`` 用于非注册表数据集显式指定训练根。
     ``level_inference_enable`` 为 True 时才额外生成级联推理产物，默认关闭。
     """
-    context = load_evaluation_context(source_dir, train_dir)
+    context = load_experiment_data_context(source_dir, train_dir)
     run_entry = resolve_run_entry(context)
     level_name = run_entry.level_name
     target_device = resolve_device(device)
@@ -89,7 +89,7 @@ def evaluate_test_set(
         [label_by_folder.get(name, -1) for name in sample_folders],
         dtype=np.int64,
     )
-    class_ids = resolve_run_class_ids(context.dataset_index, run_entry)
+    class_ids = resolve_run_class_ids(context, run_entry)
     local_by_global = {
         int(class_id): local_id for local_id, class_id in enumerate(class_ids)
     }
@@ -193,7 +193,7 @@ def _maybe_generate_level_inference(
     device: Any,
 ) -> None:
     """test_result 生成后补齐已完备层级的级联推理；未补齐时由 helper 跳过。"""
-    from ramanv2.inference.test_inference import run_experiment_inference
+    from ramanv2.inference.cascade import run_experiment_inference
 
     random.seed(context.config.execution.seed)
     levels = tuple((context.meta or {}).get("head_names") or (level_name,))
@@ -209,6 +209,7 @@ def _maybe_generate_level_inference(
         print(f"[Inference] 跳过级联推理：{error}")
         return
     for name, result_dir in results.items():
+        merge_level_test_inference_summary(result_dir, name)
         print(f"[Inference] {name} -> {result_dir}")
 
 

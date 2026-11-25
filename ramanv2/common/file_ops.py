@@ -132,32 +132,42 @@ def write_text_atomic(target_path: Path | str, text: str) -> Path:
 
 
 def publish_directory(temp_path: Path | str, target_path: Path | str) -> Path:
-    """用临时目录替换目标目录，失败时保留旧目录。"""
-    temporary = Path(temp_path).resolve()
+    """用已验证的临时目录替换一个目标。"""
     target = Path(target_path).resolve()
-    backup = target.with_name(f".{target.name}.{uuid4().hex}.backup")
-    rollback_failed = False
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        if target.exists():
-            rename_directory(target, backup)
-        rename_directory(temporary, target)
-    except Exception:
-        if backup.exists():
-            if target.exists():
-                remove_path(target)
-            try:
-                rename_directory(backup, target)
-            except Exception:
-                rollback_failed = True
-                raise
-        raise
-    finally:
-        if backup.exists() and not rollback_failed:
-            remove_path(backup)
-        if temporary.exists():
-            remove_path(temporary)
+    with publish_directories({target: Path(temp_path)}):
+        pass
     return target
+
+
+@contextmanager
+def publish_directories(directories: dict[Path, Path]):
+    """发布一组临时目录，在调用方完成登记前保留原目录备份。"""
+    pairs = [(target.resolve(), temp.resolve()) for target, temp in directories.items()]
+    backups: list[tuple[Path, Path]] = []
+    published: list[Path] = []
+    try:
+        for target, temporary in pairs:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                backup = create_temporary_path(target)
+                rename_directory(target, backup)
+                backups.append((target, backup))
+            rename_directory(temporary, target)
+            published.append(target)
+        yield
+    except Exception:
+        for target in reversed(published):
+            remove_path(target)
+        for target, backup in reversed(backups):
+            rename_directory(backup, target)
+        raise
+    else:
+        for _, backup in backups:
+            remove_path(backup)
+    finally:
+        for _, temporary in pairs:
+            if temporary.exists():
+                remove_path(temporary)
 
 
 @contextmanager
@@ -221,9 +231,10 @@ def publish_files(files: dict[Path | str, Path | str]) -> None:
             if backup.exists() and not target.exists():
                 os.replace(backup, target)
         raise
-    finally:
+    else:
         for _, backup in backups:
             backup.unlink(missing_ok=True)
+    finally:
         for _, temporary in pairs:
             temporary.unlink(missing_ok=True)
 
@@ -280,6 +291,7 @@ __all__ = [
     "create_temporary_path",
     "file_sha256",
     "publish_directory",
+    "publish_directories",
     "publish_file",
     "publish_files",
     "preserve_paths",

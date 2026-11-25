@@ -33,8 +33,3 @@ def parse_folder_prefix(name: str, uppercase_enable: bool = False) -> str:
     match = re.match(r"[A-Za-z]+", text)
     prefix = match.group(0) if match else text
     return prefix.upper() if uppercase_enable else prefix
-
-
-def build_natural_key(text: str) -> list[int | str]:
-    """构造按数字自然排序的键，使 cell2 排在 cell10 前。"""
-    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", text)]

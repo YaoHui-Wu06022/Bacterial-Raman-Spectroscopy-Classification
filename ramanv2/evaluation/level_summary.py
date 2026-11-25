@@ -9,9 +9,10 @@ from typing import Any
 import pandas as pd
 
 from ramanv2.common.device import resolve_device
-from ramanv2.common.hierarchy import load_hierarchy_meta, normalize_level_name
+from ramanv2.experiments.run_manifest import load_hierarchy_meta
+from ramanv2.data.labels import normalize_level_name
 from ramanv2.common.paths import relpath
-from ramanv2.core.run_context import (
+from ramanv2.experiments.run_context import (
     CASCADE_MODE_DIR_NAME,
     HIERARCHY_META_FILE_NAME,
     LEVEL_SUMMARY_DIR_NAME,
@@ -20,25 +21,26 @@ from ramanv2.core.run_context import (
     TEST_RESULT_DIR_NAME,
     VAL_RESULT_DIR_NAME,
 )
-from ramanv2.evaluation.context import (
-    EvaluationContext,
-    load_evaluation_context,
-    resolve_experiment_dir,
+from ramanv2.experiments.snapshot import resolve_experiment_dir
+from ramanv2.experiments.data_context import (
+    ExperimentDataContext,
+    load_experiment_data_context,
     resolve_level_name,
 )
 from ramanv2.evaluation.metrics_report import write_model_report
-from ramanv2.common.result_text import build_result_summary
+from ramanv2.evaluation.result_text import build_result_summary, merge_level_test_inference_summary
 from ramanv2.evaluation.independent_test import (
     TEST_SAMPLE_CSV_NAME,
     compute_folder_metrics,
     resolve_preprocessed_test_dir,
 )
 from ramanv2.inference.spectrum_input import build_inference_preprocessor
-from ramanv2.modeling.predictor import load_predictor
-from ramanv2.modeling.run_manifest import (
+from ramanv2.inference.predictor import load_predictor
+from ramanv2.experiments.run_manifest import (
     find_model_slot_dirs,
     has_model_path,
-    resolve_entry_path,
+    find_run_entry,
+    resolve_slot_class_ids,
 )
 
 
@@ -95,7 +97,7 @@ def summarize_level_results(
     ``auto_evaluate_enable`` 为真时，缺失的父类 val_result/test_result 会先自动评估。
     """
     assert_multi_model_level(source_dir, level_name, "层级汇总")
-    context = load_evaluation_context(source_dir)
+    context = load_experiment_data_context(source_dir)
     level_name = resolve_level_name(context, level_name)
     if auto_evaluate_enable:
         _ensure_level_results(context, level_name, device)
@@ -137,11 +139,7 @@ def summarize_level_results(
             metric_class_ids=sorted(set(labels)) if covered_enable else None,
         )
 
-    from ramanv2.inference.test_inference import (
-        merge_level_test_inference_summary,
-        resolve_level_inference_dir,
-        run_experiment_inference,
-    )
+    from ramanv2.inference.cascade import run_experiment_inference
 
     test_dir = resolve_preprocessed_test_dir(
         context.config.dataset.profile_id,
@@ -157,11 +155,7 @@ def summarize_level_results(
     if level_name not in cascade_results:
         raise RuntimeError(f"{level_name} 的级联模型未补齐，无法生成 cascade 结果")
     cascade_root = summary_root / CASCADE_MODE_DIR_NAME
-    inference_dir = resolve_level_inference_dir(
-        context.experiment_dir,
-        context.meta,
-        level_name,
-    )
+    inference_dir = cascade_results[level_name]
     _write_cascade_test_report(
         context.meta,
         level_name,
@@ -175,7 +169,7 @@ def summarize_level_results(
         target_device,
         cascade_root / VAL_RESULT_DIR_NAME,
     )
-    merge_level_test_inference_summary(context.experiment_dir, context.meta, level_name)
+    merge_level_test_inference_summary(inference_dir, level_name)
     for result_dir, mode, title in (
         (parent_known_root / VAL_RESULT_DIR_NAME, PARENT_KNOWN_MODE_DIR_NAME, "验证集评估汇总"),
         (parent_known_root / TEST_RESULT_DIR_NAME, PARENT_KNOWN_MODE_DIR_NAME, "独立测试集评估汇总"),
@@ -247,7 +241,7 @@ def _write_cascade_test_report(
 
 
 def _write_cascade_val_report(
-    context: EvaluationContext,
+    context: ExperimentDataContext,
     level_name: str,
     device: Any,
     output_dir: Path,
@@ -287,7 +281,7 @@ def _write_cascade_val_report(
 
 
 def _ensure_level_results(
-    context: EvaluationContext,
+    context: ExperimentDataContext,
     level_name: str,
     device: str | None,
 ) -> None:
@@ -330,7 +324,7 @@ def _ensure_level_results(
 
 
 def _collect_level_frames(
-    context: EvaluationContext,
+    context: ExperimentDataContext,
     level_name: str,
     result_dir_name: str,
     sample_csv_name: str,
@@ -424,7 +418,7 @@ def _collect_level_frames(
 
 
 def _inherit_single_child(
-    context: EvaluationContext,
+    context: ExperimentDataContext,
     parent_level: str,
     parent_id: int,
     child_id: int,
@@ -491,7 +485,7 @@ def _inherit_single_child(
 
 
 def _read_slot_results(
-    context: EvaluationContext,
+    context: ExperimentDataContext,
     level_name: str,
     slot_dir: Path,
     result_dir_name: str,
@@ -502,7 +496,7 @@ def _read_slot_results(
     if not csv_path.is_file():
         return None
     entry, parent_id = _resolve_slot_entry(context, level_name, slot_dir)
-    class_ids = _slot_class_ids(context, level_name, parent_id, entry)
+    class_ids = resolve_slot_class_ids(context.meta, level_name, parent_id, entry)
     local_to_global = {
         local_id: int(global_id) for local_id, global_id in enumerate(class_ids)
     }
@@ -517,42 +511,17 @@ def _read_slot_results(
 
 
 def _resolve_slot_entry(
-    context: EvaluationContext,
+    context: ExperimentDataContext,
     level_name: str,
     slot_dir: Path,
 ) -> tuple[Any, int | None]:
     """按槽位目录定位全局或父类子模型条目。"""
-    level_dir = context.experiment_dir / level_name
-    if slot_dir.resolve() == level_dir.resolve():
-        entry = (context.meta.get("level_models") or {}).get(level_name)
-        parent_id = None
-    else:
-        prefix = f"{level_name}_"
-        if not slot_dir.name.startswith(prefix):
-            raise ValueError(f"无法识别的模型槽位目录：{slot_dir}")
-        parent_id = int(slot_dir.name[len(prefix) :])
-        entry = (
-            ((context.meta.get("parent_models") or {}).get(level_name) or {})
-            .get(str(parent_id))
-        )
-    if not has_model_path(entry):
+    entry = find_run_entry(context.experiment_dir, context.meta, slot_dir)
+    if entry.level_name != level_name:
+        raise ValueError(f"槽位目录与实验层级不一致：{slot_dir}")
+    if not has_model_path(entry.values):
         raise FileNotFoundError(f"{level_name} 的槽位未记录模型：{slot_dir}")
-    run_dir = resolve_entry_path(context.experiment_dir, entry, "run_dir")
-    if run_dir != slot_dir.resolve():
-        raise ValueError(f"槽位目录与层级元数据不一致：{slot_dir}")
-    return entry, parent_id
-
-
-def _slot_class_ids(
-    context: EvaluationContext,
-    level_name: str,
-    parent_id: int | None,
-    entry: Any,
-) -> list[int]:
-    """返回槽位输出类别在目标层级的全局索引顺序。"""
-    if parent_id is None:
-        return list(range(context.dataset_index.num_classes_by_level[level_name]))
-    return [int(item) for item in entry.get("child_ids") or []]
+    return entry.values, entry.parent_id
 
 
 __all__ = [

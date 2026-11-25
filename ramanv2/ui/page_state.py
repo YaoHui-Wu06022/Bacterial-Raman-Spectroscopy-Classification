@@ -7,7 +7,7 @@ from pathlib import Path
 import streamlit as st
 
 from ramanv2.pipeline.state import PipelineState, load_pipeline_state, write_pipeline_state
-from ramanv2.pipeline.lineage import lineage_path, sync_pipeline_state_from_lineage
+from ramanv2.pipeline.lineage import lineage_path, load_pipeline_progress
 from ramanv2.ui.page_context import PageContext
 
 
@@ -83,34 +83,23 @@ def render_action_error(label: str, error: Exception) -> None:
 
 
 @st.cache_data(show_spinner=False)
-def _cached_lineage_date_sets(data_root: str, lineage_modified_ns: int) -> dict[str, tuple[str, ...]]:
-    """按 folder_lineage.json 的 mtime 缓存派生日期集合，避免每次页面运行重解析 2.5MB JSON。
-
-    走向文件变化时 mtime 随之更新，缓存自动失效。
-    """
-    del lineage_modified_ns
-    derived = PipelineState()
-    sync_pipeline_state_from_lineage(Path(data_root), derived)
-    return {
-        "cleaning": tuple(sorted(derived.cleaning.completed_date_names)),
-        "affine": tuple(sorted(derived.affine_completed_dates)),
-        "init": tuple(sorted(derived.init_generated_dates)),
-    }
+def _cached_pipeline_progress(
+    data_root: str, state_path: str, state_modified_ns: int, lineage_modified_ns: int,
+) -> PipelineState:
+    """缓存同一 SQLite 版本下的流水线门禁。"""
+    return load_pipeline_progress(data_root, state_path)
 
 
 def load_page_state(context: PageContext) -> PipelineState:
-    """每次页面运行都从磁盘读取共享状态，避免旧会话覆盖新状态。"""
-    state = load_pipeline_state(context.state_file)
+    """读取业务门禁；数据库变更后自动失效页面缓存。"""
+    state_file = context.state_file
     lineage_file = lineage_path(context.data_root)
-    if context.data_root.is_dir() and lineage_file.is_file():
-        derived = _cached_lineage_date_sets(
-            str(context.data_root.resolve()),
-            lineage_file.stat().st_mtime_ns,
-        )
-        state.cleaning.completed_date_names = set(derived["cleaning"])
-        state.affine_completed_dates = set(derived["affine"])
-        state.init_generated_dates = set(derived["init"])
-    return state
+    return _cached_pipeline_progress(
+        str(context.data_root.resolve()),
+        str(state_file),
+        state_file.stat().st_mtime_ns if state_file.is_file() else 0,
+        lineage_file.stat().st_mtime_ns if lineage_file.is_file() else 0,
+    )
 
 
 def write_page_state(context: PageContext, state: PipelineState) -> None:

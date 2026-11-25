@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ramanv2.common.result_text import build_result_summary
-from ramanv2.evaluation.context import resolve_slot_target
+from ramanv2.evaluation.result_text import build_result_summary
+from ramanv2.experiments.run_manifest import resolve_slot_target
 from ramanv2.evaluation.model_eval import evaluate_model_run
 from ramanv2.evaluation.pca_svm import BaselineSpec, evaluate_baseline_run
 

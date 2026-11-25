@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 
@@ -55,3 +56,8 @@ def find_ancestor_dir(start_path: Path | str, marker_name: str) -> Path:
 def relpath(path: Path | str, start: Path | str) -> str:
     """返回相对于 ``start`` 的可迁移路径。"""
     return normalize_relpath(os.path.relpath(path, start))
+
+
+def build_natural_key(text: str) -> list[int | str]:
+    """构造按数字自然排序的键，使 cell2 排在 cell10 前。"""
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", text)]

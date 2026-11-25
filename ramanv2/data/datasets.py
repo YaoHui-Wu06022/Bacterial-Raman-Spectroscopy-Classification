@@ -13,11 +13,11 @@ from typing import Any, Mapping
 
 from ramanv2.core.config import DEFAULT_BAD_BANDS
 from ramanv2.common.file_ops import read_json, write_json
-from ramanv2.common.naming import PIPELINE_DIR_NAME, is_date_name
+from ramanv2.data.naming import PIPELINE_DIR_NAME, is_date_name
 from ramanv2.common.paths import DATASET_ROOT
 from ramanv2.data.dataset_mapping import MAPPING_FILE_NAME, ensure_dataset_mapping
+from ramanv2.spectra.cosmic import FolderCosmicOptions
 from ramanv2.data.folder_cosmic import (
-    FolderCosmicOptions,
     build_folder_cosmic_options,
     build_folder_cosmic_payload,
 )

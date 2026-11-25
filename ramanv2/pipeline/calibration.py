@@ -10,16 +10,10 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from ramanv2.common import file_ops
-from ramanv2.common.arc_data import count_arc_data, has_arc_data
+from ramanv2.data.arc_data import count_arc_data, has_arc_data
 from ramanv2.common.file_ops import create_temporary_path, preserve_paths, publish_directory, write_json
-from ramanv2.common.naming import (
-    BEAD_FOLDER_NAME,
-    CANONICAL_FOLDER_PATTERN,
-    FOLDER_DELETE_RELATIVE,
-    MANUAL_DELETE_RELATIVE,
-    SPECIAL_FOLDER_NAMES,
-    build_natural_key,
-)
+from ramanv2.data.naming import BEAD_FOLDER_NAME, CANONICAL_FOLDER_PATTERN, FOLDER_DELETE_RELATIVE, MANUAL_DELETE_RELATIVE, SPECIAL_FOLDER_NAMES
+from ramanv2.common.paths import build_natural_key
 from ramanv2.data.calibration.affine import (
     analyze_date,
     apply_folder_affine_compensation,
@@ -393,14 +387,15 @@ def rebuild_shift_folder(data_root: Path, shift_root: Path, date_name: str, fold
             shutil.rmtree(temporary)
 
 
-def apply_affine_reports(
+def record_affine_reports(
     state: PipelineState,
+    state_path: Path | str,
     reports: Sequence[Mapping[str, object]],
     *,
     invalidate_extra: Iterable[str] = (),
     pop_latest: bool = False,
 ) -> list[str]:
-    """按 CLI 规则回填仿射状态并失效下游，返回实际失效日期。"""
+    """登记仿射报告并持久化状态，返回实际失效日期。"""
     invalidated = {str(item) for item in invalidate_extra}
     for report in reports:
         date_name = str(report.get("date", "")).strip()
@@ -418,11 +413,12 @@ def apply_affine_reports(
         invalidate_downstream(state, invalidated)
     if pop_latest:
         state.dataset_builds.pop("latest", None)
+    write_pipeline_state(state_path, state)
     return sorted(invalidated)
 
 
 __all__ = [
-    "apply_affine_reports",
+    "record_affine_reports",
     "load_date_affine_parameters",
     "rebuild_shift_data",
     "rebuild_shift_folder",

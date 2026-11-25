@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ramanv2.common.file_ops import read_json
-from ramanv2.common.hierarchy import FLAT_LABEL_SCHEMA, HIERARCHY_LABEL_SCHEMA
-from ramanv2.common.naming import parse_folder_prefix
+from ramanv2.core.label_schema import FLAT_LABEL_SCHEMA, HIERARCHY_LABEL_SCHEMA
+from ramanv2.data.naming import parse_folder_prefix
 
 
 HIERARCHY_FILE_NAME = "hierarchy.json"

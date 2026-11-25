@@ -5,16 +5,19 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from contextlib import contextmanager
+import shutil
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
+from itertools import zip_longest
 from pathlib import Path
 from typing import Any, Iterator
 
-from ramanv2.common.arc_data import list_arc_data_paths
+from ramanv2.common.file_ops import create_temporary_path, publish_file
+from ramanv2.data.arc_data import list_arc_data_paths
 
 
 DATABASE_FILE_NAME = "pipeline.db"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def database_path(metadata_dir: Path | str) -> Path:
@@ -28,11 +31,18 @@ def connect(path: Path | str) -> Iterator[sqlite3.Connection]:
     target.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(target)
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA journal_mode = DELETE")
-    connection.execute("PRAGMA busy_timeout = 5000")
     try:
-        initialize_schema(connection)
+        version = _schema_version(connection)
+        if version is None and not _has_tables(connection):
+            initialize_schema(connection)
+        elif version != SCHEMA_VERSION:
+            raise ValueError(
+                f"流水线数据库版本不受支持：{target}（{version}）；"
+                "v1 数据集请运行 pipeline upgrade-db --dataset <id>"
+            )
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA journal_mode = DELETE")
+        connection.execute("PRAGMA busy_timeout = 5000")
         yield connection
         connection.commit()
     except Exception:
@@ -72,17 +82,6 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             input_fingerprint TEXT,
             updated_at TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS files (
-            source_id TEXT NOT NULL,
-            file_name TEXT NOT NULL,
-            status TEXT NOT NULL,
-            source_path TEXT,
-            deleted_path TEXT,
-            reason TEXT,
-            recorded_at TEXT,
-            PRIMARY KEY (source_id, file_name),
-            FOREIGN KEY (source_id) REFERENCES folders(source_id) ON DELETE CASCADE
-        );
         CREATE TABLE IF NOT EXISTS outputs (
             source_id TEXT NOT NULL,
             kind TEXT NOT NULL,
@@ -104,6 +103,77 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
         "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)",
         (str(SCHEMA_VERSION),),
     )
+
+
+def _has_tables(connection: sqlite3.Connection) -> bool:
+    return connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1"
+    ).fetchone() is not None
+
+
+def _schema_version(connection: sqlite3.Connection) -> int | None:
+    has_meta = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'"
+    ).fetchone()
+    if not has_meta:
+        return None
+    row = connection.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+    return int(row[0]) if row is not None else None
+
+
+def upgrade_database(path: Path | str) -> dict[str, object]:
+    """备份 v1 元数据，在副本中移除逐谱投影，验证后发布 v2。"""
+    target = Path(path).resolve()
+    if not target.is_file():
+        raise FileNotFoundError(f"流水线数据库不存在：{target}")
+    before = target.stat()
+    staged = create_temporary_path(target)
+    backup_stage = create_temporary_path(target)
+    backup = target.with_suffix(".v1.bak")
+    try:
+        with closing(sqlite3.connect(target.as_uri() + "?mode=ro", uri=True)) as source:
+            version = _schema_version(source)
+            if version == SCHEMA_VERSION:
+                return {"database": str(target), "schema_version": version, "status": "already_current"}
+            if version != 1:
+                raise ValueError(f"只支持将流水线数据库从 v1 升到 v2，当前版本为 {version}")
+            with closing(sqlite3.connect(backup_stage)) as snapshot:
+                source.backup(snapshot)
+        shutil.copy2(backup_stage, staged)
+        with closing(sqlite3.connect(backup_stage)) as previous, closing(sqlite3.connect(staged)) as updated:
+            with updated:
+                updated.execute("DROP TABLE files")
+                updated.execute(
+                    "UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(SCHEMA_VERSION),)
+                )
+                _validate_database_upgrade(previous, updated)
+        current = target.stat()
+        if (current.st_mtime_ns, current.st_size) != (before.st_mtime_ns, before.st_size):
+            raise RuntimeError("升级期间数据库发生变化，请停止流水线写入后重试")
+        # 上次发布若失败，保留原备份，并为新的本次快照分配独立路径。
+        if backup.exists():
+            backup = create_temporary_path(backup)
+        publish_file(backup_stage, backup)
+        publish_file(staged, target)
+    finally:
+        staged.unlink(missing_ok=True)
+        backup_stage.unlink(missing_ok=True)
+    return {"database": str(target), "backup": str(backup), "schema_version": SCHEMA_VERSION, "status": "upgraded"}
+
+
+def _validate_database_upgrade(previous: sqlite3.Connection, updated: sqlite3.Connection) -> None:
+    """确认数据库完整且除派生投影和版本号外的记录一致。"""
+    if _schema_version(updated) != SCHEMA_VERSION:
+        raise RuntimeError("数据库升级后版本检查失败")
+    if updated.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+        raise RuntimeError("数据库升级后完整性检查失败")
+    if updated.execute("PRAGMA foreign_key_check").fetchone() is not None:
+        raise RuntimeError("数据库升级后外键检查失败")
+    for table in ("meta", "lineage", "pipeline_state", "folders", "outputs", "test_defaults"):
+        where = " WHERE key != 'schema_version'" if table == "meta" else ""
+        query = f"SELECT * FROM {table}{where} ORDER BY rowid"
+        if any(old != new for old, new in zip_longest(previous.execute(query), updated.execute(query))):
+            raise RuntimeError(f"数据库升级后记录不一致：{table}")
 
 
 def _now() -> str:
@@ -170,26 +240,7 @@ def _write_folder_index(
             str(record.get("updated_at") or _now()),
         ),
     )
-    connection.execute("DELETE FROM files WHERE source_id = ?", (source_id,))
     connection.execute("DELETE FROM outputs WHERE source_id = ?", (source_id,))
-    files = record.get("files", {})
-    if isinstance(files, dict):
-        for file_name, entry in files.items():
-            if not isinstance(entry, dict):
-                continue
-            connection.execute(
-                "INSERT OR REPLACE INTO files(source_id, file_name, status, source_path, "
-                "deleted_path, reason, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    source_id,
-                    str(file_name),
-                    str(entry.get("status", "")),
-                    _none_string(entry.get("source_path")),
-                    _none_string(entry.get("deleted_path")),
-                    _none_string(entry.get("reason")),
-                    _none_string(entry.get("recorded_at")),
-                ),
-            )
     outputs = record.get("outputs", {})
     if isinstance(outputs, dict):
         for kind, output_path in outputs.items():
@@ -331,10 +382,6 @@ def check_database(metadata_dir: Path | str, cosmic_root: Path | str) -> dict[st
     }
 
 
-def _none_string(value: Any) -> str | None:
-    return None if value is None else str(value)
-
-
 __all__ = [
     "DATABASE_FILE_NAME",
     "check_database",
@@ -346,4 +393,5 @@ __all__ = [
     "refresh_fingerprints",
     "save_lineage_payload",
     "save_state_payload",
+    "upgrade_database",
 ]

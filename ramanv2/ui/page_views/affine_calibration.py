@@ -7,10 +7,10 @@ from pathlib import Path
 
 import streamlit as st
 
-from ramanv2.common.arc_data import count_arc_data, has_arc_data
-from ramanv2.common.naming import BEAD_FOLDER_NAME, MANUAL_DELETE_RELATIVE
+from ramanv2.data.arc_data import count_arc_data, has_arc_data
+from ramanv2.data.naming import BEAD_FOLDER_NAME, MANUAL_DELETE_RELATIVE
 from ramanv2.pipeline.calibration import (
-    apply_affine_reports,
+    record_affine_reports,
     rebuild_shift_data,
     run_affine_calibration,
     run_date_rebuild,
@@ -219,12 +219,12 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
                         )
                     compute_report = compute_reports[0] if compute_reports else {}
                     compute_status = str(compute_report.get("status", ""))
-                    changed = apply_affine_reports(
+                    changed = record_affine_reports(
                         state,
+                        context.state_file,
                         [item for item in compute_reports if item.get("status") == "manual_approved"],
                     )
                     if changed:
-                        write_page_state(context, state)
                         set_flash(
                             "affine_date_rebuild",
                             f"{compute_target} 仿射已发布，shift 已生成",
@@ -292,21 +292,16 @@ def _render_date_rebuild_section(context: PageContext, state) -> None:
                     results = run_identity_affine(
                         context.data_root, identity_targets, context.shift_root
                     )
-                changed = [
-                    str(item["date"]) for item in results
-                    if item.get("status") == "manual_approved"
-                ]
                 failures = [
                     f"{item['date']}：{item.get('error')}"
                     for item in results
                     if item.get("status") == "error"
                 ]
-                changed = apply_affine_reports(
+                changed = record_affine_reports(
                     state,
+                    context.state_file,
                     [item for item in results if item.get("status") == "manual_approved"],
                 )
-                if changed:
-                    write_page_state(context, state)
                 invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
                 set_flash(
                     "affine_date_rebuild",
@@ -426,22 +421,17 @@ def _render_identity_affine_page(context: PageContext, state) -> None:
     ):
         with st.spinner("正在复制 cosmic 光谱并发布 identity 校准……"):
             results = run_identity_affine(context.data_root, eligible_dates, context.shift_root)
-        changed = [
-            str(result["date"])
-            for result in results
-            if result.get("status") == "manual_approved"
-        ]
         failed = [
             f"{result['date']}: {result.get('error')}"
             for result in results
             if result.get("status") == "error"
         ]
-        changed = apply_affine_reports(
+        changed = record_affine_reports(
             state,
+            context.state_file,
             [item for item in results if item.get("status") == "manual_approved"],
         )
         invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
-        write_page_state(context, state)
         set_flash(
             "affine_identity",
             f"已发布 {len(changed)} 个日期的 identity 校准"
@@ -534,13 +524,13 @@ def render_affine_calibration_page(context: PageContext) -> None:
             for report in reports["rebuild"]
             if report.get("status") == "rebuilt"
         }
-        apply_affine_reports(
+        record_affine_reports(
             state,
+            context.state_file,
             reports["calibration"],
             invalidate_extra=rebuilt_dates,
         )
         invalidate_ui_cache(*INVALIDATE_CLEANING_AFFINE_DATASET)
-        write_page_state(context, state)
         st.session_state["affine_analyze_reports"] = reports
         st.rerun()
     _render_analyze_reports(st.session_state.pop("affine_analyze_reports", None))

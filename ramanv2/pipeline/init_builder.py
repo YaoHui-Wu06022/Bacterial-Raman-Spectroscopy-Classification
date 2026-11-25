@@ -9,26 +9,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Literal, Mapping
-from uuid import uuid4
 
-from ramanv2.common.arc_data import (
+from ramanv2.data.arc_data import (
     has_arc_data,
     list_arc_data_paths,
     parse_raw_arc_data,
 )
-from ramanv2.common.naming import (
-    CANONICAL_FOLDER_PATTERN,
-    DATE_PATTERN,
-    SPECIAL_FOLDER_NAMES,
-    build_natural_key,
-    parse_folder_prefix,
-)
-from ramanv2.common.file_ops import create_temporary_path, publish_directory, read_json, rename_directory, remove_path
+from ramanv2.data.naming import CANONICAL_FOLDER_PATTERN, DATE_PATTERN, SPECIAL_FOLDER_NAMES, parse_folder_prefix
+from ramanv2.common.paths import build_natural_key
+from ramanv2.common.file_ops import create_temporary_path, preserve_paths, publish_directories, publish_directory, read_json, remove_path
 from ramanv2.data.count import summarize_dataset
 from ramanv2.data.hierarchy_spec import HierarchySpec
 from ramanv2.data.profiles import TEST_ROOT_NAME
 from ramanv2.data.dataset_mapping import DatasetMapping
-from ramanv2.pipeline.lineage import apply_output_path, initialize_folder_lineage, load_folder_lineage, write_folder_lineage
+from ramanv2.pipeline.lineage import apply_output_path, initialize_folder_lineage, lineage_path, load_folder_lineage, write_folder_lineage
 
 
 BuildMode = Literal["full", "incremental", "replace_dates"]
@@ -68,6 +62,9 @@ def build_full_init(
     hierarchy: HierarchySpec,
     rebuild_test_enable: bool = True,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    supplement_groups: tuple[tuple[Path, Path], ...] | None = None,
+    record_report: Callable[[dict[str, object]], None] | None = None,
+    state_path: Path | None = None,
 ) -> dict[str, object]:
     """从通过门禁的 shift 日期构建普通 init 与选定的独立 init_test。
 
@@ -76,8 +73,6 @@ def build_full_init(
     供界面显示构建进度。
     """
     cosmic_root = Path(shift_root).resolve().parent / "cosmic_data"
-    if cosmic_root.is_dir():
-        initialize_folder_lineage(cosmic_root, mapping)
     # 既有 init 日期若仍有活动源谱，必须继续通过门禁，不能重建时静默丢失。
     required_dates = {
         match.group(2)
@@ -105,8 +100,11 @@ def build_full_init(
         hierarchy=hierarchy,
         publish_test_enable=rebuild_test_enable,
         progress_callback=progress_callback,
+        mapping=mapping,
+        supplement_groups=supplement_groups,
+        record_report=record_report,
+        state_path=state_path,
     )
-    report["count"] = summarize_dataset(Path(init_root).resolve())
     return report
 
 
@@ -151,7 +149,11 @@ def build_init_datasets(
     *,
     hierarchy: HierarchySpec,
     publish_test_enable: bool = True,
+    mapping: DatasetMapping | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    supplement_groups: tuple[tuple[Path, Path], ...] | None = None,
+    record_report: Callable[[dict[str, object]], None] | None = None,
+    state_path: Path | None = None,
 ) -> dict[str, object]:
     """按批准日期构建 init；replace_dates 仅替换已生成日期及已导出的测试组。"""
     if mode not in {"full", "incremental", "replace_dates"}:
@@ -195,7 +197,7 @@ def build_init_datasets(
         source_id: Path(record["outputs"]["test"]).name
         for source_id, record in load_folder_lineage(cosmic_root)["folders"].items()
         if record.get("outputs", {}).get("test")
-    }
+    } if mode == "replace_dates" else {}
     for date_name in eligible_dates:
         groups.extend(
             _collect_source_groups(
@@ -326,33 +328,45 @@ def build_init_datasets(
             "test_exports": test_exports,
             "selected_test_folders": sorted(selected_keys or set(), key=build_natural_key),
         }
-        if mode == "replace_dates":
-            for name, target in destination_roots.items():
-                publish_directory(temporary_roots[name], target)
-        else:
-            _publish_all(temporary_roots, destination_roots)
-        if cosmic_root.is_dir():
-            payload = load_folder_lineage(cosmic_root)
-            for group in groups:
-                relative = _target_relative(group, hierarchy)
-                if group.is_test:
+        if supplement_groups is not None:
+            report["supplement"] = _copy_supplement_groups(
+                temporary_roots["__all__"], supplement_groups
+            )
+        if mode == "full":
+            report["count"] = summarize_dataset(temporary_roots["__all__"])
+
+        metadata_paths = [lineage_path(cosmic_root)] if cosmic_root.is_dir() else []
+        if state_path is not None:
+            metadata_paths.append(state_path)
+        directories = {target: temporary_roots[name] for name, target in destination_roots.items()}
+        with preserve_paths(metadata_paths), publish_directories(directories):
+            if cosmic_root.is_dir():
+                payload = (
+                    initialize_folder_lineage(cosmic_root, mapping)
+                    if mode == "full" else load_folder_lineage(cosmic_root)
+                )
+                for group in groups:
+                    relative = _target_relative(group, hierarchy)
+                    if group.is_test:
+                        apply_output_path(
+                            payload,
+                            group.date_name,
+                            group.source_name or group.source_dir.name,
+                            test_path=str(resolved_test_root / relative) if resolved_test_root is not None else None,
+                        )
+                        continue
                     apply_output_path(
                         payload,
                         group.date_name,
                         group.source_name or group.source_dir.name,
-                        test_path=str(resolved_test_root / relative) if resolved_test_root is not None else None,
+                        init_path=str(full_root / relative),
                     )
-                    continue
-                apply_output_path(
-                    payload,
-                    group.date_name,
-                    group.source_name or group.source_dir.name,
-                    init_path=str(full_root / relative),
-                )
-            for record in payload.get("folders", {}).values():
-                if record.get("date") in eligible_dates and (mode != "replace_dates" or replaced_init_dirs):
-                    record["init_pending"] = False
-            write_folder_lineage(cosmic_root, payload)
+                for record in payload.get("folders", {}).values():
+                    if record.get("date") in eligible_dates and (mode != "replace_dates" or replaced_init_dirs):
+                        record["init_pending"] = False
+                write_folder_lineage(cosmic_root, payload)
+            if record_report is not None:
+                record_report(report)
         return report
     except Exception:
         for temporary in temporary_roots.values():
@@ -562,31 +576,23 @@ def _is_manual_approved(path: Path) -> bool:
     return isinstance(payload, dict) and payload.get("status") == "manual_approved"
 
 
-def _publish_all(
-    temporary_roots: dict[str, Path],
-    destination_roots: dict[str, Path],
-) -> None:
-    backups: list[tuple[Path, Path]] = []
-    published: list[tuple[Path, Path]] = []
-    try:
-        for name, target in destination_roots.items():
-            temporary = temporary_roots[name]
-            if target.exists():
-                backup = target.parent / f".{target.name}_previous_{uuid4().hex}"
-                rename_directory(target, backup)
-                backups.append((target, backup))
-            rename_directory(temporary, target)
-            published.append((target, temporary))
-        for _, backup in backups:
-            shutil.rmtree(backup, ignore_errors=True)
-    except Exception:
-        for target, temporary in reversed(published):
-            if target.exists() and not temporary.exists():
-                rename_directory(target, temporary)
-        for target, backup in reversed(backups):
-            if backup.exists() and not target.exists():
-                rename_directory(backup, target)
-        raise
+def _copy_supplement_groups(
+    staged_root: Path,
+    groups: tuple[tuple[Path, Path], ...],
+) -> dict[str, object]:
+    """将已规划的补充组写进全量构建的临时目录。"""
+    file_count = 0
+    targets: list[str] = []
+    for source, relative in groups:
+        target = (staged_root / relative).resolve()
+        if not target.is_relative_to(staged_root) or target.exists():
+            raise ValueError(f"补充组输出冲突：{relative}")
+        count = build_spectrum_folder(source, target)
+        if not count:
+            raise ValueError(f"补充组没有有效光谱：{source}")
+        file_count += count
+        targets.append(relative.as_posix())
+    return {"status": "ready", "folder_count": len(targets), "file_count": file_count, "targets": targets}
 
 
 __all__ = [

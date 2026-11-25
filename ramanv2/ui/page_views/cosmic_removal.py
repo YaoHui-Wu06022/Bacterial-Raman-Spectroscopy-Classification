@@ -13,10 +13,10 @@ import pandas as pd
 import streamlit as st
 
 from ramanv2.common.plotting import configure_matplotlib_fonts
+from ramanv2.spectra.cosmic import build_folder_cosmic_reference
 from ramanv2.data.folder_cosmic import (
     build_folder_cosmic_options,
     build_folder_cosmic_payload,
-    build_folder_cosmic_reference,
     read_spectrum_folder,
 )
 from ramanv2.pipeline.folder_ingest import (

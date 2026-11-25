@@ -18,13 +18,13 @@ from ramanv2.common.plotting import (
     configure_matplotlib_fonts,
     save_figure,
 )
-from ramanv2.common.arc_data import read_arc_data
+from ramanv2.data.arc_data import read_arc_data
 from ramanv2.core.config import InputConfig
 from ramanv2.common.paths import resolve_path
 from ramanv2.spectra.bad_bands import build_valid_mask, normalize_bad_bands
 from ramanv2.spectra.normalize import normalize_spectrum
 
-from ramanv2.common.arc_data import iter_arc_dirs
+from ramanv2.data.arc_data import iter_arc_dirs
 
 
 @dataclass(frozen=True)

@@ -7,8 +7,7 @@ import json
 from pathlib import Path
 
 from ramanv2.common.file_ops import write_json
-from ramanv2.common.naming import BEAD_FOLDER_NAME
-from ramanv2.data.datasets import annotate_dataset_build
+from ramanv2.data.naming import BEAD_FOLDER_NAME
 from ramanv2.data.dataset_mapping import MAPPING_FILE_NAME, ensure_dataset_mapping
 from ramanv2.data.profiles import resolve_selection
 from ramanv2.pipeline.state import pipeline_state_path_for_spec
@@ -58,6 +57,10 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     db_check.add_argument("--dataset", default=DEFAULT_DATASET_ID, help="数据集标识，默认使用默认数据集")
     db_check.add_argument("--refresh", action="store_true", dest="refresh_fingerprints")
     db_check.set_defaults(run_command=run_command)
+
+    upgrade = commands.add_parser("upgrade-db", help="备份并升级数据集流水线数据库到 v2")
+    upgrade.add_argument("--dataset", required=True, help="ASCII 数据集标识")
+    upgrade.set_defaults(run_command=run_command)
 
     ingest = commands.add_parser("ingest-folder", help="清洗并入库一个文件夹")
     ingest.add_argument("--dataset", default=DEFAULT_DATASET_ID, help="数据集标识，默认使用默认数据集")
@@ -123,6 +126,12 @@ def run_command(args: argparse.Namespace) -> int:
     if args.command in {"affine", "rebuild-shift", "rebuild-records"} and not spec.cosmic_dir.is_dir():
         print("cosmic_data 不存在：请先在「宇宙射线去除」页从 raw_data 生成。")
         return 1
+    if args.command == "upgrade-db":
+        from ramanv2.pipeline.db import upgrade_database
+
+        report = upgrade_database(pipeline_state_path_for_spec(spec))
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
     if args.command == "db-check":
         from ramanv2.pipeline.db import check_database, refresh_fingerprints
 
@@ -133,25 +142,24 @@ def run_command(args: argparse.Namespace) -> int:
         print(json.dumps(check_database(metadata_dir, cosmic_root), ensure_ascii=False, indent=2))
         return 0
 
-    from ramanv2.pipeline.state import load_pipeline_state, write_pipeline_state
-    from ramanv2.pipeline.lineage import initialize_folder_lineage, sync_pipeline_state_from_lineage
+    from ramanv2.pipeline.state import write_pipeline_state
+    from ramanv2.pipeline.lineage import load_pipeline_progress
 
     state_path = pipeline_state_path_for_spec(spec)
-    state = load_pipeline_state(state_path)
     cosmic_root = spec.cosmic_dir
-    if cosmic_root.is_dir():
-        initialize_folder_lineage(cosmic_root)
-        sync_pipeline_state_from_lineage(cosmic_root, state)
+    state = load_pipeline_progress(
+        cosmic_root, state_path, initialize_enable=args.command != "init",
+    )
     if args.command == "clean-status":
         print(json.dumps(state.to_payload(), ensure_ascii=False, indent=2))
         return 0
     if args.command == "affine":
-        from ramanv2.pipeline.calibration import apply_affine_reports, run_affine_calibration, run_identity_affine
+        from ramanv2.pipeline.calibration import record_affine_reports, run_affine_calibration, run_identity_affine
 
         dates = args.date_names or sorted(state.cleaning.completed_date_names)
         source_root = args.source_root or spec.cosmic_dir
         output_root = args.output_root or spec.shift_dir
-        from ramanv2.common.arc_data import has_arc_data
+        from ramanv2.data.arc_data import has_arc_data
 
         if not dates and spec.cosmic_dir.is_dir():
             from ramanv2.pipeline.cleaning import scan_date_names
@@ -164,28 +172,21 @@ def run_command(args: argparse.Namespace) -> int:
         flat_dates = [date_name for date_name in dates if date_name not in set(bead_dates)]
         reports = run_affine_calibration(source_root, bead_dates, output_root)
         reports += run_identity_affine(source_root, flat_dates, output_root)
-        apply_affine_reports(state, reports, pop_latest=True)
-        write_pipeline_state(state_path, state)
+        record_affine_reports(state, state_path, reports, pop_latest=True)
         print(json.dumps(reports, ensure_ascii=False, indent=2))
         return 0
     if args.command == "init":
-        from ramanv2.pipeline.supplement import build_init_from_shift
+        from ramanv2.pipeline.supplement import run_full_init
 
-        shift_root = args.shift_root or spec.shift_dir
-        init_root = args.init_root or spec.init_dir
-        catalog = _dataset_mapping_for_spec(spec)
-        report = build_init_from_shift(
-            shift_root,
-            init_root,
-            catalog,
-            sorted(state.affine_completed_dates),
-            supplement_root=spec.supplement_path,
-            test_root=spec.init_test_dir,
+        report = run_full_init(
+            spec,
+            state,
+            state_path,
+            _dataset_mapping_for_spec(spec),
+            shift_root=args.shift_root,
+            init_root=args.init_root,
             selected_test_folders=args.test_folders,
-            hierarchy=spec.hierarchy,
         )
-        state.dataset_builds["full_init"] = annotate_dataset_build(report, spec)
-        write_pipeline_state(state_path, state)
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     if args.command == "rebuild-shift":

@@ -10,7 +10,7 @@ from typing import Any, Mapping
 import torch
 from torch import nn
 
-from ramanv2.common.hierarchy import FLAT_LABEL_SCHEMA
+from ramanv2.core.label_schema import FLAT_LABEL_SCHEMA
 from ramanv2.common.paths import PROJECT_ROOT
 from ramanv2.core.config import Config, build_config
 from ramanv2.data.datasets import DatasetSpec
